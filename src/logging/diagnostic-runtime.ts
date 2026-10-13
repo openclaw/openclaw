@@ -2,7 +2,11 @@ import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
-import { getDiagnosticSessionState, type SessionRef } from "./diagnostic-session-state.js";
+import {
+  getDiagnosticSessionState,
+  touchDiagnosticSessionState,
+  type SessionRef,
+} from "./diagnostic-session-state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 export const diagnosticLogger = createSubsystemLogger("diagnostic");
@@ -37,10 +41,7 @@ export function logMessageQueuedWithBacklogPolicy(
   if (countsTowardBacklog) {
     state.queueDepth += 1;
   }
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(state);
   if (diagnosticLogger.isEnabled("debug")) {
     diagnosticLogger.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${

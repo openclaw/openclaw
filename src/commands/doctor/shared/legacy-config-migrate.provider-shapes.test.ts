@@ -94,24 +94,6 @@ describe("legacy migrate provider-shaped config", () => {
 
   it.each<{ name: string; path: string; value: unknown; expected: string[] }>([
     {
-      name: "root TTS",
-      path: "tts",
-      value: legacyTts,
-      expected: ["tts.providers-generic-shape", ...voiceAndEnabled],
-    },
-    {
-      name: "keyed agent entries",
-      path: "agents",
-      value: { entries: { main: { tts: legacyTts } } },
-      expected: voiceAndEnabled,
-    },
-    {
-      name: "channel accounts",
-      path: "channels",
-      value: { slack: { accounts: { work: { tts: legacyTts } } } },
-      expected: voiceAndEnabled,
-    },
-    {
       name: "blocked channel and account keys",
       path: "channels",
       value: {

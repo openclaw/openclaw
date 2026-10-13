@@ -1,6 +1,16 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -48,6 +58,75 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
 }
 
 describe("Node Code Mode executor", () => {
+  it("reports heap exhaustion after dispatch with the native cause and recovers", async () => {
+    // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
+    // A standalone process exercises native OOM without changing the test runner's V8 flags.
+    const probe = `
+      import { nodeCodeModeExecutor } from ${JSON.stringify(new URL("./code-mode-node.ts", import.meta.url).href)};
+      import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
+      import { LegacyPluginSdkResourceHost } from ${JSON.stringify(new URL("../plugins/legacy-sdk-resource-host.ts", import.meta.url).href)};
+      import { createTestGatewayScheduler } from ${JSON.stringify(new URL("../test-utils/gateway-scheduler-clock.ts", import.meta.url).href)};
+      registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode").href)}));
+      const host = new LegacyPluginSdkResourceHost();
+      const scheduler = createTestGatewayScheduler();
+      host.bindScheduler(scheduler);
+      let boundaries = 0;
+      let failure;
+      try {
+        const config = ${JSON.stringify(config)};
+        const result = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [],
+          source: "await yield_control(); const data = []; for (let i = 0; i < 2_000_000; i++) data.push({ i, value: String(i) }); return data.length;",
+        }, { timeoutMs: 7000, inlineHost: {
+          onBoundary: async (boundary, context) => {
+            boundaries++;
+            return { kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
+              settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })) };
+          },
+          onFailure: (error, phase, workerId) => {
+            failure = { code: error.cause?.code, stack: error.cause?.stack, phase, workerId };
+          },
+        } }));
+        const recovered = await host.run(() => nodeCodeModeExecutor.execute({
+          kind: "exec", config, catalog: [], namespaces: [], source: "return 42",
+        }, { timeoutMs: 7000 }));
+        console.log(JSON.stringify({ result, recovered, boundaries, failure }));
+      } finally {
+        await host.close();
+        await scheduler.stop();
+      }
+    `;
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "-e",
+        probe,
+      ],
+      { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 20_000 },
+    );
+    const observed: unknown = JSON.parse(stdout);
+    expect(observed).toMatchObject({
+      boundaries: 1,
+      result: {
+        status: "failed",
+        code: "runtime_unavailable",
+        error: expect.stringContaining("exhausted its 64 MiB JavaScript heap"),
+      },
+      failure: {
+        code: "ERR_WORKER_OUT_OF_MEMORY",
+        stack: expect.any(String),
+        phase: "host",
+        workerId: expect.stringMatching(/^code-mode-node:/),
+      },
+      recovered: { status: "completed", value: { json: "42" } },
+    });
+    expect(observed).toMatchObject({
+      result: { error: expect.stringContaining("Inspect any completed actions before retrying") },
+    });
+  });
   it.each(["alternating limits", "concurrent continuations"] as const)(
     "keeps workers warm across %s",
     async (scenario) => {
@@ -150,32 +229,102 @@ describe("Node Code Mode executor", () => {
     });
   });
 
-  it.each([
-    "await null; while (true) {}",
-    'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}',
-  ])("interrupts guest execution under the same timeout: %s", async (source) => {
+  it("interrupts guest execution after an async yield and recovers the worker", async () => {
     const started = performance.now();
     expect(
-      await execute('text("before"); json({ n: 1 }); console.log("diagnostic"); ' + source, {
-        executionTimeoutMs: 30,
-      }),
+      await execute(
+        'text("before"); json({ n: 1 }); console.log("diagnostic"); await null; while (true) {}',
+        { executionTimeoutMs: 30 },
+      ),
     ).toMatchObject({
       status: "failed",
       code: "timeout",
       error: "code mode timeout exceeded",
       failurePhase: "guest",
-      output: {
-        count: source.includes("inherited hook") ? 4 : 3,
-        source: {
-          kind: "complete",
-          json:
-            '[{"type":"text","text":"before"},{"type":"json","value":{"n":1}},{"type":"text","text":"diagnostic"}' +
-            (source.includes("inherited hook") ? ',{"type":"text","text":"safe"}]' : "]"),
-        },
-      },
     });
     // Includes cold Worker startup, but must not spend the 5 s wall budget.
     expect(performance.now() - started).toBeLessThan(2_000);
+    expect(await execute("return 42")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: "42" },
+    });
+  });
+
+  it("preserves published output when interrupting inherited JSON hooks", async ({ signal }) => {
+    const source =
+      'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}';
+    const worker = new URL(
+      "../../test/helpers/code-mode-node.timeout.test-support.ts",
+      import.meta.url,
+    );
+    const notifications = new BroadcastChannel(randomUUID());
+    const environmentKey = "openclaw.codeModeTimeoutOutputTest";
+    const previousEnvironment = getEnvironmentData(environmentKey);
+    setEnvironmentData(environmentKey, notifications.name);
+    const published = createDeferred();
+    const consumed = createDeferred();
+    const count = 4;
+    notifications.addEventListener("message", ({ data }) => {
+      if (data === count) {
+        published.resolve();
+      }
+    });
+    const resolveWorker = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+    const resolver = vi
+      .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+      .mockImplementation((name) => (name === "codeModeNode" ? worker : resolveWorker(name)));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const operation = host.run(() =>
+        nodeCodeModeExecutor.execute(
+          {
+            kind: "exec",
+            source: 'text("before"); json({ n: 1 }); console.log("diagnostic"); ' + source,
+            config,
+            catalog: [],
+            namespaces: [],
+            executionTimeoutMs: 30,
+          },
+          {
+            timeoutMs: 7_000,
+            signal,
+            inlineHost: {
+              onInputConsumed: () => consumed.resolve(),
+              onBoundary: async () => {
+                throw new Error("The infinite loop must not flush its output at a boundary");
+              },
+            },
+          },
+        ),
+      );
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([published.promise, consumed.promise]),
+          operation,
+          "Execution ended before output publication",
+        ),
+        signal,
+      );
+      await vi.advanceTimersByTimeAsync(30);
+      expect(await withinTest(operation, signal)).toMatchObject({
+        status: "failed",
+        code: "timeout",
+        error: "code mode timeout exceeded",
+        failurePhase: "guest",
+        output: {
+          count,
+          source: {
+            kind: "complete",
+            json: '[{"type":"text","text":"before"},{"type":"json","value":{"n":1}},{"type":"text","text":"diagnostic"},{"type":"text","text":"safe"}]',
+          },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+      resolver.mockRestore();
+      setEnvironmentData(environmentKey, previousEnvironment);
+      notifications.close();
+    }
     expect(await execute("return 42")).toMatchObject({
       status: "completed",
       value: { kind: "complete", json: "42" },
@@ -218,29 +367,28 @@ describe("Node Code Mode executor", () => {
   });
 
   it.each(["resume", "inline"] as const)(
-    "interrupts loops after %s without replaying delivered output",
+    "does not replay delivered output when %s times out",
     async (mode) => {
       const input: CodeModeExecutorStartInput = {
         kind: "exec",
-        source: 'text("before"); await yield_control(); text("after"); while (true) {}',
+        source:
+          'text("before"); await yield_control(); text("after"); await yield_control(); while (true) {}',
         config,
         catalog: [],
         namespaces: [],
       };
       const reply = (id: string) => ({ id, ok: true, json: "null" });
+      const delivered: unknown[] = [];
       let result = await nodeCodeModeExecutor.execute(input, {
         timeoutMs: 7_000,
         ...(mode === "inline"
           ? {
               inlineHost: {
-                onBoundary: async (boundary) => {
-                  expect(boundary.output.source).toEqual({
-                    kind: "complete",
-                    json: '[{"type":"text","text":"before"}]',
-                  });
+                onBoundary: async (boundary, context) => {
+                  delivered.push(boundary.output);
                   return {
                     kind: "continue",
-                    timeoutMs: 30,
+                    timeoutMs: delivered.length === 1 ? context.maxTimeoutMs : 30,
                     pendingRequests: [],
                     settledRequests: boundary.pendingRequests.map(({ id }) => reply(id)),
                   };
@@ -250,25 +398,32 @@ describe("Node Code Mode executor", () => {
           : {}),
       });
       if (mode === "resume") {
-        if (result.status !== "waiting") {
-          throw new Error(JSON.stringify(result));
+        for (const timeoutMs of [config.timeoutMs, 30]) {
+          if (result.status !== "waiting") {
+            throw new Error(JSON.stringify(result));
+          }
+          delivered.push(result.output);
+          continuations.add(result.continuation);
+          result = await result.continuation.resume(
+            {
+              kind: "resume",
+              config: { ...config, timeoutMs },
+              settledRequests: result.pendingRequests.map(({ id }) => reply(id)),
+            },
+            { timeoutMs: 7_000 },
+          );
         }
-        continuations.add(result.continuation);
-        result = await result.continuation.resume(
-          {
-            kind: "resume",
-            config: { ...config, timeoutMs: 30 },
-            settledRequests: result.pendingRequests.map(({ id }) => reply(id)),
-          },
-          { timeoutMs: 7_000 },
-        );
       }
+      expect(delivered).toEqual([
+        { count: 1, source: { kind: "complete", json: '[{"type":"text","text":"before"}]' } },
+        { count: 1, source: { kind: "complete", json: '[{"type":"text","text":"after"}]' } },
+      ]);
       expect(result).toMatchObject({
         status: "failed",
         code: "timeout",
         output: {
-          count: 1,
-          source: { kind: "complete", json: '[{"type":"text","text":"after"}]' },
+          count: 0,
+          source: { kind: "complete", json: "[]" },
         },
       });
     },

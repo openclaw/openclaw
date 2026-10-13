@@ -567,37 +567,13 @@ describe("qa coverage report", () => {
     });
     const report = renderQaScenarioMatchesMarkdownReport({
       query: "mixed",
-      matches: [
-        {
-          ...flowScenario,
-          id: "flow-proof",
-          theme: "test",
-          surfaces: [flowScenario.surface],
-          risk: "unassigned",
-          coverageIds: [
-            ...(flowScenario.coverage?.primary ?? []),
-            ...(flowScenario.coverage?.secondary ?? []),
-          ],
-          docsRefs: [],
-          codeRefs: [],
-          executionKind: flowScenario.execution.kind,
-        },
-        {
-          ...playwrightScenario,
-          id: "playwright-proof",
-          theme: "test",
-          surfaces: [playwrightScenario.surface],
-          risk: "unassigned",
-          coverageIds: [
-            ...(playwrightScenario.coverage?.primary ?? []),
-            ...(playwrightScenario.coverage?.secondary ?? []),
-          ],
-          docsRefs: [],
-          codeRefs: [],
-          executionKind: playwrightScenario.execution.kind,
-          executionPath: playwrightExecutionPath,
-        },
-      ],
+      matches: findQaScenarioMatches(
+        [
+          { ...flowScenario, id: "flow-proof" },
+          { ...playwrightScenario, id: "playwright-proof" },
+        ],
+        "proof",
+      ),
     });
 
     expect(report).toContain("- Suite commands:");

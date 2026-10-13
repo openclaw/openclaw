@@ -1,12 +1,6 @@
-// Legacy session runtime config migrations for retired maintenance/fork sizing keys.
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { moveLegacyConfigKey } from "./legacy-config-record-shared.js";
 
 /** Match only parser-valid values that resolve to an unsafe zero-duration cutoff. */
@@ -33,45 +27,20 @@ function hasZeroDuration(raw: unknown, key: "pruneAfter" | "resetArchiveRetentio
   return isZeroDuration(maintenance[key]);
 }
 
-const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
-  path: ["session", "maintenance"],
-  message:
-    'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
-  match: (value) => Object.hasOwn(getRecord(value) ?? {}, "rotateBytes"),
-};
-
-const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
-  path: ["session", "maintenance"],
-  message:
-    'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of eligible stale/non-preserved session entries. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
-  match: (raw) => hasZeroDuration(raw, "pruneAfter"),
-};
-
-const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = {
-  path: ["session", "maintenance"],
-  message:
-    'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so the keep-by-default archive retention applies.',
-  match: (raw) => hasZeroDuration(raw, "resetArchiveRetention"),
-};
-
-const SESSION_ALIAS_RULES: LegacyConfigRule[] = [
-  {
-    path: ["session", "maintenance", "pruneDays"],
-    message:
-      'session.maintenance.pruneDays was renamed to pruneAfter. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["session", "resetByType", "dm"],
-    message: 'session.resetByType.dm was renamed to direct. Run "openclaw doctor --fix".',
-  },
-];
-
-/** Legacy config migration specs for session runtime config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "session.canonical-aliases",
-    describe: "Move session aliases to canonical keys",
-    legacyRules: SESSION_ALIAS_RULES,
+    legacyRules: [
+      {
+        path: ["session", "maintenance", "pruneDays"],
+        message:
+          'session.maintenance.pruneDays was renamed to pruneAfter. Run "openclaw doctor --fix".',
+      },
+      {
+        path: ["session", "resetByType", "dm"],
+        message: 'session.resetByType.dm was renamed to direct. Run "openclaw doctor --fix".',
+      },
+    ],
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
       for (const [section, legacy, canonical] of [
@@ -82,11 +51,17 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         moveLegacyConfigKey(owner, legacy, canonical, `session.${section}`, changes);
       }
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "session.maintenance.rotateBytes",
-    describe: "Remove deprecated session.maintenance.rotateBytes",
-    legacyRules: [LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE],
+    legacyRules: [
+      {
+        path: ["session", "maintenance"],
+        message:
+          'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
+        match: (value) => Object.hasOwn(getRecord(value) ?? {}, "rotateBytes"),
+      },
+    ],
     apply: (raw, changes) => {
       const maintenance = getRecord(getRecord(raw.session)?.maintenance);
       if (!maintenance || !Object.hasOwn(maintenance, "rotateBytes")) {
@@ -95,13 +70,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       delete maintenance.rotateBytes;
       changes.push("Removed deprecated session.maintenance.rotateBytes.");
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "session.maintenance.zero-duration-retention",
-    describe: "Remove zero-duration session maintenance values so documented defaults apply",
     legacyRules: [
-      SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE,
-      SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE,
+      {
+        path: ["session", "maintenance"],
+        message:
+          'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of eligible stale/non-preserved session entries. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
+        match: (raw) => hasZeroDuration(raw, "pruneAfter"),
+      },
+      {
+        path: ["session", "maintenance"],
+        message:
+          'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so the keep-by-default archive retention applies.',
+        match: (raw) => hasZeroDuration(raw, "resetArchiveRetention"),
+      },
     ],
     apply: (raw, changes) => {
       const maintenance = getRecord(getRecord(raw.session)?.maintenance);
@@ -109,14 +93,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         return;
       }
       for (const key of ["resetArchiveRetention", "pruneAfter"] as const) {
-        if (!Object.hasOwn(maintenance, key)) {
+        if (!hasZeroDuration(maintenance, key)) {
           continue;
         }
-        const val = maintenance[key];
-        if (!isZeroDuration(val)) {
-          continue;
-        }
-        const label = String(val);
+        const label = String(maintenance[key]);
         delete maintenance[key];
         const outcome =
           key === "resetArchiveRetention"
@@ -125,5 +105,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         changes.push(`Removed session.maintenance.${key} "${label}" (zero duration); ${outcome}.`);
       }
     },
-  }),
+  },
 ];

@@ -15,7 +15,6 @@ import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 
-/** Runs non-interactive setup for clients that connect to an existing remote gateway. */
 export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -39,32 +38,23 @@ export async function runNonInteractiveRemoteSetup(params: {
   if (remotePassword) {
     delete preservedRemote.token;
   }
+  const remote = { ...preservedRemote, url: remoteUrl };
+  for (const [field, value, envName] of [
+    ["token", remoteToken, "OPENCLAW_GATEWAY_TOKEN"],
+    ["password", remotePassword, "OPENCLAW_GATEWAY_PASSWORD"],
+  ] as const) {
+    if (value) {
+      remote[field] =
+        opts.secretInputMode === "ref" ? createGatewayEnvSecretRef(baseConfig, envName) : value;
+    }
+  }
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,
     gateway: {
       ...baseConfig.gateway,
       mode: "remote",
-      remote: {
-        ...preservedRemote,
-        url: remoteUrl,
-        ...(remoteToken
-          ? {
-              token:
-                opts.secretInputMode === "ref"
-                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_TOKEN")
-                  : remoteToken,
-            }
-          : {}),
-        ...(remotePassword
-          ? {
-              password:
-                opts.secretInputMode === "ref"
-                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_PASSWORD")
-                  : remotePassword,
-            }
-          : {}),
-      },
+      remote,
     },
   };
   if (opts.skipBootstrap) {

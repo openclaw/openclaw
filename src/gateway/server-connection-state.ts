@@ -90,6 +90,9 @@ export function createGatewayConnectionState(params: {
               },
             }
           : undefined;
+        if (!prepared) {
+          return false;
+        }
         return canReceiveSessionEvent({
           cfg,
           policyConfig,
@@ -98,7 +101,7 @@ export function createGatewayConnectionState(params: {
           agentId,
           event,
           payload,
-          ...(prepared ? { prepared } : {}),
+          prepared,
         });
       } catch {
         return false;
@@ -212,6 +215,9 @@ export function createGatewayConnectionState(params: {
       sessionRowProjection = projection;
       ancestorReferences = new WeakMap();
       const unsubscribe = sessionChanges.subscribeFacts((change) => {
+        if (!("all" in change) && change.scope === "acp") {
+          return;
+        }
         if ("all" in change) {
           ancestorReferences = new WeakMap();
         } else if (change.factsInvalidated || (change.facts && change.facts.kind !== "unchanged")) {

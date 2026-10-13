@@ -14,9 +14,6 @@ import type {
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 
-/**
- * Transport-facing audio target used by realtime voice bridge sessions.
- */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: RealtimeVoiceBridgeCallbacks["onAudio"];
@@ -44,9 +41,6 @@ export type RealtimeVoiceBridgeSession = Pick<
   triggerGreeting(instructions?: string): void;
 };
 
-/**
- * Provider bridge inputs plus transport callbacks for one realtime voice session.
- */
 export type RealtimeVoiceBridgeSessionParams = Omit<
   RealtimeVoiceBridgeCreateRequest,
   "onAudio" | "onClearAudio" | "onMark" | "getPlaybackState" | "onToolCall" | "onReady"
@@ -68,9 +62,6 @@ export type RealtimeVoiceBridgeSessionParams = Omit<
 
 type RealtimeVoiceSessionPhase = "admitting" | "provider-terminal" | "closing" | "disposed";
 
-/**
- * Creates a realtime voice bridge session and wires provider events to the configured audio sink.
- */
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {

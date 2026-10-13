@@ -48,6 +48,7 @@ import {
   isRetryableReefRelayFailure,
 } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
+import { LegacyReefTrustStore } from "./trust-store.legacy.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
 function resolveAccount(cfg: unknown): ReefAccount {
@@ -60,7 +61,8 @@ function resolveAccount(cfg: unknown): ReefAccount {
   };
 }
 
-function listTrustedPeers(config: ReefAccount["config"]): string[] {
+/** @deprecated Retained for released hosts without asynchronous channel hooks. */
+function listTrustedPeersCurrent(config: ReefAccount["config"]): string[] {
   if (!config.handle) {
     return [];
   }
@@ -68,19 +70,48 @@ function listTrustedPeers(config: ReefAccount["config"]): string[] {
   // without initializing the live plugin runtime.
   const runtime = getOptionalReefRuntime();
   return runtime
-    ? openReefTrustStore(runtime, config)
-        .list()
-        .map((entry) => entry.peer)
+    ? new LegacyReefTrustStore(runtime, config).listCurrent().map((entry) => entry.peer)
     : [];
 }
 
-function listTrustedPeerDirectoryEntries(params: {
+async function listTrustedPeers(config: ReefAccount["config"]): Promise<string[]> {
+  const runtime = getOptionalReefRuntime();
+  return runtime && config.handle
+    ? (await openReefTrustStore(runtime, config).list()).map((entry) => entry.peer)
+    : [];
+}
+
+function describeReefAccount(account: ReefAccount, friendCount: number) {
+  return {
+    accountId: "default",
+    enabled: account.enabled,
+    configured: account.configured,
+    extra: {
+      handle: account.config.handle,
+      relayUrl: account.config.relayUrl,
+      friendCount,
+    },
+  };
+}
+
+function resolveReefDmPolicy(allowFrom: string[]) {
+  return {
+    policy: "pairing" as const,
+    allowFrom,
+    policyPath: "Reef local peer trust",
+    allowFromPath: "Reef local peer trust",
+    approveHint: "openclaw pairing approve reef <code>",
+    normalizeEntry: (entry: string) => normalizeReefTarget(entry) ?? entry,
+  };
+}
+
+async function listTrustedPeerDirectoryEntries(params: {
   config: ReefAccount["config"];
   query: string | null | undefined;
   limit: number | null | undefined;
 }) {
   const query = normalizeReefTarget(params.query ?? "") ?? params.query?.trim().toLowerCase();
-  const peers = listTrustedPeers(params.config).filter(
+  const peers = (await listTrustedPeers(params.config)).filter(
     (peer) => !query || peer === query || peer.includes(query),
   );
   const limit = params.limit == null ? peers.length : Math.max(0, params.limit);
@@ -128,25 +159,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     resolveAccount,
     isEnabled: (account) => account.enabled,
     isConfigured: (account) => account.configured,
+    /** @deprecated Retained for released hosts without resolveAllowFromAsync. */
     resolveAllowFrom: ({ cfg }) => {
       const config = resolveReefConfig(cfg as ReefCoreConfig);
-      return listTrustedPeers(config);
+      return listTrustedPeersCurrent(config);
     },
+    resolveAllowFromAsync: ({ cfg }) => listTrustedPeers(resolveAccount(cfg).config),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
-    describeAccount: (account) => {
-      const friendCount = listTrustedPeers(account.config).length;
-      return {
-        accountId: "default",
-        enabled: account.enabled,
-        configured: account.configured,
-        extra: {
-          handle: account.config.handle,
-          relayUrl: account.config.relayUrl,
-          friendCount,
-        },
-      };
-    },
+    /** @deprecated Retained for released hosts without describeAccountAsync. */
+    describeAccount: (account) =>
+      describeReefAccount(account, listTrustedPeersCurrent(account.config).length),
+    describeAccountAsync: async (account) =>
+      describeReefAccount(account, (await listTrustedPeers(account.config)).length),
   },
   messaging: {
     targetPrefixes: ["reef"],
@@ -217,14 +242,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     },
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: "pairing",
-      allowFrom: listTrustedPeers(account.config),
-      policyPath: "Reef local peer trust",
-      allowFromPath: "Reef local peer trust",
-      approveHint: "openclaw pairing approve reef <code>",
-      normalizeEntry: (entry) => normalizeReefTarget(entry) ?? entry,
-    }),
+    /** @deprecated Retained for released hosts without resolveDmPolicyAsync. */
+    resolveDmPolicy: ({ account }) => resolveReefDmPolicy(listTrustedPeersCurrent(account.config)),
+    resolveDmPolicyAsync: async ({ account }) =>
+      resolveReefDmPolicy(await listTrustedPeers(account.config)),
   },
   status: {
     defaultRuntime: { accountId: "default", enabled: true, configured: false },
@@ -246,28 +267,30 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
       if (!ctx.account.configured) {
         throw new Error("Reef requires handle, email, and guard config");
       }
+      const config = structuredClone(ctx.account.config);
       const runtime = getReefRuntime();
-      const keys = await loadKeys(runtime);
       const identityBinding = {
-        handle: ctx.account.config.handle!,
-        relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
+        handle: config.handle!,
+        relayUrl: parseReefRelayUrl(config.relayUrl),
       };
+      const keys = await loadKeys(runtime, () => ctx.abortSignal.throwIfAborted());
       await assertReefIdentityBinding(runtime, identityBinding);
+      ctx.abortSignal.throwIfAborted();
       const authority = createReefRuntimeAuthority(ctx.abortSignal);
       const transport = new ReefTransportClient(
-        ctx.account.config.relayUrl,
-        ctx.account.config.handle!,
+        identityBinding.relayUrl,
+        identityBinding.handle,
         keys,
       );
-      const stores = openStores(runtime, keys, { authoritySignal: authority.signal });
-      const inboxCursor = new ReefInboxCursorStore(runtime, identityBinding);
+      const stores = await openStores(runtime, keys, { authoritySignal: authority.signal });
+      const inboxCursor = new ReefInboxCursorStore(runtime, identityBinding, authority.signal);
       const reviews = stores.reviews;
       const pairing = createChannelPairingController({
         core: runtime,
         channel: "reef",
         accountId: "default",
       });
-      const trust = openReefTrustStore(runtime, ctx.account.config);
+      const trust = openReefTrustStore(runtime, config, () => authority.signal.throwIfAborted());
       const friends = new ReefFriendManager(
         transport,
         trust,
@@ -277,18 +300,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
         },
         authority.signal,
       );
-      const onIngress = async (message: ReefIngressMessage) => {
+      const onIngress = async (message: ReefIngressMessage, assertCurrent: () => void) => {
         const dispatchContent = resolveReefInboundDispatchContent(message);
         const budget = autonomyBudget(message.autonomy);
         const loop = recordChannelBotPairLoopAndCheckSuppression({
           scopeId: "reef:default",
           conversationId: message.thread ?? message.id,
           senderId: message.peer,
-          receiverId: ctx.account.config.handle!,
+          receiverId: identityBinding.handle,
           config: budget.botLoopProtection,
           defaultEnabled: true,
         });
         if (loop.suppressed) {
+          assertCurrent();
           await ownerNotice({
             text: `Reef auto-reply budget exhausted for @${message.peer}; delivery paused until cooldown.`,
             peer: message.peer,
@@ -296,6 +320,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
           });
           return;
         }
+        // Released hosts may ignore the forwarded authority hook.
+        assertCurrent();
         await dispatchInboundDirectDm({
           channelIngress: "unsupported",
           cfg: ctx.cfg,
@@ -305,13 +331,14 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
           peer: { kind: "direct", id: message.peer },
           senderId: message.peer,
           senderAddress: `reef:${message.peer}`,
-          recipientAddress: `reef:${ctx.account.config.handle}`,
+          recipientAddress: `reef:${identityBinding.handle}`,
           conversationLabel: `@${message.peer}'s agent`,
           ...dispatchContent,
           messageId: message.id,
           commandAuthorized: false,
           // ReefMessageFlow invokes ingress only after peer trust and guard approval.
           inboundAccessAuthorized: true,
+          assertAuthority: assertCurrent,
           deliver: async (payload) => {
             const text = payload.text ?? "";
             if (text.trim()) {
@@ -330,15 +357,14 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
       const ownerNotice = createReefOwnerNoticeHandler({
         runtime,
         cfg: ctx.cfg,
-        accountId: "default",
-        handle: ctx.account.config.handle!,
+        handle: identityBinding.handle,
       });
       const flow: ReefMessageFlow = new ReefMessageFlow({
-        config: ctx.account.config,
+        config,
         trust,
         keys,
         transport,
-        guard: createConfiguredGuard(ctx.account.config),
+        guard: createConfiguredGuard(config),
         audit: stores.audit,
         replay: stores.replay,
         reviews,
@@ -348,13 +374,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
         onOwnerNotice: async (text) =>
           ownerNotice({
             text,
-            contextKey: `reef:${ctx.account.config.handle}`,
+            contextKey: `reef:${identityBinding.handle}`,
           }),
       });
       const receiptNotifier = new ReefReceiptNotifier(
         async (notice) => {
           let resendText = "";
           let dispatchFailure: Error | undefined;
+          const assertCurrent = () => {
+            authority.signal.throwIfAborted();
+            notice.recovery.assertCurrent();
+          };
+          // Reserve may yield; older dispatchers do not recheck this hook.
+          assertCurrent();
           await dispatchInboundDirectDm({
             channelIngress: "unsupported",
             cfg: ctx.cfg,
@@ -364,12 +396,13 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             peer: { kind: "direct", id: notice.peer },
             senderId: notice.peer,
             senderAddress: `reef:${notice.peer}`,
-            recipientAddress: `reef:${ctx.account.config.handle}`,
+            recipientAddress: `reef:${identityBinding.handle}`,
             conversationLabel: `Reef delivery receipt for @${notice.peer}`,
             rawBody: notice.text,
             bodyForAgent: notice.text,
             messageId: `rejection-${notice.messageId}`,
             commandAuthorized: false,
+            assertAuthority: assertCurrent,
             extraContext: {
               ReefDeliveryRejected: true,
               ReefEnvelopeId: notice.messageId,
@@ -403,22 +436,16 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
               replyTo: notice.messageId,
               expectedRecipient: notice.recipient,
               resendDisabled: true,
+              prepareDelivery: notice.recovery.prepareOutboundDelivery.bind(notice.recovery),
+              recovery: notice.recovery,
             });
           }
         },
         {
-          loadState: (peer) => trust.rejectionNoticeState(peer),
-          reserve: (rejection, noticeState) =>
-            trust.reserveOutboundRejectionNotice(
-              rejection.peer,
-              rejection.id,
-              rejection.recipient,
-              noticeState,
-            ),
-          complete: (rejection, noticeState) => {
-            // Persist cooldown before deleting the reservation. A crash between
-            // those writes leaves stop-only recovery, never another resend grant.
-            if (!trust.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+          loadState: (rejection) => rejection.recovery.loadState(),
+          reserve: (rejection, noticeState) => rejection.recovery.reserve(noticeState),
+          complete: async (rejection, noticeState) => {
+            if (!(await rejection.recovery.complete(noticeState))) {
               throw new Error(`Reef rejection ${rejection.id} lost its durable delivery state`);
             }
           },
@@ -439,12 +466,13 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             sendPairingReply: async () => {},
           });
         }, signal);
+        await receiptNotifier.notifyRejections(await trust.pendingOutboundRejections());
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.
       // The lifecycle owns both the ordering and the reconcile failure policy.
       const activate = async () => {
-        await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
+        await receiptNotifier.notifyRejections(await trust.pendingOutboundRejections());
         if (ctx.abortSignal.aborted) {
           return;
         }

@@ -23,16 +23,10 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import { AuthStorage } from "./auth-storage.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
-import { ModelRegistry } from "./model-registry.js";
-import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
-import { createGrepToolDefinition } from "./tools/grep.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -231,48 +225,7 @@ describe("AgentSession runtime and transcript projections", () => {
     },
   );
 
-  it("keeps grep-only truncation results free of unavailable read-tool instructions", async () => {
-    const cwd = await fs.realpath(tempDirs.make("openclaw-sdk-grep-guidance-"));
-    const line = `needle ${"x".repeat(600)} OMITTED_END`;
-    await fs.writeFile(path.join(cwd, "long-line.txt"), `${line}\n`);
-    const { session } = await createAgentSession({
-      systemPrompt: "Test session prompt",
-      cwd,
-      tools: ["grep"],
-      customTools: [createGrepToolDefinition(cwd)],
-      model: testModel,
-      thinkingLevel: "medium" as const,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-    try {
-      expect(session.getActiveToolNames()).toEqual(["grep"]);
-      session.setActiveToolsByName(["read", "grep"]);
-      expect(session.getActiveToolNames()).toEqual(["grep"]);
-      const grep = session.agent.state.tools[0];
-      if (!grep) {
-        throw new Error("Expected the selected grep tool");
-      }
-      const result = await grep.execute("grep-long-line", {
-        pattern: "needle",
-        path: "long-line.txt",
-      });
-      const text = result.content
-        .flatMap((block) => (block.type === "text" ? [block.text] : []))
-        .join("\n");
-      expect(result.details).toMatchObject({ linesTruncated: true });
-      expect(text).toContain(`long-line.txt:1: ${line.slice(0, 500)}... [truncated]`);
-      expect(text).toContain("Some lines truncated to 500 chars");
-      expect(text).not.toContain("OMITTED_END");
-      expect(text).not.toMatch(/\bread tool\b/u);
-    } finally {
-      session.dispose();
-    }
-  });
-
-  it("preserves execution correlation IDs through redacted transcript persistence", async () => {
+  it("preserves execution correlation IDs and argument bytes through transcript persistence", async () => {
     const dir = tempDirs.make("openclaw-correlation-projection-");
     const scope = {
       agentId: "main",
@@ -326,21 +279,21 @@ describe("AgentSession runtime and transcript projections", () => {
       content: ids.map((id) => ({
         type: "toolCall",
         id,
-        arguments: { value: expect.not.stringContaining(id) },
+        arguments: { value: id },
       })),
     });
     expect(stored.filter((message) => message.role === "toolResult")).toMatchObject(
       ids.map((toolCallId) => ({
         toolCallId,
-        content: [{ type: "text", text: expect.not.stringContaining(toolCallId) }],
-        details: { value: expect.not.stringContaining(toolCallId) },
+        content: [{ type: "text", text: toolCallId }],
+        details: { value: toolCallId },
         isError: false,
       })),
     );
   });
 
   it.each(["apiKey", "account"])(
-    "executes original %s arguments while preserving redacted storage and delivery facts",
+    "executes and persists original %s arguments while preserving delivery facts",
     async (field) => {
       const dir = tempDirs.make("openclaw-runtime-projection-");
       const scope = {
@@ -462,7 +415,7 @@ describe("AgentSession runtime and transcript projections", () => {
             { type: "text", text: "Extension: Looking up both records." },
             ...values.map((value) => ({
               type: "toolCall",
-              arguments: { [field]: field === "account" ? value : "***" },
+              arguments: { [field]: value },
             })),
           ],
           openclawDelivery: { replyToCurrent: true },

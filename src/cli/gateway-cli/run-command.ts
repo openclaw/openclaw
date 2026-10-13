@@ -1,9 +1,13 @@
 // Gateway run command option registration and lazy handoff to runtime startup.
 import { Option, type Command } from "commander";
+import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import {
   WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "../../daemon/windows-task-supervisor-contract.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { resolveCliStartupPolicy } from "../command-startup-policy.js";
+import type { createGatewayDispatchStartupTrace } from "../startup-trace.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import { resolveGatewayRunOptions } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -11,6 +15,44 @@ import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 type GatewayRunCommandHooks = {
   beforeRun?: (opts: Pick<GatewayRunOpts, "force" | "reset">) => Promise<void> | void;
 };
+
+export async function bootstrapGatewayRun(params: {
+  opts: Pick<GatewayRunOpts, "force" | "reset">;
+  runtime: RuntimeEnv;
+  commandPath: string[];
+  startupPolicy: ReturnType<typeof resolveCliStartupPolicy>;
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>;
+}): Promise<void> {
+  const { opts, runtime, commandPath, startupPolicy, startupTrace } = params;
+  let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
+  const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
+    const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
+      await import("./pre-bootstrap.js");
+    const prepared = await prepareGatewayRunBootstrap({ opts, runtime });
+    if (prepared) {
+      beforeStatePreparation = (snapshot) =>
+        recheckGatewayRunBootstrap({ opts, runtime, ...(snapshot ? { snapshot } : {}) });
+    }
+    return prepared;
+  });
+  if (!shouldBootstrap) {
+    return;
+  }
+  await startupTrace.measure("gateway-run-bootstrap", async () => {
+    const { ensureCliExecutionBootstrap } = await import("../command-execution-startup.js");
+    await ensureCliExecutionBootstrap({
+      runtime,
+      commandPath,
+      startupPolicy,
+      loadPlugins: false,
+      ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+    });
+    const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
+    await startupTrace.measure("gateway-run-reload-environment", () =>
+      reloadTrustedGatewayRunEnvironment({ runtime }),
+    );
+  });
+}
 
 export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks = {}): Command {
   return cmd

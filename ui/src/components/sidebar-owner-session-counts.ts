@@ -16,6 +16,7 @@ const QUERY = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 } as const satisfies SessionListScope;
 
 /** Presentation adapter for one complete, access-scoped managed-list facet. */

@@ -9,7 +9,6 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
@@ -25,6 +24,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { deriveMeetingTranscriptSessionColumns } from "../transcripts/store-columns.js";
+import { meetingTranscriptDb } from "../transcripts/store-sqlite.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
@@ -83,7 +85,6 @@ async function makeFixture() {
 }
 
 afterEach(async () => {
-  pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
@@ -315,9 +316,7 @@ describe("legacy state migration caller storage", () => {
                 "SDK settings",
               );
               expect(detected.agentDir.targetDir).toBe(targetDir);
-              await expect(ensureTool("fd", true)).resolves.toBe(
-                path.join(activeDir, "bin", binary),
-              );
+              await expect(ensureTool("fd")).resolves.toBe(path.join(activeDir, "bin", binary));
               expect(fs.readFileSync(path.join(targetDir, "bin", binary), "utf8")).toBe(
                 targetDir === legacyDir ? "legacy binary" : "current binary",
               );
@@ -432,24 +431,24 @@ describe("legacy state migration caller storage", () => {
       stateDatabase.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
       stateDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       const historicalSlug = `meeting-${"x".repeat(2200)}`;
-      stateDatabase
-        .prepare(
-          `INSERT INTO meeting_transcript_sessions
-             (session_id, started_at, selector, export_key, session_slug, provider_id,
-              source_json, created_at_ms, updated_at_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          "wal-meeting",
-          "2026-09-03T00:00:00.000Z",
-          `2026-09-03/${historicalSlug}`,
-          `2026-09-03/${historicalSlug}`,
-          historicalSlug,
-          "manual-transcript",
-          JSON.stringify({ providerId: "manual-transcript", channelId: "room" }),
-          1,
-          1,
-        );
+      const sourceJson = JSON.stringify({ providerId: "manual-transcript", channelId: "room" });
+      executeSqliteQuerySync(
+        stateDatabase,
+        meetingTranscriptDb(stateDatabase)
+          .insertInto("meeting_transcript_sessions")
+          .values({
+            session_id: "wal-meeting",
+            started_at: "2026-09-03T00:00:00.000Z",
+            selector: `2026-09-03/${historicalSlug}`,
+            export_key: `2026-09-03/${historicalSlug}`,
+            session_slug: historicalSlug,
+            provider_id: "manual-transcript",
+            source_json: sourceJson,
+            ...deriveMeetingTranscriptSessionColumns(sourceJson, null),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          }),
+      );
       expect(fs.existsSync(`${agentDatabasePath}-wal`)).toBe(true);
       expect(fs.existsSync(`${stateDatabasePath}-wal`)).toBe(true);
 

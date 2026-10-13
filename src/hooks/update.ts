@@ -21,29 +21,12 @@ import {
 } from "./install.js";
 import { readHookInstalls } from "./installs.js";
 
-/** Logger contract for hook pack update operations. */
-type HookPackUpdateLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
-
-/** Per-pack update status emitted by updateNpmInstalledHookPacks. */
-type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
-
-/** Outcome for one hook pack update attempt. */
 type HookPackUpdateOutcome = {
   hookId: string;
-  status: HookPackUpdateStatus;
+  status: "updated" | "unchanged" | "skipped" | "error";
   message: string;
   currentVersion?: string;
   nextVersion?: string;
-};
-
-/** Aggregate update result with the possibly updated config. */
-type HookPackUpdateSummary = {
-  config: OpenClawConfig;
-  changed: boolean;
-  outcomes: HookPackUpdateOutcome[];
 };
 
 /** Integrity drift payload enriched with hook pack identity and dry-run state. */
@@ -58,14 +41,14 @@ type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  logger?: HookPackUpdateLogger;
+  logger?: Parameters<typeof installHooksFromNpmSpec>[0]["logger"];
   hookIds?: string[];
   dryRun?: boolean;
   lease?: PluginLifecycleLeaseContext;
   beforePersistentApply?: () => void;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}): Promise<HookPackUpdateSummary> {
+}) {
   const logger = params.logger ?? {};
   const transactionRequest = resolvePluginInstallTransactionRequest(params);
   // The caller owns the config commit and settles every staged payload/record together.

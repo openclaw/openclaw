@@ -66,6 +66,16 @@ private struct SlashPanelHeightKey: PreferenceKey {
     }
 }
 
+/// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
+/// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
+struct ChatComposerSection<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
 struct OpenClawChatComposerPresentationOwner: Equatable {
     let viewModelID: ObjectIdentifier
     let session: OpenClawChatViewModel.SessionSnapshot
@@ -135,7 +145,6 @@ struct OpenClawChatComposer: View {
     @State private var fileImporterOwner: OpenClawChatAttachmentCaptureOwner?
     #if canImport(UIKit)
     @State private var cameraEncodingTask: Task<Void, Never>?
-    @State private var cameraEncodingGeneration = UUID()
     @State private var cameraCaptureOwner: OpenClawChatAttachmentCaptureOwner?
     #endif
     @FocusState private var isFocused: Bool
@@ -275,7 +284,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var styledComposer: some View {
-        self.composerContent
+        ChatComposerSection { self.composerContent }
             .padding(composerPadding)
             .background { self.composerBackground }
     }
@@ -620,7 +629,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var editor: some View {
-        self.editorContent
+        ChatComposerSection { self.editorContent }
             .overlay(alignment: .top) {
                 if self.isSlashPopoverPresented {
                     self.slashCommandPanel
@@ -1465,8 +1474,6 @@ extension OpenClawChatComposer {
         let fileName = "camera-\(UUID().uuidString.prefix(8)).jpg"
         let viewModel = owner.viewModel
         let session = owner.session
-        let generation = UUID()
-        self.cameraEncodingGeneration = generation
         // Pin routing before JPEG encoding suspends so an external agent or
         // session update cannot adopt this camera result under a new owner.
         viewModel.beginAttachmentStaging()
@@ -1476,7 +1483,6 @@ extension OpenClawChatComposer {
                 sendableImage.value.jpegData(compressionQuality: 0.92)
             }.value
             guard !Task.isCancelled,
-                  self.cameraEncodingGeneration == generation,
                   self.viewModel === viewModel,
                   viewModel.isCurrentSession(session),
                   self.isAttachmentInputEnabled,
@@ -1505,7 +1511,6 @@ extension OpenClawChatComposer {
 
     private func cancelActiveCameraEncoding() {
         #if canImport(UIKit)
-        self.cameraEncodingGeneration = UUID()
         self.cameraEncodingTask?.cancel()
         self.cameraEncodingTask = nil
         #endif

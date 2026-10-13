@@ -64,7 +64,7 @@ export async function readGatewayStartupPhase(params: {
   }
 }
 
-export type GatewayRestartProbeAuth = {
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -77,11 +77,13 @@ export type GatewayReachability = {
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeTimeouts?: Array<{ id: string; error: string }>;
+  channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   probeError?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };
@@ -90,6 +92,7 @@ export type GatewayHttpReadiness = {
 export async function waitForGatewayHttpReadiness(params: {
   attempts: number;
   config?: OpenClawConfig;
+  /** Absolute deadline in the performance.now() clock domain. */
   deadlineAt: number;
   delayMs: number;
   probeTimeoutMs?: number;
@@ -102,7 +105,7 @@ export async function waitForGatewayHttpReadiness(params: {
   let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
     params.signal?.throwIfAborted();
-    const remainingMs = params.deadlineAt - Date.now();
+    const remainingMs = params.deadlineAt - performance.now();
     if (remainingMs <= 0) {
       return latest;
     }
@@ -124,7 +127,7 @@ export async function waitForGatewayHttpReadiness(params: {
       return latest;
     }
     if (attempt + 1 < params.attempts) {
-      const remainingDelayMs = params.deadlineAt - Date.now();
+      const remainingDelayMs = params.deadlineAt - performance.now();
       if (remainingDelayMs <= 0) {
         return latest;
       }
@@ -204,16 +207,39 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
   });
 }
 
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
+function readChannelProbeFailures(health: unknown) {
+  const errors: GatewayReachability["channelProbeErrors"] = [];
+  const timeouts: GatewayReachability["channelProbeErrors"] = [];
+  const warnings: GatewayReachability["channelProbeErrors"] = [];
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  return Object.entries(channels ?? {}).flatMap(([id, summary]) => {
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (probe?.ok !== false) {
-      return [];
+  for (const [id, summary] of Object.entries(channels ?? {})) {
+    const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
+    for (const [accountId, value] of accounts.length ? accounts : Object.entries({ "": summary })) {
+      const account = asOptionalRecord(value);
+      if (account?.enabled === false || account?.configured === false) {
+        continue;
+      }
+      if (account?.running === false || account?.healthState === "not-running") {
+        warnings.push({
+          id: accountId ? `${id}/${accountId}` : id,
+          error:
+            typeof account.lastError === "string" && account.lastError.trim()
+              ? account.lastError
+              : "not running",
+        });
+      }
     }
-    const error = probe.error;
-    return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
-  });
+    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
+    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+      continue;
+    }
+    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+    (probe.timedOut === true ? timeouts : errors).push({
+      id,
+      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+    });
+  }
+  return { errors, timeouts, warnings };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -293,7 +319,12 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    result.channelProbeErrors = readChannelProbeErrors(health);
+    const { errors, timeouts, warnings } = readChannelProbeFailures(health);
+    result.channelProbeErrors = errors;
+    result.channelRuntimeWarnings = warnings.length ? warnings : undefined;
+    if (timeouts.length) {
+      result.channelProbeTimeouts = timeouts;
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket

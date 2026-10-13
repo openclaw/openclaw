@@ -162,5 +162,5 @@ function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
 }
 
 function emitLifecycleEnd(handler: Parameters<typeof emitAgentEvent>[0], runId: string, seq = 2) {
-  emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
+  return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
 }

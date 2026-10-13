@@ -1,8 +1,3 @@
-/**
- * Agent image resize helpers.
- *
- * Prepares image bytes for provider payload limits using the configured image processor.
- */
 import type { ImageContent } from "../../llm/types.js";
 import { convertImageToPng, createImageProcessor, type ImageProbe } from "../../media/image-ops.js";
 

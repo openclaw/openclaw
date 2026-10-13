@@ -22,9 +22,12 @@ import {
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
 import { readTranscriptLibraryStatus } from "./status.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import {
   cursorScope,
   encodeCursor,
+  iterateTranscriptExport,
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readTranscriptEntry,
   readTranscriptLibraryEntry,
@@ -67,6 +70,13 @@ function observeArchiveReads(
 ) {
   // SQL allocation assertions use the same kernels locally; the worker fixture
   // separately proves the real facade's transport and absence of parent SQL.
+  vi.spyOn(store, "listReadEntries").mockImplementation(
+    new Proxy(store.listReadEntries.bind(store), {
+      async apply(_target, _receiver, [options]) {
+        return queryTranscriptReadEntries(database, options);
+      },
+    }),
+  );
   vi.spyOn(store, "readEntry").mockImplementation(async (selector, purpose) =>
     readTranscriptEntry(database, selector, purpose),
   );
@@ -76,6 +86,20 @@ function observeArchiveReads(
   vi.spyOn(store, "readLibraryEntry").mockImplementation(async (params) =>
     readTranscriptLibraryEntry(database, params),
   );
+  vi.spyOn(store, "streamExport").mockImplementation(async (selector, includeNotes, consume) => {
+    const rows = iterateTranscriptExport(database, selector, includeNotes);
+    try {
+      for (let step = rows.next(); ; step = rows.next()) {
+        if (step.done) {
+          return step.value;
+        }
+        await consume([step.value]);
+      }
+    } catch (error) {
+      rows.throw(error);
+      throw error;
+    }
+  });
   vi.spyOn(store, "readSummarySnapshot").mockImplementation(async (descriptor, maxUtterances) =>
     readTranscriptSummarySnapshot(database, descriptor, maxUtterances),
   );
@@ -183,6 +207,7 @@ describe("transcript library SQLite query budgets", () => {
       await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
       const db = database();
       seedExportBookkeeping(db);
+      const malformedSummaryColumns = deriveMeetingTranscriptSummaryColumns("{malformed");
       executeSqliteQuerySync(
         db,
         meetingTranscriptDb(db)
@@ -192,6 +217,7 @@ describe("transcript library SQLite query budgets", () => {
               session_id: target.sessionId,
               session_started_at: target.startedAt,
               summary_json: "{malformed",
+              overview: malformedSummaryColumns.overview,
               utterance_count: 0,
             })),
           ),
@@ -397,6 +423,40 @@ describe("transcript library SQLite query budgets", () => {
     },
   );
 
+  it("budgets public previews after projection while retaining raw tool bounds", async () => {
+    const { store, database } = fixture();
+    for (const id of ["a", "b", "c"]) {
+      const target = session(id, {
+        source: { providerId: "manual-transcript", private: "synthetic-private" },
+        metadata: { private: "synthetic-metadata", agentId: "main" },
+      });
+      await store.writeSession(target);
+      await store.writeSummary(
+        {
+          ...summarizeTranscripts({ session: target, utterances: [] }),
+          overview: "x".repeat(600_000),
+        },
+        target,
+      );
+    }
+    const reads = observeArchiveReads(store, database());
+    const page = await listTranscriptLibrary(store, { limit: 2 });
+    expect(page.sessions.map(({ overview }) => overview)).toEqual([
+      "x".repeat(280),
+      "x".repeat(280),
+    ]);
+    expect(page.nextCursor).not.toBeNull();
+    expect(JSON.stringify(page)).not.toContain("synthetic-");
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ executions: 1, rows: 3, closed: true });
+    await expect(store.listReadEntries({ limit: 2 })).rejects.toThrow(
+      expect.objectContaining({ type: "transcript_result_too_large" }),
+    );
+    await expect(
+      listTranscriptLibrary(store, { limit: 1 }, () => "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES)),
+    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
+  });
+
   it("bounds summary transfer after omitting duplicated history and keeps the larger export budget", async () => {
     const { store, database } = fixture();
     const target = session("summary-bound");
@@ -408,11 +468,12 @@ describe("transcript library SQLite query budgets", () => {
     };
     await store.writeSummary({ ...summary, transcript: [] }, target);
     const db = database();
+    const summaryJson = JSON.stringify(summary);
     executeSqliteQuerySync(
       db,
       meetingTranscriptDb(db)
         .updateTable("meeting_transcript_summaries")
-        .set({ summary_json: JSON.stringify(summary) })
+        .set({ summary_json: summaryJson, ...deriveMeetingTranscriptSummaryColumns(summaryJson) })
         .where("session_id", "=", target.sessionId)
         .where("session_started_at", "=", target.startedAt),
     );

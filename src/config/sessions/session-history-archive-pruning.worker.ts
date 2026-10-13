@@ -46,14 +46,13 @@ export function readSessionArchivePruningInDatabase(
         "session_key",
       ])
       .where("published_at", "is not", null)
+      .$narrowType<{ published_at: number }>()
       .orderBy("created_at", "asc")
       .orderBy("session_id", "asc")
       .orderBy("generation", "asc")
       .limit(limit),
   ).rows;
-  return rows.flatMap((row) =>
-    row.published_at === null ? [] : [{ ...row, published_at: row.published_at }],
-  );
+  return rows.map((row) => Object.assign({}, row));
 }
 
 export function readSessionArchivePruningInWorker(

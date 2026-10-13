@@ -14,11 +14,9 @@ export async function waitForPreparedReplyQueue(params: {
   refreshPreparedState: () => Promise<void>;
   resolveBusyState: () => { isActive: boolean };
 }): Promise<ReplyPayload | undefined> {
-  if (params.queueMode === "interrupt") {
-    await params.interruptActiveRun();
-  } else {
-    await params.waitForActiveRunEnd(params.activeSessionId);
-  }
+  await (params.queueMode === "interrupt"
+    ? params.interruptActiveRun()
+    : params.waitForActiveRunEnd(params.activeSessionId));
   await params.refreshPreparedState();
   return params.resolveBusyState().isActive
     ? { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT }

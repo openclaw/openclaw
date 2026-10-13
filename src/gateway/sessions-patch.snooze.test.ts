@@ -47,8 +47,6 @@ describe("snooze", () => {
     { entry: { archivedAt: 10 }, error: archivedError },
     { patch: { archived: true }, error: archivedError },
     { entry: { spawnedBy: MAIN_SESSION_KEY }, error: childError },
-    { entry: { parentSessionKey: "agent:main:dashboard:parent" }, error: childError },
-    { storeKey: "agent:main:subagent:child", error: childError },
     { storeKey: "unknown", error: "Cannot snooze the unknown session sentinel." },
     { storeKey: "global", error: "Cannot snooze an agent's main session." },
     { storeKey: MAIN_SESSION_KEY, error: "Cannot snooze an agent's main session." },

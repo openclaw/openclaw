@@ -83,6 +83,7 @@ it("acquires wrapper leases and manages templates without the application comman
   copyPrWrapperSources(root);
   linkPrWrapperDependencies(root);
   await prepareCopiedSourceModules(root, [
+    "src/agents/worktrees/allocation.ts",
     "src/agents/worktrees/template-registry-async.ts",
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-db.ts",
@@ -101,9 +102,10 @@ it("acquires wrapper leases and manages templates without the application comman
       "-e",
       `
         import assert from "node:assert/strict";
+        import { withWorktreeAllocationLease } from "./src/agents/worktrees/allocation.js";
         import {
           deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
-          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync, touchTemplateAsync,
+          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync,
         } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
         import {
@@ -120,8 +122,7 @@ it("acquires wrapper leases and manages templates without the application comman
         for (let grant = 0; grant < 2; grant += 1) {
           await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         }
-        await withOpenClawStateLease(options, async (lease) => {
-          const guard = () => lease.assertOwned();
+        await withWorktreeAllocationLease({ env: process.env }, async ({ commitGuard: guard }) => {
           const template = {
             cacheKey: "wrapper-template", id: "generation-1",
             repoRoot: process.cwd(), commonDir: process.cwd() + "/.git",
@@ -133,9 +134,8 @@ it("acquires wrapper leases and manages templates without the application comman
           await reserveTemplateAsync(process.env, template, guard);
           assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
           assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
-          assert.equal(await touchTemplateAsync(process.env, template.id, 3, guard), true);
           assert.deepEqual(await listTemplatesAsync(process.env), [
-            { ...template, status: "ready", lastUsedAt: 3 },
+            { ...template, status: "ready", lastUsedAt: 2 },
           ]);
           assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
           assert.equal(await hasTemplatesAsync(process.env), false);

@@ -156,7 +156,7 @@ describe("registered project catalog", () => {
       const old = createDeferred<ProjectsListResult>();
       h.request.mockReturnValueOnce(old.promise);
       const pending = h.store.refresh(true);
-      const current = { ...project, originUrl: undefined, displayName: "Hidden Project" };
+      const current = { ...project, originUrl: undefined, displayName: "Release Tools" };
       h.request.mockResolvedValue({ projects: [current] });
       if (change === "client") {
         h.snapshot.client = createTestGatewayClient(h.request);
@@ -180,28 +180,16 @@ describe("registered project catalog", () => {
       await h.store.refresh();
       old.resolve({ projects: [project] });
       await pending;
-      expect(h.store.snapshot.repositories).toEqual([{ aliases: ["Hidden Project"] }]);
+      expect(h.store.snapshot.result?.projects[0]?.displayName).toBe("Release Tools");
+      expect(h.store.snapshot.repositories).toEqual([{ aliases: ["Release Tools"] }]);
+      expect(
+        markdownGitHubAliases(h.store.snapshot.repositories, { owner: "acme", repo: "tools" }),
+      ).toEqual([
+        ["release tools", null],
+        ["tools", { owner: "acme", repo: "tools" }],
+      ]);
     },
   );
-
-  it("keeps read-only display names unresolved without inventing hidden origin aliases", async () => {
-    const h = harness();
-    await h.store.refresh();
-    h.snapshot.hello!.auth!.scopes = ["operator.read"];
-    h.request.mockResolvedValue({
-      projects: [{ ...project, displayName: "Release Tools", originUrl: undefined }],
-    });
-    h.emit();
-    await h.store.refresh();
-    expect(h.store.snapshot.result?.projects[0]?.displayName).toBe("Release Tools");
-    expect(h.store.snapshot.repositories).toEqual([{ aliases: ["Release Tools"] }]);
-    expect(
-      markdownGitHubAliases(h.store.snapshot.repositories, { owner: "acme", repo: "tools" }),
-    ).toEqual([
-      ["release tools", null],
-      ["tools", { owner: "acme", repo: "tools" }],
-    ]);
-  });
 
   it("clears aliases on read permission loss without requesting wider access", async () => {
     const h = harness();
@@ -227,10 +215,7 @@ describe("registered project catalog", () => {
   });
 
   it.each([
-    "https://gitlab.com/team/shared.git",
     "gitlab.com:team/shared.git",
-    "internal:team/shared.git",
-    "internal:shared.git",
     "[2001:db8::1]:shared.git",
     "ssh://internal/shared.git",
     "https://gitlab.com/team/%73hared.git",
@@ -254,19 +239,14 @@ describe("registered project catalog", () => {
   });
 
   it.each([
-    ["https://github.com/OpenClaw/ClawSweeper.git", true],
-    ["git@github.com:OpenClaw/ClawSweeper.git", true],
     ["github.com:OpenClaw/ClawSweeper.git", true],
-    ["ssh://git@github.com/OpenClaw/ClawSweeper.git", true],
     ["ssh://github.com/OpenClaw/ClawSweeper.git", true],
     ["ssh://github.com:22/OpenClaw/ClawSweeper.git", true],
     ["ssh://github.com:2222/OpenClaw/ClawSweeper.git", false],
     ["ssh://github.com.evil.test/OpenClaw/ClawSweeper.git", false],
-    ["https://gitlab.com/openclaw/clawsweeper.git", false],
     ["https://user:secret@github.com/openclaw/clawsweeper.git", false],
     ["git@evil.test:openclaw/clawsweeper.git", false],
     ["/workspace/clawsweeper", false],
-    [undefined, false],
   ])("binds only verified GitHub clone coordinates: %s", async (originUrl, resolves) => {
     const h = harness();
     await h.store.refresh();

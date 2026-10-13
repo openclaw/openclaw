@@ -1,4 +1,3 @@
-// Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -823,6 +822,192 @@ describe("MediaStreamHandler security hardening", () => {
       expect(closed.code).toBe(1009);
       expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("MediaStreamHandler base64 validation", () => {
+  it("drops malformed media frames while keeping the stream usable", async () => {
+    const sentAudio: Buffer[] = [];
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {},
+      sendAudio: (audio) => sentAudio.push(Buffer.from(audio)),
+      close: () => {},
+      isConnected: () => true,
+    };
+    const handler = createHandler({
+      transcriptionProvider: createStubSttProvider(() => session),
+      shouldAcceptStream: () => true,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-base64",
+          start: { callSid: "CA-base64" },
+        }),
+      );
+      for (const payload of ["!!!not-valid-base64!!!", "   \t\n  "]) {
+        ws.send(JSON.stringify({ event: "media", media: { payload } }));
+      }
+      ws.send(JSON.stringify({ event: "media", media: { payload: "-_8" } }));
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: { payload: Buffer.from("valid").toString("base64") },
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(sentAudio).toEqual([Buffer.from([0xfb, 0xff]), Buffer.from("valid")]);
+      });
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("MediaStreamHandler lifecycle", () => {
+  it("keeps rejecting upgrades through the shutdown barrier without active sockets", async () => {
+    const handler = createHandler();
+    let releaseShutdownBarrier: (() => void) | undefined;
+    const shutdownBarrier = new Promise<void>((resolve) => {
+      releaseShutdownBarrier = resolve;
+    });
+    const close = handler.close(shutdownBarrier);
+    let closeSettled = false;
+    void close.then(() => {
+      closeSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+
+    releaseShutdownBarrier?.();
+    await close;
+    expect(closeSettled).toBe(true);
+  });
+
+  it("rejects duplicate start frames without creating another STT session", async () => {
+    const closeSession = vi.fn();
+    const sttSession: RealtimeTranscriptionSession = {
+      connect: async () => {},
+      sendAudio: () => {},
+      close: closeSession,
+      isConnected: () => true,
+    };
+    const createSession = vi.fn(() => sttSession);
+    const shouldAcceptStream = vi.fn(() => true);
+    const onConnect = vi.fn();
+    const onDisconnect = vi.fn();
+    const handler = createHandler({
+      transcriptionProvider: createStubSttProvider(createSession),
+      shouldAcceptStream,
+      onConnect,
+      onDisconnect,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-first",
+          start: { callSid: "CA-first" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(onConnect).toHaveBeenCalledWith("CA-first", "MZ-first");
+      });
+
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-second",
+          start: { callSid: "CA-second" },
+        }),
+      );
+      const closed = await waitForClose(ws);
+
+      expect(closed).toEqual({ code: 1008, reason: "Duplicate start" });
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(shouldAcceptStream).toHaveBeenCalledTimes(1);
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(closeSession).toHaveBeenCalledTimes(1);
+        expect(onDisconnect).toHaveBeenCalledWith("CA-first", "MZ-first");
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("terminates active streams and shares concurrent close completion", async () => {
+    const closeSession = vi.fn();
+    const onConnect = vi.fn();
+    const onDisconnect = vi.fn();
+    const handler = createHandler({
+      transcriptionProvider: createStubSttProvider(() => ({
+        ...createStubSession(),
+        close: closeSession,
+      })),
+      shouldAcceptStream: () => true,
+      onConnect,
+      onDisconnect,
+    });
+    const server = await startWsServer(handler);
+    const ws = await connectWs(server.url);
+    let releaseShutdownBarrier: (() => void) | undefined;
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-shutdown",
+          start: { callSid: "CA-shutdown" },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(onConnect).toHaveBeenCalledWith("CA-shutdown", "MZ-shutdown");
+      });
+
+      const closed = waitForClose(ws);
+      const shutdownBarrier = new Promise<void>((resolve) => {
+        releaseShutdownBarrier = resolve;
+      });
+      const firstClose = handler.close(shutdownBarrier);
+      const secondClose = handler.close();
+      let closeSettled = false;
+      void firstClose.then(() => {
+        closeSettled = true;
+      });
+
+      expect(secondClose).toBe(firstClose);
+      expect(await closed).toEqual({ code: 1006, reason: "" });
+      await vi.waitFor(() => {
+        expect(closeSession).toHaveBeenCalledTimes(1);
+        expect(onDisconnect).toHaveBeenCalledWith("CA-shutdown", "MZ-shutdown");
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+      });
+      expect(closeSettled).toBe(false);
+
+      releaseShutdownBarrier?.();
+      await firstClose;
+      expect(closeSettled).toBe(true);
+    } finally {
+      releaseShutdownBarrier?.();
+      ws.terminate();
+      await handler.close();
       await server.close();
     }
   });

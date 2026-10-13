@@ -100,9 +100,6 @@ describe("setupChannels status and catalog fallback plugin reuse", () => {
     }));
     resolveChannelSetupEntries.mockReturnValue(makeChannelSetupEntries());
     collectChannelStatus.mockResolvedValue({
-      installedPlugins: [],
-      catalogEntries: [],
-      installedCatalogEntries: [],
       statusByChannel: new Map(),
       statusLines: [],
     });
@@ -112,9 +109,6 @@ describe("setupChannels status and catalog fallback plugin reuse", () => {
   it("localizes the channel status note title in the setup flow", async () => {
     const note = vi.fn(async () => undefined);
     collectChannelStatus.mockResolvedValue({
-      installedPlugins: [],
-      catalogEntries: [],
-      installedCatalogEntries: [],
       statusByChannel: new Map(),
       statusLines: ["Discord: configured"],
     });

@@ -1,6 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
@@ -27,6 +28,7 @@ import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -40,15 +42,18 @@ import {
   retainAgentDatabase,
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
-import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { assertAgentDatabaseResourceAdmission } from "./openclaw-agent-db-resources.js";
+import { revalidateAgentDatabaseTerminalOpenAsync } from "./openclaw-agent-db-terminal.js";
 import {
-  assertExistingAgentSchemaOwner,
-  assertSupportedAgentSchemaVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
-import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+  getOpenClawAgentDatabaseValidationForTransfer,
+  type OpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
+import { withWorkerAdmission } from "./openclaw-agent-db-worker-admission.js";
+import {
+  INCOGNITO_AGENT_SQLITE_BASENAME,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
+import type { OpenClawAgentDatabaseAdmissionExecution } from "./openclaw-agent-execution-admission-contract.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -57,7 +62,11 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 
 /** Denial still invokes run under admission, with a throwing authority check, to permit cleanup. */
 export type OpenClawAgentDatabaseWriteAdmission = <T>(
-  run: (assertCurrent: () => void, validation?: OpenClawAgentDatabaseValidation) => T | Promise<T>,
+  run: (
+    assertCurrent: () => void,
+    validation?: OpenClawAgentDatabaseValidation,
+    integrityRevoked?: boolean,
+  ) => T | Promise<T>,
 ) => Promise<T>;
 
 /** Refusal must unwind ownership without entering corruption repair or changing its caller error. */
@@ -103,6 +112,15 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?.();
 }
 
+function assertAgentDatabaseWriteAllowed(pathname: string): void {
+  if (path.basename(pathname) === INCOGNITO_AGENT_SQLITE_BASENAME) {
+    throw new Error("Incognito sessions use the memory session actor, not a SQLite database.");
+  }
+  if (isArtifactPreservingStateRead("agent", pathname)) {
+    throw new Error("Programming error: writable agent database open during read-only inspection.");
+  }
+}
+
 /** Bind admission drivers to the canonical private database-open generator. */
 export function createOpenClawAgentDatabaseAdmissionOwner(
   openSteps: (
@@ -128,6 +146,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
     repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
   ): OpenClawAgentDatabase {
+    assertAgentDatabaseWriteAllowed(resolveOpenClawAgentSqlitePath(options));
     const run = () => {
       const steps = openSteps(
         options,
@@ -180,20 +199,13 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           }
         }
       : deletionCommit;
-    const enteredNestedTransaction = database.db.isTransaction;
     return withSqlitePostCommitPublications(database.db, () =>
       runSqliteImmediateTransactionSync(
         database.db,
         () => {
           assertAgentDeletionDatabaseCleanupAccess(database, options);
           assertAgentCreationClaimAccess(database, options);
-          const operationResult = operation(database);
-          if (!enteredNestedTransaction && !cache.incognito.has(database)) {
-            // Permission failure must roll back with the write. Repairing after
-            // COMMIT could make callers retry a transaction already durable in SQLite.
-            ensureOpenClawAgentDatabasePermissions(database.path, options);
-          }
-          return operationResult;
+          return operation(database);
         },
         {
           busyTimeoutMs: writeOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -206,7 +218,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     );
   }
 
-  /** The initiating caller guards its physical open; each coalesced caller guards its own operation. */
+  /** Released SDK guards may read SQLite; preserve their native open and integrity-resume checkpoints. */
   function withOpenClawAgentDatabaseAsync<T>(
     inputOptions: OpenClawAgentDatabaseOptions,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
@@ -214,7 +226,50 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     assertCurrent?: () => void,
     signal?: AbortSignal,
   ): Promise<T> {
+    const run = () =>
+      runAgentDatabaseAsync(inputOptions, operation, assertCurrent, signal, "native");
+    const scope = getOpenClawDatabaseMaintenanceScope();
+    return scope ? scope.run(run) : run();
+  }
+
+  /** Runtime authority runs in worker grants: same-owner row predicates belong in the worker. */
+  function withOpenClawAgentDatabaseRuntime<T>(
+    inputOptions: OpenClawAgentDatabaseOptions,
+    operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+    assertCurrent?: () => void,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const run = () => runAgentDatabaseAsync(inputOptions, operation, assertCurrent, signal);
+    const scope = getOpenClawDatabaseMaintenanceScope();
+    return scope ? scope.run(run) : run();
+  }
+
+  /** Core callers retain their original creating reference through native handle admission. */
+  function withOpenClawAgentDatabaseRuntimeFromExecution<T>(
+    inputOptions: OpenClawAgentDatabaseOptions,
+    execution: OpenClawAgentDatabaseAdmissionExecution,
+    operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+    assertCurrent?: () => void,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const agentId = normalizeAgentId(inputOptions.agentId);
+    const pathname = resolveOpenClawAgentSqlitePath({ ...inputOptions, agentId });
+    const assertExecutionCurrent = () => {
+      execution.assertCurrent();
+      if (execution.agentId !== agentId || execution.path !== pathname) {
+        throw new Error("Agent runtime admission differs from its captured execution");
+      }
+      assertCurrent?.();
+    };
+    const run = () =>
+      runAgentDatabaseAsync(
+        inputOptions,
+        operation,
+        assertExecutionCurrent,
+        signal,
+        undefined,
+        execution,
+      );
     const scope = getOpenClawDatabaseMaintenanceScope();
     return scope ? scope.run(run) : run();
   }
@@ -224,6 +279,8 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
     assertCurrent?: () => void,
     signal?: AbortSignal,
+    prepared?: "native" | "worker",
+    execution?: OpenClawAgentDatabaseAdmissionExecution,
   ): Promise<T> {
     signal?.throwIfAborted();
     assertCurrent?.();
@@ -234,18 +291,51 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    assertAgentDatabaseWriteAllowed(pathname);
+    options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
+    options.path = pathname;
+    if (cache.terminal.peek(pathname)) {
+      await revalidateAgentDatabaseTerminalOpenAsync(pathname, assertCurrent, signal);
+    }
+    const cached = cache.databases.get(pathname);
+    const schema = getOpenClawAgentDatabaseValidationForTransfer({
+      agentId,
+      path: pathname,
+    })?.schema;
+    if (
+      !prepared &&
+      isMainThread &&
+      (!cached?.db.isOpen || !schema || Atomics.load(new Int32Array(schema.valid), 0) !== 1) &&
+      !cache.pending.has(pathname)
+    ) {
+      return withWorkerAdmission(
+        options,
+        assertCurrent,
+        signal,
+        (preparation) =>
+          runAgentDatabaseAsync(options, operation, assertCurrent, signal, preparation, execution),
+        execution,
+      );
+    }
     const existing = cache.pending.get(pathname);
     if (existing?.agentId !== undefined && existing.agentId !== agentId) {
       throw new Error(`Agent database ${pathname} is opening for ${existing.agentId}`);
     }
     if (existing?.controller.signal.aborted) {
       return existing.promise.then(
-        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent, signal),
-        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent, signal),
+        () => runAgentDatabaseAsync(options, operation, assertCurrent, signal, prepared, execution),
+        () => runAgentDatabaseAsync(options, operation, assertCurrent, signal, prepared, execution),
       );
     }
     const pending =
-      existing ?? startOpenClawAgentDatabaseAdmission(options, agentId, pathname, assertCurrent);
+      existing ??
+      startOpenClawAgentDatabaseAdmission(
+        options,
+        agentId,
+        pathname,
+        assertCurrent,
+        prepared === "worker",
+      );
     pending.operations += 1;
     const work = racePromiseWithAbortSignal(pending.promise, signal)
       .then((database) => {
@@ -291,6 +381,10 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    assertAgentDatabaseWriteAllowed(pathname);
+    if (cache.terminal.peek(pathname)) {
+      await revalidateAgentDatabaseTerminalOpenAsync(pathname);
+    }
     const existing = cache.pending.get(pathname);
     if (existing) {
       if (existing.agentId !== agentId) {
@@ -316,13 +410,14 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     let suspended = false;
     try {
       while (true) {
-        const outcome = await withAdmission(async (assertCurrent, validation) => {
+        const outcome = await withAdmission(async (assertCurrent, validation, integrityRevoked) => {
           suspended = false;
           assertAgentDatabaseOpenAuthority(steps, () => {
             assertCurrent();
-            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, check?.database);
+            assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           });
           pending.validation = validation;
+          pending.integrityRevoked = integrityRevoked;
           const step = failure ? steps.throw(failure.error) : steps.next();
           if (!step.done) {
             suspended = true;
@@ -430,7 +525,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
   function assertOpenClawAgentDatabaseAdmissionCurrent(
     options: OpenClawAgentDatabaseOptions,
     pending: PendingAgentDatabaseOpen,
-    database?: DatabaseSync,
   ): void {
     const pathname = pending.path;
     pending.controller.signal.throwIfAborted();
@@ -442,14 +536,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     assertAgentCreationClaimCurrent(options);
     getAgentDeletionDatabaseCleanup(options)?.assertCurrent();
     pending.assertHeld?.();
-    if (database) {
-      assertSupportedAgentSchemaVersion(database, pathname);
-      assertExistingAgentSchemaOwner(
-        readExistingAgentSchemaMeta(database),
-        pending.agentId,
-        pathname,
-      );
-    }
   }
 
   function startOpenClawAgentDatabaseAdmission(
@@ -457,15 +543,16 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     agentId: string,
     pathname: string,
     assertCurrent?: () => void,
+    workerPrepared = false,
   ): PendingAgentDatabaseOpen {
     const admission = createOpenClawAgentDatabaseAdmission(agentId, pathname);
     const { pending } = admission;
+    pending.workerPrepared = workerPrepared;
     const operation = openSteps(options, pending);
     void (async () => {
       assertAgentDatabaseOpenAuthority(operation, assertCurrent);
       let step = operation.next();
       while (!step.done) {
-        const database = step.value.database;
         let failure: unknown;
         let failed = false;
         try {
@@ -482,7 +569,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         }
         // Throwing an integrity verdict into the generator can repair indexes too.
         assertAgentDatabaseOpenAuthority(operation, () => {
-          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, database);
+          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending);
           assertCurrent?.();
         });
         // Resuming, or throwing into, the same owner preserves repair and unwind policy.
@@ -502,6 +589,8 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     openOpenClawAgentDatabase,
     runOpenClawAgentWriteTransaction,
     withOpenClawAgentDatabaseAsync,
+    withOpenClawAgentDatabaseRuntime,
+    withOpenClawAgentDatabaseRuntimeFromExecution,
     withOpenClawAgentDatabaseAdmission,
   };
 }

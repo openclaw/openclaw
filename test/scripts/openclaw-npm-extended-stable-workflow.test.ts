@@ -315,6 +315,14 @@ describe("minimal npm extended-stable workflow", () => {
       invocation: null,
       api: true,
     },
+    {
+      label: "diverged target missing the gate",
+      hasScript: false,
+      relationship: "diverged",
+      status: 1,
+      invocation: null,
+      api: true,
+    },
   ])("enforces plugin compatibility admission for $label", (testCase) => {
     const run = runPluginCompatibilityGate(testCase);
     expect(run.result.status, run.result.stderr).toBe(testCase.status);
@@ -325,6 +333,25 @@ describe("minimal npm extended-stable workflow", () => {
     }
     if (testCase.status === 1) {
       expect(run.result.stderr).toContain("not proven to predate");
+    }
+  });
+
+  it("adds extended-stable without adding policy or verifier contracts", () => {
+    const raw = readFileSync(workflowPath, "utf8");
+    const parsed = workflow();
+    expect(parsed.on?.workflow_dispatch?.inputs?.npm_dist_tag?.options).toEqual([
+      "beta",
+      "latest",
+      "extended-stable",
+    ]);
+    for (const forbidden of [
+      "release-policy",
+      "policyMode",
+      "release-operation-verifier",
+      "external_contract_revision",
+      "stable-lines.json",
+    ]) {
+      expect(raw).not.toContain(forbidden);
     }
   });
 
@@ -476,15 +503,6 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(trustedRef.env?.BYPASS_EXTENDED_STABLE_GUARD).toBeUndefined();
     expect(trustedRef.run).not.toContain("BYPASS_EXTENDED_STABLE_GUARD");
-
-    const summary = step(
-      parsed.jobs?.publish_openclaw_npm,
-      "Summarize extended-stable npm publication",
-    );
-    expect(summary.env?.BYPASS_EXTENDED_STABLE_GUARD).toBe(
-      "${{ inputs.bypass_extended_stable_guard }}",
-    );
-    expect(summary.run).toContain("Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}");
   });
 
   it("lets protected tooling promote only the canonical immutable extended-stable candidate", () => {
@@ -525,15 +543,33 @@ describe("minimal npm extended-stable workflow", () => {
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       status: 0,
     },
+    { label: "feature branch", workflowRef: "refs/heads/feature/recovery", status: 1 },
+    {
+      label: "release branch with candidate override",
+      workflowRef: "refs/heads/release/2026.8.1",
+      status: 1,
+    },
     {
       label: "Tideclaw branch",
       workflowRef: "refs/heads/tideclaw/alpha/2026-09-25-1200Z",
       status: 1,
     },
     {
+      label: "extended-stable branch",
+      workflowRef: "refs/heads/extended-stable/2026.8.33",
+      status: 1,
+    },
+    { label: "ordinary tag", workflowRef: "refs/tags/v2026.8.34", status: 1 },
+    {
       label: "wrong candidate month",
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       candidate: "extended-stable/2026.7.33",
+      status: 1,
+    },
+    {
+      label: "noncanonical candidate branch",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      candidate: "extended-stable/2026.8.34",
       status: 1,
     },
     {
@@ -543,9 +579,21 @@ describe("minimal npm extended-stable workflow", () => {
       status: 1,
     },
     {
+      label: "beta selector",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      npmDistTag: "beta",
+      status: 1,
+    },
+    {
       label: "correction suffix",
       workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
       tag: "v2026.8.34-1",
+      status: 1,
+    },
+    {
+      label: "non-tag candidate",
+      workflowRef: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      tag: "a".repeat(40),
       status: 1,
     },
     {
@@ -684,20 +732,25 @@ describe("minimal npm extended-stable workflow", () => {
     expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
   });
 
-  it.each([
-    { artifactPresent: true, invocation: null },
-    { artifactPresent: false, invocation: "ui:build" },
-  ])(
-    "ensures the Control UI artifact without a target tsx loader: $artifactPresent",
-    (testCase) => {
-      const { artifactExists, invocation, result, targetHasTsxLoader } =
-        runControlUiArtifactStep(testCase);
-      expect(targetHasTsxLoader).toBe(false);
-      expect(result.status, result.stderr).toBe(0);
-      expect(invocation).toBe(testCase.invocation);
-      expect(artifactExists).toBe(true);
-    },
-  );
+  it("accepts the historical full-build artifact without a target tsx loader", () => {
+    const { artifactExists, invocation, result, targetHasTsxLoader } = runControlUiArtifactStep({
+      artifactPresent: true,
+    });
+    expect(targetHasTsxLoader).toBe(false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(invocation).toBeNull();
+    expect(artifactExists).toBe(true);
+  });
+
+  it("builds a missing Control UI release artifact through the target package script", () => {
+    const { artifactExists, invocation, result, targetHasTsxLoader } = runControlUiArtifactStep({
+      artifactPresent: false,
+    });
+    expect(targetHasTsxLoader).toBe(false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(invocation).toBe("ui:build");
+    expect(artifactExists).toBe(true);
+  });
 
   it("uses the trusted Full Validation evidence verifier", () => {
     const parsed = workflow();
@@ -762,26 +815,6 @@ describe("minimal npm extended-stable workflow", () => {
     );
   });
 
-  it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {
-    const parsed = workflow();
-    const publish = parsed.jobs?.publish_openclaw_npm;
-    const capture = step(publish, "Capture previous extended-stable selector");
-    const readback = step(publish, "Verify extended-stable registry readback");
-    const summary = step(publish, "Summarize extended-stable npm publication");
-    expect(capture.run).toContain("openclaw-npm-extended-stable-release.mjs capture-selector");
-    expect(step(publish, "Publish").run).toContain("openclaw-npm-publish.sh");
-    expect(readback.run).toContain("openclaw-npm-extended-stable-release.mjs verify-readback");
-    expect(summary.if).toContain("always()");
-    expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
-    expect(summary.run).toContain('EXPECTED_VERSION="$RELEASE_TAG"');
-    expect(summary.env?.EXTENDED_STABLE_BRANCH).toBe(
-      "${{ inputs.release_candidate_branch || github.ref_name }}",
-    );
-    expect(summary.env?.RELEASE_SHA).toBeUndefined();
-    expect(summary.run).toContain('release_sha="$(git rev-parse HEAD)"');
-    expect(publish?.environment).toBe("npm-publish");
-  });
-
   it("publishes only the tarball path verified from the preflight manifest", () => {
     const publish = workflow().jobs?.publish_openclaw_npm;
     const provenance = step(publish, "Verify prepared tarball provenance");
@@ -795,11 +828,40 @@ describe("minimal npm extended-stable workflow", () => {
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
     );
+    expect(publishStep.env).toMatchObject({
+      PREFLIGHT_WORKFLOW_SHA: "${{ steps.preflight_run.outputs.head_sha }}",
+      PREFLIGHT_RUN_ID: "${{ steps.preflight_run.outputs.run_id }}",
+      PREFLIGHT_RUN_ATTEMPT: "${{ steps.preflight_run.outputs.run_attempt }}",
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+    });
     expect(publish?.steps?.map((candidate) => candidate.name)).not.toContain(
       "Resolve publish tarball",
     );
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       "find preflight-tarball -type f -name '*.tgz'",
+    );
+  });
+
+  it("publishes gateway packages in manifest order before the root package", () => {
+    const parsed = workflow();
+    const preflightPack = step(
+      workflow(preflightWorkflowPath).jobs?.prepare_openclaw_npm,
+      "Pack and seal publishable npm package set",
+    );
+    const publish = step(parsed.jobs?.publish_openclaw_npm, "Publish");
+    expect(preflightPack.run).toContain("npm-prepared-bundle.mjs prepare");
+    const policy = JSON.parse(
+      readFileSync("scripts/lib/npm-core-release-packages.json", "utf8"),
+    ) as { path: string }[];
+    expect(policy.map((entry) => entry.path)).toEqual([
+      "packages/ai",
+      "packages/gateway-protocol",
+      "packages/gateway-client",
+    ]);
+    expect(publish.run).toContain("(.corePackageTarballs // [])[]");
+    expect(publish.run).toContain(
+      'bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

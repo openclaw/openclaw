@@ -45,7 +45,7 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
    - `parakeet-mlx` on Apple Silicon (MLX-capable; device use remains unobserved)
    - `whisper` (Python CLI; downloads models automatically)
 
-Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
+Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to check a backend.
 Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
 Gemini CLI and Antigravity are not auto-detected for media understanding. Audio
@@ -153,7 +153,7 @@ installation, run them once for that agent.
 
 The `profile` field is not required when OpenClaw can unambiguously select a
 compatible API-key profile, but it is strongly recommended. Explicit selection
-keeps audio routing deterministic if another OpenAI API-key profile exists now or
+keeps audio routing fixed if another OpenAI API-key profile exists now or
 is added later. The auth order still keeps the OAuth profile first for ordinary
 provider resolution.
 
@@ -304,7 +304,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 ## Gotchas
 
 - Scope rules use first-match-wins; `chatType` is normalized to `direct`, `group`, or `channel`.
-- Ensure your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
+- Check that your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
 - Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.

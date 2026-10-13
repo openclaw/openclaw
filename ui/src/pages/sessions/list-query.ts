@@ -28,6 +28,7 @@ export function buildSessionsListQuery(
     !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
   return {
     source: "sessions-page",
+    excludeDock: !deepLinkSessionKey,
     rowMode: "compact",
     limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
     ...(activeMinutes ? { activeMinutes } : {}),

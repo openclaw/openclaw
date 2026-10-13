@@ -5,11 +5,11 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecToolConfig } from "../config/types.tools.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsDisplayPath,
-  type ExecApprovalDecision,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
@@ -18,7 +18,6 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
   type ExecAsk,
-  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "./exec-approvals.js";
@@ -27,46 +26,9 @@ const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
 export const SESSION_EXEC_OVERRIDES_NOTE =
   "Per-session /exec overrides are not included; run /exec in the relevant session to inspect its current defaults.";
-type ExecPolicyConfig = {
-  host?: ExecTarget;
-  mode?: ExecMode;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-};
+type ExecPolicyConfig = Pick<ExecToolConfig, "host" | "mode" | "security" | "ask">;
 
-type ExecPolicyHostSummary = {
-  requested: ExecTarget;
-  requestedSource: string;
-};
-
-type ExecPolicyFieldSummary<TValue extends ExecSecurity | ExecAsk> = {
-  requested: TValue;
-  requestedSource: string;
-  host: TValue;
-  hostSource: string;
-  effective: TValue;
-  note: string;
-};
-
-export type ExecPolicyScopeSnapshot = {
-  scopeLabel: string;
-  configPath: string;
-  agentId?: string;
-  host: ExecPolicyHostSummary;
-  mode: {
-    requested: ExecMode;
-    requestedSource: string;
-    effective: ExecMode;
-    note: string;
-  };
-  security: ExecPolicyFieldSummary<ExecSecurity>;
-  ask: ExecPolicyFieldSummary<ExecAsk>;
-  askFallback: {
-    effective: ExecSecurity;
-    source: string;
-  };
-  allowedDecisions: readonly ExecApprovalDecision[];
-};
+export type ExecPolicyScopeSnapshot = ReturnType<typeof resolveExecPolicyScopeSnapshot>;
 
 function resolveRequestedField<TValue extends string>(params: {
   scopeValue?: TValue;
@@ -98,14 +60,7 @@ function resolveRequestedPolicy(params: {
   scopeExecConfig?: ExecPolicyConfig;
   globalExecConfig?: ExecPolicyConfig;
   configPath: string;
-}): {
-  mode: ExecMode;
-  modeSource: string;
-  security: ExecSecurity;
-  securitySource: string;
-  ask: ExecAsk;
-  askSource: string;
-} {
+}) {
   const explicitMode =
     params.scopeExecConfig?.mode ||
     (!hasLegacyExecPolicyOverride(params.scopeExecConfig)
@@ -159,24 +114,6 @@ function resolveRequestedPolicy(params: {
     ask: ask.value,
     askSource: ask.source,
   };
-}
-
-function formatHostFieldSource(params: {
-  hostPath: string;
-  field: ExecPolicyField;
-  sourceSuffix: string | null;
-  hostDefaultSource?: string;
-}): string {
-  if (params.sourceSuffix) {
-    return `${params.hostPath} ${params.sourceSuffix}`;
-  }
-  if (params.hostDefaultSource) {
-    return params.hostDefaultSource;
-  }
-  if (params.field === "askFallback") {
-    return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
-  }
-  return "inherits requested tool policy";
 }
 
 export function collectExecPolicyScopeSnapshots(params: {
@@ -239,7 +176,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
   hostPath?: string;
   hostDefaults?: ExecPolicyHostDefaults;
   hostDefaultSource?: string;
-}): ExecPolicyScopeSnapshot {
+}) {
   const requestedHost = resolveRequestedField<ExecTarget>({
     scopeValue: params.scopeExecConfig?.host,
     globalValue: params.globalExecConfig?.host,
@@ -262,6 +199,18 @@ export function resolveExecPolicyScopeSnapshot(params: {
     },
   });
   const hostPath = params.hostPath ?? resolveExecApprovalsDisplayPath();
+  const formatHostFieldSource = (field: ExecPolicyField, sourceSuffix: string | null): string => {
+    if (sourceSuffix) {
+      return `${hostPath} ${sourceSuffix}`;
+    }
+    if (params.hostDefaultSource) {
+      return params.hostDefaultSource;
+    }
+    if (field === "askFallback") {
+      return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
+    }
+    return "inherits requested tool policy";
+  };
   const effectiveSecurity = minSecurity(requestedPolicy.security, resolved.agent.security);
   const effectiveAsk = maxAsk(requestedPolicy.ask, resolved.agent.ask);
   const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);
@@ -293,12 +242,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       requested: requestedPolicy.security,
       requestedSource: requestedPolicy.securitySource,
       host: resolved.agent.security,
-      hostSource: formatHostFieldSource({
-        hostPath,
-        field: "security",
-        sourceSuffix: resolved.agentSources.security,
-        hostDefaultSource: params.hostDefaultSource,
-      }),
+      hostSource: formatHostFieldSource("security", resolved.agentSources.security),
       effective: effectiveSecurity,
       note:
         effectiveSecurity === requestedPolicy.security
@@ -309,24 +253,14 @@ export function resolveExecPolicyScopeSnapshot(params: {
       requested: requestedPolicy.ask,
       requestedSource: requestedPolicy.askSource,
       host: resolved.agent.ask,
-      hostSource: formatHostFieldSource({
-        hostPath,
-        field: "ask",
-        sourceSuffix: resolved.agentSources.ask,
-        hostDefaultSource: params.hostDefaultSource,
-      }),
+      hostSource: formatHostFieldSource("ask", resolved.agentSources.ask),
       effective: effectiveAsk,
       note:
         effectiveAsk === requestedPolicy.ask ? "requested ask applies" : "more aggressive ask wins",
     },
     askFallback: {
       effective: effectiveAskFallback,
-      source: formatHostFieldSource({
-        hostPath,
-        field: "askFallback",
-        sourceSuffix: resolved.agentSources.askFallback,
-        hostDefaultSource: params.hostDefaultSource,
-      }),
+      source: formatHostFieldSource("askFallback", resolved.agentSources.askFallback),
     },
     allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: effectiveAsk }),
   };

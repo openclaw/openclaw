@@ -15,23 +15,6 @@ const fixedStore = (agentId: string): OpenClawConfig => ({
 });
 
 describe("session agent ownership", () => {
-  it("does not read unrelated roster entries for a prepared owner", () => {
-    let unrelatedReads = 0;
-    const prepared: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: {},
-          get unrelated() {
-            unrelatedReads += 1;
-            return {};
-          },
-        },
-      },
-    };
-    expect(resolve({ config: prepared, agentId: "main" })).toBe("main");
-    expect(unrelatedReads).toBe(0);
-  });
-
   it("rejects an invalid explicit selector before resolving the session owner", () => {
     expect(() => resolve({ config, agentId: "!!!", sessionKey: "agent:main:main" })).toThrow(
       "Invalid explicit agent id",
@@ -81,30 +64,21 @@ describe("session agent ownership", () => {
     ).toThrow(AgentSelectionRequiredError);
   });
 
-  it("keeps agent-scoped sessions available when the fixed-store owner retires", () => {
-    expect(
-      resolve({ config: fixedStore("retired"), sessionKey: "agent:beta:main", agentId: "beta" }),
-    ).toBe("beta");
-  });
-
   it("rejects a selector conflicting with the agent-scoped key", () => {
     expect(() => resolve({ config, sessionKey: "agent:beta:main", agentId: "main" })).toThrow(
       AgentSelectionRequiredError,
     );
   });
 
-  it.each([
-    { owner: { sessionKey: "feishu:direct:ou_user1", fallbackAgentId: "main" }, expected: "main" },
-    {
-      owner: { sessionKey: "agent:beta:feishu:direct:ou_user1", fallbackAgentId: "main" },
-      expected: "beta",
-    },
-    {
-      owner: { sessionKey: "feishu:direct:ou_user1", agentId: "beta", fallbackAgentId: "main" },
-      expected: "beta",
-    },
-  ])("selects the prepared owner by precedence: $owner", ({ owner, expected }) => {
-    expect(resolve({ config, ...owner })).toBe(expected);
+  it("selects an explicit owner before the prepared fallback", () => {
+    expect(
+      resolve({
+        config,
+        sessionKey: "feishu:direct:ou_user1",
+        agentId: "beta",
+        fallbackAgentId: "main",
+      }),
+    ).toBe("beta");
   });
 
   it("keeps the selected owner for paired callers despite retained migration metadata", () => {

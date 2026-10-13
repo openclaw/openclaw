@@ -101,26 +101,24 @@ export async function patchSessionStatusModel(params: {
             ...(workspaceDir ? { workspaceDir } : {}),
             env: process.env,
           });
-    const policy = createModelVisibilityPolicy({
-      cfg: params.cfg,
-      catalog,
+    const modelResolution = {
+      cfg,
+      agentId,
       defaultProvider: currentProvider,
-      defaultModel: configured,
-      agentId: params.agentId,
       allowManifestNormalization: true,
       allowPluginNormalization: true,
       manifestPlugins: manifestMetadataSnapshot,
+    };
+    const policy = createModelVisibilityPolicy({
+      ...modelResolution,
+      catalog,
+      defaultModel: configured,
     });
 
     const selected = resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...modelResolution,
       raw,
-      defaultProvider: currentProvider,
       aliasIndex,
-      allowManifestNormalization: true,
-      allowPluginNormalization: true,
-      manifestPlugins: manifestMetadataSnapshot,
     });
     if (!selected) {
       throw new Error(`Unrecognized model "${raw}".`);
@@ -178,4 +176,20 @@ export async function patchSessionStatusModel(params: {
     resolved: { entry: patched.entry, key: patched.sessionKey, persisted: true },
     changedModel: true,
   };
+}
+
+export function withActiveStatusModelIdentity(
+  entry: SessionEntry,
+  identity: { provider?: string; model: string },
+): SessionEntry {
+  const next: SessionEntry = {
+    ...entry,
+    model: identity.model,
+    ...(identity.provider ? { modelProvider: identity.provider } : {}),
+  };
+  delete next.providerOverride;
+  delete next.modelOverride;
+  delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
+  return next;
 }

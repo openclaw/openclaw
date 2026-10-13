@@ -1,4 +1,3 @@
-// Gateway readiness checker for channel health and startup sidecar state.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -13,7 +12,6 @@ import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
-/** Snapshot returned by the gateway readiness probe. */
 type ReadinessResult = {
   ready: boolean;
   failing: string[];
@@ -25,7 +23,6 @@ type ReadinessResult = {
   stateDatabase?: { reason: string };
 };
 
-/** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
 export type StartupResult =
@@ -33,7 +30,6 @@ export type StartupResult =
   | { ok: false; status: "starting"; uptimeMs: number; pendingReason: string }
   | { ok: false; status: "draining"; uptimeMs: number };
 
-/** Function form used by HTTP startup endpoints and tests. */
 export type StartupChecker = () => StartupResult;
 
 type GatewayStartupStateDeps = {
@@ -94,7 +90,6 @@ function shouldIgnoreReadinessFailure(
   return restartableReason && inRestartHandoff;
 }
 
-/** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(
   deps: GatewayStartupStateDeps & {
     channelManager: Pick<
@@ -104,7 +99,6 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
-    allowPendingAgentDatabases?: boolean;
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
@@ -138,16 +132,11 @@ export function createReadinessChecker(
         uptimeMs,
       };
     }
-    const failedAgents = agentDatabases?.filter(
-      (refusal) =>
-        deps.allowPendingAgentDatabases === false ||
-        refusal.code !== "agent-database-inspection-pending",
-    );
-    if (failedAgents?.length) {
+    if (agentDatabases?.length) {
       cachedState = null;
       return {
         ready: false,
-        failing: failedAgents.map(({ agentId }) => `agent-database:${agentId}`),
+        failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
     }

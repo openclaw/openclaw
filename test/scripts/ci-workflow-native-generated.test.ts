@@ -71,8 +71,8 @@ describe("generated native locale scope", () => {
       });
       expect(result.status, result.output).toBe(0);
       expect(result.outputs.run_node).toBe(String(runBuilds));
-      expect(result.outputs.run_macos).toBe(String(runBuilds));
-      expect(result.outputs.run_ios_build).toBe(String(runBuilds));
+      expect(result.outputs.run_macos).toBe(String(runBuilds && eventName !== "pull_request"));
+      expect(result.outputs.run_ios_build).toBe(String(runBuilds && eventName !== "pull_request"));
       expect(result.outputs.run_android_job).toBe(String(runBuilds));
       expect(result.outputs.run_native_i18n).toBe("true");
     },

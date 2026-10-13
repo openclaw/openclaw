@@ -12,15 +12,14 @@ enum VoiceWakeRecognitionDebugSupport {
         isFinal: Bool,
         loggerLevel: Logger.Level,
         lastLoggedText: inout String?,
-        lastLoggedAt: inout Date?,
-        minRepeatInterval: TimeInterval = 0.25) -> Bool
+        lastLoggedAt: inout Date?) -> Bool
     {
         guard !transcript.isEmpty else { return false }
         guard loggerLevel == .debug || loggerLevel == .trace else { return false }
         if transcript == lastLoggedText,
            !isFinal,
            let last = lastLoggedAt,
-           Date().timeIntervalSince(last) < minRepeatInterval
+           Date().timeIntervalSince(last) < 0.25
         {
             return false
         }

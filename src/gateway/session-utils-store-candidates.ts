@@ -3,10 +3,7 @@ import type { SessionEntryReadSource } from "../config/sessions/session-entry-re
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import type { SessionStoreTarget } from "../config/sessions/targets-collision.js";
 import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
-import {
-  resolveExistingAgentSessionStoreTargetsSync,
-  type ExistingAgentSessionStoreTargetResolver,
-} from "../config/sessions/targets.js";
+import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -21,12 +18,14 @@ export function resolveGatewaySessionStoreCandidates(
   cache?: GatewaySessionStoreDiscoveryCache,
   excludeConfiguredFallback = false,
   env: NodeJS.ProcessEnv = process.env,
-  registeredDatabases?: readonly { agentId: string; path: string }[],
   resolveExistingTargets?: ExistingAgentSessionStoreTargetResolver,
 ): GatewaySessionStoreDiscovery {
   const cached = cache?.get(agentId);
   if (cached) {
     return cached;
+  }
+  if (!resolveExistingTargets) {
+    throw new Error("Session store discovery must be prepared in the read worker");
   }
   const storeConfig = cfg.session?.store;
   const fallback = {
@@ -39,13 +38,7 @@ export function resolveGatewaySessionStoreCandidates(
       ? fallback.storePath
       : undefined;
   const discovery = {
-    existing: resolveExistingTargets
-      ? resolveExistingTargets(agentId, excludeStorePath)
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId, {
-          env,
-          registeredDatabases,
-          excludeStorePath,
-        }),
+    existing: resolveExistingTargets(agentId, excludeStorePath),
     fallback,
   };
   cache?.set(agentId, discovery);
@@ -99,7 +92,6 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
     params.targetDiscoveryCache,
     configured,
     params.env,
-    params.registeredDatabases,
     params.resolveExistingTargets,
   );
   return {

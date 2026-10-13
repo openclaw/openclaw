@@ -278,22 +278,6 @@ describe("Chrome MCP durable tab ownership", () => {
     ]);
   });
 
-  it("opens the first page in an empty explicit-CDP browser", async () => {
-    const { session, pages } = createMarkerSession({ existingPage: false });
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    mockMarkerLookup(pages);
-
-    const opened = await openChromeMcpTab("chrome-live", "about:blank", {
-      cdpUrl: "http://127.0.0.1:9222",
-    });
-
-    expect(ownershipOf(opened)).toMatchObject({
-      status: "durable",
-      nativeTargetId: "NATIVE-1",
-    });
-    expect(pages).toEqual([{ id: 1, nativeTargetId: "NATIVE-1", url: "about:blank" }]);
-  });
-
   it("rejects an empty auto-connected browser before creating a page", async () => {
     const { session, pages } = createMarkerSession({ existingPage: false });
     setChromeMcpSessionFactoryForTest(async () => session as never);
@@ -381,21 +365,6 @@ describe("Chrome MCP durable tab ownership", () => {
       expect(calls.map(([call]) => call.name)).not.toContain("close_page");
     },
   );
-
-  it("classifies malformed marker lookup payloads as lookup failures", async () => {
-    const { session } = createMarkerSession();
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockResolvedValueOnce({ targets: "not-an-array" });
-
-    const opened = await openChromeMcpTab("chrome-live", "about:blank", {
-      cdpUrl: "https://browser.example",
-    });
-
-    expect(ownershipOf(opened)).toEqual({
-      status: "non-durable",
-      reason: "target-marker-lookup-failed",
-    });
-  });
 
   it("classifies malformed marker list entries as lookup failures", async () => {
     const { session } = createMarkerSession();

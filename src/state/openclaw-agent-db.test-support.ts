@@ -7,8 +7,8 @@ import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { agentDatabaseLifecycle as cache } from "./openclaw-agent-db-lifecycle.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
+import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 /** Materialize distinct current databases without runtime handles, leases, or registrations. */
 export function createCurrentOpenClawAgentDatabaseFixtures(
@@ -40,7 +40,7 @@ export function createCurrentOpenClawAgentDatabaseFixtures(
 /** Remove only the schema owner's future projection before carving a historical database. */
 export function removeCanonicalValidationFromHistoricalAgentFixture(database: DatabaseSync): void {
   const definitions = [
-    ...canonicalSessionValidationSchemaSql().matchAll(
+    ...canonicalSessionValidationSchemaSql(OPENCLAW_AGENT_SCHEMA_V21_SQL).matchAll(
       /^CREATE (TABLE|TRIGGER) IF NOT EXISTS ([a-z_]+)\b/gm,
     ),
   ];
@@ -55,6 +55,35 @@ export function removeCanonicalValidationFromHistoricalAgentFixture(database: Da
   }
 }
 
+export function seedSchema19SessionKeyRepairFixture(database: DatabaseSync): void {
+  removeCanonicalValidationFromHistoricalAgentFixture(database);
+  database
+    .prepare(
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .run(
+      "agent:worker-1:session-1",
+      "session-1",
+      JSON.stringify({ sessionId: "session-1", updatedAt: 1 }),
+      1,
+    );
+  database.exec(`
+    DROP TABLE session_transcript_cold_archives;
+    PRAGMA user_version = 19;
+    UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
+    DROP TRIGGER session_nodes_entry_valid_after_insert;
+    DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+    DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+    DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+    DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+    DROP INDEX idx_agent_session_nodes_entry_not_valid;
+    DROP TABLE session_key_contract;
+    ALTER TABLE session_nodes DROP COLUMN entry_valid;
+    ALTER TABLE session_conversations DROP COLUMN route_context_json;
+  `);
+}
+
 /** List process-held agent databases without opening or inspecting fixture state. */
 export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
   return [...cache.databases.values()]
@@ -67,11 +96,6 @@ export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; pa
 }
 
 /** Model missing restart metadata without invoking the runtime invalidation owner. */
-export function removeAgentIntegrityMetadataForTest(env: NodeJS.ProcessEnv): void {
-  const store = openNodeSqliteDatabase(resolveQuarantineStorePath(env));
-  try {
-    store.exec("DELETE FROM agent_integrity_verifications");
-  } finally {
-    store.close();
-  }
+export function removeAgentIntegrityMetadataForTest(pathname: string): void {
+  fs.rmSync(`${pathname}.seal`, { force: true });
 }

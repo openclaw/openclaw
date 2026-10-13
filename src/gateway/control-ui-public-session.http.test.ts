@@ -1,12 +1,16 @@
+import fs from "node:fs";
 import type { Server } from "node:http";
+import nodePath from "node:path";
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
   AUTH_TOKEN,
   createRequest,
@@ -14,14 +18,25 @@ import {
   createTestGatewayServer,
   dispatchRequest,
 } from "./server-http.test-harness.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const reader = vi.hoisted(() => vi.fn());
 const shareActive = vi.hoisted(() => vi.fn());
 const tokenResolver = vi.hoisted(() => vi.fn());
+const renderCard = vi.hoisted(() => vi.fn());
+vi.mock(import("./control-ui-public-session-card.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  createPublicSessionCardRenderer: () => ({ render: renderCard, dispose: async () => {} }),
+}));
+// mock-isolation: Keep persisted session state outside this HTTP transport fixture.
 vi.mock("./control-ui-public-session-read.js", () => ({
   isPublicSessionShareActive: shareActive,
   readPublicSessionShare: reader,
 }));
+// mock-isolation: The transport fixture supplies exact token outcomes without installation identity.
 vi.mock("./control-ui-public-session-token.js", () => ({
   resolvePublicSessionShareToken: tokenResolver,
 }));
@@ -45,15 +60,28 @@ const PUBLIC_SESSION = {
   truncated: false,
 };
 
+const servers = new Set<Server>();
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 function createPublicGateway(basePath = "", config: OpenClawConfig = TEST_CONFIG): Server {
-  return createTestGatewayServer({
+  const context = createGatewayRequestContext(makeContextParams());
+  context.resolveGatewayContext = () => context;
+  const projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
+  bindSessionRowProjection(context, () => projection);
+  const root = dirs.make("session-card-http-");
+  fs.writeFileSync(nodePath.join(root, "social-card.png"), "static card bytes");
+  const server = createTestGatewayServer({
     resolvedAuth: AUTH_TOKEN,
     overrides: {
       controlUiEnabled: true,
       controlUiBasePath: basePath,
+      controlUiRoot: { kind: "resolved", path: root },
       getRuntimeConfig: () => config,
+      getGatewayRequestContext: () => context,
+      httpRequestLifetime: context,
     },
   });
+  servers.add(server);
+  return server;
 }
 
 function requestPath(params?: {
@@ -98,7 +126,7 @@ function responseHeader(
   response: ReturnType<typeof createResponse>,
   name: string,
 ): string | undefined {
-  const call = response.setHeader.mock.calls.find(
+  const call = response.setHeader.mock.calls.findLast(
     ([headerName]) => String(headerName).toLowerCase() === name.toLowerCase(),
   );
   return call ? String(call[1]) : undefined;
@@ -107,6 +135,7 @@ function responseHeader(
 beforeEach(() => {
   resetGatewayWorkAdmission();
   reader.mockReset().mockResolvedValue(PUBLIC_SESSION);
+  renderCard.mockReset().mockResolvedValue(Buffer.from("rendered card bytes"));
   shareActive.mockReset().mockReturnValue(true);
   tokenResolver.mockReset().mockImplementation((token: string) => {
     const shareId = token.slice(3, 51);
@@ -115,6 +144,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const server of servers) {
+    server.emit("close");
+  }
+  servers.clear();
   resetGatewayWorkAdmission();
 });
 
@@ -126,14 +159,29 @@ describe("anonymous public session HTTP boundary", () => {
       const route = requestPath({ basePath });
       const response = await send(server, { path: route });
       expect(response.res.statusCode).toBe(200);
-      expect(reader).toHaveBeenCalledWith(expect.any(Object), LOCATOR, { offset: 0 });
+      expect(reader).toHaveBeenCalledWith(expect.any(Object), LOCATOR, {
+        offset: 0,
+        projection: expect.any(Object),
+      });
       const html = response.getBody();
       expect(html).toContain("Launch notes");
+      expect(html).toContain(`${basePath}/share/session/card.png?token=`);
+      expect(html).toContain('property="og:image:width" content="1200"');
+      expect(html).toContain('property="og:image:height" content="630"');
+      expect(html).toContain(
+        'name="twitter:image:alt" content="Launch notes · OpenClaw public session"',
+      );
       expect(html).toContain("The public viewer is ready.");
-      expect(html).not.toMatch(/agent:demo|séssion\.123|<script|openclaw-app/);
+      expect(html).not.toMatch(/agent:demo|séssion\.123|new WebSocket|openclaw-app/);
       expect(responseHeader(response, "Cache-Control")).toBe("no-store");
       expect(responseHeader(response, "Referrer-Policy")).toBe("no-referrer");
-      expect(responseHeader(response, "Content-Security-Policy")).toContain("default-src 'none'");
+      const csp = responseHeader(response, "Content-Security-Policy");
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("font-src 'self'");
+      for (const hash of computeInlineScriptHashes(html)) {
+        expect(csp).toContain(hash);
+      }
+      expect(html).toContain(`href="${basePath}/fonts/instrument-sans.css"`);
 
       reader.mockClear();
       const head = await send(server, { path: route, method: "HEAD" });
@@ -156,7 +204,10 @@ describe("anonymous public session HTTP boundary", () => {
       const older = await send(server, { path: `${route}&offset=100` });
       const olderHtml = older.getBody();
       expect(older.res.statusCode).toBe(200);
-      expect(reader).toHaveBeenLastCalledWith(expect.any(Object), LOCATOR, { offset: 100 });
+      expect(reader).toHaveBeenLastCalledWith(expect.any(Object), LOCATOR, {
+        offset: 100,
+        projection: expect.any(Object),
+      });
       expect(olderHtml).toContain("&amp;offset=200");
       expect(olderHtml).toContain("Back to latest");
       expect(olderHtml).not.toContain('http-equiv="refresh"');
@@ -175,10 +226,13 @@ describe("anonymous public session HTTP boundary", () => {
       expect((await send(server, { path: route, method: "POST" })).res.statusCode).toBe(404);
       expect(reader.mock.calls.length).toBe(before);
       reader.mockResolvedValue(null);
+      shareActive.mockReturnValue(false);
       const revoked = await send(server, { path: route });
       expect(revoked.res.statusCode).toBe(404);
       expect(revoked.getBody()).toBe("This public session is unavailable.");
       expect(responseHeader(revoked, "Cache-Control")).toBe("no-store");
+      shareActive.mockReturnValue(true);
+      sessionChanges.emit({ sessionKey: LOCATOR.sessionKey });
       reader.mockRejectedValue(new Error("private store location"));
       const unavailable = await send(server, { path: route });
       expect(unavailable.res.statusCode).toBe(503);
@@ -186,6 +240,76 @@ describe("anonymous public session HTTP boundary", () => {
       expect(unavailable.getBody()).not.toContain("private store location");
     },
   );
+
+  it.each(["", "/control"])(
+    "serves a redacted, cached card through the public boundary (%s)",
+    async (basePath) => {
+      const server = createPublicGateway(basePath);
+      const cardPath = requestPath({ basePath }).replace(
+        "/share/session?",
+        "/share/session/card.png?",
+      );
+      reader.mockResolvedValue({
+        ...PUBLIC_SESSION,
+        title: "<headline>",
+        messages: [
+          { role: "toolResult", content: "PRIVATE_TOOL_CONTENT" },
+          { role: "user", provenance: { kind: "internal" }, content: "PRIVATE_INPUT" },
+          { role: "user", content: "Public opening" },
+        ],
+      });
+      const first = await send(server, { path: cardPath });
+      expect(first.res.statusCode).toBe(200);
+      expect(responseHeader(first, "Content-Type")).toBe("image/png");
+      expect(responseHeader(first, "Cache-Control")).toBe("public, max-age=300");
+      expect(first.end).toHaveBeenLastCalledWith(Buffer.from("rendered card bytes"));
+      expect(renderCard).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "<headline>", quote: "Public opening", messageCount: 2 }),
+      );
+      expect(JSON.stringify(renderCard.mock.calls)).not.toContain("PRIVATE_");
+      await send(server, { path: cardPath });
+      expect(renderCard).toHaveBeenCalledTimes(1);
+      shareActive.mockReturnValue(false);
+      const revoked = await send(server, { path: cardPath });
+      expect(revoked.end).toHaveBeenLastCalledWith(Buffer.from("static card bytes"));
+      expect(responseHeader(revoked, "Cache-Control")).toBe("no-store");
+    },
+  );
+
+  it("returns the same static PNG for unknown, unpublished, renderer failures and insecure ingress", async () => {
+    const server = createPublicGateway();
+    const cardPath = requestPath().replace("/share/session?", "/share/session/card.png?");
+    tokenResolver.mockResolvedValueOnce(null);
+    expect((await send(server, { path: cardPath })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+    reader.mockResolvedValueOnce(null);
+    expect((await send(server, { path: cardPath })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+    renderCard.mockRejectedValueOnce(new Error("PRIVATE_RENDER_ERROR"));
+    expect((await send(server, { path: cardPath })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+    const insecure = await send(server, { path: cardPath, remoteAddress: "203.0.113.12" });
+    expect(insecure.end).toHaveBeenLastCalledWith(Buffer.from("static card bytes"));
+    expect(tokenResolver).toHaveBeenCalledTimes(3);
+    expect((await send(server, { path: `${cardPath}&offset=1` })).end).toHaveBeenLastCalledWith(
+      Buffer.from("static card bytes"),
+    );
+  });
+
+  it("shares the page's client rate limit with card requests", async () => {
+    const server = createPublicGateway();
+    for (let request = 0; request < 120; request++) {
+      await send(server);
+    }
+    const cardPath = requestPath().replace("/share/session?", "/share/session/card.png?");
+    const limited = await send(server, { path: cardPath });
+    expect(limited.end).toHaveBeenLastCalledWith(Buffer.from("static card bytes"));
+    expect(responseHeader(limited, "Cache-Control")).toBe("no-store");
+    expect(renderCard).not.toHaveBeenCalled();
+  });
 
   it("rejects transcript work after Gateway admission closes while generic previews stay cheap", async () => {
     const server = createPublicGateway();
@@ -219,14 +343,14 @@ describe("anonymous public session HTTP boundary", () => {
         headers: { "x-forwarded-for": clientIp, "x-forwarded-proto": "https" },
       });
 
-    for (let request = 0; request < 20; request += 1) {
+    for (let request = 0; request < 120; request += 1) {
       expect((await fromProxy("203.0.113.10")).res.statusCode).toBe(200);
     }
     expect((await fromProxy("203.0.113.11")).res.statusCode).toBe(200);
     const limited = await fromProxy("203.0.113.10");
     expect(limited.res.statusCode).toBe(429);
     expect(Number(responseHeader(limited, "Retry-After"))).toBeGreaterThan(0);
-    expect(reader).toHaveBeenCalledTimes(21);
+    expect(reader).toHaveBeenCalledTimes(1);
   });
 
   it("rate-limits malformed opaque tokens before transcript work", async () => {
@@ -234,13 +358,13 @@ describe("anonymous public session HTTP boundary", () => {
     const invalidPath = buildControlUiPublicSessionSharePath({
       token: `v1.${"z".repeat(96)}`,
     });
-    for (let request = 0; request < 20; request += 1) {
+    for (let request = 0; request < 120; request += 1) {
       expect((await send(server, { path: invalidPath })).res.statusCode).toBe(404);
     }
     const limited = await send(server, { path: invalidPath });
     expect(limited.res.statusCode).toBe(429);
     expect(Number(responseHeader(limited, "Retry-After"))).toBeGreaterThan(0);
-    expect(tokenResolver).toHaveBeenCalledTimes(20);
+    expect(tokenResolver).toHaveBeenCalledTimes(120);
     expect(reader).not.toHaveBeenCalled();
   });
 
@@ -334,7 +458,7 @@ describe("anonymous public session HTTP boundary", () => {
         trustedProxies: ["10.0.0.1"],
       },
     });
-    for (let request = 0; request < 120; request += 1) {
+    for (let request = 0; request < 240; request += 1) {
       const response = await send(server, {
         remoteAddress: "10.0.0.1",
         headers: {
@@ -350,108 +474,36 @@ describe("anonymous public session HTTP boundary", () => {
     });
     expect(limited.res.statusCode).toBe(429);
     expect(Number(responseHeader(limited, "Retry-After"))).toBeGreaterThan(0);
-    expect(reader).toHaveBeenCalledTimes(120);
-  });
-
-  it("coalesces identical reads and caps unique concurrent reads per publication", async () => {
-    const server = createPublicGateway();
-    const resolvers: Array<(value: typeof PUBLIC_SESSION) => void> = [];
-    reader.mockImplementation(
-      () =>
-        new Promise<typeof PUBLIC_SESSION>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
-
-    const firstResponse = createResponse();
-    const first = dispatchRequest(
-      server,
-      createRequest({
-        path: requestPath(),
-        host: "127.0.0.1:18789",
-        remoteAddress: "127.0.0.1",
-      }),
-      firstResponse.res,
-    );
-    await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(1));
-    const secondResponse = createResponse();
-    const second = dispatchRequest(
-      server,
-      createRequest({
-        path: requestPath(),
-        host: "127.0.0.1:18789",
-        remoteAddress: "127.0.0.1",
-      }),
-      secondResponse.res,
-    );
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
     expect(reader).toHaveBeenCalledTimes(1);
-    resolvers.shift()?.(PUBLIC_SESSION);
-    await Promise.all([first, second]);
-    expect(firstResponse.res.statusCode).toBe(200);
-    expect(secondResponse.res.statusCode).toBe(200);
-
-    const held: Array<Promise<void>> = [];
-    for (const [index, offset] of [1, 2].entries()) {
-      const response = createResponse();
-      held.push(
-        dispatchRequest(
-          server,
-          createRequest({
-            path: requestPath({ offset }),
-            host: "127.0.0.1:18789",
-            remoteAddress: "127.0.0.1",
-          }),
-          response.res,
-        ),
-      );
-      await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(index + 2));
-    }
-    const excess = await send(server, { path: requestPath({ offset: 3 }) });
-    expect(excess.res.statusCode).toBe(503);
-    expect(responseHeader(excess, "Retry-After")).toBe("1");
-    expect(reader).toHaveBeenCalledTimes(3);
-    for (const resolve of resolvers.splice(0)) {
-      resolve(PUBLIC_SESSION);
-    }
-    await Promise.all(held);
   });
 
-  it("caps unique concurrent reads across publications", async () => {
+  it("reuses a completed representation and rechecks revocation before 304", async () => {
     const server = createPublicGateway();
-    const resolvers: Array<(value: typeof PUBLIC_SESSION) => void> = [];
-    reader.mockImplementation(
-      () =>
-        new Promise<typeof PUBLIC_SESSION>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
-    const held: Array<Promise<void>> = [];
-    for (let request = 0; request < 8; request += 1) {
-      const shareId = request.toString(16).padStart(48, "0");
-      const response = createResponse();
-      held.push(
-        dispatchRequest(
-          server,
-          createRequest({
-            path: requestPath({ locator: { ...LOCATOR, shareId } }),
-            host: "127.0.0.1:18789",
-            remoteAddress: "127.0.0.1",
-          }),
-          response.res,
-        ),
-      );
-      await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(request + 1));
-    }
-    const excess = await send(server, {
-      path: requestPath({ locator: { ...LOCATOR, shareId: "f".repeat(48) } }),
+    const first = await send(server);
+    expect(first.res.statusCode).toBe(200);
+    const etag = responseHeader(first, "ETag");
+    expect(etag).toBeDefined();
+    const unchanged = await send(server, { headers: { "if-none-match": etag! } });
+    expect(unchanged.res.statusCode).toBe(304);
+    expect(unchanged.getBody()).toBe("");
+    expect(reader).toHaveBeenCalledTimes(1);
+    shareActive.mockReturnValue(false);
+    const revoked = await send(server, { headers: { "if-none-match": etag! } });
+    expect(revoked.res.statusCode).toBe(404);
+    expect(revoked.getBody()).not.toContain("The public viewer is ready");
+  });
+
+  it("rebuilds a cached public document after its committed session changes", async () => {
+    const server = createPublicGateway();
+    const first = await send(server);
+    reader.mockResolvedValue({ ...PUBLIC_SESSION, title: "Updated public title" });
+    sessionChanges.emit({ sessionKey: LOCATOR.sessionKey });
+    const changed = await send(server, {
+      headers: { "if-none-match": responseHeader(first, "ETag")! },
     });
-    expect(excess.res.statusCode).toBe(503);
-    expect(reader).toHaveBeenCalledTimes(8);
-    for (const resolve of resolvers) {
-      resolve(PUBLIC_SESSION);
-    }
-    await Promise.all(held);
+    expect(changed.res.statusCode).toBe(200);
+    expect(changed.getBody()).toContain("Updated public title");
+    expect(reader).toHaveBeenCalledTimes(2);
   });
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", async () => {

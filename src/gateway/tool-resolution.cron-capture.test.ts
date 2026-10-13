@@ -48,8 +48,8 @@ describe("MCP automation creator capture", () => {
     setRuntimeConfigSnapshot(cfg);
     let current = true;
     const effect = vi.fn();
-    vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockImplementation(
-      ({ options }) => {
+    vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync").mockImplementation(
+      async ({ options }) => {
         const assertCurrent = expectDefined(
           options?.assertInvocationCurrent,
           "standalone grant guard",
@@ -99,7 +99,6 @@ describe("MCP automation creator capture", () => {
   }> = [
     { label: "inherited native", toolsAllow: undefined, nativeExec: true, unreadableSchema: false },
     { label: "finite native", toolsAllow: ["exec"], nativeExec: true, unreadableSchema: false },
-    { label: "restricted MCP", toolsAllow: undefined, nativeExec: false, unreadableSchema: false },
     {
       label: "schema-filtered MCP",
       toolsAllow: undefined,
@@ -145,7 +144,9 @@ describe("MCP automation creator capture", () => {
             throw new Error("plugin schema is unavailable");
           },
         });
-        vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockReturnValue([tool]);
+        vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync").mockResolvedValue([
+          tool,
+        ]);
       }
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),

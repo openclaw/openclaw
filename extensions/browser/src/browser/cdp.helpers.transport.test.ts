@@ -149,13 +149,8 @@ describe("browser CDP authenticated HTTP transport", () => {
     await expectAllSocketsReleased(server);
   });
 
-  it.each<{ label: string; headers: HeadersInit }>([
-    {
-      label: "Headers objects",
-      headers: new Headers({ Authorization: EXPECTED_AUTHORIZATION }),
-    },
-    { label: "tuple headers", headers: [["Authorization", EXPECTED_AUTHORIZATION]] },
-  ])("preserves authenticated CDP JSON responses with $label", async ({ headers }) => {
+  it("preserves authenticated CDP JSON responses with tuple headers", async () => {
+    const headers: HeadersInit = [["Authorization", EXPECTED_AUTHORIZATION]];
     const server = await startAuthenticatedCdpServer({ status: 200, streaming: false });
     const url = new URL(server.url);
     url.password = "wrong-url-credential";

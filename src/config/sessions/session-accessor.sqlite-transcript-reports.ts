@@ -10,16 +10,8 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { getCliHistoryWriter } from "./cli-history-boundary.js";
@@ -28,7 +20,6 @@ import type {
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryWorkerMetadataInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -36,28 +27,27 @@ import {
   assertSqliteTranscriptWriteIdentity,
   prepareSqliteScope,
   resolveSqliteScope,
-  resolveSqliteTranscriptScope,
   resolveSqliteWriteAdmissionScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
-  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
-import {
-  appendAbortedSessionTranscriptPartialInTransaction,
-  appendSelectedTranscriptReportInTransaction,
-  prepareCustomTranscriptReport,
-  prepareTranscriptReportSelection,
-} from "./session-accessor.sqlite-transcript-reports.kernel.js";
+import { prepareCustomTranscriptReport } from "./session-accessor.sqlite-transcript-reports.kernel.js";
 import type {
   CustomMessageReport,
   AbortedSessionTranscriptPartial,
   AbortedSessionTranscriptPartialResult,
   TranscriptReport,
+  TranscriptReportCommit,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { withMemoryReportWorker } from "./session-actor-transcript-reports.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
 import {
@@ -69,7 +59,6 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
-  assertOwnedTranscriptWriteCommit,
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
@@ -109,62 +98,54 @@ async function settleReportOperation<T>(
   return result.value;
 }
 
-async function withNativeCurrentTranscript<T>(
-  scope: SessionTranscriptWriteScope,
-  run: (database: OpenClawAgentDatabase, resolved: ResolvedTranscriptScope) => T,
-): Promise<Result<T, TranscriptAppendRefusal>> {
-  const fenced = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fenced);
-  return runExclusiveSqliteSessionWrite(
-    resolved,
-    async () =>
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          assertOwnedTranscriptWriteCommit(fenced);
-          const refusal = resolveTranscriptAppendRefusal(
-            readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-            resolved,
-            fenced,
-          );
-          if (refusal) {
-            if (fenced.expectedWriterRunId !== undefined) {
-              throw new SessionTranscriptWriterClaimReboundError(refusal);
-            }
-            return err(refusal);
-          }
-          const result = run(database, resolved);
-          assertOwnedTranscriptWriteCommit(fenced);
-          const rebound = resolveTranscriptAppendRefusal(
-            readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-            resolved,
-            fenced,
-          );
-          if (rebound) {
-            throw new SessionTranscriptWriterClaimReboundError(rebound);
-          }
-          return ok(result);
-        },
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.report" },
-      ),
-    "session.transcript.report",
-  );
-}
-
 async function withReportWorker<T>(
   scope: SessionTranscriptWriteScope,
   kind: "read" | "append",
   run: (
     operation: Pick<SqliteWorkerStore<TranscriptReportWorkerOperations>, "execute">,
     assertCurrent: () => void,
-    publish: (result: {
-      projectionNeedsReconcile: boolean;
-      cliHistoryChanged?: boolean;
-      sessionEntryChanged?: boolean;
-    }) => void,
+    publish: (
+      result: Pick<
+        TranscriptReportCommit,
+        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+      >,
+    ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
   sessionEntryCurrent?: SessionEntryCurrentCheck,
 ): Promise<Result<T, TranscriptAppendRefusal>> {
+  const assertCaller = captureOwnedTranscriptWriteAssertion(scope);
+  const authority = { assertCurrent: assertCaller, authorize: assertCaller };
+  const namespace = captureSessionActorStorageOwner(scope, authority);
+  if (namespace) {
+    if (sessionEntryCurrent) {
+      throw new Error("A file session source cannot authorize a memory transcript report");
+    }
+    const result = await withSessionActorStorage(
+      scope,
+      {
+        authority,
+        lifetime: { assertCurrent: assertCaller, assertReadable: assertCaller },
+      },
+      (memory) => withMemoryReportWorker(scope, memory, run),
+    );
+    if (result) {
+      return result;
+    }
+    const refusal = resolveTranscriptAppendRefusal(
+      undefined,
+      {
+        agentId: namespace.agentId,
+        path: namespace.path,
+        sessionKey: scope.sessionKey ?? "",
+        sessionId: scope.sessionId ?? "",
+      },
+      scope,
+    )!;
+    if (scope.expectedWriterRunId !== undefined) {
+      throw new SessionTranscriptWriterClaimReboundError(refusal);
+    }
+    return err(refusal);
+  }
   // Preserve the logical target for live authority and pin the physical owner before yielding.
   const fenced = withOwnedSessionTranscriptWriterFence({
     ...scope,
@@ -303,6 +284,7 @@ async function withReportWorker<T>(
                           storePath: execution.path,
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
+                          entry: publication.entry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {
@@ -340,19 +322,6 @@ async function withReportWorker<T>(
     : prepare();
 }
 
-function isProcessHeldTranscript(scope: SessionTranscriptWriteScope): boolean {
-  return (
-    isIncognitoSessionKey(scope.sessionKey) ||
-    Boolean(
-      scope.storePath &&
-      isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
-        agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
-        env: scope.env,
-      }),
-    )
-  );
-}
-
 /** Fills a hot transcript only when its settled registered producer left no authoritative answer. */
 export async function appendAbortedSessionTranscriptPartial(
   scope: SessionTranscriptWriteScope & { sessionId: string },
@@ -360,7 +329,10 @@ export async function appendAbortedSessionTranscriptPartial(
     config?: import("../types.openclaw.js").OpenClawConfig;
   },
 ): Promise<Result<AbortedSessionTranscriptPartialResult, TranscriptAppendRefusal>> {
-  const publicationScope = { ...scope };
+  const publicationScope = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
   const { config, ...input } = partial;
   const preparedMessage = prepareTranscriptMessageAppend({
     message: attachSessionTranscriptRunId(partial.message, partial.runId),
@@ -369,34 +341,25 @@ export async function appendAbortedSessionTranscriptPartial(
   if (!preparedMessage || preparedMessage.persistedMessage.role !== "assistant") {
     throw new Error("Aborted partial requires prepared assistant storage bytes");
   }
-  const settlement = isProcessHeldTranscript(publicationScope)
-    ? await withNativeCurrentTranscript(publicationScope, (database, resolved) =>
-        appendAbortedSessionTranscriptPartialInTransaction(
-          database,
-          resolved,
-          input,
-          preparedMessage,
-        ),
-      )
-    : await withReportWorker(
-        publicationScope,
-        "append",
-        async (operation, _assertCurrent, publish) => {
-          const result = await operation.execute({
-            type: "abortedPartial",
-            input: { ...input, message: preparedMessage.persistedMessage, preparedMessage },
-          });
-          if (!result.ok) {
-            return result;
-          }
-          const receipt = result.value.abortedPartial;
-          if (!receipt) {
-            throw new Error("Aborted partial worker returned no settlement receipt");
-          }
-          publish(result.value);
-          return ok(receipt);
-        },
-      );
+  const settlement = await withReportWorker(
+    publicationScope,
+    "append",
+    async (operation, _assertCurrent, publish) => {
+      const result = await operation.execute({
+        type: "abortedPartial",
+        input: { ...input, message: preparedMessage.persistedMessage, preparedMessage },
+      });
+      if (!result.ok) {
+        return result;
+      }
+      const receipt = result.value.abortedPartial;
+      if (!receipt) {
+        throw new Error("Aborted partial worker returned no settlement receipt");
+      }
+      publish(result.value);
+      return ok(receipt);
+    },
+  );
   if (settlement.ok && !settlement.value.skipped && settlement.value.append.appended) {
     const { append, lifecycleRevision, messageSeq } = settlement.value;
     await publishTranscriptUpdate(publicationScope, {
@@ -415,54 +378,14 @@ export async function readLatestSessionTranscriptReport(
   scope: SessionTranscriptWriteScope,
   customTypes: readonly string[],
 ): Promise<Result<CustomMessageReport | undefined, TranscriptAppendRefusal>> {
-  if (isProcessHeldTranscript(scope)) {
-    // Process-held incognito databases retain their sole native owner.
-    return withNativeCurrentTranscript(
-      scope,
-      (database, resolved) =>
-        prepareTranscriptReportSelection(database, resolved, { kind: "custom", customTypes })
-          .latest,
-    );
-  }
+  const selectedTypes = [...customTypes];
   return withReportWorker(scope, "read", async (operation, assertCurrent) => {
     const prepared = await operation.execute({
       type: "prepare",
-      input: { kind: "custom", customTypes },
+      input: { kind: "custom", customTypes: selectedTypes },
     });
     assertCurrent();
     return prepared.ok ? ok(prepared.value.latest) : prepared;
-  });
-}
-
-/** Boot repair and process-held incognito databases retain their native transaction owner. */
-export async function appendSessionTranscriptReportNative(
-  scope: SessionTranscriptWriteScope,
-  report: TranscriptReport,
-): Promise<Result<void, TranscriptAppendRefusal>> {
-  return withNativeCurrentTranscript(scope, (database, resolved) => {
-    const facts = prepareTranscriptReportSelection(
-      database,
-      resolved,
-      report.kind === "assistant"
-        ? { kind: "assistant", responseId: report.message.responseId }
-        : report,
-    );
-    if (facts.suppressed) {
-      return;
-    }
-    if (report.kind === "assistant") {
-      appendSelectedTranscriptReportInTransaction(database, resolved, facts.appendParentId, report);
-      return;
-    }
-    const selected = report.selectReport(facts.latest);
-    if (selected) {
-      appendSelectedTranscriptReportInTransaction(
-        database,
-        resolved,
-        facts.appendParentId,
-        prepareCustomTranscriptReport(selected, facts.appendParentId),
-      );
-    }
   });
 }
 
@@ -470,14 +393,10 @@ export async function appendSessionTranscriptReportNative(
 export async function appendSessionTranscriptReport(
   scope: SessionTranscriptWriteScope,
   report: TranscriptReport,
-  options?: { sessionEntryCurrent?: SessionEntryCurrentCheck },
+  options?: {
+    sessionEntryCurrent?: SessionEntryCurrentCheck;
+  },
 ): Promise<Result<void, TranscriptAppendRefusal>> {
-  if (isProcessHeldTranscript(scope)) {
-    if (options?.sessionEntryCurrent) {
-      throw new Error("A file session source cannot authorize a process-held transcript report");
-    }
-    return appendSessionTranscriptReportNative(scope, report);
-  }
   if (report.kind === "assistant") {
     const preparedMessage = prepareTranscriptMessageAppend({
       message: applyAssistantDeliveryDirectives(report.message),
@@ -503,7 +422,6 @@ export async function appendSessionTranscriptReport(
   const selection = {
     kind: report.kind,
     customTypes: [...report.customTypes],
-    suppressWhenAssistantRun: report.suppressWhenAssistantRun,
   };
   const selectReport = report.selectReport;
   return withReportWorker(

@@ -1,5 +1,5 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
-import type { LitElement } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
@@ -10,7 +10,9 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
-import { McpAppPanel } from "./mcp-app-panel.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
   MCP_APP_MESSAGE_EVENT,
@@ -19,6 +21,8 @@ import {
   type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
+import { mountView } from "./mcp-app-view.test-support.ts";
+import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
 
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
@@ -90,17 +94,6 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   return { ...actual, AppBridge, PostMessageTransport };
 });
 
-const { McpAppView } = await import("./mcp-app-view.ts");
-type McpAppViewElement = InstanceType<typeof McpAppView>;
-
-const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
-
-// Keep the mounted view and i18n controller in the current module graph when
-// the non-isolated runner has retained an earlier production registration.
-class TestMcpAppView extends McpAppView {}
-
-customElements.define(MCP_APP_VIEW_ELEMENT_NAME, TestMcpAppView);
-
 describe("mcp-app-view localization", () => {
   afterEach(async () => {
     bridgeMocks.instances.length = 0;
@@ -158,36 +151,34 @@ describe("mcp-app-view localization", () => {
         ...payload,
       }),
     );
-    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
-    Reflect.set(view, "context", {
-      gateway: {
-        snapshot: { client: { request }, phase: "connected" },
-        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
-        subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-          gatewayListeners.add(listener);
-          gatewayEventsReady.resolve();
-          return () => {
-            gatewayListeners.delete(listener);
-            if (gatewayListeners.size === 0) {
-              gatewayEventsStopped.resolve();
-            }
-          };
+    const { view, unmount } = mountView(
+      { sessionKey: "agent:main:main", viewId, title: "Parts library" },
+      {
+        gateway: {
+          snapshot: { client: { request }, phase: "connected" },
+          connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+          subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+            gatewayListeners.add(listener);
+            gatewayEventsReady.resolve();
+            return () => {
+              gatewayListeners.delete(listener);
+              if (gatewayListeners.size === 0) {
+                gatewayEventsStopped.resolve();
+              }
+            };
+          },
+        },
+        theme: {
+          subscribe(listener: () => void) {
+            themeListeners.add(listener);
+            return () => {
+              themeListeners.delete(listener);
+              unsubscribe();
+            };
+          },
         },
       },
-      theme: {
-        subscribe(listener: () => void) {
-          themeListeners.add(listener);
-          return () => {
-            themeListeners.delete(listener);
-            unsubscribe();
-          };
-        },
-      },
-    });
-    view.sessionKey = "agent:main:main";
-    view.viewId = viewId;
-    view.title = "Parts library";
-    document.body.append(view);
+    );
 
     const frame = await frameReady.promise;
     expect(frame.getAttribute("src")).toContain("/mcp-app-sandbox?ticket=test");
@@ -230,23 +221,22 @@ describe("mcp-app-view localization", () => {
       request,
       themeListeners,
       gatewayListeners,
-      gatewayEventsReady: gatewayEventsReady.promise,
       gatewayEventsStopped: gatewayEventsStopped.promise,
       unsubscribe,
       transport: bridgeMocks.transports[0] as { close: ReturnType<typeof vi.fn> },
       view,
+      unmount,
     };
   }
 
   it("keeps resource display hints within the initialized App capabilities", async () => {
     bridgeMocks.appModes = ["inline"];
-    const { view, bridge, gatewayEventsReady } = await mountBridge("view-modes", true, true, {
+    const { view, bridge } = await mountBridge("view-modes", true, true, {
       displayModes: {
         availableDisplayModes: ["inline", "fullscreen"],
         preferredDisplayMode: "fullscreen",
       },
     });
-    await gatewayEventsReady;
     expect(view.displayMode).toBe("inline");
     await expect(bridge.onrequestdisplaymode?.({ mode: "fullscreen" })).resolves.toEqual({
       mode: "inline",
@@ -257,9 +247,9 @@ describe("mcp-app-view localization", () => {
   });
 
   it("reveals questions and approvals only for its conversation without replacing the App frame", async () => {
-    const { view, frame, gatewayListeners, gatewayEventsReady, gatewayEventsStopped } =
-      await mountBridge("view-input-" + crypto.randomUUID());
-    await gatewayEventsReady;
+    const { view, frame, gatewayListeners, gatewayEventsStopped, unmount } = await mountBridge(
+      "view-input-" + crypto.randomUUID(),
+    );
     const emit = (event: string, payload: unknown) => {
       for (const listener of gatewayListeners) {
         listener({ type: "event", event, payload });
@@ -274,7 +264,7 @@ describe("mcp-app-view localization", () => {
     emit("question.requested", { sessionKey: view.sessionKey, status: "pending" });
     await view.updateComplete;
     expect(view.displayMode).toBe("inline");
-    expect(view.shadowRoot?.querySelector("iframe")).toBe(frame);
+    expect(view.querySelector("iframe")).toBe(frame);
     view.displayMode = "fullscreen";
     await view.updateComplete;
     emit("plugin.approval.requested", { request: { sessionKey: "agent:other:main" } });
@@ -282,8 +272,8 @@ describe("mcp-app-view localization", () => {
     emit("plugin.approval.requested", { request: { sessionKey: view.sessionKey } });
     await view.updateComplete;
     expect(view.displayMode).toBe("inline");
-    expect(view.shadowRoot?.querySelector("iframe")).toBe(frame);
-    view.remove();
+    expect(view.querySelector("iframe")).toBe(frame);
+    unmount();
     await gatewayEventsStopped;
     expect(gatewayListeners.size).toBe(0);
   });
@@ -312,7 +302,7 @@ describe("mcp-app-view localization", () => {
     const preview = "Please compare the selected parts. ".repeat(8);
     const cancelled = send([{ type: "text", text: preview }]);
     await view.updateComplete;
-    const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+    const dialog = view.querySelector<HTMLElement>('[role="alertdialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog!.textContent).toContain("Parts library");
     expect(dialog!.textContent).toContain("Send this message to the assistant?");
@@ -322,22 +312,22 @@ describe("mcp-app-view localization", () => {
     expect(previewElement.title).toBe(preview);
     expect(previewElement.textContent).toContain(preview.slice(0, 200));
     expect(previewElement.textContent).not.toContain(preview);
-    expect(view.shadowRoot!.activeElement).toBe(dialog);
+    await waitForSolid(() => expect(document.activeElement).toBe(dialog));
     [...dialog!.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Cancel")!
       .click();
     expect(await cancelled).toEqual({ isError: true });
     await view.updateComplete;
     expect(received).toHaveLength(0);
-    expect(view.shadowRoot!.querySelector('[role="alertdialog"]')).toBeNull();
-    expect(view.shadowRoot!.activeElement).toBe(frame);
+    expect(view.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.activeElement).toBe(frame);
 
     const accepted = send([
       { type: "text", text: "one" },
       { type: "text", text: "two" },
     ]);
     await view.updateComplete;
-    [...view.shadowRoot!.querySelectorAll('[role="alertdialog"] button')]
+    [...view.querySelectorAll('[role="alertdialog"] button')]
       .find((button) => button.textContent?.trim() === "Send")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(await accepted).toEqual({});
@@ -375,7 +365,7 @@ describe("mcp-app-view localization", () => {
       content: [{ type: "text", text: "First request" }],
     });
     await view.updateComplete;
-    const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+    const dialog = view.querySelector<HTMLElement>('[role="alertdialog"]');
     expect(dialog).not.toBeNull();
     // A second app click can refocus its frame while the first prompt is pending.
     frame.focus();
@@ -386,15 +376,15 @@ describe("mcp-app-view localization", () => {
       }),
     ).toEqual({ isError: true });
     await view.updateComplete;
-    expect(view.shadowRoot!.querySelectorAll('[role="alertdialog"]')).toHaveLength(1);
+    expect(view.querySelectorAll('[role="alertdialog"]')).toHaveLength(1);
     expect(dialog!.textContent).toContain("First request");
     expect(dialog!.textContent).not.toContain("Second request");
     dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(await first).toEqual({ isError: true });
     await view.updateComplete;
     expect(received).not.toHaveBeenCalled();
-    expect(view.shadowRoot!.querySelector('[role="alertdialog"]')).toBeNull();
-    expect(view.shadowRoot!.activeElement).toBe(frame);
+    expect(view.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.activeElement).toBe(frame);
   });
 
   it("sends with Enter on the focused strip and restores frame focus", async () => {
@@ -414,22 +404,24 @@ describe("mcp-app-view localization", () => {
       content: [{ type: "text", text: "Keyboard request" }],
     });
     await view.updateComplete;
-    const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+    const dialog = view.querySelector<HTMLElement>('[role="alertdialog"]');
     expect(dialog).not.toBeNull();
-    expect(view.shadowRoot!.activeElement).toBe(dialog);
+    await waitForSolid(() => expect(document.activeElement).toBe(dialog));
     dialog!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(await pending).toEqual({});
     await view.updateComplete;
     expect(received).toHaveLength(1);
     expect(received[0]!.content).toEqual([{ type: "text", text: "Keyboard request" }]);
-    expect(view.shadowRoot!.activeElement).toBe(frame);
-    expect(view.shadowRoot!.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(document.activeElement).toBe(frame);
+    expect(view.querySelector('[role="alertdialog"]')).toBeNull();
   });
 
-  it.each(["disconnect", "rebind"] as const)(
+  it.each(["disconnect", "viewId", "sessionKey", "agentId"] as const)(
     "cancels pending confirmation on %s before a stale Send can dispatch",
     async (change) => {
-      const { bridge, frame, view } = await mountBridge("view-retired-" + crypto.randomUUID());
+      const { bridge, frame, view, unmount } = await mountBridge(
+        "view-retired-" + crypto.randomUUID(),
+      );
       vi.spyOn(window, "confirm").mockReturnValue(false);
       frame.checkVisibility = () => true;
       frame.focus();
@@ -440,15 +432,15 @@ describe("mcp-app-view localization", () => {
         content: [{ type: "text", text: "Retired request" }],
       });
       await view.updateComplete;
-      const dialog = view.shadowRoot!.querySelector<HTMLElement>('[role="alertdialog"]');
+      const dialog = view.querySelector<HTMLElement>('[role="alertdialog"]');
       expect(dialog).not.toBeNull();
       const send = [...dialog!.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Send",
       )!;
       if (change === "disconnect") {
-        view.remove();
+        unmount();
       } else {
-        view.viewId = "replacement-view";
+        view[change] = "replacement";
         await view.updateComplete;
       }
       send.click();
@@ -463,23 +455,22 @@ describe("mcp-app-view localization", () => {
         details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
       });
     });
-    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
-    Reflect.set(view, "context", {
+    const context = {
       gateway: {
         snapshot: { client: { request } },
         connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
       },
-    });
-    view.sessionKey = "agent:main:main";
-    view.viewId = "mcp-app-expired";
-    view.surface = "board";
+    };
+    const { view } = mountView(
+      { sessionKey: "agent:main:main", viewId: "mcp-app-expired", surface: "board" },
+      context,
+    );
     const expired = vi.fn();
     view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
-    document.body.append(view);
 
     await expect.poll(() => expired).toHaveBeenCalledOnce();
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector('[role="status"]')).toBeNull();
+    expect(view.querySelector('[role="status"]')).toBeNull();
   });
 
   it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
@@ -500,12 +491,7 @@ describe("mcp-app-view localization", () => {
         subscribe: () => () => {},
       },
     };
-    const panel = new McpAppPanel();
-    const provider = createApplicationContextProvider(context as unknown as ApplicationContext);
-    provider.append(panel);
-    const expired = deferred();
-    panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
-    panel.launch = {
+    const launch = {
       owner: client,
       sessionKey: "agent:main:main",
       agentId: "main",
@@ -514,40 +500,37 @@ describe("mcp-app-view localization", () => {
         toolName: "library",
         title: "Parts library",
         resourceUri: "ui://parts/library",
-        entrypoint: { type: "global" },
+        entrypoint: { type: "global" as const },
       },
     };
-    document.body.append(provider);
+    const provider = createSolidApplicationContextProvider(
+      context as unknown as ApplicationContext,
+    );
+    const mounted = mountSolid(() => createComponent(McpAppPanel, { launch }), {
+      wrapper: provider.wrapper,
+    });
+    const panel = mounted.container.querySelector<McpAppPanelElement>("openclaw-mcp-app-panel")!;
+    const expired = deferred();
+    panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
     await expired.promise;
     const view = panel.querySelector("mcp-app-view")!;
     await view.updateComplete;
-    const button = [...view.shadowRoot!.querySelectorAll("button")].find(
+    const button = [...view.querySelectorAll("button")].find(
       (candidate) => candidate.textContent?.trim() === "Relaunch",
     );
     expect(button).toBeDefined();
     button!.click();
     await vi.dynamicImportSettled();
+    const launchParams = {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      serverName: "parts",
+      toolName: "library",
+      entrypointType: "global",
+    };
     expect(request.mock.calls.filter(([method]) => method === "mcp.app.launch")).toEqual([
-      [
-        "mcp.app.launch",
-        {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          serverName: "parts",
-          toolName: "library",
-          entrypointType: "global",
-        },
-      ],
-      [
-        "mcp.app.launch",
-        {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          serverName: "parts",
-          toolName: "library",
-          entrypointType: "global",
-        },
-      ],
+      ["mcp.app.launch", launchParams],
+      ["mcp.app.launch", launchParams],
     ]);
   });
 
@@ -555,28 +538,28 @@ describe("mcp-app-view localization", () => {
     const request = vi.fn(async () => {
       throw new Error("upstream token expired");
     });
-    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
-    Reflect.set(view, "context", {
+    const context = {
       gateway: {
         snapshot: { client: { request } },
         connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
       },
-    });
-    view.sessionKey = "agent:main:main";
-    view.viewId = "mcp-app-upstream-expired";
+    };
+    const { view } = mountView(
+      { sessionKey: "agent:main:main", viewId: "mcp-app-upstream-expired" },
+      context,
+    );
     const expired = vi.fn();
     view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
-    document.body.append(view);
 
     await expect
-      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .poll(() => view.querySelector(".error")?.textContent)
       .toContain("upstream token expired");
     expect(expired).not.toHaveBeenCalled();
   });
 
   it("does not advertise or install message support for read-only views", async () => {
     const { bridge, view } = await mountBridge(`view-read-only-${crypto.randomUUID()}`, false);
-    expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
+    expect(view.querySelector('[role="status"]')?.textContent).toContain(
       "Send a message to interact again",
     );
     expect(bridge.capabilities).not.toHaveProperty("message");
@@ -597,7 +580,7 @@ describe("mcp-app-view localization", () => {
       bridge.updateModelContextHandler?.({ content: [{ type: "text", text: "selection" }] }),
     ).rejects.toThrow("expired");
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
+    expect(view.querySelector('[role="status"]')?.textContent).toContain(
       "Send a message to interact again",
     );
   });
@@ -618,10 +601,9 @@ describe("mcp-app-view localization", () => {
   });
 
   it("does not republish consumed context when an earlier bridge refresh settles", async () => {
-    const { bridge, request, view, gatewayListeners, gatewayEventsReady } = await mountBridge(
+    const { bridge, request, view, gatewayListeners } = await mountBridge(
       `view-context-${crypto.randomUUID()}`,
     );
-    await gatewayEventsReady;
     const state = { updateId: "revision-one", content: [{ type: "text", text: "selected item" }] };
     const refresh = deferred<{ state: typeof state }>();
     const received: McpAppContextEventDetail[] = [];
@@ -660,7 +642,7 @@ describe("mcp-app-view localization", () => {
       import("../pages/chat/components/chat-transcript.test-support.ts"),
       import("../pages/chat/outbox-browser.test-support.ts"),
       import("../test-helpers/storage.ts"),
-      import("../pages/apps/apps-page.ts"),
+      import("../pages/apps/apps-page.tsx"),
     ]);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     installOutboxBrowserStorage();
@@ -769,8 +751,11 @@ describe("mcp-app-view localization", () => {
     });
     const appClient = createTestGatewayClient(request);
     client.request = appClient.request.bind(appClient);
-    const apps = document.createElement("openclaw-apps-page") as LitElement & { appSearch: string };
-    apps.appSearch = "?server=parts&tool=library";
+    // SAFETY: the registered Apps page exposes these properties to its rendering callers.
+    const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
+      readonly updateComplete: Promise<boolean>;
+    };
+    Object.assign(apps, { appSearch: "?server=parts&tool=library" });
     const provider = createApplicationContextProvider(fixture.context);
     const initialized = deferred();
     provider.addEventListener(MCP_APP_CONTEXT_EVENT, () => initialized.resolve(), { once: true });
@@ -791,16 +776,15 @@ describe("mcp-app-view localization", () => {
       await pane.updateComplete;
       expect(pane.querySelector('[role="alert"]')?.textContent).toBeUndefined();
       await initialized.promise;
-      const strip = pane.querySelector<LitElement>("openclaw-mcp-app-context-strip")!;
+      const strip = pane.querySelector("openclaw-mcp-app-context-strip")!;
       expect(pane.classList.contains("mcp-app-conversation")).toBe(true);
       expect(strip).not.toBeNull();
+      const itemSelector = ".mcp-app-context__item";
       const bridge = bridgeMocks.instances[0] as Awaited<ReturnType<typeof mountBridge>>["bridge"];
       await bridge.updateModelContextHandler!({ content: first.content });
-      await strip.updateComplete;
-      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(2);
+      await waitForSolid(() => expect(strip.querySelectorAll(itemSelector)).toHaveLength(2));
       await bridge.updateModelContextHandler!({ content: second.content });
-      await strip.updateComplete;
-      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(3);
+      await waitForSolid(() => expect(strip.querySelectorAll(itemSelector)).toHaveLength(3));
       expect(
         request.mock.calls.filter(([method]) => method === "mcp.app.updateModelContext"),
       ).toHaveLength(2);
@@ -810,8 +794,7 @@ describe("mcp-app-view localization", () => {
         modelContext: null,
         updateId: second.updateId,
       });
-      await strip.updateComplete;
-      expect(strip.textContent?.trim()).toBe("");
+      await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
       expect(bridge.setHostContext).toHaveBeenLastCalledWith(
         expect.objectContaining({ "openai/modelContext": null }),
       );
@@ -863,7 +846,7 @@ describe("mcp-app-view localization", () => {
     document.documentElement.style.setProperty("--card", "#161920");
     document.documentElement.style.setProperty("--text", "#d4d4d8");
 
-    const { bridge, themeListeners, unsubscribe, view } = await mountBridge(
+    const { bridge, frame, themeListeners, unsubscribe, view, unmount } = await mountBridge(
       `view-context-${crypto.randomUUID()}`,
     );
     expect(bridge.options.hostContext).toMatchObject({
@@ -902,19 +885,37 @@ describe("mcp-app-view localization", () => {
 
     view.height = 480;
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(view.querySelector("iframe")?.style.height).toBe("480px");
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
 
+    const onHeightChange = vi.fn();
+    view.onHeightChange = onHeightChange;
     bridge.onsizechange?.({ height: 900 });
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
+    expect(frame.style.height).toBe("900px");
+    expect(view.querySelector<HTMLElement>(".mount")?.style.minHeight).toBe("900px");
+    expect(onHeightChange).toHaveBeenLastCalledWith(900);
+    bridge.onsizechange?.({ height: Number.NaN });
+    expect(frame.style.height).toBe("900px");
+    expect(onHeightChange).toHaveBeenCalledTimes(1);
+    for (const change of [
+      { title: "Updated library" },
+      { surface: "board" },
+      { relaunching: true },
+    ]) {
+      Object.assign(view, change);
+      await view.updateComplete;
+      expect(view.querySelector("iframe")).toBe(frame);
+      expect(frame.style.height).toBe("900px");
+    }
 
     view.fillContainer = true;
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("100%");
+    expect(view.querySelector("iframe")?.style.height).toBe("100%");
     bridge.onsizechange?.({ height: 900 });
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("100%");
+    expect(view.querySelector("iframe")?.style.height).toBe("100%");
+    expect(onHeightChange).toHaveBeenCalledTimes(1);
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
@@ -927,11 +928,11 @@ describe("mcp-app-view localization", () => {
 
     view.fillContainer = false;
     await view.updateComplete;
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(view.querySelector("iframe")?.style.height).toBe("480px");
     bridge.onsizechange?.({ height: 900 });
-    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
+    expect(view.querySelector("iframe")?.style.height).toBe("900px");
 
-    view.remove();
+    unmount();
     await expect.poll(() => disconnect).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(themeListeners.size).toBe(0);
@@ -1005,13 +1006,10 @@ describe("mcp-app-view localization", () => {
     });
     await i18n.setLocale("pt-BR");
 
-    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
-    view.sessionKey = "agent:main:main";
-    view.viewId = "view-1";
-    document.body.append(view);
+    const { view } = mountView({ sessionKey: "agent:main:main", viewId: "view-1" });
 
     await expect
-      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .poll(() => view.querySelector(".error")?.textContent)
       .toBe("Aplicativo MCP indisponível: Gateway do aplicativo MCP indisponível");
   });
 
@@ -1034,21 +1032,20 @@ describe("mcp-app-view localization", () => {
         toolResult: null,
         messageSupported: false,
       }));
-      const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
-      Reflect.set(view, "context", {
-        gateway: {
-          snapshot: { client: { request } },
-          connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      const { view } = mountView(
+        { sessionKey: "agent:main:main", viewId: crypto.randomUUID() },
+        {
+          gateway: {
+            snapshot: { client: { request } },
+            connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+          },
         },
-      });
-      view.sessionKey = "agent:main:main";
-      view.viewId = crypto.randomUUID();
-      document.body.append(view);
+      );
 
       await expect
-        .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+        .poll(() => view.querySelector(".error")?.textContent)
         .toContain("MCP App sandbox URL is invalid");
-      expect(view.shadowRoot?.querySelector("iframe")).toBeNull();
+      expect(view.querySelector("iframe")).toBeNull();
     },
   );
 });

@@ -16,8 +16,8 @@ type RaftAccountConfig = {
 export type ResolvedRaftAccount = ReturnType<typeof resolveRaftAccount>;
 
 const {
-  listAccountIds,
-  resolveDefaultAccountId,
+  listAccountIds: listRaftAccountIds,
+  resolveDefaultAccountId: resolveDefaultRaftAccountId,
   resolveAccountConfig: resolveMergedRaftAccountConfig,
 } = createAccountListHelpers<RaftAccountConfig>(RAFT_CHANNEL_ID, {
   normalizeAccountId,
@@ -28,16 +28,11 @@ const {
   },
 });
 
-export const listRaftAccountIds = listAccountIds;
-export const resolveDefaultRaftAccountId = resolveDefaultAccountId;
-
-function resolveRaftConfig(cfg: OpenClawConfig): RaftAccountConfig | undefined {
-  return cfg.channels?.[RAFT_CHANNEL_ID] as RaftAccountConfig | undefined;
-}
+export { listRaftAccountIds, resolveDefaultRaftAccountId };
 
 export function resolveRaftAccount(params: { cfg: OpenClawConfig; accountId?: string | null }) {
   const accountId = normalizeAccountId(params.accountId ?? resolveDefaultRaftAccountId(params.cfg));
-  const channel = resolveRaftConfig(params.cfg);
+  const channel = params.cfg.channels?.[RAFT_CHANNEL_ID] as RaftAccountConfig | undefined;
   const merged = resolveMergedRaftAccountConfig(params.cfg, accountId);
   const configuredProfile = normalizeOptionalString(merged.profile);
   const envProfile =

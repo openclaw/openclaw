@@ -14,6 +14,7 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
+import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import {
   readExactSessionEntryRow,
   readSessionEntryByIdInDatabase,
@@ -23,6 +24,8 @@ import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry
 import {
   assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
+  readWithCanonicalSessionReaderContinuation,
+  type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import type {
@@ -30,6 +33,7 @@ import type {
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
+import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 
 // One last-key/read-policy projection per native handle; the revision owner invalidates its facts.
 const currentEntryReads = new WeakMap<
@@ -65,33 +69,31 @@ function createCurrentEntryRead(
               projection: "list",
             })?.entry
           : lookup === "logical"
-            ? readSessionEntryRow(database, sessionKey, "full")?.entry
+            ? readSessionEntryRow(database, sessionKey, "list")?.entry
             : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
-      if (options.projection === "capability") {
+      if (!current || options.projection === "capability") {
         entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;
         return true;
       }
-      entry = current
-        ? {
-            sessionId: current.sessionId,
-            previousSessionId: current.previousSessionId,
-            ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
-            ...(current.repositoryWorkspaceId === undefined
-              ? {}
-              : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
-            lifecycleRevision: current.lifecycleRevision,
-            lifecycleRunId: current.lifecycleRunId,
-            activeWriterRunId: current.activeWriterRunId,
-            ...(current.subagentRecovery
-              ? {
-                  subagentRecovery: {
-                    lastRunId: current.subagentRecovery.lastRunId,
-                    sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
-                  },
-                }
-              : {}),
-          }
-        : undefined;
+      entry = {
+        sessionId: current.sessionId,
+        previousSessionId: current.previousSessionId,
+        ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
+        ...(current.repositoryWorkspaceId === undefined
+          ? {}
+          : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
+        lifecycleRevision: current.lifecycleRevision,
+        lifecycleRunId: current.lifecycleRunId,
+        activeWriterRunId: current.activeWriterRunId,
+        ...(current.subagentRecovery
+          ? {
+              subagentRecovery: {
+                lastRunId: current.subagentRecovery.lastRunId,
+                sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
+              },
+            }
+          : {}),
+      };
       return true;
     },
   );
@@ -101,7 +103,7 @@ function createCurrentEntryRead(
   };
 }
 
-export function readSessionEntryCurrentFactsInDatabase(
+function readSessionEntryCurrentFactsInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   sessionKey: string,
   lookup: "exact" | "logical" = "exact",
@@ -126,7 +128,7 @@ export function readSessionEntryCurrentFactsInDatabase(
   return readWithCanonicalSessionAdmission(database, cached.read);
 }
 
-export function assertSessionEntryCurrentNativeSource(
+function assertSessionEntryCurrentNativeSource(
   source: SessionEntryCurrentSource,
   database?: OpenClawAgentReadOnlyDatabase,
 ): void {
@@ -177,7 +179,7 @@ export function requestSessionEntryCurrentAdmission(
     };
     requestAdmission({ ...request, facts });
     assertSessionEntryCurrentNativeSource(source, database);
-    // A foreign commit invalidates cached facts, not necessarily this session's ownership.
+    // A writer receipt invalidates cached facts, not necessarily this session's ownership.
     if (
       !isDeepStrictEqual(
         entry,
@@ -215,4 +217,54 @@ export function requestSessionEntriesCurrentAdmission(
     requestSessionEntryCurrentAdmission(source, current, {}, (next) => enter(index + 1, next));
   };
   enter(0, request);
+}
+
+/** Canonical entry currency reuses parsed facts only at the same native connection revision. */
+export function readSessionEntryCurrentFacts(request: {
+  database: { agentId: string; path: string };
+  scope: { agentId?: string; sessionKey: string; env?: NodeJS.ProcessEnv };
+  source?: SessionEntryCurrentSource;
+  continuation?: CanonicalSessionReaderContinuation;
+}): {
+  kind: "session-entry-current";
+  entry: SessionEntryCurrentFacts | undefined;
+  source?: ReturnType<typeof captureSessionEntryReadSource>;
+} {
+  const sessionKey = request.scope.sessionKey;
+  assertCanonicalSessionKeyWrite(sessionKey, request.scope.agentId);
+  if (request.source) {
+    if (
+      request.source.path !== request.database.path ||
+      request.source.agentId !== request.database.agentId ||
+      request.source.sessionKey !== sessionKey
+    ) {
+      throw new Error("Session currency request differs from its captured source");
+    }
+    assertSessionEntryCurrentNativeSource(request.source);
+  }
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
+        const source = captureSessionEntryReadSource(
+          database,
+          undefined,
+          "Session currency read requires its current durable owner",
+        );
+        if (request.source) {
+          assertSessionEntryCurrentNativeSource(request.source, database);
+        }
+        return {
+          entry: readSessionEntryCurrentFactsInDatabase(database, sessionKey),
+          source,
+        };
+      }),
+    { ...request.database, env: request.scope.env },
+  );
+  if (!result.found && result.reason !== "database-missing") {
+    throw new SessionMetadataUnavailableError(result.reason);
+  }
+  return {
+    kind: "session-entry-current",
+    ...(result.found ? result.value : { entry: undefined }),
+  };
 }

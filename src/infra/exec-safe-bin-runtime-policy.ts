@@ -1,4 +1,3 @@
-// Resolves runtime safe-bin policy and trust warnings.
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
 import {
   normalizeSafeBinProfileFixtures,
@@ -59,13 +58,7 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "zsh",
 ]);
 
-const INTERPRETER_LIKE_PATTERNS = [
-  /^python\d+(?:\.\d+)?$/,
-  /^ruby\d+(?:\.\d+)?$/,
-  /^perl\d+(?:\.\d+)?$/,
-  /^php\d+(?:\.\d+)?$/,
-  /^node\d+(?:\.\d+)?$/,
-];
+const VERSIONED_INTERPRETER_PATTERN = /^(?:python|ruby|perl|php|node)\d+(?:\.\d+)?$/;
 
 /** Returns true for safeBins that can interpret scripts or execute broad embedded programs. */
 export function isInterpreterLikeSafeBin(raw: string): boolean {
@@ -76,10 +69,9 @@ export function isInterpreterLikeSafeBin(raw: string): boolean {
   if (INTERPRETER_LIKE_SAFE_BINS.has(normalized)) {
     return true;
   }
-  return INTERPRETER_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
+  return VERSIONED_INTERPRETER_PATTERN.test(normalized);
 }
 
-/** Lists normalized interpreter-like safeBins from a configured entry set. */
 export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[] {
   return Array.from(entries)
     .map((entry) => normalizeSafeBinName(entry))
@@ -103,7 +95,6 @@ export function resolveMergedSafeBinProfileFixtures(params: {
   };
 }
 
-/** Resolves safe-bin names, profiles, trusted dirs, and warning metadata for exec evaluation. */
 export function resolveExecSafeBinRuntimePolicy(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;

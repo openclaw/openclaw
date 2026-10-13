@@ -2,16 +2,6 @@ import type { Checker, Project } from "typescript/unstable/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
 
-export type ConsumerScope =
-  | "src"
-  | "extension"
-  | "package"
-  | "app"
-  | "ui"
-  | "script"
-  | "test"
-  | "other";
-
 export type TopologyReportName =
   | "public-surface-usage"
   | "owner-map"
@@ -77,11 +67,7 @@ export type TopologyScope = {
   id: string;
   description: string;
   entrypoints: PublicEntrypoint[];
-  importFilter: (specifier: string) => boolean;
-  classifyUsageBucket: (relPath: string) => UsageBucket;
-  ownerForPath: (relPath: string) => string | null;
-  extensionForPath: (relPath: string) => string | null;
-  packageOwnerForPath: (relPath: string) => string | null;
+  internalRoots: string[];
 };
 
 export type RankedCandidates = {

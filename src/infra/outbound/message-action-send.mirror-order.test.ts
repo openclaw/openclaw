@@ -33,6 +33,7 @@ describe("outbound mirror route ordering", () => {
   let storePath: string;
   let cfg: OpenClawConfig;
   const handleAction = vi.fn();
+  const sendMedia = vi.fn();
 
   function registerTestChannel() {
     const plugin: ChannelPlugin = {
@@ -49,6 +50,7 @@ describe("outbound mirror route ordering", () => {
       },
       outbound: {
         deliveryMode: "direct",
+        sendMedia,
         // The plugin action path above owns the send; core delivery must not run.
         sendText: async () => {
           throw new Error("unexpected core sendText");
@@ -89,6 +91,7 @@ describe("outbound mirror route ordering", () => {
       channels: { testchat: { enabled: true } },
     } as OpenClawConfig;
     handleAction.mockReset();
+    sendMedia.mockReset();
     registerTestChannel();
     await seedMainSessionWithDiscordOrigin();
   });
@@ -136,6 +139,46 @@ describe("outbound mirror route ordering", () => {
       from: "testchat:12345",
     });
   });
+
+  it.each(["plugin", "core"] as const)(
+    "retains distinct media identities through %s sends with matching mirror text",
+    async (handledBy) => {
+      handleAction.mockResolvedValue(
+        handledBy === "plugin" ? jsonResult({ ok: true, messageId: "media-send" }) : null,
+      );
+      sendMedia.mockResolvedValue({ channel: "testchat", messageId: "media-send" });
+      const mediaUrls = ["https://example.com/one/chart.png", "https://example.com/two/chart.png"];
+      for (const media of [...mediaUrls, mediaUrls[1]]) {
+        const result = await runMessageAction({
+          cfg,
+          action: "send",
+          params: { channel: "testchat", target: "user:12345", message: "Chart", media },
+          agentId: "main",
+          dryRun: false,
+        });
+        expect(result.handledBy).toBe(handledBy);
+      }
+      const events = loadTranscriptEventsSync({
+        agentId: "main",
+        sessionKey: MAIN_SESSION_KEY,
+        sessionId: "main-session",
+        storePath,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({ type: "session", id: "main-session" }),
+        ...mediaUrls.map((mediaUrl) =>
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              content: [{ type: "text", text: "Chart\nchart.png" }],
+              openclawDelivery: { mediaUrls: [mediaUrl] },
+            }),
+          }),
+        ),
+      ]);
+      expect(handledBy === "plugin" ? handleAction : sendMedia).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it.each([
     {

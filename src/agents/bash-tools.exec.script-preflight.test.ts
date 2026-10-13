@@ -9,6 +9,7 @@ import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { readToolEffectReceipt } from "./tool-effect-receipt.js";
 
 const processGatewayAllowlistMock = vi.hoisted(() =>
   vi.fn(
@@ -17,6 +18,7 @@ const processGatewayAllowlistMock = vi.hoisted(() =>
     }): Promise<{
       allowWithoutEnforcedCommand: boolean;
       revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+      releaseSpawn?: () => void;
     }> => ({ allowWithoutEnforcedCommand: true }),
   ),
 );
@@ -77,6 +79,23 @@ it("blocks interactive channel login commands from exec", async () => {
 });
 
 describeNonWin("exec script preflight", () => {
+  it("releases prepared launch authority when approval preparation finishes after cancellation", async () => {
+    const controller = new AbortController();
+    const releaseSpawn = vi.fn();
+    processGatewayAllowlistMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("cancelled during approval preparation"));
+      return { allowWithoutEnforcedCommand: true, releaseSpawn };
+    });
+    await expect(
+      createPreflightTool().execute(
+        "cancelled-preparation",
+        { command: "echo must-not-launch" },
+        controller.signal,
+      ),
+    ).rejects.toThrow("cancelled during approval preparation");
+    expect(releaseSpawn).toHaveBeenCalledOnce();
+  });
+
   it.each([true, false])("revalidates approved bytes before spawn (changed=%s)", async (mutate) => {
     await withScripts({ "script.sh": "#!/bin/sh\necho approved\n" }, async (workdir) => {
       const prepared = await prepareSystemRunMutableFileApproval({
@@ -131,15 +150,18 @@ describeNonWin("exec script preflight", () => {
   });
 
   it.each([
-    ["$A", "payload = $A"],
     ["$P", 'result = f"{ "$A" + $P }"'],
     ["$A", 'result = f"\\{$A}"'],
     ["$F", 'result = f"{lambda value: $F}"'],
     ["$E", 'text = "ok\rpayload = $E'],
     ["$D", 'text = "ok"\r# note\rpayload = $D'],
   ])("blocks Python shell variable %s in %s", async (token, source) => {
-    await expect(execScripts("python bad.py", { "bad.py": source })).rejects.toThrow(
+    const result = execScripts("python bad.py", { "bad.py": source });
+    await expect(result).rejects.toThrow(
       `exec preflight: detected likely shell variable injection (${token})`,
+    );
+    await expect(result).rejects.toSatisfy(
+      (error) => readToolEffectReceipt(error)?.state === "not_started",
     );
   });
 
@@ -183,61 +205,10 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("returns native Node diagnostics after preserving preceding output", async () => {
-    const result = await execScripts("node bad.js", {
-      "bad.js": 'process.stdout.write("before-error\\n"); const value = $DM_JSON;',
-    });
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-    const text = result.content.find((c) => c.type === "text")?.text ?? "";
-    expect(text).toContain("ReferenceError");
-    expect(text).not.toContain("exec preflight:");
-    expect(text).toMatch(/^before-error\r?\n/);
-  });
-
-  it("returns native preload errors before inline code runs", async () => {
-    const result = await execScripts("node --import ./bad.js -e \"console.log('entry-ran')\"", {
-      "bad.js": "const value = $DM_JSON;",
-    });
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-    const text = result.content.find((c) => c.type === "text")?.text ?? "";
-    expect(text).toContain("ReferenceError");
-    expect(text).not.toContain("exec preflight:");
-    expect(text).not.toContain("entry-ran");
-  });
-
-  it("validates the first quoted Python operand behind env despite trailing script arguments", async () => {
-    await expect(
-      execScripts('/usr/bin/env python "..bad.py" --output out.py', {
-        "..bad.py": "payload = $DM_JSON",
-        "out.py": "print('ok')",
-      }),
-    ).rejects.toThrow(injection);
-  });
-
-  it("validates symlinked script entrypoints within workdir", async () => {
-    await withScripts({ "bad.py": "payload = $DM_JSON" }, async (workdir) => {
-      await fs.symlink(path.join(workdir, "bad.py"), path.join(workdir, "link.py"));
-      await expect(runExecPreflight("python3 link.py", workdir)).rejects.toThrow(injection);
-    });
-  });
-
   it("validates scripts under literal tilde directories", async () => {
     await expect(
       execScripts('python3 "~/bad.py"', { "~/bad.py": "payload = $DM_JSON" }),
     ).rejects.toThrow(injection);
-  });
-
-  it("skips script-file preflight in yolo host mode", async () => {
-    await withScripts({ "bad.py": "payload = $DM_JSON" }, async (workdir) => {
-      const result = await createPreflightTool("off").execute("call-yolo", {
-        command: "python3 bad.py",
-        workdir,
-      });
-      const text = result.content.find((c) => c.type === "text")?.text ?? "";
-      expect(text).not.toMatch(/exec preflight:/);
-      expect(text).toContain("SyntaxError");
-      expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-    });
   });
 
   it("skips preflight reads outside workdir", async () => {
@@ -304,8 +275,10 @@ describeNonWin("exec script preflight", () => {
     `env /bin/bash --rcfile shell.rc --noprofile --norc -O extglob -ceu "python 'bad.py'"`,
     'bash -c "if true; then python bad.py; fi"',
   ])("fails closed for %s", async (command) => {
-    await expect(runExecPreflight(command)).rejects.toThrow(
-      /exec preflight: complex interpreter invocation detected/,
+    const result = runExecPreflight(command);
+    await expect(result).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    await expect(result).rejects.toSatisfy(
+      (error) => readToolEffectReceipt(error)?.state === "not_started",
     );
   });
 

@@ -4,6 +4,7 @@ import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-cl
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -18,13 +19,16 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import {
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -39,6 +43,8 @@ import {
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundGatewayRequestContext,
 } from "./message-gateway-options.js";
@@ -54,15 +60,7 @@ import {
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
-export { annotateSourceDelivery } from "./message-action-result-acceptance.js";
-
 const log = createSubsystemLogger("outbound/message-action");
-
-// Gateway runtime is only needed for remote message action dispatch or
-// idempotency keys; keep normal in-process actions import-light.
-const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
-);
 
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
@@ -91,10 +89,10 @@ async function callGatewayMessageAction<T>(params: {
   agentRuntimeIdentityToken?: string;
   requestContext?: OutboundGatewayRequestContext;
   abortSignal?: AbortSignal;
+  assertDirectAdapterHandoff?: SessionSourceAssertion;
   onUnknownDeliveryOutcome?: () => void;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege, isGatewayTransportError } =
-    await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, isGatewayTransportError } = await loadMessageGatewayRuntime();
   const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // A timed-out send is reattached with the same idempotency key. Cap only the
   // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
@@ -117,7 +115,14 @@ async function callGatewayMessageAction<T>(params: {
       ? params.gateway.request<R>(options, params.requestContext)
       : callGatewayLeastPrivilege<R>(options);
   try {
-    return await request<T>(call);
+    return await runWithSessionSourceScope(
+      params.assertDirectAdapterHandoff,
+      async () => {
+        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+        return request<T>(call);
+      },
+      { checkAfter: false },
+    );
   } catch (error) {
     if (
       !(
@@ -211,14 +216,6 @@ export function projectGatewayQueuedDeliveryResult(error: unknown) {
   };
 }
 
-async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
-  }
-  const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
-  return randomIdempotencyKey();
-}
-
 export async function applyMessageCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -294,7 +291,7 @@ export async function executeGatewayAction(
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     ctx.input.conversationReadOrigin,
   );
-  const idempotencyKey = await resolveGatewayActionIdempotencyKey(
+  const idempotencyKey = await resolveGatewayIdempotencyKey(
     normalizeOptionalString(ctx.params.idempotencyKey),
   );
   const callerOwnsTerminalReceipt =
@@ -335,10 +332,10 @@ export async function executeGatewayAction(
   let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {
-    assertOutboundHandoffCurrent(ctx.input.assertDirectAdapterHandoff);
     payload = await callGatewayMessageAction<unknown>({
       gateway: ctx.gateway,
       abortSignal: ctx.input.abortSignal,
+      assertDirectAdapterHandoff: ctx.input.assertDirectAdapterHandoff,
       agentRuntimeIdentityToken,
       requestContext,
       onUnknownDeliveryOutcome: () => {
@@ -400,28 +397,21 @@ export async function executeGatewayAction(
     return result;
   }
   const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
-  if (result.kind === "send") {
+  if (result.kind === "send" || result.kind === "poll") {
     return {
       ...result,
       handledBy: "core",
       ...(partialDelivery
         ? {}
-        : {
-            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
-            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
-          }),
-    };
-  }
-  if (result.kind === "poll") {
-    return {
-      ...result,
-      handledBy: "core",
-      ...(partialDelivery
-        ? {}
-        : {
-            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
-            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
-          }),
+        : result.kind === "send"
+          ? {
+              // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+              sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+            }
+          : {
+              // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+              pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+            }),
     };
   }
   return result;
@@ -621,6 +611,17 @@ export async function executeMessagePlugin(
     return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
+  const finishPluginAction = (payload: unknown, toolResult?: AgentToolResult<unknown>) =>
+    annotateSourceDelivery(
+      {
+        ...actionResult,
+        handledBy: "plugin",
+        payload,
+        ...(toolResult ? { toolResult } : {}),
+      },
+      ctx,
+      replyToIsExplicit,
+    );
   const authorization = input.messageActionAuthorization;
   let handled;
   try {
@@ -645,29 +646,12 @@ export async function executeMessagePlugin(
       ? projectMessageActionPartialDelivery(error)
       : undefined;
     if (partialDelivery) {
-      return await annotateSourceDelivery(
-        {
-          ...actionResult,
-          handledBy: "plugin",
-          payload: partialDelivery,
-        },
-        ctx,
-        replyToIsExplicit,
-      );
+      return await finishPluginAction(partialDelivery);
     }
     throw error;
   }
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return await annotateSourceDelivery(
-    {
-      ...actionResult,
-      handledBy: "plugin",
-      payload: extractToolPayload(handled),
-      toolResult: handled,
-    },
-    ctx,
-    replyToIsExplicit,
-  );
+  return await finishPluginAction(extractToolPayload(handled), handled);
 }

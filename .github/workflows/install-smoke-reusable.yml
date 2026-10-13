@@ -173,78 +173,30 @@ jobs:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
-      - name: Checkout trusted build warning relay
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: main
-          path: .artifacts/build-warning-harness
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            scripts/relay-build-limit-warnings.mts
-            scripts/lib/check-limits.mts
-
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
-      - name: Restore exact trusted workflow revision
+      - name: Resolve exact trusted workflow identity
         id: workflow
         env:
           EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
-          HARNESS_PATH: .artifacts/build-warning-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
         shell: bash
         run: &trusted_workflow_identity_run |
           set -euo pipefail
           node --input-type=module <<'NODE'
           import { appendFileSync } from "node:fs";
-          import { execFileSync } from "node:child_process";
 
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
           const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
-          const harnessPath = process.env.HARNESS_PATH ?? "";
           if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
             throw new Error("job.workflow_repository must exactly match github.repository");
           }
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
             throw new Error("job.workflow_sha must be a full lowercase commit SHA");
-          }
-          if (harnessPath !== ".release-harness" && harnessPath !== ".artifacts/build-warning-harness") {
-            throw new Error("trusted harness path is invalid");
-          }
-          const git = (...args) =>
-            execFileSync("git", ["-C", harnessPath, ...args], {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "inherit"],
-            }).trim();
-          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
-          if (remote !== `https://github.com/${repository}`) {
-            throw new Error("trusted harness remote does not match the workflow repository");
-          }
-          execFileSync(
-            "git",
-            [
-              "-C",
-              harnessPath,
-              "fetch",
-              "--no-tags",
-              "--no-recurse-submodules",
-              "--depth=1",
-              "origin",
-              job.workflow_sha,
-            ],
-            { stdio: "inherit" },
-          );
-          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
-            stdio: "inherit",
-          });
-          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
-            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
           }
           const outputPath = process.env.GITHUB_OUTPUT;
           if (!outputPath) {
@@ -254,6 +206,63 @@ jobs:
             outputPath,
             `repository=${repository}\nsha=${job.workflow_sha}\n`,
           );
+          NODE
+
+      - name: Checkout trusted build warning relay
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ github.sha }}
+          path: .artifacts/build-warning-harness
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/relay-build-limit-warnings.mts
+            scripts/lib/check-limits.mts
+
+      # The immutable caller checkout is a seed only. Execute no repository code until Q is restored.
+      - name: Restore exact trusted workflow revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          HARNESS_PATH: .artifacts/build-warning-harness
+        shell: bash
+        run: &trusted_workflow_restore_run |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { realpathSync } from "node:fs";
+          import { resolve } from "node:path";
+
+          const repository = process.env.WORKFLOW_REPOSITORY ?? "";
+          const workflowSha = process.env.WORKFLOW_SHA ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || !/^[0-9a-f]{40}$/u.test(workflowSha)) {
+            throw new Error("authenticated workflow repository and full SHA are required");
+          }
+          if (![".release-harness", ".artifacts/build-warning-harness"].includes(harnessPath)) {
+            throw new Error("trusted harness path is invalid");
+          }
+          const directory = resolve(realpathSync(process.cwd()), harnessPath);
+          if (realpathSync(directory) !== directory) {
+            throw new Error("trusted harness path must not traverse symlinks");
+          }
+          const git = (...args) => execFileSync("git", ["-C", directory, ...args], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "inherit"],
+            timeout: 120_000,
+          }).trim();
+          if (git("remote", "get-url", "origin").replace(/\.git$/u, "") !== "https://github.com/" + repository) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          if (git("rev-parse", "HEAD") !== workflowSha) {
+            git("fetch", "--no-tags", "--no-recurse-submodules", "--depth=1", "origin", workflowSha);
+            git("checkout", "--detach", workflowSha);
+          }
+          if (git("rev-parse", "HEAD") !== workflowSha) {
+            throw new Error("trusted harness checkout did not resolve to the authenticated workflow SHA");
+          }
           NODE
 
       - name: Set up Blacksmith Docker Builder
@@ -398,18 +407,6 @@ jobs:
             -C "$candidate_dir"
           test -f "$candidate_dir/Dockerfile"
 
-      # Start from a statically trusted checkout. The following step validates job context
-      # locally before restoring the exact called-workflow revision.
-      - &trusted_workflow_subdir_checkout_step
-        name: Checkout trusted release harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: main
-          path: .release-harness
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -417,14 +414,34 @@ jobs:
           package-manager-cache: false
 
       - &trusted_workflow_subdir_identity_step
-        name: Restore exact trusted workflow revision
+        name: Resolve exact trusted workflow identity
         id: workflow
         env:
           EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
-          HARNESS_PATH: .release-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
         shell: bash
         run: *trusted_workflow_identity_run
+
+      # Bootstrap from an immutable caller seed, never moving main or a propagated ref.
+      # The next step restores authenticated callee Q before any repository code executes.
+      - &trusted_workflow_subdir_checkout_step
+        name: Checkout trusted release harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ github.sha }}
+          path: .release-harness
+          fetch-depth: 1
+          persist-credentials: false
+
+      - &trusted_workflow_subdir_restore_step
+        name: Restore exact trusted workflow revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          HARNESS_PATH: .release-harness
+        shell: bash
+        run: *trusted_workflow_restore_run
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
@@ -545,7 +562,6 @@ jobs:
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -553,6 +569,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - name: Prepare trusted selected-source Git owner
         uses: ./.release-harness/.github/actions/git-owner
@@ -745,7 +765,6 @@ jobs:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -753,6 +772,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - name: Require exact trusted installer harness
         env:
@@ -932,7 +955,6 @@ jobs:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -940,6 +962,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
@@ -1011,7 +1037,6 @@ jobs:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1019,6 +1044,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
@@ -1082,7 +1111,6 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1090,6 +1118,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - &candidate_payload_binding_step
         name: Validate candidate payload artifact binding
@@ -1277,28 +1309,32 @@ jobs:
       - name: Run Rocky Linux installer smoke
         env:
           PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          BASELINE_VERSION: ${{ inputs.update_baseline_version || 'latest' }}
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -e OPENCLAW_NODE_VERSION="${NODE_VERSION}" \
+            -e BASELINE_VERSION \
             -v "$PAYLOAD_DIR/install.sh:/tmp/install.sh:ro" \
             rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
-            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version "$BASELINE_VERSION" --no-onboard --no-prompt --verify && openclaw --version'
 
       - name: Run Rocky Linux CLI installer smoke
         env:
           PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          BASELINE_VERSION: ${{ inputs.update_baseline_version || 'latest' }}
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -e OPENCLAW_NODE_VERSION="${NODE_VERSION}" \
+            -e BASELINE_VERSION \
             -v "$PAYLOAD_DIR/install-cli.sh:/tmp/install-cli.sh:ro" \
             rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
-            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version "$BASELINE_VERSION" --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
 
   installer_smoke_nonroot:
     needs: [preflight, installer_smoke_candidate_payload, installer_smoke_nonroot_image]
@@ -1308,7 +1344,6 @@ jobs:
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1316,6 +1351,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - name: Validate candidate payload artifact binding
         env: *candidate_payload_binding_env
@@ -1511,7 +1550,6 @@ jobs:
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1519,6 +1557,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - *candidate_payload_binding_step
 
@@ -1574,7 +1616,6 @@ jobs:
     continue-on-error: true
     timeout-minutes: 20
     steps:
-      - *trusted_workflow_subdir_checkout_step
       - name: Setup Node for payload verification
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1582,6 +1623,10 @@ jobs:
           package-manager-cache: false
 
       - *trusted_workflow_subdir_identity_step
+
+      - *trusted_workflow_subdir_checkout_step
+
+      - *trusted_workflow_subdir_restore_step
 
       - *candidate_payload_binding_step
 

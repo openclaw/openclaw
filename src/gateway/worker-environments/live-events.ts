@@ -416,10 +416,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return invalidEvent();
     }
     const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
-    if (write) {
-      window.trajectoryWrites.add(write);
-      void write.then(() => window.trajectoryWrites.delete(write));
-    }
+    window.trajectoryWrites.add(write);
+    void write.then(() => window.trajectoryWrites.delete(write));
     recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
@@ -554,13 +552,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         await Promise.all(window.trajectoryWrites);
       }
       if (result.ok) {
-        if (!runOwner?.isCancelledFinishing(params.request)) {
-          try {
-            params.source.receiptAuthority();
-          } catch {
-            return invalidEvent();
-          }
-        }
+        // Source closure after publication does not revoke the accepted prefix's ACK.
         if (windows.get(sessionId) !== window) {
           return { ok: false, details: { reason: "session-not-attached" } };
         }

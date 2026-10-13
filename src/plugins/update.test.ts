@@ -249,6 +249,19 @@ function createNpmInstallConfig(
   return pluginConfig({ [pluginId]: { source: "npm", spec, installPath, ...record } });
 }
 
+function resolvedNpmInstall(
+  name: string,
+  version: string,
+  record: PluginInstallRecord,
+): PluginInstallRecord {
+  return {
+    ...record,
+    resolvedName: name,
+    resolvedVersion: version,
+    resolvedSpec: `${name}@${version}`,
+  };
+}
+
 function createClawHubInstallConfig(
   params: {
     pluginId?: string;
@@ -396,16 +409,13 @@ function createPeerLinkInstallConfig(params: {
     ...Object.fromEntries(
       params.plugins.map(({ pluginId, packageName }) => [
         pluginId,
-        {
+        resolvedNpmInstall(packageName, "2026.5.4", {
           source: "npm",
           spec: packageName,
           installPath: params.installPaths[pluginId],
-          resolvedName: packageName,
-          resolvedVersion: "2026.5.4",
-          resolvedSpec: `${packageName}@2026.5.4`,
           integrity: "sha512-same",
           shasum: "same",
-        },
+        }),
       ]),
     ),
   });
@@ -423,9 +433,9 @@ function mockNpmViewMetadata(params: {
     stdout: JSON.stringify({
       name: params.name,
       version: params.version,
-      ...(params.integrity ? { "dist.integrity": params.integrity } : {}),
-      ...(params.shasum ? { "dist.shasum": params.shasum } : {}),
-      ...(params.openclaw ? { openclaw: params.openclaw } : {}),
+      "dist.integrity": params.integrity,
+      "dist.shasum": params.shasum,
+      openclaw: params.openclaw,
     }),
     stderr: "",
   });
@@ -470,18 +480,15 @@ function createNpmUpdateFixture(params: {
   }
   return {
     installPath,
-    config: createNpmInstallConfig(
-      params.pluginId,
-      params.spec ?? params.packageName,
-      installPath,
-      {
-        resolvedName: params.packageName,
-        resolvedSpec: `${params.packageName}@${params.installedVersion}`,
-        resolvedVersion: params.installedVersion,
+    config: pluginConfig({
+      [params.pluginId]: resolvedNpmInstall(params.packageName, params.installedVersion, {
+        source: "npm",
+        spec: params.spec ?? params.packageName,
+        installPath,
         ...(params.integrity ? { integrity: params.integrity } : {}),
         ...(params.shasum ? { shasum: params.shasum } : {}),
-      },
-    ),
+      }),
+    }),
   };
 }
 
@@ -646,24 +653,6 @@ describe("updateNpmInstalledPlugins", () => {
     validatePackageExtensionEntriesForInstallMock.mockReset();
   });
 
-  it("passes timeout budget to npm plugin metadata checks and installs", async () => {
-    const { config } = createNpmUpdateFixture({
-      pluginId: "lossless-claw",
-      packageName: "@martian-engineering/lossless-claw",
-      installedVersion: "0.9.0",
-      registryVersion: "0.10.0",
-      registryIntegrity: "sha512-next",
-      installerVersion: "0.10.0",
-    });
-    await updatePlugin(config, "lossless-claw", { timeoutMs: 1_800_000 });
-    expect(npmViewCall()?.[1]?.timeoutMs).toBe(1_800_000);
-    expectRecordFields(npmInstallCall(), {
-      spec: "@martian-engineering/lossless-claw",
-      expectedPluginId: "lossless-claw",
-      timeoutMs: 1_800_000,
-    });
-  });
-
   it("propagates a managed installer ownership refusal before later updates", async () => {
     const { createManagedPluginArtifactConsentHandler } =
       await vi.importActual<typeof import("./capability-consent.js")>("./capability-consent.js");
@@ -691,12 +680,9 @@ describe("updateNpmInstalledPlugins", () => {
       alias: { ...record },
       later: { source: "npm" as const, spec: "@acme/later", installPath: laterDir },
     };
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: { [pluginId]: { enabled: true }, later: { enabled: true } },
-        installs: records,
-      },
-    };
+    const config = pluginConfig(records, {
+      entries: { [pluginId]: { enabled: true }, later: { enabled: true } },
+    });
     const originalConfig = structuredClone(config);
     const originalFiles = [
       "package.json",
@@ -1125,10 +1111,7 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("targets the activated core for version-bound post-update plugin @openclaw/codex@latest", async () => {
-    const { spec, recordSpec } = {
-      spec: "@openclaw/codex@latest",
-      recordSpec: "@openclaw/codex@latest",
-    };
+    const spec = "@openclaw/codex@latest";
     const targetVersion = "2026.9.4";
     const { config } = createNpmUpdateFixture({
       pluginId: "codex",
@@ -1153,7 +1136,7 @@ describe("updateNpmInstalledPlugins", () => {
       syncOfficialPluginInstalls: true,
     });
     expect(npmInstallCall()?.spec).toBe(`@openclaw/codex@${targetVersion}`);
-    expect(result.config.plugins?.installs?.codex?.spec).toBe(recordSpec);
+    expect(result.config.plugins?.installs?.codex?.spec).toBe(spec);
   });
 
   it("converges after one beta-channel update when latest is newer and preserves @openclaw/codex@beta", async () => {
@@ -1204,64 +1187,74 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("restores automatic updates for an official release pin (official sync=false, prefix=v)", async () => {
-    const { syncOfficialPluginInstalls, releasePrefix } = {
-      syncOfficialPluginInstalls: false,
-      releasePrefix: "v",
-    };
-    const packageName = "@openclaw/discord";
-    const { config } = createNpmUpdateFixture({
-      pluginId: "discord",
-      packageName,
-      installedVersion: "2027.1.1",
-      spec: `${packageName}@${releasePrefix}2027.1.1`,
-      registryVersion: "2027.2.1",
-      installerVersion: "2027.2.1",
-      installerResolvedSpec: `${packageName}@2027.2.1`,
-    });
-    const options = { syncOfficialPluginInstalls, updateChannel: "stable" as const };
-
-    const recovered = await updatePlugin(config, "discord", {
-      ...options,
-      coreVersion: `${releasePrefix}2027.2.1`,
-    });
-
-    expect(npmInstallCall()?.spec).toBe(packageName);
-    expect(recovered.config.plugins?.installs?.discord).toMatchObject({
-      spec: packageName,
-      resolvedVersion: "2027.2.1",
-    });
-  });
-
-  it("restores automatic updates without reinstalling the current artifact (official sync=true)", async () => {
-    const syncOfficialPluginInstalls = true;
-    const packageName = "@openclaw/discord";
-    const { config } = createNpmUpdateFixture({
-      pluginId: "discord",
-      packageName,
-      installedVersion: "2027.2.1",
-      spec: `${packageName}@2027.2.1`,
-      registryVersion: "2027.2.1",
-      registryIntegrity: "sha512-same",
-      integrity: "sha512-same",
-    });
-    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
-
-    const result = await updatePlugin(config, "discord", {
-      syncOfficialPluginInstalls,
-      updateChannel: "stable",
-      coreVersion: "2027.2.1",
-    });
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.installs?.discord).toMatchObject({
-      spec: packageName,
-      resolvedVersion: "2027.2.1",
-      integrity: "sha512-same",
-    });
-    expect(config.plugins?.installs?.discord?.spec).toBe(`${packageName}@2027.2.1`);
-  });
+  it.each(["updated", "unchanged", "failed"] as const)(
+    "recovers an official npm release pin only after a successful %s replacement",
+    async (outcome) => {
+      const packageName = "@openclaw/discord";
+      const unchanged = outcome === "unchanged";
+      const installedVersion = unchanged ? "2027.2.1" : "2027.1.1";
+      const prefix = outcome === "updated" ? "v" : "";
+      const spec = `${packageName}@${prefix}${installedVersion}`;
+      const { config } = createNpmUpdateFixture({
+        pluginId: "discord",
+        packageName,
+        installedVersion,
+        spec,
+        registryVersion: "2027.2.1",
+        ...(unchanged ? { registryIntegrity: "sha512-same", integrity: "sha512-same" } : {}),
+        ...(outcome === "updated"
+          ? {
+              installerVersion: "2027.2.1",
+              installerResolvedSpec: `${packageName}@2027.2.1`,
+            }
+          : {}),
+      });
+      if (unchanged) {
+        installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+      } else if (outcome === "failed") {
+        expectDefined(config.plugins, "plugin config fixture").entries = {
+          discord: { enabled: true, config: { preserved: true } },
+        };
+        installPluginFromNpmSpecMock.mockResolvedValue({
+          ok: false,
+          error: "replacement entry not found",
+        });
+      }
+      const result = await updatePlugin(config, "discord", {
+        ...(outcome !== "failed"
+          ? { syncOfficialPluginInstalls: unchanged, updateChannel: "stable" }
+          : {}),
+        coreVersion: `${prefix}2027.2.1`,
+      });
+      if (unchanged) {
+        expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+        expect(result.changed).toBe(true);
+        expect(result.config.plugins?.installs?.discord).toMatchObject({
+          spec: packageName,
+          resolvedVersion: "2027.2.1",
+          integrity: "sha512-same",
+        });
+        expect(config.plugins?.installs?.discord?.spec).toBe(spec);
+      } else {
+        expect(npmInstallCall()?.spec).toBe(packageName);
+        if (outcome === "updated") {
+          expect(result.config.plugins?.installs?.discord).toMatchObject({
+            spec: packageName,
+            resolvedVersion: "2027.2.1",
+          });
+        } else {
+          expect(result.changed).toBe(false);
+          expect(result.config).toBe(config);
+          expect(result.config.plugins?.installs?.discord?.spec).toBe(spec);
+          expect(result.config.plugins?.entries?.discord).toEqual({
+            enabled: true,
+            config: { preserved: true },
+          });
+          expect(result.outcomes[0]?.status).toBe("error");
+        }
+      }
+    },
+  );
 
   it("preserves independently versioned official pins and integrity during beta bulk sync", async () => {
     const channel = "beta";
@@ -1334,36 +1327,6 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.outcomes[0]?.message).not.toContain("is pinned");
   });
 
-  it("retains an official release pin and settings when its replacement fails", async () => {
-    const packageName = "@openclaw/discord";
-    const { config } = createNpmUpdateFixture({
-      pluginId: "discord",
-      packageName,
-      installedVersion: "2027.1.1",
-      spec: `${packageName}@2027.1.1`,
-      registryVersion: "2027.2.1",
-    });
-    expectDefined(config.plugins, "plugin config fixture").entries = {
-      discord: { enabled: true, config: { preserved: true } },
-    };
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      error: "replacement entry not found",
-    });
-
-    const result = await updatePlugin(config, "discord", { coreVersion: "2027.2.1" });
-
-    expect(npmInstallCall()?.spec).toBe(packageName);
-    expect(result.changed).toBe(false);
-    expect(result.config).toBe(config);
-    expect(result.config.plugins?.installs?.discord?.spec).toBe(`${packageName}@2027.1.1`);
-    expect(result.config.plugins?.entries?.discord).toEqual({
-      enabled: true,
-      config: { preserved: true },
-    });
-    expect(result.outcomes[0]?.status).toBe("error");
-  });
-
   it("does not skip trusted official default updates when latest resolves to the installed prerelease", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "acpx",
@@ -1400,12 +1363,14 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "1.0.1",
     });
 
-    await updatePlugin(config, "acpx");
+    await updatePlugin(config, "acpx", { timeoutMs: 1_800_000 });
+    expect(npmViewCall()?.[1]?.timeoutMs).toBe(1_800_000);
 
     expect(npmInstallCall()).toMatchObject({
       spec: "@vendor/acpx-fork",
       expectedPluginId: "acpx",
       trustedSourceLinkedOfficialInstall: false,
+      timeoutMs: 1_800_000,
     });
   });
 
@@ -1780,151 +1745,123 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it.each([
-    {
-      name: "falls through to npm reinstall when metadata probing fails for valid specs",
-      spec: "@martian-engineering/lossless-claw",
-      fallsBack: true,
-    },
-    {
-      name: "records range metadata probing failures without falling through to npm reinstall",
-      spec: "@martian-engineering/lossless-claw@^0.9.0",
-      fallsBack: false,
-    },
-  ] as const)("$name", async ({ spec, fallsBack }) => {
-    const warn = vi.fn();
-    const info = vi.fn();
-    const installPath = createInstalledPackageDir("@martian-engineering/lossless-claw", "0.9.0");
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "registry timeout",
-    });
-    if (fallsBack) {
-      mockSuccessfulNpmUpdate({
-        pluginId: "lossless-claw",
-        targetDir: installPath,
-        version: "0.9.0",
-      });
-    }
-    const result = await updatePlugin(
-      createNpmInstallConfig("lossless-claw", spec, installPath),
-      "lossless-claw",
-      { logger: { warn, info } },
-    );
-
-    if (fallsBack) {
-      expect(info).toHaveBeenCalledWith(
-        "Could not check lossless-claw before update; falling back to installer path: npm view failed: registry timeout",
+  it.each(["fallback", "range", "beta", "healthy", "unreadable"] as const)(
+    "handles npm metadata failures for a %s install",
+    async (scenario) => {
+      const demo = scenario === "beta" || scenario === "unreadable";
+      const pluginId = demo ? "demo" : "lossless-claw";
+      const packageName =
+        scenario === "beta"
+          ? "@example/demo"
+          : demo
+            ? "@acme/demo"
+            : "@martian-engineering/lossless-claw";
+      const version = demo ? "1.0.0" : "0.9.0";
+      const spec = `${packageName}${scenario === "fallback" || scenario === "beta" ? "" : `@^${version}`}`;
+      const installPath =
+        scenario === "beta"
+          ? "/missing/demo"
+          : createInstalledPackageDir(packageName, version, {
+              runnable: scenario === "healthy" || scenario === "unreadable",
+            });
+      const config = createNpmInstallConfig(
+        pluginId,
+        spec,
+        installPath,
+        scenario === "healthy"
+          ? {
+              resolvedName: packageName,
+              resolvedVersion: version,
+              resolvedSpec: `${packageName}@${version}`,
+            }
+          : {},
       );
+      const plugins = expectDefined(config.plugins, "metadata failure config");
+      if (scenario === "healthy") {
+        plugins.allow = [pluginId, "keep"];
+        plugins.deny = [pluginId, "blocked"];
+        plugins.slots = { memory: pluginId, contextEngine: pluginId };
+        plugins.entries = { [pluginId]: { enabled: true, config: { preserved: true } } };
+      } else if (scenario === "unreadable") {
+        plugins.entries = { demo: { enabled: true } };
+        expectDefined(plugins.installs, "metadata failure installs").local = {
+          source: "path",
+          installPath: "/tmp/local",
+        };
+        validatePackageExtensionEntriesForInstallMock.mockImplementationOnce(() => {
+          throw new Error("permission denied");
+        });
+      }
+      const failed = { code: 1, stdout: "", stderr: "registry timeout" };
+      if (scenario === "beta") {
+        runCommandWithTimeoutMock.mockResolvedValue({
+          ...failedNpmVersionQueryResult,
+          stderr: "registry timeout",
+        });
+      } else {
+        runCommandWithTimeoutMock.mockResolvedValueOnce(failed);
+      }
+      if (scenario === "fallback") {
+        mockSuccessfulNpmUpdate({ pluginId, targetDir: installPath, version });
+      }
+      const warn = vi.fn();
+      const info = vi.fn();
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: scenario === "unreadable" ? [pluginId, "local"] : [pluginId],
+        ...(scenario === "beta" ? { updateChannel: "beta" } : {}),
+        ...(scenario === "healthy" || scenario === "unreadable" ? { disableOnFailure: true } : {}),
+        logger: { warn, ...(scenario === "fallback" || scenario === "range" ? { info } : {}) },
+      });
+      if (scenario === "unreadable") {
+        expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
+        expect(result.outcomes.map((outcome) => outcome.pluginId)).toEqual(["demo", "local"]);
+        return;
+      }
       expect(warn).not.toHaveBeenCalled();
-      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
-    } else {
-      expect(warn).not.toHaveBeenCalled();
+      if (scenario === "fallback") {
+        expect(info).toHaveBeenCalledWith(
+          "Could not check lossless-claw before update; falling back to installer path: npm view failed: registry timeout",
+        );
+        expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+        return;
+      }
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(false);
-      expect(result.outcomes).toEqual([
-        {
-          pluginId: "lossless-claw",
-          status: "error",
-          message: "Failed to check lossless-claw: npm view failed: registry timeout",
-        },
-      ]);
-    }
-  });
-
-  it("reports a beta registry failure only through its attributed outcome", async () => {
-    const warn = vi.fn();
-    const config = createNpmInstallConfig("demo", "@example/demo", "/missing/demo");
-    runCommandWithTimeoutMock.mockResolvedValue({
-      ...failedNpmVersionQueryResult,
-      stderr: "registry timeout",
-    });
-
-    const result = await updatePlugin(config, "demo", {
-      updateChannel: "beta",
-      logger: { warn },
-    });
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.config).toBe(config);
-    expect(result.changed).toBe(false);
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({
-        pluginId: "demo",
-        status: "error",
-        code: "npm_metadata_failure",
-        message: expect.stringContaining("registry timeout"),
-      }),
-    ]);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("preserves healthy plugin state when metadata probing fails before replacement", async () => {
-    const warn = vi.fn();
-    const installPath = createInstalledPackageDir("@martian-engineering/lossless-claw", "0.9.0", {
-      runnable: true,
-    });
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "registry timeout",
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          allow: ["lossless-claw", "keep"],
-          deny: ["lossless-claw", "blocked"],
-          slots: {
-            memory: "lossless-claw",
-            contextEngine: "lossless-claw",
+      if (scenario === "beta") {
+        expect(result.config).toBe(config);
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({
+            pluginId,
+            status: "error",
+            code: "npm_metadata_failure",
+            message: expect.stringContaining("registry timeout"),
+          }),
+        ]);
+      } else {
+        expect(result.outcomes).toEqual([
+          {
+            pluginId,
+            status: "error",
+            message: "Failed to check lossless-claw: npm view failed: registry timeout",
           },
-          entries: {
-            "lossless-claw": {
-              enabled: true,
-              config: { preserved: true },
-            },
-          },
-          installs: {
-            "lossless-claw": {
-              source: "npm",
-              spec: "@martian-engineering/lossless-claw@^0.9.0",
-              installPath,
-              resolvedName: "@martian-engineering/lossless-claw",
-              resolvedVersion: "0.9.0",
-              resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
-            },
-          },
-        },
-      },
-      pluginIds: ["lossless-claw"],
-      disableOnFailure: true,
-      logger: { warn },
-    });
-
-    expect(warn).not.toHaveBeenCalled();
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
-      enabled: true,
-      config: { preserved: true },
-    });
-    expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
-    expect(result.config.plugins?.deny).toEqual(["lossless-claw", "blocked"]);
-    expect(result.config.plugins?.slots).toEqual({
-      memory: "lossless-claw",
-      contextEngine: "lossless-claw",
-    });
-    expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "lossless-claw",
-        status: "error",
-        message: "Failed to check lossless-claw: npm view failed: registry timeout",
-      },
-    ]);
-  });
+        ]);
+        if (scenario === "healthy") {
+          expect(result.config.plugins?.entries?.[pluginId]).toEqual({
+            enabled: true,
+            config: { preserved: true },
+          });
+          expect(result.config.plugins?.allow).toEqual([pluginId, "keep"]);
+          expect(result.config.plugins?.deny).toEqual([pluginId, "blocked"]);
+          expect(result.config.plugins?.slots).toEqual({
+            memory: pluginId,
+            contextEngine: pluginId,
+          });
+          expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
+        }
+      }
+    },
+  );
 
   it.each([
     { spec: "@acme/demo@2.0.0", updateChannel: "stable", stderr: "E404 No matching version" },
@@ -2039,46 +1976,6 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
-  it("continues the plugin sweep when deferred payload validation throws", async () => {
-    const warn = vi.fn();
-    const installPath = createInstalledPackageDir("@acme/demo", "1.0.0", {
-      runnable: true,
-    });
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "registry timeout",
-    });
-    validatePackageExtensionEntriesForInstallMock.mockImplementationOnce(() => {
-      throw new Error("permission denied");
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          entries: { demo: { enabled: true } },
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@acme/demo@^1.0.0",
-              installPath,
-            },
-            local: {
-              source: "path",
-              installPath: "/tmp/local",
-            },
-          },
-        },
-      },
-      pluginIds: ["demo", "local"],
-      disableOnFailure: true,
-      logger: { warn },
-    });
-
-    expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
-    expect(result.outcomes.map(({ pluginId }) => pluginId)).toEqual(["demo", "local"]);
-  });
-
   it("skips globally disabled installs before network or capability consent", async () => {
     capabilityConsentMode.real = true;
     const onCapabilityConsent = vi.fn();
@@ -2121,23 +2018,12 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          entries: {
-            codex: {
-              enabled: false,
-              config: { preserved: true },
-            },
-          },
-          installs: {
-            codex: {
-              source: "npm",
-              spec: "@openclaw/codex@2026.5.3",
-              installPath,
-            },
-          },
+      config: pluginConfig(
+        { codex: { source: "npm", spec: "@openclaw/codex@2026.5.3", installPath } },
+        {
+          entries: { codex: { enabled: false, config: { preserved: true } } },
         },
-      },
+      ),
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
     });
@@ -2168,73 +2054,69 @@ describe("updateNpmInstalledPlugins", () => {
 
   it.each([
     {
-      name: "keeps exact npm dry-runs unchanged when probe metadata is absent but spec matches",
+      name: "unchanged without metadata",
       targetVersion: "1.2.3",
       status: "unchanged",
       message: "demo is up to date (1.2.3).",
+      probe: false,
     },
     {
-      name: "reports exact npm dry-runs that move backwards as downgrades",
+      name: "downgraded without metadata",
       targetVersion: "1.2.2",
       status: "updated",
       message: "Would downgrade demo: 1.2.3 -> 1.2.2.",
+      probe: false,
     },
-  ] as const)("$name", async ({ targetVersion, status, message }) => {
-    const installPath = createInstalledPackageDir("@acme/demo", "1.2.3");
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: installPath,
-      extensions: ["index.ts"],
-    });
-
-    const result = await updatePlugin(
-      createNpmInstallConfig("demo", `@acme/demo@${targetVersion}`, installPath),
-      "demo",
-      { dryRun: true },
-    );
-
-    expectRecordFields(result.outcomes[0], {
-      pluginId: "demo",
-      status,
-      currentVersion: "1.2.3",
-      nextVersion: targetVersion,
-      message,
-    });
-  });
-
-  it("reports newer registry default releases for exact pinned demo@v1.2.3 dry-runs (official sync=false)", async () => {
-    const { version, pluginId, packageName, syncOfficialPluginInstalls } = {
-      version: "v1.2.3",
-      pluginId: "demo",
-      packageName: "@acme/demo",
-      syncOfficialPluginInstalls: false,
-    };
-    const spec = `${packageName}@${version}`;
-    const { config } = createNpmUpdateFixture({
-      pluginId,
-      packageName,
-      installedVersion: "1.2.3",
-      registryVersion: "1.2.4",
-      spec,
-      installerVersion: "1.2.3",
-      installerResolvedSpec: spec,
-    });
-    const result = await updatePlugin(config, pluginId, {
-      dryRun: true,
-      syncOfficialPluginInstalls,
-    });
-
-    expect(npmInstallCall()?.spec).toBe(spec);
-    expect(npmViewCall()?.[0]).toContain(packageName);
-    expectRecordFields(result.outcomes[0], {
-      pluginId,
+    {
+      name: "newer registry release behind a pin",
+      targetVersion: "v1.2.3",
       status: "unchanged",
-      currentVersion: "1.2.3",
-      nextVersion: "1.2.4",
-      message: `${pluginId} is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update ${packageName}@latest\` to replace this version pin.`,
-    });
-  });
+      message:
+        "demo is pinned to @acme/demo@v1.2.3 (installed 1.2.3); registry latest resolves to 1.2.4. Pass `openclaw plugins update @acme/demo@latest` to replace this version pin.",
+      probe: true,
+    },
+  ] as const)(
+    "reports exact npm dry-runs: $name",
+    async ({ targetVersion, status, message, probe }) => {
+      const spec = `@acme/demo@${targetVersion}`;
+      const { config, installPath } = createNpmUpdateFixture({
+        pluginId: "demo",
+        packageName: "@acme/demo",
+        installedVersion: "1.2.3",
+        spec,
+        ...(probe
+          ? { registryVersion: "1.2.4", installerVersion: "1.2.3", installerResolvedSpec: spec }
+          : {}),
+      });
+      if (!probe) {
+        installPluginFromNpmSpecMock.mockResolvedValue({
+          ok: true,
+          pluginId: "demo",
+          targetDir: installPath,
+          extensions: ["index.ts"],
+        });
+      }
+      const result = await updatePlugin(
+        probe ? config : createNpmInstallConfig("demo", spec, installPath),
+        "demo",
+        {
+          dryRun: true,
+          ...(probe ? { syncOfficialPluginInstalls: false } : {}),
+        },
+      );
+      expectRecordFields(result.outcomes[0], {
+        pluginId: "demo",
+        status,
+        currentVersion: "1.2.3",
+        nextVersion: probe ? "1.2.4" : targetVersion,
+        message,
+      });
+      if (probe) {
+        expect(npmInstallCall()?.spec).toBe(spec);
+        expect(npmViewCall()?.[0]).toContain("@acme/demo");
+      }
+    },
+  );
 
   it.each([
     {
@@ -2387,121 +2269,112 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it.each([
-    {
-      name: "keeps an existing ClawHub plugin enabled when a newer target release is blocked",
-      code: "clawhub_download_blocked",
-      version: "1.2.4",
-      error: "ClawHub blocked this release; update was not started.",
-      warning:
-        "╭─ BLOCKED - ClawHub flagged this release as malicious ─╮\n│ • Security scan: malicious │\n╰────────────────────────────────────────────────────────╯",
-    },
-    ...["1.2.3"].map((version) => ({
-      name: `keeps an existing ClawHub plugin enabled when ${version === "1.2.4" ? "newer" : "current"} target security data is unavailable`,
-      code: "clawhub_security_unavailable",
-      version,
-      error: `ClawHub release "demo@${version}" could not be checked because ClawHub security data is unavailable. Try again later or choose a different version.`,
-      warning: undefined,
-    })),
-  ])("$name", async ({ code, version, error, warning }) => {
-    installPluginFromClawHubMock.mockResolvedValue({
+    "newer-blocked",
+    "security-unavailable",
+    "current-blocked",
+    "official-blocked",
+    "custom-unavailable",
+  ] as const)("preserves ClawHub trust policy for %s updates", async (scenario) => {
+    const official = scenario === "official-blocked" || scenario === "custom-unavailable";
+    const pluginId = official ? "discord" : "demo";
+    const currentVersion = official ? "2026.5.12" : "1.2.3";
+    const code =
+      scenario === "custom-unavailable"
+        ? "artifact_unavailable"
+        : scenario === "security-unavailable"
+          ? "clawhub_security_unavailable"
+          : "clawhub_download_blocked";
+    const version = official
+      ? "2026.5.16-beta.5"
+      : scenario === "newer-blocked"
+        ? "1.2.4"
+        : "1.2.3";
+    const error =
+      scenario === "custom-unavailable"
+        ? "artifact unavailable"
+        : scenario === "security-unavailable"
+          ? `ClawHub release "demo@${version}" could not be checked because ClawHub security data is unavailable. Try again later or choose a different version.`
+          : "ClawHub blocked this release; update was not started.";
+    const warning =
+      "╭─ BLOCKED - ClawHub flagged this release as malicious ─╮\n│ • Security scan: malicious │\n╰────────────────────────────────────────────────────────╯";
+    const hasWarning = scenario === "newer-blocked" || scenario === "current-blocked";
+    const failure = {
       ok: false,
       code,
-      ...(version ? { version } : {}),
       error,
-      ...(warning ? { warning } : {}),
-    });
-    const config = createEnabledDemoClawHubInstallConfig();
-
-    const result = await updatePlugin(config, "demo", { disableOnFailure: true });
-
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo");
-    expect(result.changed).toBe(false);
-    expect(result.config).toBe(config);
-    expect(result.config.plugins?.entries?.demo).toEqual({
-      enabled: true,
-      config: { preserved: true },
-    });
-    expect(result.config.plugins?.allow).toEqual(["demo"]);
-    expect(result.config.plugins?.slots?.memory).toBe("demo");
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "demo",
-        status: "skipped",
-        code,
-        currentVersion: "1.2.3",
-        ...(warning ? { warning } : {}),
-        message: `Skipped demo ClawHub update: ${error} Existing installed plugin left unchanged.`,
-      },
-    ]);
-  });
-
-  it("does not fall back to npm for blocked official ClawHub artifact downloads", async () => {
-    const installPath = createInstalledPackageDir("@openclaw/discord", "2026.5.12");
-    const config = createClawHubInstallConfig({
-      pluginId: "discord",
-      installPath,
-      clawhubPackage: "@openclaw/discord",
-    });
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "clawhub_download_blocked",
-      error: "ClawHub blocked this release; update was not started.",
-      version: "2026.5.16-beta.5",
-    });
-
-    const result = await updatePlugin(config, "discord", {
-      updateChannel: "beta",
-      disableOnFailure: true,
-    });
-
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.config).toBe(config);
-    expect(result.outcomes).toMatchObject([
-      {
-        pluginId: "discord",
-        status: "skipped",
-        code: "clawhub_download_blocked",
-        currentVersion: "2026.5.12",
-      },
-    ]);
-  });
-
-  it("disables a blocked ClawHub plugin without changing trust policy", async () => {
+      ...(scenario !== "custom-unavailable" ? { version } : {}),
+      ...(hasWarning ? { warning } : {}),
+    };
+    if (scenario === "custom-unavailable") {
+      installPluginFromClawHubMock.mockResolvedValueOnce(failure);
+    } else {
+      installPluginFromClawHubMock.mockResolvedValue(failure);
+    }
+    const config = official
+      ? createClawHubInstallConfig({
+          pluginId,
+          installPath: createInstalledPackageDir("@openclaw/discord", currentVersion),
+          clawhubPackage: "@openclaw/discord",
+          ...(scenario === "custom-unavailable"
+            ? { clawhubUrl: "https://custom-clawhub.example" }
+            : {}),
+        })
+      : createEnabledDemoClawHubInstallConfig();
     const warn = vi.fn();
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "clawhub_download_blocked",
-      version: "1.2.3",
-      error: "ClawHub blocked this release; update was not started.",
-      warning:
-        "╭─ BLOCKED - ClawHub flagged this release as malicious ─╮\n│ • Security scan: malicious │\n╰────────────────────────────────────────────────────────╯",
+    const result = await updatePlugin(config, pluginId, {
+      ...(official ? { updateChannel: "beta" } : {}),
+      ...(scenario !== "custom-unavailable" ? { disableOnFailure: true } : {}),
+      ...(scenario === "current-blocked" ? { logger: { warn } } : {}),
     });
-    const config = createEnabledDemoClawHubInstallConfig();
-
-    const result = await updatePlugin(config, "demo", {
-      disableOnFailure: true,
-      logger: { warn },
-    });
-
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.entries?.demo).toEqual({
-      enabled: false,
-      config: { preserved: true },
-    });
-    expect(result.config.plugins?.allow).toEqual(["demo"]);
-    expect(result.config.plugins?.slots).toBeUndefined();
-    const message =
-      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo).';
-    expect(warn).toHaveBeenCalledWith(message);
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "demo",
-        status: "skipped",
-        message,
-      },
-    ]);
+    if (official) {
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      if (scenario === "custom-unavailable") {
+        expect(result.outcomes).toEqual([
+          {
+            pluginId,
+            status: "error",
+            message:
+              "Failed to update discord: artifact unavailable (ClawHub clawhub:@openclaw/discord@beta).",
+          },
+        ]);
+      } else {
+        expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
+        expect(result.changed).toBe(false);
+        expect(result.config).toBe(config);
+        expect(result.outcomes).toMatchObject([
+          { pluginId, status: "skipped", code, currentVersion },
+        ]);
+      }
+    } else {
+      const disabled = scenario === "current-blocked";
+      expect(result.changed).toBe(disabled);
+      expect(result.config.plugins?.entries?.demo).toEqual({
+        enabled: !disabled,
+        config: { preserved: true },
+      });
+      expect(result.config.plugins?.allow).toEqual(["demo"]);
+      if (disabled) {
+        expect(result.config.plugins?.slots).toBeUndefined();
+        const message =
+          'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo).';
+        expect(warn).toHaveBeenCalledWith(message);
+        expect(result.outcomes).toEqual([{ pluginId, status: "skipped", message }]);
+      } else {
+        expect(clawHubInstallCall()?.spec).toBe("clawhub:demo");
+        expect(result.config).toBe(config);
+        expect(result.config.plugins?.slots?.memory).toBe("demo");
+        expect(result.outcomes).toEqual([
+          {
+            pluginId,
+            status: "skipped",
+            code,
+            currentVersion,
+            ...(hasWarning ? { warning } : {}),
+            message: `Skipped demo ClawHub update: ${error} Existing installed plugin left unchanged.`,
+          },
+        ]);
+      }
+    }
   });
 
   it("updates ClawHub-installed plugins via recorded package metadata", async () => {
@@ -2610,36 +2483,6 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.outcomes[0]?.message).toBe(
       "Updated demo: unknown -> 1.2.4. (warning: beta channel fallback used clawhub:demo because clawhub:demo@beta could not be used).",
     );
-  });
-
-  it("does not fall back to trusted npm from custom ClawHub provenance", async () => {
-    const installPath = createInstalledPackageDir("@openclaw/discord", "2026.5.12");
-    installPluginFromClawHubMock.mockResolvedValueOnce({
-      ok: false,
-      code: "artifact_unavailable",
-      error: "artifact unavailable",
-    });
-
-    const result = await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "discord",
-        installPath,
-        clawhubUrl: "https://custom-clawhub.example",
-        clawhubPackage: "@openclaw/discord",
-      }),
-      "discord",
-      { updateChannel: "beta" },
-    );
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "discord",
-        status: "error",
-        message:
-          "Failed to update discord: artifact unavailable (ClawHub clawhub:@openclaw/discord@beta).",
-      },
-    ]);
   });
 
   it("skips ClawHub plugin updates when the bundled version is newer", async () => {
@@ -2820,259 +2663,220 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("drops a duplicate qqbot record and migrates its context slot after canonical success", async () => {
-    const canonicalInstallPath = createInstalledPackageDir(
-      "@tencent-connect/openclaw-qqbot",
-      "2.0.0",
-      {
-        runnable: true,
-      },
-    );
-    mockNpmViewMetadata({ name: "@tencent-connect/openclaw-qqbot", version: "2.0.1" });
-    validatePackageExtensionEntriesForInstallMock.mockResolvedValueOnce({ ok: true });
-    mockSuccessfulNpmUpdate({
-      pluginId: "openclaw-qqbot",
-      targetDir: canonicalInstallPath,
-      version: "2.0.1",
-      packageName: "@tencent-connect/openclaw-qqbot",
-    });
-
-    const config = createDuplicateQqbotConfig({ canonicalInstallPath });
-    config.plugins = { ...config.plugins, slots: { contextEngine: "qqbot" } };
-    const result = await updateNpmInstalledPlugins({ config });
-    expect(result.config.plugins?.slots?.contextEngine).toBe("openclaw-qqbot");
-
-    expectNpmUpdateCall({
-      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
-      expectedPluginId: "openclaw-qqbot",
-    });
-    expect(result.outcomes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "qqbot",
-          status: "skipped",
-          message:
-            'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
-        }),
-      ]),
-    );
-    expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
-    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
-      source: "npm",
-      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
-      installPath: canonicalInstallPath,
-      version: "2.0.1",
-    });
-    expect(resolvePluginInstallOwnerMigrations(result)).toEqual({
-      qqbot: "openclaw-qqbot",
-    });
-  });
-
   it.each([
-    { payload: "runnable", removesAlias: true },
-    { payload: "corrupt", removesAlias: false },
-    { payload: "missing", removesAlias: false },
-  ])("handles a skipped canonical $payload payload", async ({ payload, removesAlias }) => {
+    "updated",
+    "runnable",
+    "corrupt",
+    "missing",
+    "failed",
+    "dry-run",
+    "conflicting",
+  ] as const)("reconciles duplicate qqbot records after a %s canonical update", async (outcome) => {
     const canonicalInstallPath =
-      payload === "missing"
+      outcome === "missing"
         ? path.join(makeTrackedTempDir("openclaw-plugin-update-missing", tempDirs), "missing")
-        : createInstalledPackageDir("@tencent-connect/openclaw-qqbot", "2.0.1", {
-            runnable: payload === "runnable",
-          });
-    if (payload === "runnable") {
+        : ["updated", "runnable", "corrupt"].includes(outcome)
+          ? createInstalledPackageDir(
+              "@tencent-connect/openclaw-qqbot",
+              outcome === "updated" ? "2.0.0" : "2.0.1",
+              {
+                runnable: outcome !== "corrupt",
+              },
+            )
+          : undefined;
+    const config = createDuplicateQqbotConfig({ canonicalInstallPath });
+    const plugins = expectDefined(config.plugins, "duplicate config fixture");
+    if (outcome === "updated") {
+      plugins.slots = { contextEngine: "qqbot" };
+      mockNpmViewMetadata({ name: "@tencent-connect/openclaw-qqbot", version: "2.0.1" });
+      mockSuccessfulNpmUpdate({
+        pluginId: "openclaw-qqbot",
+        targetDir: canonicalInstallPath,
+        version: "2.0.1",
+        packageName: "@tencent-connect/openclaw-qqbot",
+      });
+    } else if (outcome === "failed") {
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: false,
+        error: "canonical package install failed",
+      });
+    } else if (outcome === "dry-run") {
+      mockSuccessfulNpmUpdate({
+        pluginId: "openclaw-qqbot",
+        version: "2.0.3",
+        packageName: "@tencent-connect/openclaw-qqbot",
+      });
+      delete plugins.entries;
+      delete plugins.installs?.qqbot?.installPath;
+      delete plugins.installs?.["openclaw-qqbot"]?.installPath;
+    } else if (outcome === "conflicting") {
+      plugins.installs = {
+        qqbot: {
+          source: "npm",
+          spec: "@openclaw/qqbot@1.9.0",
+          resolvedName: "@openclaw/qqbot",
+          resolvedSpec: "@openclaw/qqbot@1.9.0",
+        },
+        "openclaw-qqbot": {
+          source: "npm",
+          spec: "@vendor/openclaw-qqbot@1.0.0",
+          resolvedName: "@tencent-connect/openclaw-qqbot",
+          resolvedSpec: "@vendor/openclaw-qqbot@1.0.0",
+        },
+      };
+    }
+    if (outcome === "updated" || outcome === "runnable") {
       validatePackageExtensionEntriesForInstallMock.mockResolvedValueOnce({ ok: true });
     }
+    const skipped = outcome === "runnable" || outcome === "corrupt" || outcome === "missing";
     const result = await updateNpmInstalledPlugins({
-      config: createDuplicateQqbotConfig({ canonicalInstallPath }),
-      pluginIds: ["qqbot"],
-      skipIds: new Set(["openclaw-qqbot"]),
+      config,
+      ...(skipped ? { pluginIds: ["qqbot"], skipIds: new Set(["openclaw-qqbot"]) } : {}),
+      ...(outcome === "dry-run" ? { pluginIds: ["qqbot"], dryRun: true } : {}),
+      ...(outcome === "conflicting" ? { pluginIds: ["qqbot"] } : {}),
+      ...(outcome === "failed" ? { disableOnFailure: true } : {}),
     });
-
-    expect(result.changed).toBe(removesAlias);
-    expect(result.config.plugins?.installs?.qqbot === undefined).toBe(removesAlias);
-    expect(resolvePluginInstallOwnerMigrations(result)).toEqual(
-      removesAlias ? { qqbot: "openclaw-qqbot" } : undefined,
-    );
+    if (skipped) {
+      const removesAlias = outcome === "runnable";
+      expect(result.changed).toBe(removesAlias);
+      expect(result.config.plugins?.installs?.qqbot === undefined).toBe(removesAlias);
+      expect(resolvePluginInstallOwnerMigrations(result)).toEqual(
+        removesAlias ? { qqbot: "openclaw-qqbot" } : undefined,
+      );
+    } else if (outcome === "updated") {
+      expect(result.config.plugins?.slots?.contextEngine).toBe("openclaw-qqbot");
+      expectNpmUpdateCall({
+        spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        expectedPluginId: "openclaw-qqbot",
+      });
+      expect(result.outcomes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: "qqbot",
+            status: "skipped",
+            message:
+              'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the current plugin ID.',
+          }),
+        ]),
+      );
+      expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+      expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+        source: "npm",
+        spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        installPath: canonicalInstallPath,
+        version: "2.0.1",
+      });
+      expect(resolvePluginInstallOwnerMigrations(result)).toEqual({ qqbot: "openclaw-qqbot" });
+    } else {
+      expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
+      if (outcome === "failed") {
+        expect(result.config.plugins?.installs?.qqbot).toBeDefined();
+        expect(result.outcomes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              pluginId: "qqbot",
+              message:
+                'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not produce a runnable installation of the current plugin.',
+            }),
+          ]),
+        );
+      } else {
+        expect(result.changed).toBe(false);
+        expect(result.config.plugins?.installs).toEqual(plugins.installs);
+        if (outcome === "dry-run") {
+          expect(result.outcomes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                pluginId: "qqbot",
+                status: "skipped",
+                message:
+                  'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the current plugin ID.',
+              }),
+            ]),
+          );
+        } else {
+          expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+          expect(result.config).toBe(config);
+          expect(result.config.plugins?.entries).toEqual(plugins.entries);
+          expect(result.outcomes).toEqual([
+            {
+              pluginId: "qqbot",
+              status: "error",
+              message:
+                'Cannot replace "qqbot" with "openclaw-qqbot" because both plugin install records exist. Remove one of the conflicting installs, then retry the update.',
+            },
+          ]);
+        }
+      }
+    }
   });
 
-  it("does not remove the alias when canonical failure disables the canonical plugin", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      error: "canonical package install failed",
-    });
-    const result = await updateNpmInstalledPlugins({
-      config: createDuplicateQqbotConfig(),
-      disableOnFailure: true,
-    });
-
-    expect(result.config.plugins?.installs?.qqbot).toBeDefined();
-    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
-    expect(result.outcomes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "qqbot",
-          message:
-            'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not complete a runnable canonical update.',
-        }),
-      ]),
-    );
-  });
-
-  it("reports duplicate removal without mutating on dry-run", async () => {
-    mockSuccessfulNpmUpdate({
-      pluginId: "openclaw-qqbot",
-      version: "2.0.3",
-      packageName: "@tencent-connect/openclaw-qqbot",
-    });
-    const config = createDuplicateQqbotConfig();
-    const plugins = expectDefined(config.plugins, "duplicate config fixture");
-    delete plugins.entries;
-    delete plugins.installs?.qqbot?.installPath;
-    delete plugins.installs?.["openclaw-qqbot"]?.installPath;
-
-    const result = await updatePlugin(config, "qqbot", { dryRun: true });
-
-    expect(result.outcomes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "qqbot",
-          status: "skipped",
-          message:
-            'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
-        }),
-      ]),
-    );
-    expect(result.changed).toBe(false);
-    expect(result.config.plugins?.installs).toEqual(plugins.installs);
-    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
-  });
-
-  it("rejects duplicate migration when canonical npm identities disagree", async () => {
-    const config = {
-      plugins: {
-        entries: { qqbot: { enabled: true } },
-        installs: {
-          qqbot: {
-            source: "npm",
-            spec: "@openclaw/qqbot@1.9.0",
-            resolvedName: "@openclaw/qqbot",
-            resolvedSpec: "@openclaw/qqbot@1.9.0",
-          },
-          "openclaw-qqbot": {
-            source: "npm",
-            spec: "@vendor/openclaw-qqbot@1.0.0",
-            resolvedName: "@tencent-connect/openclaw-qqbot",
-            resolvedSpec: "@vendor/openclaw-qqbot@1.0.0",
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await updatePlugin(config, "qqbot");
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.config).toBe(config);
-    expect(result.config.plugins?.entries).toEqual(config.plugins.entries);
-    expect(result.config.plugins?.installs).toEqual(config.plugins.installs);
-    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "qqbot",
-        status: "error",
-        message:
-          'Cannot replace "qqbot" with "openclaw-qqbot" because both plugin install records exist. Remove one of the conflicting installs, then retry the update.',
-      },
-    ]);
-  });
-
-  it("updates marketplace installs and preserves source metadata", async () => {
-    installPluginFromMarketplaceMock.mockResolvedValue({
-      ok: true,
-      pluginId: "claude-bundle",
-      targetDir: "/tmp/claude-bundle",
-      version: "1.3.0",
-      extensions: ["index.ts"],
-      marketplaceName: "Vincent's Claude Plugins",
-      marketplaceSource: "vincentkoc/claude-marketplace",
-      marketplacePlugin: "claude-bundle",
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: pluginConfig({
-        "claude-bundle": {
-          source: "marketplace",
-          installPath: "/tmp/claude-bundle",
-          marketplaceName: "Vincent's Claude Plugins",
-          marketplaceSource: "vincentkoc/claude-marketplace",
-          marketplacePlugin: "claude-bundle",
-        },
-      }),
-      pluginIds: ["claude-bundle"],
-    });
-
-    expect(result.changed).toBe(true);
-    expectRecordFields(result.config.plugins?.installs?.["claude-bundle"], {
-      source: "marketplace",
-      installPath: "/tmp/claude-bundle",
-      version: "1.3.0",
-      marketplaceName: "Vincent's Claude Plugins",
-      marketplaceSource: "vincentkoc/claude-marketplace",
-      marketplacePlugin: "claude-bundle",
-    });
-  });
-
-  it("updates git installs and records resolved commit metadata", async () => {
-    const installPath = createInstalledPackageDir("demo", "1.3.0");
-    installPluginFromGitSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: installPath,
-      version: "1.3.0",
-      extensions: ["index.ts"],
-      git: {
+  it.each(["marketplace", "git"] as const)(
+    "updates %s installs and preserves source metadata",
+    async (source) => {
+      const git = source === "git";
+      const pluginId = git ? "demo" : "claude-bundle";
+      const installPath = git ? createInstalledPackageDir("demo", "1.3.0") : "/tmp/claude-bundle";
+      const marketplace = {
+        marketplaceName: "Vincent's Claude Plugins",
+        marketplaceSource: "vincentkoc/claude-marketplace",
+        marketplacePlugin: "claude-bundle",
+      };
+      const gitMetadata = {
         url: "https://github.com/acme/demo.git",
         ref: "main",
         commit: "def456",
         resolvedAt: "2026-04-30T00:00:00.000Z",
-      },
-    });
-
-    const result = await updatePlugin(
-      pluginConfig({
-        demo: {
-          source: "git",
-          installPath,
-          spec: "git:github.com/acme/demo@main",
-          gitCommit: "abc123",
-        },
-      }),
-      "demo",
-    );
-
-    expect(gitInstallCall()?.spec).toBe("git:github.com/acme/demo@main");
-    expect(gitInstallCall()?.expectedPluginId).toBe("demo");
-    expect(gitInstallCall()?.mode).toBe("update");
-    expect(result.changed).toBe(true);
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "demo",
-        status: "updated",
-        currentVersion: "1.3.0",
-        nextVersion: "1.3.0",
-        message: "Updated demo: 1.3.0 -> 1.3.0.",
-      },
-    ]);
-    expectRecordFields(result.config.plugins?.installs?.demo, {
-      source: "git",
-      spec: "git:github.com/acme/demo@main",
-      installPath,
-      version: "1.3.0",
-      gitUrl: "https://github.com/acme/demo.git",
-      gitRef: "main",
-      gitCommit: "def456",
-    });
-  });
+      };
+      (git ? installPluginFromGitSpecMock : installPluginFromMarketplaceMock).mockResolvedValue({
+        ok: true,
+        pluginId,
+        targetDir: installPath,
+        version: "1.3.0",
+        extensions: ["index.ts"],
+        ...(git ? { git: gitMetadata } : marketplace),
+      });
+      const spec = "git:github.com/acme/demo@main";
+      const result = await updatePlugin(
+        pluginConfig({
+          [pluginId]: {
+            source,
+            installPath,
+            ...(git ? { spec, gitCommit: "abc123" } : marketplace),
+          },
+        }),
+        pluginId,
+      );
+      expect(result.changed).toBe(true);
+      expectRecordFields(result.config.plugins?.installs?.[pluginId], {
+        source,
+        installPath,
+        version: "1.3.0",
+        ...(git
+          ? {
+              spec,
+              gitUrl: gitMetadata.url,
+              gitRef: gitMetadata.ref,
+              gitCommit: gitMetadata.commit,
+            }
+          : marketplace),
+      });
+      if (git) {
+        expect(gitInstallCall()?.spec).toBe(spec);
+        expect(gitInstallCall()?.expectedPluginId).toBe("demo");
+        expect(gitInstallCall()?.mode).toBe("update");
+        expect(result.outcomes).toEqual([
+          {
+            pluginId: "demo",
+            status: "updated",
+            currentVersion: "1.3.0",
+            nextVersion: "1.3.0",
+            message: "Updated demo: 1.3.0 -> 1.3.0.",
+          },
+        ]);
+      }
+    },
+  );
 });
 
 describe("syncPluginsForUpdateChannel", () => {
@@ -3084,118 +2888,97 @@ describe("syncPluginsForUpdateChannel", () => {
     runCommandWithTimeoutMock.mockReset();
   });
 
-  it("repairs bundled install metadata when the load path is re-added", async () => {
-    mockBundledSources(createBundledSource());
-    const result = await syncPluginsForUpdateChannel({
-      channel: "beta",
-      config: pluginConfig(
-        {
-          feishu: {
-            source: "path",
-            sourcePath: appBundledPluginRoot("feishu"),
-            installPath: "/tmp/old-feishu",
-            spec: "@openclaw/feishu",
-          },
-        },
-        { load: { paths: [] } },
-      ),
-    });
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(true);
-    expect(result.summary.switchedToNpm).toStrictEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([appBundledPluginRoot("feishu")]);
-    expectRecordFields(result.config.plugins?.installs?.feishu, {
-      source: "path",
-      sourcePath: appBundledPluginRoot("feishu"),
-      installPath: appBundledPluginRoot("feishu"),
-      spec: "@openclaw/feishu",
-    });
-  });
-
-  it("uses the provided env when matching bundled load and install paths", async () => {
-    const bundledHome = makeTrackedTempDir("openclaw-plugin-update-home", tempDirs);
-    mockBundledSources(createBundledSource("feishu", `${bundledHome}/plugins/feishu`));
-
-    await withEnvAsync({ HOME: "/tmp/process-home" }, async () => {
-      const result = await syncPluginsForUpdateChannel({
-        channel: "beta",
-        env: {
-          OPENCLAW_HOME: bundledHome,
-          HOME: "/tmp/ignored-home",
-        },
-        config: {
-          plugins: {
-            load: { paths: ["~/plugins/feishu"] },
-            installs: {
-              feishu: {
-                source: "path",
-                sourcePath: "~/plugins/feishu",
-                installPath: "~/plugins/feishu",
-                spec: "@openclaw/feishu",
+  it.each([false, true])(
+    "reconciles bundled paths using the provided env: %s",
+    async (homeRelative) => {
+      const bundledHome = homeRelative
+        ? makeTrackedTempDir("openclaw-plugin-update-home", tempDirs)
+        : undefined;
+      const bundledPath = homeRelative
+        ? `${bundledHome}/plugins/feishu`
+        : appBundledPluginRoot("feishu");
+      const recordedPath = homeRelative ? "~/plugins/feishu" : bundledPath;
+      mockBundledSources(createBundledSource("feishu", bundledPath));
+      await withEnvAsync(
+        { HOME: homeRelative ? "/tmp/process-home" : process.env.HOME },
+        async () => {
+          const result = await syncPluginsForUpdateChannel({
+            channel: "beta",
+            ...(homeRelative
+              ? { env: { OPENCLAW_HOME: bundledHome, HOME: "/tmp/ignored-home" } }
+              : {}),
+            config: pluginConfig(
+              {
+                feishu: {
+                  source: "path",
+                  sourcePath: recordedPath,
+                  installPath: homeRelative ? recordedPath : "/tmp/old-feishu",
+                  spec: "@openclaw/feishu",
+                },
               },
-            },
-          },
+              { load: { paths: homeRelative ? [recordedPath] : [] } },
+            ),
+          });
+          expect(result.changed).toBe(!homeRelative);
+          expect(result.config.plugins?.load?.paths).toEqual([recordedPath]);
+          expectRecordFields(result.config.plugins?.installs?.feishu, {
+            source: "path",
+            sourcePath: recordedPath,
+            installPath: recordedPath,
+            ...(!homeRelative ? { spec: "@openclaw/feishu" } : {}),
+          });
+          if (!homeRelative) {
+            expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+            expect(result.summary.switchedToNpm).toStrictEqual([]);
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["renamed", "default-enabled"] as const)(
+    "externalizes a %s bundled plugin",
+    async (mode) => {
+      const renamed = mode === "renamed";
+      const oldId = renamed ? "qqbot" : "legacy-chat";
+      const pluginId = renamed ? "openclaw-qqbot" : oldId;
+      const spec = renamed ? "@tencent-connect/openclaw-qqbot@2.0.1" : "@openclaw/legacy-chat";
+      const version = renamed ? "2.0.1" : "2.0.0";
+      const installPath = `/tmp/openclaw-plugins/${pluginId}`;
+      resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+      mockSuccessfulNpmUpdate({ pluginId, targetDir: installPath, version });
+      const result = await syncExternalizedPlugin({
+        config: renamed
+          ? createExternalizedPluginConfig({ pluginId: oldId, entryEnabled: true })
+          : {},
+        bridge: {
+          bundledPluginId: oldId,
+          pluginId,
+          npmSpec: spec,
+          channelIds: [oldId],
+          ...(renamed
+            ? { expectedIntegrity: "sha512-qqbot-catalog-pin" }
+            : { enabledByDefault: true }),
         },
       });
-
-      expect(result.changed).toBe(false);
-      expect(result.config.plugins?.load?.paths).toEqual(["~/plugins/feishu"]);
-      expectRecordFields(result.config.plugins?.installs?.feishu, {
-        source: "path",
-        sourcePath: "~/plugins/feishu",
-        installPath: "~/plugins/feishu",
+      expect(result.summary.switchedToNpm).toEqual([pluginId]);
+      expectRecordFields(result.config.plugins?.installs?.[pluginId], {
+        source: "npm",
+        spec,
+        installPath,
+        version,
       });
-    });
-  });
-
-  it("installs an externalized bundled plugin under its renamed package id", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-    mockSuccessfulNpmUpdate({
-      pluginId: "openclaw-qqbot",
-      targetDir: "/tmp/openclaw-plugins/openclaw-qqbot",
-      version: "2.0.1",
-    });
-
-    const result = await syncPluginsForUpdateChannel({
-      channel: "stable",
-      externalizedBundledPluginBridges: [
-        {
-          bundledPluginId: "qqbot",
-          pluginId: "openclaw-qqbot",
-          npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
-          expectedIntegrity: "sha512-qqbot-catalog-pin",
-          channelIds: ["qqbot"],
-        },
-      ],
-      config: {
-        channels: { qqbot: { enabled: true } },
-        plugins: {
-          entries: { qqbot: { enabled: true } },
-          load: { paths: [appBundledPluginRoot("qqbot")] },
-          installs: {
-            qqbot: {
-              source: "path",
-              sourcePath: appBundledPluginRoot("qqbot"),
-              installPath: appBundledPluginRoot("qqbot"),
-            },
-          },
-        },
-      },
-    });
-
-    expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-qqbot");
-    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-qqbot-catalog-pin");
-    expect(result.summary.switchedToNpm).toEqual(["openclaw-qqbot"]);
-    expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
-    expect(result.config.plugins?.entries?.["openclaw-qqbot"]).toEqual({ enabled: true });
-    expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
-    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
-      source: "npm",
-      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
-      installPath: "/tmp/openclaw-plugins/openclaw-qqbot",
-      version: "2.0.1",
-    });
-  });
+      if (renamed) {
+        expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-qqbot");
+        expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-qqbot-catalog-pin");
+        expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+        expect(result.config.plugins?.entries?.["openclaw-qqbot"]).toEqual({ enabled: true });
+        expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+      } else {
+        expect(result.changed).toBe(true);
+      }
+    },
+  );
 
   it.each(["npm", "clawhub", "source-fallback"] as const)(
     "selects npm releases before install and retains ClawHub fallback during %s externalization",
@@ -3269,134 +3052,74 @@ describe("syncPluginsForUpdateChannel", () => {
     },
   );
 
-  it("fails closed without npm fallback when ClawHub returns integrity drift", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: false,
-      code: "archive_integrity_mismatch",
-      error: "ClawHub ClawPack integrity mismatch.",
-      warning: "WARNING\nSecurity scan: suspicious",
-    });
-    const config = createExternalizedPluginConfig();
-
-    const result = await syncExternalizedPlugin({
-      bridge: {
-        npmSpec: undefined,
-        clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
-      },
-      config,
-    });
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.config).toBe(config);
-    expect(result.summary.warnings).toEqual(["WARNING\nSecurity scan: suspicious"]);
-    expect(result.summary.errors).toEqual([
-      {
-        pluginId: "legacy-chat",
-        code: "archive_integrity_mismatch",
-        message:
-          'Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
-      },
-    ]);
-  });
-
-  it("externalizes a default-enabled bundled plugin without explicit configuration", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-    mockSuccessfulNpmUpdate({
-      pluginId: "legacy-chat",
-      targetDir: "/tmp/openclaw-plugins/legacy-chat",
-      version: "2.0.0",
-    });
-
-    const result = await syncExternalizedPlugin({
-      config: {},
-      bridge: { enabledByDefault: true },
-    });
-
-    expect(result.changed).toBe(true);
-    expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
-    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
-      source: "npm",
-      spec: "@openclaw/legacy-chat",
-      installPath: "/tmp/openclaw-plugins/legacy-chat",
-      version: "2.0.0",
-    });
-  });
-
-  it("does not externalize disabled bundled plugins", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-
-    const result = await syncExternalizedPlugin({
-      config: createExternalizedPluginConfig({
-        channelEnabled: false,
-        entryEnabled: false,
-      }),
-    });
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
-      source: "path",
-    });
-  });
-
-  it("leaves config unchanged when externalized plugin installation fails", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      error: "package unavailable",
-      code: "npm_package_not_found",
-    });
-    const config = createExternalizedPluginConfig();
-
-    const result = await syncExternalizedPlugin({ config });
-
-    expect(result.changed).toBe(false);
-    expect(result.config).toBe(config);
-    expect(result.summary.errors).toEqual([
-      {
-        pluginId: "legacy-chat",
-        code: "npm_package_not_found",
-        message:
-          'Failed to update legacy-chat: npm package not found for @openclaw/legacy-chat.\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
-      },
-    ]);
-  });
-
-  it("does not externalize custom local path installs that only share the old plugin id", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-
-    const result = await syncExternalizedPlugin({
-      config: createExternalizedPluginConfig({
-        loadPaths: ["/workspace/plugins/legacy-chat"],
-        install: {
-          source: "path",
-          sourcePath: "/workspace/plugins/legacy-chat",
-          installPath: "/workspace/plugins/legacy-chat",
+  it.each(["npm", "clawhub"] as const)(
+    "leaves configuration unchanged after a failed %s externalization",
+    async (source) => {
+      resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+      const clawhub = source === "clawhub";
+      const code = clawhub ? "archive_integrity_mismatch" : "npm_package_not_found";
+      const warning = "WARNING\nSecurity scan: suspicious";
+      const config = createExternalizedPluginConfig();
+      (clawhub ? installPluginFromClawHubMock : installPluginFromNpmSpecMock).mockResolvedValue({
+        ok: false,
+        code,
+        error: clawhub ? "ClawHub ClawPack integrity mismatch." : "package unavailable",
+        ...(clawhub ? { warning } : {}),
+      });
+      const result = await syncExternalizedPlugin({
+        config,
+        ...(clawhub
+          ? { bridge: { npmSpec: undefined, clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2" } }
+          : {}),
+      });
+      if (clawhub) {
+        expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+        expect(result.summary.warnings).toEqual([warning]);
+      }
+      expect(result.changed).toBe(false);
+      expect(result.config).toBe(config);
+      expect(result.summary.errors).toEqual([
+        {
+          pluginId: "legacy-chat",
+          code,
+          message:
+            (clawhub
+              ? "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2)."
+              : "Failed to update legacy-chat: npm package not found for @openclaw/legacy-chat.") +
+            '\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
         },
-      }),
-    });
+      ]);
+    },
+  );
 
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
-      source: "path",
-      sourcePath: "/workspace/plugins/legacy-chat",
-    });
-  });
-
-  it("does not externalize while the bundled source is still present in the current build", async () => {
-    mockBundledSources(createBundledSource("legacy-chat"));
-
-    const result = await syncExternalizedPlugin({});
-
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
-      source: "path",
-    });
-  });
+  it.each(["disabled", "custom-path", "still-bundled"] as const)(
+    "does not externalize a %s plugin",
+    async (reason) => {
+      resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+      if (reason === "still-bundled") {
+        mockBundledSources(createBundledSource("legacy-chat"));
+      }
+      const customPath = "/workspace/plugins/legacy-chat";
+      const result = await syncExternalizedPlugin({
+        config: createExternalizedPluginConfig(
+          reason === "disabled"
+            ? { channelEnabled: false, entryEnabled: false }
+            : reason === "custom-path"
+              ? {
+                  loadPaths: [customPath],
+                  install: { source: "path", sourcePath: customPath, installPath: customPath },
+                }
+              : undefined,
+        ),
+      });
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(result.changed).toBe(false);
+      expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
+        source: "path",
+        ...(reason === "custom-path" ? { sourcePath: customPath } : {}),
+      });
+    },
+  );
 
   it("migrates already-externalized records to prototype-named plugin id __proto__", async () => {
     const targetPluginId = "__proto__";

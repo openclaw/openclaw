@@ -8,6 +8,11 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { migrateAgentDatabaseRelativePaths } from "./openclaw-state-db-schema-repair.js";
 import type { AgentDatabases, DB } from "./openclaw-state-db.generated.js";
 
+vi.hoisted(() => {
+  // The custody runner can preload these owners before the Windows path mock.
+  vi.resetModules();
+});
+
 vi.mock("node:path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:path")>();
   return { ...actual, default: actual.win32 };

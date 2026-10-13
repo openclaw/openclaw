@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
 import {
-  appendConfigAuditRecordSync,
+  appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
 } from "../config/io.audit.js";
@@ -54,7 +54,7 @@ async function fixture() {
     assertCurrent,
   };
   const context = { env, assertCurrent, candidate };
-  const migrate = (
+  const migrate = async (
     next: unknown,
     options: {
       pid?: number;
@@ -73,7 +73,7 @@ async function fixture() {
     if (options.audited === false) {
       return;
     }
-    appendConfigAuditRecordSync({
+    await appendConfigAuditRecord({
       env,
       homedir: () => root,
       record: finalizeConfigWriteAuditRecord({
@@ -125,12 +125,10 @@ describe("immutable activation protected identities", () => {
     const durable = structuredClone(test.snapshot);
     expect(JSON.stringify(durable)).not.toContain("synthetic-protected-token");
     expect(ImmutableProtectionSnapshotSchema.parse(durable)).toEqual(test.snapshot);
-    expect(verifyImmutableProtection(test.snapshot, test.context)).toEqual({
-      configMigrated: false,
-    });
-    test.migrate(test.additive());
-    test.migrate({ ...test.additive(), logging: { level: "info" } });
-    expect(verifyImmutableProtection(durable, test.context)).toEqual({ configMigrated: true });
+    expect(() => verifyImmutableProtection(test.snapshot, test.context)).not.toThrow();
+    await test.migrate(test.additive());
+    await test.migrate({ ...test.additive(), logging: { level: "info" } });
+    expect(() => verifyImmutableProtection(durable, test.context)).not.toThrow();
     expect(fs.readFileSync(test.configPath, "utf8")).toContain("legacyWebhook");
   });
 
@@ -142,7 +140,7 @@ describe("immutable activation protected identities", () => {
     "foreign origin",
   ] as const)("refuses an additive rewrite with %s provenance", async (kind) => {
     const test = await fixture();
-    test.migrate(test.additive(), {
+    await test.migrate(test.additive(), {
       audited: kind !== "unaudited",
       ...(kind === "foreign PID" ? { pid: 9999 } : {}),
       ...(kind === "foreign generation" ? { cwd: test.root } : {}),
@@ -176,7 +174,7 @@ describe("immutable activation protected identities", () => {
       } else {
         next.channels = { telegram: { ...test.config.channels.telegram, groupPolicy: "open" } };
       }
-      test.migrate(next);
+      await test.migrate(next);
       expect(() => verifyImmutableProtection(test.snapshot, test.context)).toThrow(
         /policy-preserving/u,
       );
@@ -186,15 +184,15 @@ describe("immutable activation protected identities", () => {
 
   it("rejects a foreign writer in the middle of an otherwise candidate-owned chain", async () => {
     const test = await fixture();
-    test.migrate(test.additive());
-    test.migrate({ ...test.additive(), logging: { level: "info" } }, { pid: 9999 });
-    test.migrate({ ...test.additive(), logging: { level: "info", file: "synthetic.log" } });
+    await test.migrate(test.additive());
+    await test.migrate({ ...test.additive(), logging: { level: "info" } }, { pid: 9999 });
+    await test.migrate({ ...test.additive(), logging: { level: "info", file: "synthetic.log" } });
     expect(() => verifyImmutableProtection(test.snapshot, test.context)).toThrow(/candidate/u);
   });
 
   it("refuses config changes during drain before any cutover", async () => {
     const test = await fixture();
-    test.migrate(test.additive());
+    await test.migrate(test.additive());
     expect(() => assertImmutableProtectionUnchanged(test.snapshot, test.context)).toThrow(
       /before immutable cutover/u,
     );

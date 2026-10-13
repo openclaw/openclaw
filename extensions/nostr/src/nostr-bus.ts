@@ -5,6 +5,7 @@ import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
@@ -73,18 +74,7 @@ type NostrDmSendOptions = Pick<
   "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
 >;
 
-export interface NostrBusHandle {
-  close: () => Promise<void>;
-  publicKey: string;
-  sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
-  /** Publish a profile (kind:0) to all relays */
-  publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
-  getProfileState: () => Promise<{
-    lastPublishedAt: number | null;
-    lastPublishedEventId: string | null;
-    lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-  }>;
-}
+export type NostrBusHandle = Awaited<ReturnType<typeof startNostrBus>>;
 
 interface CircuitBreakerState {
   state: "closed" | "open" | "half_open";
@@ -214,7 +204,7 @@ function createRelayHealthTracker() {
 }
 
 /** Subscribe to NIP-04 encrypted DMs. */
-export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
+export async function startNostrBus(options: NostrBusOptions) {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
@@ -593,6 +583,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     text: string,
     sendOptions?: NostrDmSendOptions & { replyToEventId?: string },
   ): Promise<string> {
+    const effect = captureEffectAuthority();
     const ciphertext = encrypt(sk, toPubkey, text);
     // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
     const tags = [["p", toPubkey]];
@@ -643,8 +634,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         await sendOptions.onPlatformSendDispatch();
         sendOptions.assertDirectAdapterHandoff?.();
       }
+      let initiated = false;
       try {
-        await connection.publish(reply);
+        await effect.initiate(() => {
+          sendOptions?.assertDirectAdapterHandoff?.();
+          initiated = true;
+          return connection.publish(reply);
+        });
         const latency = Date.now() - startTime;
 
         cb?.recordSuccess();
@@ -652,6 +648,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
         return reply.id;
       } catch (err) {
+        if (!initiated) {
+          throw err;
+        }
         recordFailure(err);
       }
     }

@@ -1,12 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  normalizeStringEntries,
   normalizeStringEntriesLower,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildMatchQueryFromTerms } from "./keyword-query.js";
+import {
+  bm25RankToScore,
+  buildMatchQueryFromTerms,
+  planKeywordSearch,
+  tokenizeFtsQuery,
+} from "./keyword-query.js";
 import {
   projectMemorySearchRow,
   resolveSnippetProjection,
@@ -14,7 +19,6 @@ import {
   type SearchRowResult,
 } from "./manager-search-shared.js";
 
-const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
 
@@ -45,6 +49,15 @@ type PathKeywordSearchResult = SearchRowResult & {
   hasBodyMatch: false;
 };
 
+function mergePathKeywordScores(target: PathKeywordSearchResult, hit: PathKeywordSearchResult) {
+  target.pathScore = Math.max(target.pathScore, hit.pathScore);
+  target.score = Math.max(target.score, hit.score);
+  target.exactPathSpecificity = Math.max(
+    target.exactPathSpecificity,
+    hit.exactPathSpecificity,
+  ) as ExactPathSpecificity;
+}
+
 function comparePathKeywordSearchResults(
   left: PathKeywordSearchResult,
   right: PathKeywordSearchResult,
@@ -69,7 +82,7 @@ function comparePathKeywordSearchResults(
 export type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 function normalizeSearchTokens(raw: string): string[] {
-  return normalizeStringEntriesLower(raw.normalize("NFC").match(FTS_QUERY_TOKEN_RE) ?? []);
+  return normalizeStringEntriesLower(tokenizeFtsQuery(raw.normalize("NFC")));
 }
 
 function literalSearchMatcher(value: string, whole = false): RegExp {
@@ -103,7 +116,8 @@ function scoreFallbackKeywordResult(params: {
   const textLengthBoost = Math.min(params.text.length / 160, 0.18);
 
   const lexicalBoost = uniqueQueryOverlap * 0.45 + density * 0.2 + pathBoost + textLengthBoost;
-  return Math.min(1, params.ftsScore + lexicalBoost);
+  // Scale boosts into the remaining headroom so relevance survives recency weighting.
+  return (params.ftsScore + lexicalBoost) / (1 + lexicalBoost);
 }
 
 function escapeLikePattern(term: string): string {
@@ -169,8 +183,12 @@ function registerSubstringSqlFunction(db: DatabaseSync, terms: readonly string[]
   );
 }
 
-function buildSubstringFilter(terms: string[], column: string): string {
-  return terms.map(() => ` AND ${NORMALIZED_CONTAINS_SQL_FUNCTION}(${column}, ?) = 1`).join("");
+function buildSubstringFilter(terms: string[], column: string, matchAny = false): string {
+  if (terms.length === 0) {
+    return "";
+  }
+  const predicates = terms.map(() => `${NORMALIZED_CONTAINS_SQL_FUNCTION}(${column}, ?) = 1`);
+  return ` AND (${predicates.join(matchAny ? " OR " : " AND ")})`;
 }
 
 function buildExactPathCandidatePatterns(query: string): string[] {
@@ -218,46 +236,9 @@ function buildExactPathCandidatePatterns(query: string): string[] {
   return [...patterns];
 }
 
-function planKeywordSearch(params: {
-  query: string;
-  ftsTokenizer?: "unicode61" | "trigram";
-  buildFtsQuery: (raw: string) => string | null;
-  includeCombiningMarks?: boolean;
-}): { matchQuery: string | null; substringTerms: string[] } {
-  if (params.ftsTokenizer !== "trigram") {
-    return {
-      matchQuery: params.buildFtsQuery(params.query),
-      substringTerms: [],
-    };
-  }
-
-  const tokenPattern = params.includeCombiningMarks ? /[\p{L}\p{M}\p{N}_]+/gu : FTS_QUERY_TOKEN_RE;
-  const tokens = normalizeStringEntries(params.query.match(tokenPattern) ?? []);
-  if (tokens.length === 0) {
-    return { matchQuery: null, substringTerms: [] };
-  }
-
-  const matchTerms: string[] = [];
-  const substringTerms: string[] = [];
-  for (const token of tokens) {
-    // FTS5 MATCH cannot find terms shorter than three Unicode characters.
-    if (Array.from(token).length < 3) {
-      substringTerms.push(token);
-      continue;
-    }
-    matchTerms.push(token);
-  }
-
-  return {
-    matchQuery: buildMatchQueryFromTerms(matchTerms),
-    substringTerms,
-  };
-}
-
 function planPathKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
-  buildFtsQuery: (raw: string) => string | null;
 }): Array<{ query: string; matchQuery: string | null; substringTerms: string[] }> {
   const forms =
     params.ftsTokenizer === "trigram"
@@ -279,13 +260,13 @@ function planPathKeywordSearch(params: {
     const plan = planKeywordSearch({
       ...params,
       query,
-      includeCombiningMarks: true,
+      includeLeadingMarks: true,
     });
     addPlan(query, plan);
   }
   if (params.ftsTokenizer !== "trigram") {
     for (const query of new Set([params.query.normalize("NFC"), params.query.normalize("NFD")])) {
-      const tokens = normalizeStringEntries(query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? []);
+      const tokens = tokenizeFtsQuery(query, true);
       const substringTerms = tokens.filter((token) => !isAscii(token));
       if (substringTerms.length > 0) {
         const matchQuery = buildMatchQueryFromTerms(tokens.filter(isAscii));
@@ -306,10 +287,8 @@ export async function searchKeyword(params: {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
-  buildFtsQuery: (raw: string) => string | null;
-  bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
-  rankingQuery?: string;
+  matchAny?: boolean;
 }): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
   if (params.limit <= 0) {
     return [];
@@ -317,7 +296,8 @@ export async function searchKeyword(params: {
   const plan = planKeywordSearch({
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
-    buildFtsQuery: params.buildFtsQuery,
+    canonicalVariants: true,
+    matchAny: params.matchAny,
   });
   if (!plan.matchQuery && plan.substringTerms.length === 0) {
     return [];
@@ -329,8 +309,8 @@ export async function searchKeyword(params: {
   const loadRows = (
     matchQuery: string | null,
     terms: string[],
-  ): Array<MemorySearchRow & { rank: number }> => {
-    const filter = buildSubstringFilter(terms, "text");
+  ): Array<MemorySearchRow & { rank: number | null }> => {
+    const filter = buildSubstringFilter(terms, "text", params.matchAny);
     if (terms.length > 0) {
       registerSubstringSqlFunction(params.db, terms);
     }
@@ -339,32 +319,47 @@ export async function searchKeyword(params: {
     const matchClause = matchQuery
       ? `${params.ftsTable} MATCH ? AND ${params.ftsTable}.rank MATCH 'bm25()'`
       : "1=1";
+    const columns = "id, path, source, start_line, end_line, text";
+    const ranked = `SELECT ${columns}, ${params.ftsTable}.rank AS rank
+      FROM ${params.ftsTable}
+      WHERE ${matchClause}${liveChunkClause}${params.sourceFilter.sql}
+      ORDER BY rank ASC LIMIT ?`;
+    // SQLite cannot combine MATCH with scalar OR predicates. Bound the BM25
+    // leg first; substring-only trigram hits fill spare capacity without a score.
+    const mixedOr = params.matchAny && matchQuery && terms.length > 0;
+    const sql = mixedOr
+      ? `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
+           SELECT ${columns}, NULL AS rank FROM ${params.ftsTable}
+           WHERE 1=1${filter}${liveChunkClause}${params.sourceFilter.sql}
+             AND id NOT IN (SELECT id FROM matches)
+           LIMIT max(0, ? - (SELECT count(*) FROM matches))
+         )
+         SELECT * FROM matches UNION ALL SELECT * FROM substrings
+         ORDER BY rank ASC NULLS LAST`
+      : `SELECT ${columns}, ${matchQuery ? `${params.ftsTable}.rank` : "NULL"} AS rank
+         FROM ${params.ftsTable}
+         WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}
+         ${matchQuery ? "ORDER BY rank ASC" : ""} LIMIT ?`;
     return params.db
-      .prepare(
-        `SELECT id, path, source, start_line, end_line, text,\n` +
-          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
-          `  FROM ${params.ftsTable}\n` +
-          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
-          (matchQuery ? ` ORDER BY rank ASC\n` : "") +
-          ` LIMIT ?`,
-      )
+      .prepare(sql)
       .all(
         ...(matchQuery ? [matchQuery] : []),
+        ...(mixedOr ? [...params.sourceFilter.params, params.limit] : []),
         ...terms,
         ...params.sourceFilter.params,
         params.limit,
-      ) as Array<MemorySearchRow & { rank: number }>;
+      ) as Array<MemorySearchRow & { rank: number | null }>;
   };
 
   const { rows, usedMatch } = loadKeywordRowsWithFallback(
     plan,
     loadRows,
-    () => normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []),
+    () => plan.tokens,
     "memory search: FTS5 MATCH failed, falling back to substring search",
   );
 
   const queryMatchers = params.boostFallbackRanking
-    ? uniqueStrings(normalizeSearchTokens(params.rankingQuery ?? params.query)).map((token) => ({
+    ? uniqueStrings(normalizeSearchTokens(params.query)).map((token) => ({
         word: literalSearchMatcher(token, true),
         substring: literalSearchMatcher(token),
       }))
@@ -377,7 +372,7 @@ export async function searchKeyword(params: {
     // signal so only the vector score contributes to contentScore; boost mode
     // still derives a lexicalBoost from query/text overlap via
     // scoreFallbackKeywordResult below.
-    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 0;
+    const textScore = usedMatch && row.rank !== null ? bm25RankToScore(row.rank) : 0;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           queryMatchers,
@@ -393,18 +388,35 @@ export async function searchKeyword(params: {
   });
 }
 
+export async function searchKeywordWithFallback(params: {
+  db: DatabaseSync;
+  body: Omit<Parameters<typeof searchKeyword>[0], "db" | "matchAny">;
+  path: Omit<Parameters<typeof searchPathKeyword>[0], "db">;
+}) {
+  const runBody = (matchAny = false) =>
+    searchKeyword({ ...params.body, db: params.db, matchAny })
+      .then((rows) => ({ rows, error: undefined }))
+      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
+  let body = await runBody();
+  const path = await searchPathKeyword({ ...params.path, db: params.db })
+    .then((rows) => ({ rows, error: undefined }))
+    .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
+  // A filename hit also preserves AND precision. Expand only an empty result.
+  if (body.rows.length === 0 && path.rows.length === 0 && !body.error && !path.error) {
+    body = await runBody(true);
+  }
+  return { body, path };
+}
+
 export async function searchPathKeyword(params: {
   db: DatabaseSync;
   pathFtsTable: string;
   query: string;
-  exactPathQuery?: string;
   exactPathLimit?: number;
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
-  buildFtsQuery: (raw: string) => string | null;
-  bm25RankToScore: (rank: number) => number;
 }): Promise<PathKeywordSearchResult[]> {
   if (params.limit <= 0) {
     return [];
@@ -414,13 +426,11 @@ export async function searchPathKeyword(params: {
   const pathPlans = planPathKeywordSearch({
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
-    buildFtsQuery: params.buildFtsQuery,
   });
   const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
   const planSubstringFilter = buildSubstringFilter(plan.substringTerms, pathColumn);
   registerSubstringSqlFunction(params.db, plan.substringTerms);
-  const exactPathQuery = params.exactPathQuery ?? params.query;
-  const matchExactPath = prepareExactPathMatcher(exactPathQuery);
+  const matchExactPath = prepareExactPathMatcher(params.query);
   // This reader consumes the query synchronously; substring plans can change
   // without replacing the original-query matcher.
   params.db.function(
@@ -428,9 +438,36 @@ export async function searchPathKeyword(params: {
     { deterministic: true },
     (candidatePath) => (typeof candidatePath === "string" ? matchExactPath(candidatePath) : 0),
   );
+  const projectPathRow = (
+    row: MemorySearchRow,
+    pathScore: number,
+    exactPathSpecificity = matchExactPath(row.path),
+  ): PathKeywordSearchResult =>
+    Object.assign(projectMemorySearchRow(row, params.snippetMaxChars, pathScore), {
+      textScore: 0 as const,
+      pathScore,
+      exactPathSpecificity,
+      hasBodyMatch: false as const,
+    });
+  const projectFirstChunks = (
+    paths: "exact_paths" | "retained_paths",
+    score: "exact_path_specificity" | "rank",
+    direction: "ASC" | "DESC",
+  ) =>
+    `SELECT c.id, ${paths}.path, ${paths}.source,\n` +
+    `       c.start_line, c.end_line, ${snippet.sql} AS text, ${paths}.${score}\n` +
+    `  FROM ${paths}\n` +
+    `  CROSS JOIN memory_index_chunks c INDEXED BY sqlite_autoindex_memory_index_chunks_1 ON c.id = (\n` +
+    `    SELECT candidate.id FROM memory_index_chunks candidate INDEXED BY idx_memory_index_chunks_path_source\n` +
+    `     WHERE candidate.path = ${paths}.path\n` +
+    `       AND candidate.source = ${paths}.source\n` +
+    `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
+    `     LIMIT 1\n` +
+    `  )\n` +
+    ` ORDER BY ${paths}.${score} ${direction}, ${paths}.path ASC, ${paths}.source ASC`;
   const hasExplicitExactPathHeadroom = params.exactPathLimit !== undefined;
   const exactPathLimit = Math.max(0, Math.floor(params.exactPathLimit ?? params.limit));
-  const exactCandidatePatterns = buildExactPathCandidatePatterns(exactPathQuery);
+  const exactCandidatePatterns = buildExactPathCandidatePatterns(params.query);
   type ExactPathRow = MemorySearchRow & {
     exact_path_specificity: ExactPathSpecificity;
   };
@@ -478,23 +515,12 @@ export async function searchPathKeyword(params: {
           `   ORDER BY exact_path_specificity DESC, path ASC, source ASC\n` +
           `   LIMIT ?\n` +
           `)\n` +
-          `SELECT c.id, exact_paths.path, exact_paths.source,\n` +
-          `       c.start_line, c.end_line, ${snippet.sql} AS text, exact_paths.exact_path_specificity\n` +
-          `  FROM exact_paths\n` +
-          `  CROSS JOIN memory_index_chunks c INDEXED BY sqlite_autoindex_memory_index_chunks_1 ON c.id = (\n` +
-          `    SELECT candidate.id FROM memory_index_chunks candidate INDEXED BY idx_memory_index_chunks_path_source\n` +
-          `     WHERE candidate.path = exact_paths.path\n` +
-          `       AND candidate.source = exact_paths.source\n` +
-          `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
-          `     LIMIT 1\n` +
-          `  )\n` +
-          ` ORDER BY exact_paths.exact_path_specificity DESC,\n` +
-          `          exact_paths.path ASC, exact_paths.source ASC`,
+          projectFirstChunks("exact_paths", "exact_path_specificity", "DESC"),
       )
       .all(...candidateParams, exactPathLimit, ...snippet.params) as ExactPathRow[];
   };
   const useLexicalExactCandidates =
-    isAscii(exactPathQuery) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
+    isAscii(params.query) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
   let exactRows: ExactPathRow[] = [];
   if (exactCandidatePatterns.length > 0 && exactPathLimit > 0) {
     try {
@@ -507,14 +533,7 @@ export async function searchPathKeyword(params: {
       exactRows = loadExactRows(false);
     }
   }
-  const exactResults = exactRows.map((row): PathKeywordSearchResult =>
-    Object.assign(projectMemorySearchRow(row, params.snippetMaxChars, 0), {
-      textScore: 0 as const,
-      pathScore: 0,
-      exactPathSpecificity: row.exact_path_specificity,
-      hasBodyMatch: false as const,
-    }),
-  );
+  const exactResults = exactRows.map((row) => projectPathRow(row, 0, row.exact_path_specificity));
   if (!pathPlans.some((entry) => entry.matchQuery || entry.substringTerms.length > 0)) {
     return exactResults;
   }
@@ -548,17 +567,7 @@ export async function searchPathKeyword(params: {
           `   ORDER BY rank ASC, ${params.pathFtsTable}.path ASC, ${params.pathFtsTable}.source ASC\n` +
           `   LIMIT ?\n` +
           `)\n` +
-          `SELECT c.id, retained_paths.path, retained_paths.source,\n` +
-          `       c.start_line, c.end_line, ${snippet.sql} AS text, retained_paths.rank\n` +
-          `  FROM retained_paths\n` +
-          `  CROSS JOIN memory_index_chunks c INDEXED BY sqlite_autoindex_memory_index_chunks_1 ON c.id = (\n` +
-          `    SELECT candidate.id FROM memory_index_chunks candidate INDEXED BY idx_memory_index_chunks_path_source\n` +
-          `     WHERE candidate.path = retained_paths.path\n` +
-          `       AND candidate.source = retained_paths.source\n` +
-          `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
-          `     LIMIT 1\n` +
-          `  )\n` +
-          ` ORDER BY retained_paths.rank ASC, retained_paths.path ASC, retained_paths.source ASC`,
+          projectFirstChunks("retained_paths", "rank", "ASC"),
       )
       .all(...queryParams, resultLimit, ...snippet.params) as PathLexicalRow[];
   };
@@ -577,7 +586,7 @@ export async function searchPathKeyword(params: {
     return loadKeywordRowsWithFallback(
       lexicalPlan,
       loadPartitions,
-      () => normalizeStringEntries(lexicalPlan.query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? []),
+      () => tokenizeFtsQuery(lexicalPlan.query, true),
       "memory search: path FTS5 MATCH failed, falling back to substring search",
     );
   };
@@ -589,28 +598,14 @@ export async function searchPathKeyword(params: {
     }
     const { rows, usedMatch } = loadLexicalRows(lexicalPlan);
     for (const row of rows) {
-      const pathScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
-      const exactPathSpecificity = matchExactPath(row.path);
-      const result: PathKeywordSearchResult = Object.assign(
-        projectMemorySearchRow(row, params.snippetMaxChars, pathScore),
-        {
-          textScore: 0 as const,
-          pathScore,
-          exactPathSpecificity,
-          hasBodyMatch: false as const,
-        },
-      );
+      const pathScore = usedMatch ? bm25RankToScore(row.rank) : 1;
+      const result = projectPathRow(row, pathScore);
       const existing = lexicalById.get(result.id);
       if (!existing) {
         lexicalById.set(result.id, result);
         continue;
       }
-      existing.pathScore = Math.max(existing.pathScore, result.pathScore);
-      existing.score = Math.max(existing.score, result.score);
-      existing.exactPathSpecificity = Math.max(
-        existing.exactPathSpecificity,
-        result.exactPathSpecificity,
-      ) as ExactPathSpecificity;
+      mergePathKeywordScores(existing, result);
     }
   }
 
@@ -622,12 +617,7 @@ export async function searchPathKeyword(params: {
       if (!exact) {
         continue;
       }
-      exact.pathScore = Math.max(exact.pathScore, entry.pathScore);
-      exact.score = Math.max(exact.score, entry.score);
-      exact.exactPathSpecificity = Math.max(
-        exact.exactPathSpecificity,
-        entry.exactPathSpecificity,
-      ) as ExactPathSpecificity;
+      mergePathKeywordScores(exact, entry);
       continue;
     }
     if (nonExactCount >= params.limit) {

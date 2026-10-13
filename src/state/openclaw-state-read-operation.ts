@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { RetainedOperation, RetainedOutcome } from "@openclaw/worker-runtime/lifecycle";
+import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
@@ -8,7 +10,12 @@ import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
 } from "../infra/sqlite-readonly-location.types.js";
-import { startSqliteReadOnlyLocationAsync } from "../infra/sqlite-snapshot-source.js";
+import { runScopedSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
+import {
+  prepareSqliteReadOnlyLocationAwaited,
+  startSqliteReadOnlyLocationAsync,
+  withSqliteSnapshotWorker,
+} from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   type DatabaseFileIdentity,
@@ -22,11 +29,15 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
-import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
+import {
+  captureOpenClawStateReadSource,
+  decodeOpenClawStateReadReply,
+} from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
   OpenClawStateReadOptions,
+  OpenClawStateReadOutcome,
   OpenClawStateReadReceipt,
   OpenClawStateReadReply,
   ReadResource,
@@ -43,6 +54,7 @@ type Selection = {
   pathname: string;
   snapshot?: {
     location: string;
+    cleanClose?: boolean;
     cleanupRoot?: string;
     assertCurrent?(): void;
     release?(): void;
@@ -51,6 +63,9 @@ type Selection = {
   context: ReturnType<typeof captureOpenClawStateReadWorkerContext>;
   preserveArtifacts: boolean;
   preferIndependentWarmRead?: true;
+  snapshotPreparation?: "awaited";
+  onChunk?: OpenClawStateReadOptions["onChunk"];
+  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"];
   controller: AbortController;
   signal: AbortSignal;
   receipt: OpenClawStateReadReceipt;
@@ -91,7 +106,7 @@ export function startOpenClawStateReadOperation(
   let releasePreparedSource: (() => void) | undefined;
   let expectedIdentity: string | undefined;
   let expectedSourceIdentity: DatabaseFileIdentity | undefined;
-  let awaitedOnly = false;
+  let awaitedOnly = selection.snapshotPreparation === "awaited";
   let producerSettled = false;
   let value: ReadResult;
   const errors: unknown[] = [];
@@ -101,7 +116,6 @@ export function startOpenClawStateReadOperation(
   let cleanupAttempt: ReturnType<typeof createDeferredCore<void>> | undefined;
   let transportStopped = false;
   let cleaned = false;
-  let validated = false;
   let servicing = false;
 
   const assertReadLifetime = () => {
@@ -174,14 +188,7 @@ export function startOpenClawStateReadOperation(
   }
 
   function release() {
-    if (!validated) {
-      validated = true;
-      try {
-        authority.assertCurrent();
-      } catch (error) {
-        acceptanceErrors.push(error);
-      }
-    }
+    // Query completion checked authority; cleanup does not re-admit the completed read.
     borrowed?.release();
     borrowed = undefined;
     snapshot?.release?.();
@@ -382,7 +389,7 @@ export function startOpenClawStateReadOperation(
   }
 
   function query() {
-    if (!snapshot && !prepared) {
+    if ((!snapshot && !prepared) || snapshot?.cleanClose) {
       expectedIdentity = context.admission.identity.key;
     }
     if (prepared) {
@@ -392,7 +399,7 @@ export function startOpenClawStateReadOperation(
       );
     }
     // The transport checks current authority at dispatch, including after a queue wait.
-    receipt.phase = "unobserved";
+    receipt.phase = command.type === "admit" ? "before-read" : "unobserved";
     if (!transport) {
       throw new Error("Shared-state read transport is unavailable");
     }
@@ -401,43 +408,51 @@ export function startOpenClawStateReadOperation(
       transport.startRead(
         {
           context,
-          location: prepared?.location ?? snapshot?.location ?? pathname,
+          location: snapshot?.cleanClose
+            ? resolveImmutableSqliteFileUri(snapshot.location)
+            : (prepared?.location ?? snapshot?.location ?? pathname),
           checkFreshAdmission: !borrowed,
           expectedIdentity,
           snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,
         },
         authority,
       ),
-      (readOutcome) => {
-        const admitted =
-          "error" in readOutcome
-            ? readOutcome.sourceAdmitted
-            : readOutcome.value.type === "admit"
-              ? undefined
-              : readOutcome.value.sourceAdmitted;
-        if (admitted === true) {
-          receipt.phase = "read";
-        } else if (admitted === false && receipt.phase !== "read") {
-          receipt.phase = "before-read";
-        }
-        try {
-          authority.assertCurrent();
-          if (admitted) {
-            borrowed?.observe();
-          }
-        } catch (error) {
-          if (!("error" in readOutcome)) {
-            throw error;
-          }
-          acceptanceErrors.push(error);
-        }
-        if ("error" in readOutcome) {
-          throw readOutcome.error;
-        }
-        value = readOutcome.value;
-        finishProducer();
-      },
+      acceptReadOutcome,
     );
+  }
+
+  function consumeReadOutcome(readOutcome: OpenClawStateReadOutcome) {
+    const admitted =
+      "error" in readOutcome
+        ? readOutcome.sourceAdmitted
+        : readOutcome.value.type === "admit"
+          ? undefined
+          : readOutcome.value.sourceAdmitted;
+    if (admitted === true) {
+      receipt.phase = "read";
+    } else if (admitted === false && receipt.phase !== "read") {
+      receipt.phase = "before-read";
+    }
+    try {
+      authority.assertCurrent();
+      if (admitted) {
+        borrowed?.observe();
+      }
+    } catch (error) {
+      if (!("error" in readOutcome)) {
+        throw error;
+      }
+      acceptanceErrors.push(error);
+    }
+    if ("error" in readOutcome) {
+      throw readOutcome.error;
+    }
+    return readOutcome.value;
+  }
+
+  function acceptReadOutcome(readOutcome: OpenClawStateReadOutcome) {
+    value = consumeReadOutcome(readOutcome);
+    finishProducer();
   }
 
   const resource: ReadResource = {
@@ -449,7 +464,12 @@ export function startOpenClawStateReadOperation(
 
   try {
     source = captureOpenClawStateReadSource();
-    transport = source.createTransport(command);
+    transport = source.createTransport(
+      command,
+      selection.onChunk,
+      selection.onChunkAsync,
+      awaitedOnly,
+    );
     unregister = registerOpenClawStateDatabaseAsyncResource({
       async close(identity) {
         if (
@@ -470,58 +490,121 @@ export function startOpenClawStateReadOperation(
     if (snapshot) {
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
     }
-    const native =
-      !snapshot && preserveArtifacts
-        ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
-        : undefined;
-    borrowed =
-      native ??
-      (!snapshot && !preserveArtifacts
-        ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
-        : undefined);
-    const independentWarmSource =
-      native &&
-      preferIndependentWarmRead &&
-      canReadWarmNativeSourceIndependently(
-        native.database,
-        pathname,
-        context.admission.identity.key,
-      );
-    if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
-      finishProducer();
-    } else if (native && !independentWarmSource) {
-      awaitedOnly = true;
-      waitAwaited(
-        prepareSqliteReadOnlyLocationFromOwnedDatabase(
-          native.database.db,
-          authority.assertCurrent,
-          authority.signal,
-          "async",
-        ),
-        (location) => {
-          prepared = location;
-          query();
-        },
-        finishProducer,
-      );
-    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
-      expectedSourceIdentity = { key: context.admission.identity.key };
-      authority.assertCurrent();
-      waitRetained("producer", transport.startValidateFresh(context, authority), () => {
-        authority.assertCurrent();
-        preparation = startSqliteReadOnlyLocationAsync(pathname, {
-          preserveSourceArtifacts: preserveArtifacts,
-          signal: authority.signal,
-          expectedSourceIdentity,
-        });
-        waitRetained("producer", preparation, (location) => {
-          prepared = location;
-          startPreparedCleanup = () => location.startCleanup();
-          query();
-        });
-      });
-    } else {
+    if (command.type === "admit") {
+      // Admission must finish before a snapshot producer may open the source.
       query();
+    } else {
+      const native =
+        !snapshot && preserveArtifacts
+          ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
+          : undefined;
+      borrowed =
+        native ??
+        (!snapshot && !preserveArtifacts
+          ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+          : undefined);
+      const independentWarmSource =
+        native &&
+        preferIndependentWarmRead &&
+        canReadWarmNativeSourceIndependently(
+          native.database,
+          pathname,
+          context.admission.identity.key,
+        );
+      if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
+        finishProducer();
+      } else if (native && !independentWarmSource) {
+        awaitedOnly = true;
+        waitAwaited(
+          prepareSqliteReadOnlyLocationFromOwnedDatabase(
+            native.database.db,
+            authority.assertCurrent,
+            authority.signal,
+            "async",
+          ),
+          (location) => {
+            prepared = location;
+            query();
+          },
+          finishProducer,
+        );
+      } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
+        const sourceIdentity = { key: context.admission.identity.key };
+        expectedSourceIdentity = sourceIdentity;
+        authority.assertCurrent();
+        if (
+          selection.snapshotPreparation === "awaited" &&
+          command.type === "plugins.metadata.read" &&
+          context.maintenanceScope?.ownsSchemaMaintenance !== true &&
+          !getStateDatabaseSchemaLease(pathname)
+        ) {
+          const capturedCommand = structuredClone(command);
+          receipt.phase = "unobserved";
+          waitAwaited(
+            withSqliteSnapshotWorker(signal, (worker, stagingRoot) => {
+              authority.assertCurrent();
+              return runScopedSqliteReadOnlyOperation(
+                worker,
+                pathname,
+                {
+                  type: "stateSnapshot.read",
+                  input: {
+                    stagingRoot,
+                    expectedSourceIdentity: sourceIdentity,
+                    command: capturedCommand,
+                    context: {
+                      environment: context.environment,
+                      existingSchemaPath: context.existingSchemaPath,
+                    },
+                  },
+                },
+                {
+                  source: "canonical",
+                  expectedIdentity: sourceIdentity.key,
+                  env: context.environment,
+                  signal,
+                },
+              ).then((reply) => consumeReadOutcome(decodeOpenClawStateReadReply(reply)));
+            }),
+            (reply) => {
+              value = reply;
+              finishProducer();
+            },
+            finishProducer,
+          );
+        } else {
+          waitRetained("producer", transport.startValidateFresh(context, authority), () => {
+            authority.assertCurrent();
+            if (selection.snapshotPreparation === "awaited") {
+              waitAwaited(
+                prepareSqliteReadOnlyLocationAwaited(pathname, {
+                  signal: authority.signal,
+                  expectedSourceIdentity: sourceIdentity,
+                }),
+                (location) => {
+                  prepared = location;
+                  query();
+                },
+                finishProducer,
+              );
+              return;
+            }
+            preparation = startSqliteReadOnlyLocationAsync(pathname, {
+              preserveSourceArtifacts: preserveArtifacts,
+              signal: authority.signal,
+              expectedSourceIdentity,
+            });
+            waitRetained("producer", preparation, (location) => {
+              prepared = location;
+              startPreparedCleanup = () => location.startCleanup();
+              query();
+            });
+          });
+        }
+        awaitedOnly ||= selection.snapshotPreparation === "awaited";
+      } else {
+        query();
+      }
     }
   } catch (error) {
     finishProducer({ error });

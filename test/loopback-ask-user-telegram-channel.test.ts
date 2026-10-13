@@ -214,8 +214,8 @@ describe("loopback ask_user Telegram channel transport", () => {
             const resolveTools = toolResolution.resolveGatewayScopedTools;
             const resolutions = vi
               .spyOn(toolResolution, "resolveGatewayScopedTools")
-              .mockImplementation((...args) => {
-                const scoped = resolveTools(...args);
+              .mockImplementation(async (...args) => {
+                const scoped = await resolveTools(...args);
                 for (const tool of scoped.tools) {
                   const execute = tool.execute;
                   vi.spyOn(tool, "execute").mockImplementation(async (...executeArgs) => {

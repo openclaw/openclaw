@@ -7,7 +7,7 @@ import {
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
+import { appendSessionResults } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionGateway,
@@ -43,8 +43,10 @@ export function getManagedSessionList(
     query,
     scope: Object.freeze({ ...scope }),
     retainedLimit: query.limit,
+    receivedKeys: new Set(),
     startupRetryAttempt: 0,
     readGeneration: 0,
+    readRevision: 0,
     connectionEpoch: null,
     snapshot: { result: null, agentId: null, loading: false, error: null },
     listeners: new Set(),
@@ -102,7 +104,7 @@ export function createSessionManagedListRefresh(
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "inherit" | "accept" | "stageObservedRows" | "mergeRows"
+      "accept" | "stageObservedRows" | "mergeRows"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
@@ -159,9 +161,10 @@ export function createSessionManagedListRefresh(
           limit: next.append ? entry.query.limit : entry.retainedLimit,
           ...(next.append && next.offset !== undefined ? { offset: next.offset } : {}),
         };
+        const issuedRevision = nextRevision();
+        entry.readRevision = issuedRevision;
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
-          const issuedRevision = nextRevision();
           const generation = entry.readGeneration;
           const readIsCurrent = () =>
             isCurrent() &&
@@ -201,20 +204,32 @@ export function createSessionManagedListRefresh(
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
           // members and discards duplicate page rows without refreshing their facts.
-          const presented = reconcileRosterPresentationMetadata(result, previous);
           const agentId = entry.query.agentId;
-          observations.inherit(presented, result, previous, agentId);
           const observed = observations.accept(
-            presented,
-            previous,
+            result,
+            entry.snapshot,
             host.readState().result,
             agentId,
-            entry.snapshot.agentId,
           );
           const nextResult =
             observed && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, observed)
               : observed;
+          const appending = Boolean(next.append && requestParams.offset && previous);
+          const receivedKeys = new Set(appending ? entry.receivedKeys : []);
+          for (const row of response.sessions) {
+            receivedKeys.add(row.key);
+          }
+          const totalCount =
+            response.totalCount ?? (appending ? entry.snapshot.pagination?.totalCount : undefined);
+          const pageEnd = (response.offset ?? requestParams.offset ?? 0) + response.sessions.length;
+          const hasMore = response.hasMore ?? (totalCount !== undefined && pageEnd < totalCount);
+          const pagination = {
+            count: receivedKeys.size,
+            totalCount,
+            hasMore,
+            nextOffset: response.nextOffset ?? (hasMore ? pageEnd : null),
+          };
           const decorated = host.decorate(nextResult, entry);
           if (decorated) {
             entry.retainedLimit = Math.max(entry.retainedLimit, decorated.sessions.length);
@@ -226,9 +241,12 @@ export function createSessionManagedListRefresh(
             undefined,
             false,
           );
+          entry.receivedKeys = receivedKeys;
           entry.connectionEpoch = scope.epoch;
           entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
+            readSucceeded: true,
+            pagination,
             result: decorated,
             agentId: agentId ?? null,
             loading: false,
@@ -271,6 +289,7 @@ export function createSessionManagedListRefresh(
               ...entry.snapshot,
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
+              readSucceeded: false,
               startupPending,
             },
             isCurrent,

@@ -94,14 +94,14 @@ async function localGit(root: string, args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-function credentialFreeHttpOrigin(raw: string): string | undefined {
+function credentialFreeOrigin(raw: string, protocols = ["http:", "https:"]): string | undefined {
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
     return undefined;
   }
-  return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+  return protocols.includes(parsed.protocol) &&
     parsed.username === "" &&
     parsed.password === "" &&
     parsed.search === "" &&
@@ -156,7 +156,7 @@ async function inspectEligibleOrigin(localPath: string): Promise<OriginInspectio
     if (status) {
       return { kind: "fallback", reason: "workspace-dirty" };
     }
-    const origin = credentialFreeHttpOrigin(rawOrigin);
+    const origin = credentialFreeOrigin(rawOrigin);
     if (!COMMIT_PATTERN.test(commit) || !origin) {
       return { kind: "fallback", reason: "origin-unavailable" };
     }
@@ -208,9 +208,14 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
       const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
         runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
       );
-      await createNodeWorkerRepositoryPreparation(exec, request.authorize).configureAuthor(
+      const origin = credentialFreeOrigin(
+        await localGit(request.localPath, ["remote", "get-url", "origin"]).catch(() => ""),
+        ["http:", "https:", "git:"],
+      );
+      await createNodeWorkerRepositoryPreparation(exec, request.authorize).configureCheckout(
         result.remoteWorkspaceDir,
         author,
+        origin,
       );
       return result;
     },

@@ -69,7 +69,7 @@ export async function locked<T>(
     await resolveChain(previous);
     if (!opts?.readOnly) {
       // Include scheduler-local changes that deliberately do not commit a store revision.
-      state.listPageSnapshot = undefined;
+      state.readSnapshot = undefined;
     }
     return await fn();
   });

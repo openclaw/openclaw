@@ -67,12 +67,14 @@ type VerifiedConversationContext = {
   incompleteMarkdownWrapper?: RegExp;
 };
 
+const CONVERSATION_CONTEXT_MARKERS = [
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+  CURRENT_MESSAGE_MARKER,
+];
+
 function hasConversationContextMarker(text: string): boolean {
-  return (
-    text.includes(HISTORY_CONTEXT_MARKER) ||
-    text.includes(RECENT_HISTORY_CONTEXT_MARKER) ||
-    text.includes(CURRENT_MESSAGE_MARKER)
-  );
+  return CONVERSATION_CONTEXT_MARKERS.some((marker) => text.includes(marker));
 }
 
 function prepareVerifiedConversationContext(
@@ -82,11 +84,7 @@ function prepareVerifiedConversationContext(
     return undefined;
   }
   const sourceCodeRegions = findCodeRegions(source);
-  const ownsConversationContext = [
-    HISTORY_CONTEXT_MARKER,
-    RECENT_HISTORY_CONTEXT_MARKER,
-    CURRENT_MESSAGE_MARKER,
-  ].some((marker) => {
+  const ownsConversationContext = CONVERSATION_CONTEXT_MARKERS.some((marker) => {
     let markerOffset = source.indexOf(marker);
     while (markerOffset !== -1) {
       const markerEnd = markerOffset + marker.length;

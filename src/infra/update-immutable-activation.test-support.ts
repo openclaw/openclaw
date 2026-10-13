@@ -59,29 +59,21 @@ export function syntheticImmutableServiceObservation(
 
 export function syntheticImmutableGatewayObservation(
   descriptor: ImmutableInstallDescriptor,
-  generation: Pick<ImmutablePreparedGeneration, "sha" | "buildDigest">,
+  generation: Pick<ImmutablePreparedGeneration, "sha">,
   serving: { pid: number; generationPath: string } | null,
   outcome: ImmutableGatewayObservation["outcome"],
 ): ImmutableGatewayObservation {
   return {
     outcome,
-    phase: "readiness",
-    elapsedMs: 1,
     service: syntheticImmutableServiceObservation(descriptor, serving),
     ...(outcome === "verified" && serving
       ? {
           verification: {
             pid: serving.pid,
             bootId: `boot-${serving.pid}`,
-            port: 18789,
             version: "2026.10.3",
             buildId: generation.sha,
             generationSha: generation.sha,
-            buildDigest: generation.buildDigest,
-            healthz: 200,
-            readyz: 200,
-            channelsReady: true,
-            pluginsReady: true,
           },
         }
       : {}),

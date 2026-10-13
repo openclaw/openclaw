@@ -21,7 +21,7 @@ import {
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "./server-methods/session-change-event.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const { createQueuedReservation, requestContext, operatorClient } = useQueuedCollectorFixture();
 
@@ -101,13 +101,13 @@ it.for(["settled", "rejected", "session replaced"] as const)(
       expect(publications).toEqual([undefined]);
       expect(cleanupSettled).toBe(false);
       expect(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry?.lastRunId,
+        (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry?.lastRunId,
       ).toBeUndefined();
       expect(respond).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
 
       if (transition === "session replaced") {
-        const selected = loadGatewaySessionEntryReadOnly(entry.childSessionKey);
+        const selected = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
         await replaceSessionEntry(
           { storePath: selected.storePath, sessionKey: entry.childSessionKey },
           {
@@ -124,7 +124,7 @@ it.for(["settled", "rejected", "session replaced"] as const)(
       await withinTest(stopping, signal);
 
       const stored = expectDefined(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
+        (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
         "terminal session",
       );
       const stopped = expectDefined(

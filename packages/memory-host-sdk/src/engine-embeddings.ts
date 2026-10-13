@@ -38,6 +38,7 @@ export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-nor
 export {
   embeddingProviderOwnsDestination,
   resolveEmbeddingEndpointUrl,
+  resolveEmbeddingProviderSsrFPolicy,
   resolveRemoteEmbeddingBearerClient,
 } from "./host/embeddings-remote-client.js";
 export {
@@ -49,6 +50,12 @@ export {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
 } from "./host/embedding-input-limits.js";
-export { hasNonTextEmbeddingParts, type EmbeddingInput } from "./host/embedding-inputs.js";
+export {
+  formatEmbeddingModelInput,
+  formatEmbeddingTaskText,
+  hasNonTextEmbeddingParts,
+  resolveEmbeddingInputFormatVersion,
+  type EmbeddingInput,
+} from "./host/embedding-inputs.js";
 export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
 export { classifyMemoryMultimodalPath } from "./host/multimodal.js";

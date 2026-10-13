@@ -99,7 +99,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
   const diagnosticOnlySuffix = serviceTargetsProbe
     ? ""
-    : ` ${infoText("(diagnostic only, not the probe target)")}`;
+    : ` ${infoText("(diagnostic only, not the check target)")}`;
   const serviceLoaded = service.loadState.status === "loaded";
   const serviceStatus = serviceLoaded
     ? okText(service.loadedText)
@@ -217,7 +217,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(
       `${label("Gateway:")} bind=${infoText(status.gateway.bindMode)} (${infoText(bindHost)}), port=${infoText(String(status.gateway.port))} (${infoText(status.gateway.portSource)})`,
     );
-    printInfo("Probe target:", status.gateway.probeUrl);
+    printInfo("Check target:", status.gateway.probeUrl);
     const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
@@ -234,7 +234,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       printInfo("Dashboard:", links.httpUrl);
     }
     if (status.gateway.probeNote) {
-      printInfo("Probe note:", status.gateway.probeNote);
+      printInfo("Check note:", status.gateway.probeNote);
     }
     if (status.gateway.windowsFirewall?.severity === "warning") {
       printWarning(`Windows firewall: ${status.gateway.windowsFirewall.message}`);
@@ -280,23 +280,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (rpc.timedOut && rpc.gatewayReached) {
       defaultRuntime.log(
         warnText(
-          "Gateway accepted the connection, but the read probe timed out. Inspect event-loop load and retry before treating the service as unreachable.",
+          "Gateway accepted the connection, but the read check timed out. Inspect event-loop load and retry before treating the service as unreachable.",
         ),
       );
     } else if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
       defaultRuntime.log(
         warnText(
-          "Gateway process is running and owns the gateway port, but readiness is not yet confirmed. Warm-up is still possible. Try openclaw gateway status --deep again shortly; check the probe credentials/config and logs if it stays unresponsive.",
+          "Gateway process is running and owns the gateway port, but readiness is not yet confirmed. Warm-up is still possible. Try openclaw gateway status --deep again shortly; check the connection credentials/config and logs if it stays unresponsive.",
         ),
       );
     } else {
       defaultRuntime.log(
-        warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
+        warnText(
+          "Readiness is not confirmed. A running service process does not prove the Gateway is available; inspect the service logs and openclaw gateway status --deep.",
+        ),
       );
     }
   }
   if (rpc) {
-    const probeLabel = rpc.kind === "read" ? "Read probe:" : "Connectivity probe:";
+    const probeLabel = rpc.kind === "read" ? "Read check:" : "Connectivity check:";
     if (rpc.ok) {
       defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
@@ -314,18 +316,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         );
       }
       if (rpc.url) {
-        defaultRuntime.error(`${label("Probe target:")} ${rpc.url}`);
+        defaultRuntime.error(`${label("Check target:")} ${rpc.url}`);
       }
       const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
       if (status.port?.status === "busy" && status.lastError) {
-        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+        defaultRuntime.error(
+          `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
+        );
       }
     }
     if (rpc.authWarning) {
-      defaultRuntime.error(`${label("Probe auth:")} ${warnText(rpc.authWarning)}`);
+      defaultRuntime.error(`${label("Check auth:")} ${warnText(rpc.authWarning)}`);
     }
     const capability = rpc.capability ? rpc.capability.replaceAll("_", "-") : null;
     if (capability) {
@@ -413,7 +417,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       printError(recovery);
     } else {
       defaultRuntime.log(
-        infoText("Native service is not installed; diagnostic only, not the probe target."),
+        infoText("Native service is not installed; diagnostic only, not the check target."),
       );
     }
   } else if (
@@ -535,7 +539,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     printError(`Gateway port ${status.port.port} is not listening (service appears running).`);
     const serviceEnv = { ...process.env, ...service.command?.environment };
     if (status.lastError) {
-      defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+      defaultRuntime.error(
+        `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
+      );
     }
     if (process.platform === "linux") {
       const unit =
@@ -544,7 +550,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const scope = service.runtime?.systemd?.scope === "system" ? "--system" : "--user";
       printError(`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`);
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
+      const logs = resolveGatewaySupervisorLogPaths(serviceEnv);
       // The plist points both launchd handles at this file, so startup crashes that
       // never reached the logger land here too; do not advertise a separate stderr.
       defaultRuntime.error(
@@ -596,19 +602,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`,
         );
       }
-      const repairs = drift.drifts.map((entry) => ({
-        entry,
-        command: resolvePluginVersionDriftUpdateCommand(entry),
-      }));
-      const updateCommands = repairs
-        .map(({ command }) => command)
-        .filter((command): command is string => Boolean(command))
-        .map((command) => formatCliCommand(command));
-      const unresolvedRepairs = repairs.filter(
-        ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-      );
-      for (const { entry } of repairs) {
+      const updateCommands: string[] = [];
+      const unresolvedRepairs: typeof drift.drifts = [];
+      for (const entry of drift.drifts) {
+        const command = resolvePluginVersionDriftUpdateCommand(entry);
         const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+        if (command) {
+          updateCommands.push(formatCliCommand(command));
+        } else if (!registryLag) {
+          unresolvedRepairs.push(entry);
+        }
         if (registryLag) {
           defaultRuntime.log(
             `- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
@@ -617,7 +620,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       }
       if (unresolvedRepairs.length > 0) {
         printError("Plugin repair target resolution failed:");
-        for (const { entry } of unresolvedRepairs) {
+        for (const entry of unresolvedRepairs) {
           const targetResolution = entry.targetResolution;
           const detail =
             targetResolution?.status === "unresolved"

@@ -94,8 +94,7 @@ function sanitizePageUrl(value: string): string {
   const normalized = sanitizePageText(value, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
   const parsed = URL.parse(normalized);
   if (!parsed) {
-    const withoutUserInfo = normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
-    return truncateUtf16Safe(withoutUserInfo, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+    return normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
   }
   if (!parsed.username && !parsed.password) {
     return normalized;

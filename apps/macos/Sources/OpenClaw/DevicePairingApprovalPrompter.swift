@@ -35,17 +35,13 @@ final class DevicePairingApprovalPrompter {
     /// hidden optimistically and restored by the failure path.
     private var pendingLocalDecisionRequestIds: Set<String> = []
 
-    private struct PairingList: Codable {
+    private struct PairingList: Decodable {
         let pending: [PendingRequest]
         let paired: [PairedDevice]?
     }
 
-    private struct PairedDevice: Codable, Equatable {
+    private struct PairedDevice: Decodable {
         let deviceId: String
-        let approvedAtMs: Double?
-        let displayName: String?
-        let platform: String?
-        let remoteIp: String?
     }
 
     struct PendingRequest: Codable, Equatable, Identifiable {
@@ -213,24 +209,13 @@ final class DevicePairingApprovalPrompter {
         guard let source = self.source else { return }
         switch push {
         case let .event(evt) where evt.event == "device.pair.requested":
-            guard let payload = evt.payload else { return }
-            do {
-                let req = try GatewayPayloadDecoding.decode(payload, as: PendingRequest.self)
-                self.enqueue(req, source: source)
-            } catch {
-                self.logger
-                    .error("failed to decode device pairing request: \(error.localizedDescription, privacy: .public)")
-            }
+            guard let req: PendingRequest = PairingPromptSupport.decodeEventPayload(
+                evt.payload, context: "device pairing request", logger: self.logger) else { return }
+            self.enqueue(req, source: source)
         case let .event(evt) where evt.event == "device.pair.resolved":
-            guard let payload = evt.payload else { return }
-            do {
-                let resolved = try GatewayPayloadDecoding.decode(payload, as: PairingResolvedEvent.self)
-                self.handleResolved(resolved, source: source)
-            } catch {
-                self.logger
-                    .error(
-                        "failed to decode device pairing resolution: \(error.localizedDescription, privacy: .public)")
-            }
+            guard let resolved: PairingResolvedEvent = PairingPromptSupport.decodeEventPayload(
+                evt.payload, context: "device pairing resolution", logger: self.logger) else { return }
+            self.handleResolved(resolved, source: source)
         case .snapshot:
             Task { await self.loadPendingRequestsFromGateway(source: source) }
         case .seqGap:

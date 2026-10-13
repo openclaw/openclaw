@@ -1,4 +1,3 @@
-// Startup policy helpers for config guards, plugin loading, banners, and CLI path checks.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 

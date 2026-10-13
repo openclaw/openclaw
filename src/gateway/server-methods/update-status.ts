@@ -39,8 +39,8 @@ import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
-  refreshLatestUpdateRestartSentinel,
-} from "../server-restart-sentinel.js";
+  prepareLatestUpdateRestartSentinel,
+} from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -49,6 +49,8 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    const warn = (stage: string, error: unknown) =>
+      context?.logGateway?.warn(`update.status ${stage} failed: ${formatErrorMessage(error)}`);
     const lifecycle = currentUpdateCheckLifecycle();
     const startedAt = areDiagnosticsEnabledForProcess() ? performance.now() : undefined;
     const timing =
@@ -75,22 +77,25 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       let sentinel: RestartSentinelPayload | null;
       try {
-        sentinel = manager ? null : await refreshLatestUpdateRestartSentinel();
+        sentinel = manager ? null : await prepareLatestUpdateRestartSentinel(undefined, lifecycle);
       } catch (err) {
-        context?.logGateway?.warn(
-          `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
-        );
+        warn("sentinel refresh", err);
         sentinel = getLatestUpdateRestartSentinel();
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      if ((params.refreshCheckout === true || immutable) && config) {
+      if ((params.refreshCheckout === true || immutable) && context?.getRuntimeConfig) {
         try {
-          await refreshGatewayUpdateStatus(config);
+          await refreshGatewayUpdateStatus(context.getRuntimeConfig);
         } catch (err) {
-          context?.logGateway?.warn(
-            `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-          );
+          warn("checkout refresh", err);
+          if (params.refreshCheckout === true) {
+            respond(false, undefined, {
+              code: "UNAVAILABLE",
+              message: "Could not check the latest update. Try again.",
+            });
+            return;
+          }
         }
       }
       mark("reconciliation");
@@ -99,9 +104,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           await reconcileAbandonedUpdateRunsAsync();
         }
       } catch (error) {
-        context?.logGateway?.warn(
-          `update.status reconciliation failed: ${formatErrorMessage(error)}`,
-        );
+        warn("reconciliation", error);
       }
       mark("history");
       const { activeRun, lastRun } = manager
@@ -118,9 +121,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : activeRun?.runId === campaignRunId
             ? activeRun
             : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
-                context?.logGateway?.warn(
-                  `update.status campaign run lookup failed: ${formatErrorMessage(error)}`,
-                );
+                warn("campaign run lookup", error);
                 return undefined;
               });
       if (lifecycle.isCurrent() && !lifecycle.signal.aborted) {
@@ -135,9 +136,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         try {
           effectiveChannel = await getUpdateEffectiveChannel();
         } catch (err) {
-          context?.logGateway?.warn(
-            `update.status install identity failed: ${formatErrorMessage(err)}`,
-          );
+          warn("install identity", err);
         }
         currentConfig = context?.getRuntimeConfig?.() ?? currentConfig;
         effectiveChannel =

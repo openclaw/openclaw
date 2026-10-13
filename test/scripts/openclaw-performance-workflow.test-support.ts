@@ -27,6 +27,7 @@ afterAll(() => {
 
 export type PerformanceFixtureOptions = {
   mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
+  successfulGitTrees?: boolean;
   baseline?: "absent" | "invalid" | "trailing-newline";
   duplicate?: boolean;
   race?: boolean;

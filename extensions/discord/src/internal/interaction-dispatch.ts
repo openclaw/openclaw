@@ -4,7 +4,8 @@ import {
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
-import type { BaseMessageInteractiveComponent, Modal } from "./components.js";
+import type { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,
@@ -107,11 +108,8 @@ const INTERACTION_FAILURE_NOTICE = "Command failed. Check the Gateway logs for d
 async function reportInteractionFailure(
   interaction: ReturnType<typeof createInteraction>,
 ): Promise<void> {
-  if (interaction.responseState !== "deferred") {
-    return;
-  }
   // A follow-up can consume the placeholder; never overwrite its visible output.
-  if (interaction.hasSentFollowUp) {
+  if (interaction.responseState !== "deferred" || interaction.hasSentFollowUp) {
     return;
   }
   try {

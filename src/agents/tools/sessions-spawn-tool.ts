@@ -3,9 +3,14 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { supportsThreadBindingSpawn } from "../../channels/conversation-resolution.js";
 import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestOwners,
+} from "../../infra/exec-request-context.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -18,7 +23,9 @@ import {
   formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
+import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -66,10 +73,8 @@ import {
   PlacedSessionsSpawnSchema,
   PLACED_SESSIONS_SPAWN_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
-import {
-  maybeSpawnVisibleSession,
-  type SessionsSpawnToolOptions,
-} from "./sessions-spawn-visible.js";
+import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
@@ -87,13 +92,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
-
-function addRoleToFailureResult<T extends { status: string }>(result: T, role: string | undefined) {
-  if (!role || (result.status !== "error" && result.status !== "forbidden")) {
-    return result;
-  }
-  return { ...result, role };
-}
 
 function recordAcceptedSessionSpawn(
   result: Record<string, unknown>,
@@ -145,7 +143,13 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
   };
 }
 
-function createSessionsSpawnToolSchema(params: {
+const createSessionsSpawnToolSchema = createCachedToolSchema({
+  build: buildSessionsSpawnToolSchema,
+  key: (params) =>
+    `${params.acpAvailable}:${params.threadAvailable}:${params.subagentThreadAvailable}:${params.swarmEnabled}`,
+});
+
+function buildSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
@@ -307,6 +311,10 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
 ): AnyAgentTool {
+  const requestOwners = captureExecRequestOwners({
+    runId: opts?.requesterTurnRunId,
+    sessionId: opts?.expectedParentSessionId,
+  });
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,
@@ -330,12 +338,14 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  const parameters = createSessionsSpawnToolSchema({
-    acpAvailable,
-    threadAvailable,
-    subagentThreadAvailable: threadAvailability.subagent,
-    swarmEnabled: swarmConfig.enabled,
-  });
+  const parameters = opts?.workerPlacement
+    ? PlacedSessionsSpawnSchema
+    : createSessionsSpawnToolSchema({
+        acpAvailable,
+        threadAvailable,
+        subagentThreadAvailable: threadAvailability.subagent,
+        swarmEnabled: swarmConfig.enabled,
+      });
   const tool: AnyAgentTool = {
     label: "Sessions",
     name: "sessions_spawn",
@@ -352,7 +362,7 @@ export function createSessionsSpawnTool(
           sessionToolsVisibility,
           spawnRestricted: restrictToSpawned,
         }),
-    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
+    parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
@@ -361,10 +371,10 @@ export function createSessionsSpawnTool(
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
         const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
-        const assertSourceActive = () => {
-          assertSourceExecution();
-          operatorSelection.assertCurrent();
-        };
+        const assertSourceActive = composeSessionSourceAssertion([
+          assertSourceExecution,
+          operatorSelection.assertCurrent,
+        ]);
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -425,6 +435,11 @@ export function createSessionsSpawnTool(
         const taskName = taskNameResult.taskName;
         const label = readToolStringParam(params, "label") ?? "";
         const runtime = params.runtime === "acp" ? "acp" : "subagent";
+        if (runtime === "subagent" && opts?.delegatedToolPolicyUnavailable) {
+          throw new ToolInputError(
+            "This mediated tool surface cannot preserve the active delegated execution grant. Start the helper from a Gateway-side native tool surface.",
+          );
+        }
         const completionTarget = params.completionTarget;
         if (completionTarget !== undefined && completionTarget !== "parent") {
           throw new ToolInputError('sessions_spawn completionTarget must be "parent" or omitted.');
@@ -438,6 +453,15 @@ export function createSessionsSpawnTool(
           throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
         }
         const requestedAgentId = readToolStringParam(params, "agentId");
+        const requesterPolicyError = resolveSenderRestrictedSpawnError({
+          inheritedToolPolicySource: opts?.inheritedToolPolicySource,
+          requesterAgentId,
+          targetAgentId: requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined,
+          visible: params.visible === true,
+        });
+        if (requesterPolicyError) {
+          return jsonResult({ status: "forbidden", error: requesterPolicyError });
+        }
         const resumeSessionId = readToolStringParam(params, "resumeSessionId");
         const modelOverride = normalizeToolModelOverride(readToolStringParam(params, "model"));
         const thinkingOverrideRaw = readToolStringParam(params, "thinking");
@@ -450,7 +474,12 @@ export function createSessionsSpawnTool(
           params.context === "fork" || params.context === "isolated" ? params.context : undefined;
         const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
         const lightContext = params.lightContext === true;
-        const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+        const spawnResult = <T extends { status: string }>(result: T) =>
+          jsonResult(
+            requestedAgentId && (result.status === "error" || result.status === "forbidden")
+              ? { ...result, role: requestedAgentId }
+              : result,
+          );
         const expectedParentSessionKey = opts?.agentSessionKey?.trim();
         if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
           throw new Error("Exact parent session access requires a session key");
@@ -466,12 +495,15 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: {
-              ...opts,
-              onSpawnEffectsStart,
-              assertActive,
-              signal: executionSignal,
-            },
+            options: withExecRequestOwners(
+              {
+                ...opts,
+                onSpawnEffectsStart,
+                assertActive,
+                signal: executionSignal,
+              },
+              requestOwners,
+            ),
           });
         const visibleResult =
           params.visible === true && opts?.expectedParentSessionId
@@ -485,18 +517,15 @@ export function createSessionsSpawnTool(
             : await spawnVisible();
         if (visibleResult) {
           recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
-          return jsonResult(
-            addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
-          );
+          return spawnResult(visibleResult as { status: string });
         }
         if (runtime === "acp" && !acpAvailable) {
-          return jsonResult({
+          return spawnResult({
             status: "error",
             error: resolveAcpUnavailableMessage({
               config: effectiveConfig,
               sandboxed: opts?.sandboxed,
             }),
-            ...roleContext,
           });
         }
         const acpUnsupportedInheritedTool =
@@ -504,10 +533,9 @@ export function createSessionsSpawnTool(
             ? findAcpUnsupportedInheritedToolDeny(opts?.inheritedToolDenylist)
             : undefined;
         if (acpUnsupportedInheritedTool) {
-          return jsonResult({
+          return spawnResult({
             status: "forbidden",
             error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
-            ...roleContext,
           });
         }
         const acpUnsupportedInheritedAllow =
@@ -515,10 +543,9 @@ export function createSessionsSpawnTool(
             ? findAcpUnsupportedInheritedToolAllow(opts?.inheritedToolAllowlist)
             : undefined;
         if (acpUnsupportedInheritedAllow) {
-          return jsonResult({
+          return spawnResult({
             status: "forbidden",
             error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
-            ...roleContext,
           });
         }
         if (runtime === "acp" && lightContext) {
@@ -567,6 +594,16 @@ export function createSessionsSpawnTool(
           sandboxed: opts?.sandboxed,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          ...(runtime === "subagent"
+            ? {
+                delegatedToolDenyFloor: opts?.delegatedToolDenyFloor,
+                requesterToolDenylist: opts?.requesterToolDenylist,
+                readDelegationConfig: opts?.readDelegationConfig,
+              }
+            : {}),
+          inheritedToolPolicySource: opts?.inheritedToolPolicySource,
+          workspaceDir: opts?.workspaceDir,
+          sessionPermissionPolicy: opts?.sessionPermissionPolicy,
         });
 
         if (runtime === "acp") {
@@ -576,10 +613,9 @@ export function createSessionsSpawnTool(
             attachments,
           });
           if (acpAttachments?.status === "forbidden" || acpAttachments?.status === "error") {
-            return jsonResult({
+            return spawnResult({
               status: acpAttachments.status,
               error: acpAttachments.error,
-              ...roleContext,
             });
           }
           const result = await spawnAcpDirect(
@@ -599,7 +635,7 @@ export function createSessionsSpawnTool(
             ),
           );
           recordAcceptedSessionSpawn(result, "isolated");
-          return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+          return spawnResult(result);
         }
 
         const result = await spawnSubagentDirect(
@@ -640,23 +676,24 @@ export function createSessionsSpawnTool(
                 : undefined,
           },
           withParentExecutionIdentity(
-            {
-              ...inheritedSpawnContext(),
-              requesterThinkingLevel: opts?.requesterThinkingLevel,
-              requesterModel: opts?.requesterModel,
-              currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-              agentGroupId: opts?.agentGroupId,
-              agentGroupChannel: opts?.agentGroupChannel,
-              workspaceDir: opts?.workspaceDir,
-              sessionPermissionPolicy: opts?.sessionPermissionPolicy,
-              requesterRunId: opts?.requesterRunId,
-            },
+            withExecRequestOwners(
+              {
+                ...inheritedSpawnContext(),
+                requesterThinkingLevel: opts?.requesterThinkingLevel,
+                requesterModel: opts?.requesterModel,
+                currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+                agentGroupId: opts?.agentGroupId,
+                agentGroupChannel: opts?.agentGroupChannel,
+                requesterRunId: opts?.requesterRunId,
+              },
+              requestOwners,
+            ),
             parentExecutionIdentityToken,
           ),
         );
 
         recordAcceptedSessionSpawn(result, result.context);
-        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+        return spawnResult(result);
       }),
     ),
   };

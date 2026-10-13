@@ -36,6 +36,25 @@ export abstract class ExecApprovalExpiry<TPayload> extends ExecApprovalLifecycle
     callerGuard?: OperatorApprovalStoreGuard,
   ): Promise<ExecApprovalForceDenyResult<TPayload>>;
 
+  protected abstract scheduleAuthorityClosure(recordId: string): void;
+
+  /** Observes a registered decision; Gateway closure rejects the wait, not the approval. */
+  awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
+    this.assertNotRetired();
+    this.scheduleAuthorityClosure(recordId);
+    const snapshot = this.getLocalSnapshot(recordId);
+    if (!snapshot) {
+      return null;
+    }
+    if (snapshot.resolvedAtMs === undefined && snapshot.expiresAtMs <= Date.now()) {
+      void this.expireDue(recordId).catch((error: unknown) => {
+        this.reportError(error, { approvalId: recordId, operation: "expire" });
+      });
+    }
+    const entry = this.pending.get(recordId);
+    return entry ? this.observeEntry(entry, entry.promise) : null;
+  }
+
   protected override scheduleExpiry(entry: PendingEntry<TPayload>, delayMs?: number): void {
     if (
       this.retired ||

@@ -8,7 +8,6 @@ import type {
   GatewayControlUiConfig,
 } from "../../config/types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { safeParseWithSchema } from "../../utils/zod-parse.js";
 
 type ConfigSummary = {
@@ -25,8 +24,6 @@ type StatusConfigRead = {
   cfg: OpenClawConfig;
   mode: "fast" | "full";
 };
-
-const loadConfigIoRuntime = createLazyPromise(() => import("../../config/io.runtime.js"));
 
 async function resolveInvalidStatusConfig(value: unknown): Promise<OpenClawConfig> {
   const [{ GatewayConfigSchema }, { SecretsConfigSchema }, { LoggingConfigSchema }] =
@@ -117,17 +114,23 @@ async function readFastStatusConfig(
   };
 }
 
-async function readFullStatusConfig(params: {
+export async function readDaemonStatusConfig(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
-  pluginValidation?: "full" | "skip";
+  deep?: boolean;
 }): Promise<StatusConfigRead> {
-  const { createConfigIO } = await loadConfigIoRuntime();
+  if (!params.deep) {
+    const fast = await readFastStatusConfig(params.configPath, params.env);
+    if (fast) {
+      return fast;
+    }
+  }
+  const { createConfigIO } = await import("../../config/io.runtime.js");
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
     observe: false,
-    pluginValidation: params.pluginValidation ?? "skip",
+    pluginValidation: params.deep ? "full" : "skip",
     logger: {
       error: () => {},
       warn: () => {},
@@ -150,19 +153,4 @@ async function readFullStatusConfig(params: {
     cfg,
     mode: "full",
   };
-}
-
-export async function readDaemonStatusConfig(params: {
-  env: NodeJS.ProcessEnv;
-  configPath: string;
-  deep?: boolean;
-}): Promise<StatusConfigRead> {
-  return (
-    (params.deep ? null : await readFastStatusConfig(params.configPath, params.env)) ??
-    (await readFullStatusConfig({
-      env: params.env,
-      configPath: params.configPath,
-      pluginValidation: params.deep ? "full" : "skip",
-    }))
-  );
 }

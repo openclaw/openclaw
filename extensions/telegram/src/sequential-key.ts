@@ -84,7 +84,6 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
-/** Registry key for a text command, or undefined when the text is not one. */
 function resolveTelegramCommandKeyForControlLane(params: {
   rawText?: string;
   botUsername?: string;
@@ -105,16 +104,6 @@ function resolveTelegramCommandKeyForControlLane(params: {
   return listChatCommands().find((entry) =>
     entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
   )?.key;
-}
-
-export function isTelegramReadOnlyControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  // Read-only commands must not supersede pending work when they enter the control lane.
-  // Diagnostics and export commands materialize state and remain on the ordinary lane.
-  const key = resolveTelegramCommandKeyForControlLane(params);
-  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
 export function isTelegramControlLaneText(params: {

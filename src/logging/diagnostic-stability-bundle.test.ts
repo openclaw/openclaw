@@ -395,8 +395,13 @@ describe("diagnostic stability bundles", () => {
   it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
-      type: "diagnostic.memory.sample",
-      uptimeMs: 1000,
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "worker_heap_threshold",
+      usedBytes: 1024,
+      limitBytes: 1100,
+      thresholdBytes: 990,
+      workerThreadId: 2,
       memory: {
         rssBytes: 4096,
         heapTotalBytes: 1024,
@@ -417,6 +422,7 @@ describe("diagnostic stability bundles", () => {
             script: "prepared-model-catalog.worker.js",
             threadId: 2,
             heapUsed: 1024,
+            heapSizeLimitBytes: 1100,
             heapTotal: 2048,
             external: 1024,
             arrayBuffers: 512,
@@ -440,6 +446,15 @@ describe("diagnostic stability bundles", () => {
     if (readback.status !== "found") {
       throw new Error("Expected readable diagnostics");
     }
+    expect(readback.bundle.snapshot.events[0]).toMatchObject({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "worker_heap_threshold",
+      usedBytes: 1024,
+      limitBytes: 1100,
+      thresholdBytes: 990,
+      workerThreadId: 2,
+    });
     expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
       workerCount: 2,
       workerHeapSampledCount: 1,
@@ -454,6 +469,7 @@ describe("diagnostic stability bundles", () => {
           script: "prepared-model-catalog.worker.js",
           threadId: 2,
           heapUsed: 1024,
+          heapSizeLimitBytes: 1100,
           heapTotal: 2048,
           external: 1024,
           arrayBuffers: 512,
@@ -532,7 +548,7 @@ describe("diagnostic stability bundles", () => {
     });
     const snapshot = bundle.snapshot as Record<string, unknown>;
     Object.assign(snapshot, {
-      count: 3,
+      count: 4,
       privateSnapshot: "snapshot-secret",
       events: [
         {
@@ -562,12 +578,22 @@ describe("diagnostic stability bundles", () => {
           usage: {},
           context: {},
         },
+        {
+          seq: 4,
+          ts: 4,
+          type: "model.call.error",
+          durationMs: 130,
+          providerProcessingMs: 20.25,
+          providerWaitEstimateMs: 109.75,
+          failureKind: "aborted",
+        },
       ],
       summary: {
         byType: {
           "webhook.error": 1,
           "exec.approval.followup_suppressed": 1,
           "model.usage": 1,
+          "model.call.error": 1,
           "private summary type": 1,
         },
         privateSummary: "summary-secret",
@@ -627,10 +653,20 @@ describe("diagnostic stability bundles", () => {
         context: {},
       }),
     );
+    expect(result.bundle.snapshot.events[3]).toEqual({
+      seq: 4,
+      ts: 4,
+      type: "model.call.error",
+      failureKind: "aborted",
+      durationMs: 130,
+      providerProcessingMs: 20.25,
+      providerWaitEstimateMs: 109.75,
+    });
     expect(result.bundle.snapshot.summary.byType).toEqual({
       "webhook.error": 1,
       "exec.approval.followup_suppressed": 1,
       "model.usage": 1,
+      "model.call.error": 1,
     });
     const sanitized = JSON.stringify(result.bundle);
     for (const secret of [

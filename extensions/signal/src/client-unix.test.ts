@@ -4,6 +4,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
@@ -56,6 +58,68 @@ function response(id: unknown, result: unknown) {
 }
 
 describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
+  it.each([false, true])(
+    "prepares the socket write and rechecks its caller after waiting (revoked=%s)",
+    async (revoked) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const reply = createDeferred<void>();
+      const authority = fetchRuntime.captureEffectAuthority();
+      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          return authority.initiate(effect);
+        },
+      });
+      const requests: Record<string, unknown>[] = [];
+      const { baseUrl } = await serve((request, socket) => {
+        requests.push(request);
+        arrived.resolve();
+        void reply.promise.then(() => socket.end(response(request.id, { sent: true })));
+      });
+      const caller = new AbortController();
+      const failure = new Error("Signal caller ended during preparation");
+      const sending = signalRpcRequest(
+        "send",
+        { message: "prepared" },
+        {
+          baseUrl,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("socket write bypassed preparation");
+          }),
+        ]);
+        expect(requests).toEqual([]);
+        if (revoked) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!revoked) {
+          await arrived.promise;
+          reply.resolve();
+        }
+        expect(await sending).toEqual(revoked ? { error: failure } : { value: { sent: true } });
+        expect(requests).toHaveLength(revoked ? 0 : 1);
+      } finally {
+        caller.abort(failure);
+        prepared.resolve();
+        reply.resolve();
+        await sending;
+      }
+    },
+  );
+
   it("sends newline JSON-RPC and matches a fragmented UTF-8 response by id", async () => {
     const caller = new AbortController();
     const requests: Record<string, unknown>[] = [];

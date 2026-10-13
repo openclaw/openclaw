@@ -193,14 +193,13 @@ function restoreAppliedGatewayRunConfigEnvironment(preserveSelection = true): vo
 async function readGuardedGatewayRunConfig(
   params: GatewayRunGuardParams,
 ): Promise<ConfigFileSnapshot | null> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
   const { createConfigIO } = await import("../../config/io.factory.js");
   return await withArtifactPreservingStateReads(async () => {
-    const current = await readConfigFileSnapshot({
-      isolateEnv: true,
+    const current = await createConfigIO({
+      env: cloneEnvWithPlatformSemantics(process.env),
       observe: false,
       pluginValidation: "core-only",
-    });
+    }).readConfigFileSnapshot();
     const guard = (snapshot: ConfigFileSnapshot) =>
       enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
     if (!guard(current)) {

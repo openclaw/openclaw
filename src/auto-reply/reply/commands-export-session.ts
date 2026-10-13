@@ -2,14 +2,13 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
-  type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
@@ -39,41 +38,39 @@ interface SessionData {
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
-function hasPersistedAcpSession(params: {
+async function hasPersistedAcpSession(params: {
+  cfg: HandleCommandsParams["cfg"];
   sessionKey: string;
   entry: StoredSessionEntry;
-}): boolean {
+}): Promise<boolean> {
   if (params.entry.acp) {
     return true;
   }
   try {
-    return Boolean(readAcpSessionMetaForEntry(params));
+    return Boolean(await readAcpSessionMetaForEntryAsync(params));
   } catch {
     return false;
   }
 }
 
 function isBackendDelegatedSession(
-  entry: StoredSessionEntry,
+  storedEntry: StoredSessionEntry,
   entries: AgentSessionEntry[],
   hasStoredAcpSession: boolean,
 ): boolean {
   const hasBackendSession =
     hasStoredAcpSession ||
-    hasNonEmptyString(entry.claudeCliSessionId) ||
-    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
+    hasNonEmptyString(storedEntry.claudeCliSessionId) ||
+    Object.values(storedEntry.cliSessionBindings ?? {}).some((binding) =>
       hasNonEmptyString(binding?.sessionId),
     ) ||
-    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString);
+    Object.values(storedEntry.cliSessionIds ?? {}).some(hasNonEmptyString);
   if (!hasBackendSession) {
     return false;
   }
-  const messages = entries.filter(
-    (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
-  );
   return (
-    messages.length > 0 &&
-    messages.every((transcriptEntry) => transcriptEntry.message.role === "user")
+    entries.some((entry) => entry.type === "message") &&
+    entries.every((entry) => entry.type !== "message" || entry.message.role === "user")
   );
 }
 
@@ -219,7 +216,7 @@ async function readSessionDataFromIdentity(params: {
     ? rawEntries.map((entry) => {
         const node = tree.byId.get(entry.id);
         return node && entry.parentId !== node.parentId
-          ? ({ ...entry, parentId: node.parentId } as AgentSessionEntry)
+          ? { ...entry, parentId: node.parentId }
           : entry;
       })
     : rawEntries;
@@ -240,7 +237,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (args.error) {
     return { text: args.error };
   }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
+  const sessionTarget = await resolveExportCommandSessionTarget(params);
   if ("text" in sessionTarget) {
     return sessionTarget;
   }
@@ -260,7 +257,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = hasPersistedAcpSession({
+  const hasStoredAcpSession = await hasPersistedAcpSession({
+    cfg: params.cfg,
     sessionKey: params.sessionKey,
     entry,
   });

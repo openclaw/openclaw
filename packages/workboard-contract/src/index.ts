@@ -1,5 +1,15 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
+export type WorkboardDatabasePortApi<Database, Input> = {
+  inspectWorkboardPortSource(db: Database): {
+    version: number;
+    migrationRequired: boolean;
+    pendingColumns: Record<string, string[]>;
+  };
+  admitWorkboardPort(dbPath: string, input?: Input): void;
+  WorkboardPortSchemaError: new (message?: string) => Error;
+};
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -242,6 +252,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -396,6 +408,7 @@ export type {
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardSpec,
   WorkboardSessionsBoardView,
   WorkboardSessionsColumn,

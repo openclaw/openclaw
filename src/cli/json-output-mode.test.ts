@@ -6,6 +6,7 @@ import {
   applyResolvedCommandOutputMode,
   hasJsonOutputFlag,
   isJsonOutputModeActive,
+  withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
 
@@ -33,20 +34,6 @@ describe("json output mode", () => {
     expect(hasJsonOutputFlag(["node", "openclaw", "nodes", "--", "--json"])).toBe(false);
   });
 
-  it("temporarily routes console logs to stderr while json output is being prepared", async () => {
-    const snapshots: boolean[] = [];
-
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "nodes", "list", "--json"],
-      async () => {
-        snapshots.push(loggingState.forceConsoleToStderr);
-      },
-    );
-
-    expect(snapshots).toEqual([true]);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
-
   it("keeps Doctor warnings on stderr and JSON stdout parseable", async () => {
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -67,19 +54,6 @@ describe("json output mode", () => {
     const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(warnings).toContain("Doctor warnings");
     expect(warnings).toContain(message);
-  });
-
-  it("leaves existing stderr routing enabled after json output preparation", async () => {
-    loggingState.forceConsoleToStderr = true;
-
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "nodes", "list", "--json"],
-      async () => {
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-      },
-    );
-
-    expect(loggingState.forceConsoleToStderr).toBe(true);
   });
 
   it("restores stdout routing when command metadata marks --json as parse-only", async () => {
@@ -111,18 +85,6 @@ describe("json output mode", () => {
     );
   });
 
-  it("preserves inherited stderr routing when resolved metadata is parse-only", async () => {
-    loggingState.forceConsoleToStderr = true;
-
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "config", "set", "gateway.port", "18789", "--json"],
-      async () => {
-        applyResolvedCommandOutputMode(false);
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-      },
-    );
-  });
-
   it("retains stderr routing through preaction for plain machine output", async () => {
     await withConsoleLogsRoutedToStderrForJson(
       ["node", "openclaw", "models", "aliases", "list", "--plain"],
@@ -138,14 +100,43 @@ describe("json output mode", () => {
     );
   });
 
-  it("still restores stdout when preaction resolves neither JSON nor plain machine output", async () => {
-    await withConsoleLogsRoutedToStderrForJson(
-      ["node", "openclaw", "models", "aliases", "list", "--plain"],
-      async () => {
-        applyResolvedCommandOutputMode(false);
+  it.each(["temporary-first", "json-first"])(
+    "retains temporary stderr routing across JSON refinement and release (%s)",
+    async (order) => {
+      const resume = Promise.withResolvers<void>();
+      let temporary: Promise<void> | undefined;
+      const startTemporary = () => {
+        temporary = withConsoleLogsRoutedToStderr(() => resume.promise);
+      };
+      try {
+        if (order === "temporary-first") {
+          startTemporary();
+        }
+        await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
+          if (order === "json-first") {
+            startTemporary();
+          }
+          applyResolvedCommandOutputMode(false);
+          expect(loggingState.forceConsoleToStderr).toBe(true);
+        });
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        resume.resolve();
+        await temporary;
         expect(loggingState.forceConsoleToStderr).toBe(false);
-      },
-      { machineOutput: true },
-    );
+      } finally {
+        resume.resolve();
+        await temporary;
+      }
+    },
+  );
+
+  it("preserves JSON routing retained until exit when a temporary scope finishes", async () => {
+    await withConsoleLogsRoutedToStderr(async () => {
+      await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {}, {
+        retainRoutingUntilProcessExit: true,
+      });
+      expect(loggingState.forceConsoleToStderr).toBe(true);
+    });
+    expect(loggingState.forceConsoleToStderr).toBe(true);
   });
 });

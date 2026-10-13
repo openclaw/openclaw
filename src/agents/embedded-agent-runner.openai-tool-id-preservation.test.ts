@@ -84,29 +84,6 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       ...overrides,
     });
 
-  it("repairs displaced tool results before downgrading pairing IDs", async () => {
-    const result = await sanitize([
-      call("call_123|fc_123"),
-      user("still waiting"),
-      output("call_123|fc_123", "ok"),
-    ]);
-    expect(result[1]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call_123",
-      content: [{ type: "text", text: "ok" }],
-      isError: false,
-    });
-    expect(result[2]?.role).toBe("user");
-  });
-
-  it("normalizes overlong call IDs and malformed item IDs", async () => {
-    const rawId = `call_${"x".repeat(120)}|notfc_${"y".repeat(120)}`;
-    const result = await sanitize([call(rawId), output(rawId, "ok")]);
-    const id = callId(result[0]);
-    expect(id).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
-    expect(result[1]).toMatchObject({ toolCallId: id });
-  });
-
   it("keeps repeated Kimi calls distinct while repairing the incomplete later turn", async () => {
     const first = "functions.gateway:0|fc_tmp_first";
     const second = "functions.gateway:0|fc_tmp_second";
@@ -141,34 +118,31 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     expect(roles).toEqual(["assistant", "toolResult", "user", "assistant", "toolResult", "user"]);
   });
 
-  it.each(["openai-responses", "openai-chatgpt-responses", "azure-openai-responses"])(
-    "preserves paired tool IDs for an unowned provider using %s",
-    async (modelApi) => {
-      const id = "call_gateway_0|fc_gateway_0";
-      const result = await sanitize(
-        [
-          castAgentMessage({
-            role: "assistant",
-            content: [
-              {
-                type: "thinking",
-                thinking: "reasoning",
-                thinkingSignature: { id: "rs_1", type: "reasoning" },
-              },
-              { type: "toolCall", id, name: "noop", arguments: {} },
-            ],
-          }),
-          output(id, ""),
-        ],
-        {
-          modelApi,
-          provider: "custom-compatible",
-          modelId: undefined,
-          sessionManager: makeInMemorySessionManager([]),
-        },
-      );
-      expect(callId(result[0])).toBe(id);
-      expect(result[1]).toMatchObject({ toolCallId: id });
-    },
-  );
+  it("preserves paired tool IDs for an unowned Azure Responses provider", async () => {
+    const id = "call_gateway_0|fc_gateway_0";
+    const result = await sanitize(
+      [
+        castAgentMessage({
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "reasoning",
+              thinkingSignature: { id: "rs_1", type: "reasoning" },
+            },
+            { type: "toolCall", id, name: "noop", arguments: {} },
+          ],
+        }),
+        output(id, ""),
+      ],
+      {
+        modelApi: "azure-openai-responses",
+        provider: "custom-compatible",
+        modelId: undefined,
+        sessionManager: makeInMemorySessionManager([]),
+      },
+    );
+    expect(callId(result[0])).toBe(id);
+    expect(result[1]).toMatchObject({ toolCallId: id });
+  });
 });

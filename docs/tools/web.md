@@ -89,6 +89,15 @@ is determined when a turn starts.
 Provider setup and search testing require Gateway administrator access. Changes
 use the existing configuration owner; there is no separate search credential store.
 
+When no managed provider is configured, OpenClaw omits `web_search` from the
+agent tool list, including Tool Search and Code Mode catalogs. On turns without
+native search, the agent receives a short setup hint instead. Explicitly disabled
+or policy-denied search does not produce a missing-configuration hint. Configured
+providers with invalid or unavailable credentials keep their normal diagnostics;
+configuration presence is not a health check. Native search and explicitly selected
+key-free providers are unchanged. New tool contexts pick up completed setup; existing
+configured tools continue to read current credentials at execution time.
+
 ## Choosing a provider
 
 <CardGroup cols={2}>
@@ -229,7 +238,7 @@ true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
 titles, error `message`) is stripped of any pre-existing envelope lines and
 re-wrapped exactly once at the core boundary, so no provider metadata can spoof
 the marker. `query` is always the requested query, citation and result URLs
-must parse as http(s), `published` must be ISO-date shaped, URLs are emitted canonicalized, and a
+must parse as http(s), `published` must be ISO-date shaped, URLs are normalized before output, and a
 payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
@@ -312,7 +321,10 @@ the OpenAI provider plugin, the managed search route stays available.
 Managed provider failures return the selected provider's identity and a safe,
 actionable diagnostic. Authentication failures identify the HTTP status and
 ask you to check credentials or select another provider. Upstream response
-bodies are not included in model-facing diagnostics. Automatic selection may
+bodies are not included in model-facing diagnostics. A provider's `TimeoutError`
+is reported as a search timeout, including its effective time limit when supplied
+as numeric metadata. Caller cancellation remains a cancellation rather than a
+provider failure. Automatic selection may
 try another configured provider; explicit provider choices never fall back.
 
 ## Native Codex web search
@@ -344,7 +356,7 @@ namespace.
 - When `allowedDomains` is set, it restricts both hosted `web_search` and
   managed `web_fetch` on turns where native hosted search is active. Turns
   using a managed search provider are unchanged. Automatic managed search
-  fallback also fails closed if hosted search is unavailable.
+  fallback is also blocked if hosted search is unavailable.
 - Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
 

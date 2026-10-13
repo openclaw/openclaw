@@ -1,179 +1,106 @@
-// Tests version fast-path output before the full entrypoint loads.
 import "./test-utils/prepare-compiled-subprocesses.js";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../test/helpers/promise.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../test/helpers/promise.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
+import { resolveCommitHash } from "./infra/git-commit.js";
 
-vi.mock("./cli/argv.js", () => ({
-  isRootHelpInvocation: () => false,
-  isRootVersionInvocation: (argv: string[]) => argv.includes("--version"),
+vi.mock("./version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./version.js")>()),
+  VERSION: "9.9.9-test",
 }));
 
-vi.mock("./cli/container-target.js", () => ({
-  parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
-  resolveCliContainerTarget: (argv: string[], env: NodeJS.ProcessEnv = process.env) =>
-    argv.includes("--container") ? "demo" : (env.OPENCLAW_CONTAINER ?? null),
+vi.mock("./infra/git-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/git-commit.js")>()),
+  resolveCommitHash: vi.fn(),
 }));
 
 describe("entry root version fast path", () => {
-  it("prints version output and skips host handling when container-targeted", async () => {
-    const output = vi.fn();
-    const taggedExit = createDeferred();
-    const plainExit = createDeferred();
-    const exit = vi
-      .fn()
-      .mockImplementationOnce(() => taggedExit.resolve())
-      .mockImplementationOnce(() => plainExit.resolve());
-    const resolveVersion = vi.fn<
-      () => Promise<{
-        VERSION: string;
-        resolveCommitHash: (params: { moduleUrl: string }) => string | null;
-      }>
-    >(async () => ({
-      VERSION: "9.9.9-test",
-      resolveCommitHash: vi.fn(() => "abc1234"),
-    }));
+  const exit = vi.fn<typeof process.exit>();
+  let previousExitCode: typeof process.exitCode;
+  let logging: typeof import("./logging.js");
 
-    expect(
-      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-        output,
-        exit,
-        resolveVersion,
-      }),
-    ).toBe(true);
-    await taggedExit.promise;
-    expect(output).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
-    expect(exit).toHaveBeenCalledWith(0);
-
-    output.mockClear();
-    exit.mockClear();
-    resolveVersion.mockResolvedValueOnce({
-      VERSION: "9.9.9-test",
-      resolveCommitHash: vi.fn(() => null),
-    });
-
-    expect(
-      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-        output,
-        exit,
-        resolveVersion,
-      }),
-    ).toBe(true);
-    await plainExit.promise;
-    expect(output).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
-    expect(exit).toHaveBeenCalledWith(0);
-
-    output.mockClear();
-    exit.mockClear();
-    expect(
-      tryHandleRootVersionFastPath(["node", "openclaw", "--container", "demo", "--version"], {
-        output,
-        exit,
-        resolveVersion,
-      }),
-    ).toBe(false);
-    expect(resolveVersion).toHaveBeenCalledTimes(2);
-    expect(output).not.toHaveBeenCalled();
-    expect(exit).not.toHaveBeenCalled();
-
-    expect(
-      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-        env: { OPENCLAW_CONTAINER: "demo" },
-        output,
-        exit,
-        resolveVersion,
-      }),
-    ).toBe(false);
+  beforeAll(async () => {
+    // Cold diagnostics can compile worker artifacts; prepare them before behavior deadlines.
+    [logging] = await Promise.all([
+      import("./logging.js"),
+      import("./cli/dotenv.js"),
+      import("./logging/json-console-line.js"),
+    ]);
   });
 
-  describe("default error diagnostics", () => {
-    let logging: typeof import("./logging.js");
+  beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    vi.stubEnv("OPENCLAW_CONTAINER", undefined);
+    vi.spyOn(process, "exit").mockImplementation(exit);
+  });
 
-    beforeAll(async () => {
-      // Cold diagnostics can compile worker artifacts; prepare them before behavior deadlines.
-      [logging] = await Promise.all([
-        import("./logging.js"),
-        import("./cli/dotenv.js"),
-        import("./logging/json-console-line.js"),
-      ]);
-    });
+  afterEach(() => {
+    process.exitCode = previousExitCode;
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    logging.resetLogger();
+  });
 
-    it("calls exit(1) via injected exit hook when resolveVersion rejects", async () => {
-      const completed = createDeferred();
-      const exit = vi.fn(() => completed.resolve());
-      const output = vi.fn();
-      const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-      const resolveVersion = vi
-        .fn<() => Promise<never>>()
-        .mockRejectedValue(new Error("version resolution failed"));
+  it.each([
+    { commit: "abc1234", expected: "OpenClaw 9.9.9-test (abc1234)" },
+    { commit: null, expected: "OpenClaw 9.9.9-test" },
+  ])("prints version output with commit $commit", async ({ commit, expected }) => {
+    const printed = createDeferred();
+    const output = vi.spyOn(console, "log").mockImplementation(() => printed.resolve());
+    vi.mocked(resolveCommitHash).mockReturnValue(commit);
 
-      try {
-        const handled = tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-          output,
-          exit,
-          resolveVersion,
-        });
-        await withTestTimeout(completed.promise, 10_000, "version failure did not exit");
-        expect(handled).toBe(true);
-        expect(resolveVersion).toHaveBeenCalledTimes(1);
-        expect(exit).toHaveBeenCalledWith(1);
-        expect(output).not.toHaveBeenCalled();
-        expect(exit).toHaveBeenCalledTimes(1);
-        expect(stderrSpy.mock.calls.map(([value]) => String(value)).join("\n")).toContain(
-          "version resolution failed",
-        );
-      } finally {
-        stderrSpy.mockRestore();
-      }
-    });
+    expect(tryHandleRootVersionFastPath(["node", "openclaw", "--version"])).toBe(true);
+    await printed.promise;
 
-    it("structures version-resolution failures for JSON console output", async () => {
-      const completed = createDeferred();
-      const exit = vi.fn(() => completed.resolve());
-      const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-      const resolveVersion = vi
-        .fn<() => Promise<never>>()
-        .mockRejectedValue(new Error("version resolution failed"));
-      logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    expect(output).toHaveBeenCalledWith(expected);
+    expect(process.exitCode).toBe(0);
+    expect(exit).not.toHaveBeenCalled();
+  });
 
-      try {
-        const handled = tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-          exit,
-          resolveVersion,
-        });
-        await withTestTimeout(completed.promise, 10_000, "JSON version failure did not exit");
-        expect(handled).toBe(true);
-        expect(exit).toHaveBeenCalledWith(1);
-        const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+  it("skips host handling when container-targeted", () => {
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(
+      tryHandleRootVersionFastPath(["node", "openclaw", "--container", "demo", "--version"]),
+    ).toBe(false);
+
+    vi.stubEnv("OPENCLAW_CONTAINER", "demo");
+    expect(tryHandleRootVersionFastPath(["node", "openclaw", "--version"])).toBe(false);
+    expect(resolveCommitHash).not.toHaveBeenCalled();
+    expect(output).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it.each(["pretty", "json"] as const)(
+    "reports version-resolution failures with %s console output",
+    async (consoleStyle) => {
+      const printed = createDeferred();
+      const output = vi.spyOn(console, "log").mockImplementation(() => {});
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+        printed.resolve();
+        return true;
+      });
+      vi.mocked(resolveCommitHash).mockImplementation(() => {
+        throw new Error("version resolution failed");
+      });
+      logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle });
+
+      expect(tryHandleRootVersionFastPath(["node", "openclaw", "--version"])).toBe(true);
+      await printed.promise;
+
+      expect(process.exitCode).toBe(1);
+      expect(exit).not.toHaveBeenCalled();
+      expect(output).not.toHaveBeenCalled();
+      const line = stderr.mock.calls.map(([value]) => String(value)).join("");
+      if (consoleStyle === "json") {
         expect(JSON.parse(line)).toMatchObject({
           level: "error",
           message: expect.stringContaining("version resolution failed"),
         });
-      } finally {
-        logging.resetLogger();
-        stderrSpy.mockRestore();
+      } else {
+        expect(line).toContain("version resolution failed");
       }
-    });
-  });
-
-  it("calls injected onError when provided and resolveVersion rejects", async () => {
-    const exit = vi.fn();
-    const completed = createDeferred();
-    const onError = vi.fn(() => completed.resolve());
-    const resolveVersion = vi
-      .fn<() => Promise<never>>()
-      .mockRejectedValue(new Error("version resolution failed"));
-
-    expect(
-      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-        exit,
-        onError,
-        resolveVersion,
-      }),
-    ).toBe(true);
-    await completed.promise;
-    expect(resolveVersion).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(exit).not.toHaveBeenCalled();
-  });
+    },
+  );
 });

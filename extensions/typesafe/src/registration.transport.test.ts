@@ -101,6 +101,7 @@ it("preserves mixed answers, rounded estimates, and the selected model through r
 });
 
 it.each([
+  [400, "unsupported-input"],
   [401, "authentication"],
   [403, "authentication"],
   [413, "unsupported-input"],

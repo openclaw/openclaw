@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
@@ -152,42 +153,25 @@ export async function waitForChromeMcpOperation<T>(
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
-  if (!signal && !timeout) {
-    return await pending;
+  const abortError = (aborted: AbortSignal) =>
+    toErrorObject(aborted.reason ?? new Error("aborted"), "Non-Error rejection");
+  if (!timeout) {
+    return await racePromiseWithAbortSignal(pending, signal, abortError);
   }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  try {
-    const racers = [pending];
-    if (timeout) {
-      racers.push(
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(timeout.error()), timeout.ms);
-          if (timeout.unref) {
-            timer.unref?.();
-          }
-        }),
-      );
-    }
-    if (signal) {
-      racers.push(
-        new Promise<never>((_, reject) => {
-          abortListener = () =>
-            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-          signal.addEventListener("abort", abortListener, { once: true });
-        }),
-      );
-    }
-    return await Promise.race(racers);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-  }
+  return await raceWithTimeout(
+    pending,
+    timeout.ms,
+    () => {
+      throw timeout.error();
+    },
+    {
+      ref: !timeout.unref,
+      signal,
+      onAbort: (aborted) => {
+        throw abortError(aborted);
+      },
+    },
+  );
 }
 
 export function createChromeMcpSession(

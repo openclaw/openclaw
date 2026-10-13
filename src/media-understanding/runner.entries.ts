@@ -2,13 +2,9 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeNullableString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
@@ -18,16 +14,6 @@ import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
 } from "../../packages/media-understanding-common/src/video.js";
-import {
-  collectProviderApiKeysForExecution,
-  executeWithApiKeyRotation,
-} from "../agents/api-key-rotation.js";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
-import {
-  mergeModelProviderRequestOverrides,
-  sanitizeConfiguredModelProviderRequest,
-  sanitizeConfiguredProviderRequest,
-} from "../agents/provider-request-config.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -49,10 +35,8 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
-import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import {
@@ -64,7 +48,13 @@ import {
   recordLocalAudioBackendObservation,
   resolveRequestedLocalAudioBackend,
 } from "./local-audio.js";
-import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
+import {
+  assertMediaExecutionCurrent,
+  executeProviderRequest,
+  resolveProviderExecutionAuth,
+  resolveProviderRequestContext,
+  type MediaExecutionContext,
+} from "./provider-execution.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
@@ -80,27 +70,6 @@ import type {
 } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
-
-function sanitizeProviderHeaders(
-  headers: Record<string, unknown> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    // Intentionally preserve marker-shaped values here. This path handles
-    // explicit config/runtime provider headers, where literal values may
-    // legitimately match marker patterns; discovered models.json entries are
-    // sanitized separately in the model registry path.
-    next[key] = value;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
-}
 
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
@@ -151,11 +120,6 @@ function commandBase(command: string): string {
   return path.parse(command).name;
 }
 
-function isAntigravityCliCommand(command: string): boolean {
-  const commandId = commandBase(command);
-  return commandId === "agy" || commandId === "antigravity";
-}
-
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (const [index, arg] of args.entries()) {
     if (keys.includes(arg)) {
@@ -177,10 +141,6 @@ function findArgValue(args: string[], keys: string[]): string | undefined {
   return undefined;
 }
 
-function hasArg(args: string[], keys: string[]): boolean {
-  return args.some((arg) => keys.includes(arg));
-}
-
 function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
   const outputDir = findArgValue(args, ["--output_dir", "-o"]);
   if (!outputDir) {
@@ -194,7 +154,7 @@ function resolveWhisperOutputPath(args: string[], mediaPath: string): string | n
 }
 
 function resolveWhisperCppOutputPath(args: string[]): string | null {
-  if (!hasArg(args, ["-otxt", "--output-txt"])) {
+  if (!args.some((arg) => arg === "-otxt" || arg === "--output-txt")) {
     return null;
   }
   const outputBase = findArgValue(args, ["-of", "--output-file"]);
@@ -275,6 +235,7 @@ async function resolveCliMediaPath(params: {
   command: string;
   mediaPath: string;
   outputDir: string;
+  execution?: MediaExecutionContext;
 }): Promise<string> {
   const commandId = commandBase(params.command);
   if (params.capability !== "audio" || commandId !== "whisper-cli") {
@@ -292,6 +253,7 @@ async function resolveCliMediaPath(params: {
     rootDir: params.outputDir,
     path: path.basename(wavPath),
     write: async (outputPath) => {
+      assertMediaExecutionCurrent(params.execution);
       await runFfmpeg([
         "-y",
         "-i",
@@ -313,11 +275,11 @@ async function resolveCliMediaPath(params: {
 
 type ProviderQuery = Record<string, string | number | boolean>;
 
-function resolveProviderQuery(params: {
-  providerId: string;
-  config?: MediaUnderstandingConfig;
-  entry: MediaUnderstandingModelConfig;
-}): ProviderQuery | undefined {
+function resolveProviderQuery(
+  params: Pick<Parameters<typeof runProviderEntry>[0], "config" | "entry"> & {
+    providerId: string;
+  },
+): ProviderQuery | undefined {
   const { providerId, config, entry } = params;
   const query: ProviderQuery = {};
   for (const [key, value] of Object.entries({
@@ -379,136 +341,7 @@ export function buildModelDecision(params: {
   };
 }
 
-export type MediaRequestOverrides = {
-  prompt?: string;
-  language?: string;
-};
-
-type ProviderExecutionAuth =
-  | {
-      kind: "api-key";
-      apiKeys: string[];
-      source?: string;
-    }
-  | {
-      kind: "none";
-      source: string;
-    };
-
-function executeProviderRequest<T>(
-  provider: string,
-  auth: ProviderExecutionAuth,
-  execute: (auth: Pick<AudioTranscriptionRequest, "apiKey" | "auth">) => Promise<T>,
-): Promise<T> {
-  return auth.kind === "api-key"
-    ? executeWithApiKeyRotation({
-        provider,
-        apiKeys: auth.apiKeys,
-        transientRetry: providerOperationRetryConfig("read"),
-        execute: (apiKey) =>
-          execute({
-            apiKey,
-            auth: { kind: "api-key", apiKey, source: auth.source },
-          }),
-      })
-    : execute({
-        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        auth: { kind: "none", source: auth.source ?? `provider:${provider}` },
-      });
-}
-
-async function resolveProviderExecutionAuth(params: {
-  capability: MediaUnderstandingCapability;
-  providerId: string;
-  provider?: MediaUnderstandingProvider;
-  cfg: OpenClawConfig;
-  entry: MediaUnderstandingModelConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<ProviderExecutionAuth> {
-  const apiKeyAuth = (apiKey: string, source?: string): ProviderExecutionAuth => ({
-    kind: "api-key",
-    apiKeys: collectProviderApiKeysForExecution({
-      provider: params.providerId,
-      primaryApiKey: apiKey,
-    }),
-    source,
-  });
-  const providerConfig = findNormalizedProviderValue(
-    params.cfg.models?.providers,
-    params.providerId,
-  );
-  const literalApiKey = normalizeNullableString(
-    params.cfg.models?.providers?.[params.providerId]?.apiKey,
-  );
-  if (literalApiKey) {
-    return apiKeyAuth(literalApiKey, `models.providers.${params.providerId}.apiKey`);
-  }
-  const { isProviderAuthError, requireApiKey, resolveApiKeyForProviderCore } =
-    await loadModelAuth();
-  try {
-    const auth = await resolveApiKeyForProviderCore({
-      provider: params.providerId,
-      cfg: params.cfg,
-      profileId: params.entry.profile,
-      preferredProfile: params.entry.preferredProfile,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      modelApi: resolveOpenAiAudioAuthModelApi({
-        capability: params.capability,
-        providerId: params.providerId,
-      }),
-    });
-    return apiKeyAuth(requireApiKey(auth, params.providerId), auth.source);
-  } catch (err) {
-    if (
-      !isProviderAuthError(err, "missing-provider-auth") &&
-      !isProviderAuthError(err, "missing-api-key")
-    ) {
-      throw err;
-    }
-    const context = {
-      config: params.cfg,
-      provider: params.providerId,
-      providerConfig,
-    };
-    const providerAuth = params.provider?.resolveAuth?.(context);
-    if (providerAuth?.kind === "none") {
-      return providerAuth;
-    }
-    const keyAuth = providerAuth ?? params.provider?.resolveSyntheticAuth?.(context);
-    const apiKey = keyAuth?.apiKey.trim();
-    if (apiKey) {
-      return apiKeyAuth(apiKey, keyAuth?.source);
-    }
-    throw err;
-  }
-}
-
-function resolveProviderRequestContext(params: {
-  providerId: string;
-  cfg: OpenClawConfig;
-  entry: MediaUnderstandingModelConfig;
-  config?: MediaUnderstandingConfig;
-}) {
-  const providerConfig = findNormalizedProviderValue(
-    params.cfg.models?.providers,
-    params.providerId,
-  );
-  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
-  const mergedHeaders = {
-    ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
-    ...sanitizeProviderHeaders(params.config?.headers as Record<string, unknown> | undefined),
-    ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
-  };
-  const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  const request = mergeModelProviderRequestOverrides(
-    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-    sanitizeConfiguredProviderRequest(params.config?.request),
-    sanitizeConfiguredProviderRequest(params.entry.request),
-  );
-  return { baseUrl, headers, request };
-}
+export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language">;
 
 /** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
@@ -611,7 +444,6 @@ export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
-  ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
   agentId?: string;
@@ -621,7 +453,9 @@ export async function runProviderEntry(params: {
   config?: MediaUnderstandingConfig;
   secretOwnerId?: string;
   request?: MediaRequestOverrides;
+  execution?: MediaExecutionContext;
 }): Promise<Result<MediaUnderstandingOutput | null, unknown>> {
+  assertMediaExecutionCurrent(params.execution);
   const { entry, capability, cfg } = params;
   const providerIdRaw = entry.provider?.trim();
   if (!providerIdRaw) {
@@ -693,6 +527,7 @@ export async function runProviderEntry(params: {
       cfg: params.cfg,
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
+    assertMediaExecutionCurrent(params.execution);
     const result = await describeImage(imageInput);
     return ok({
       kind: "image.description",
@@ -755,9 +590,11 @@ export async function runProviderEntry(params: {
       query: providerQuery,
       timeoutMs,
       fetchFn,
+      signal: params.execution?.signal,
     };
     let result: AudioTranscriptionResult;
     if (provider.transcribeAudioWithContext) {
+      assertMediaExecutionCurrent(params.execution);
       const attempt = await provider.transcribeAudioWithContext({
         ...input,
         cfg,
@@ -780,8 +617,11 @@ export async function runProviderEntry(params: {
         providerId,
         provider,
       });
-      result = await executeProviderRequest(providerId, auth, (requestAuth) =>
-        transcribeAudio({ ...input, ...requestAuth }),
+      result = await executeProviderRequest(
+        providerId,
+        auth,
+        (requestAuth) => transcribeAudio({ ...input, ...requestAuth }),
+        params.execution,
       );
     }
     if (isTranscriptArtifactText(result.text)) {
@@ -832,20 +672,25 @@ export async function runProviderEntry(params: {
       providerRegistry: params.providerRegistry,
     }) ||
     entry.model;
-  const result = await executeProviderRequest(providerId, auth, (requestAuth) =>
-    describeVideo({
-      buffer: media.buffer,
-      fileName: media.fileName,
-      mime: media.mime,
-      ...requestAuth,
-      baseUrl,
-      headers,
-      request,
-      model,
-      prompt,
-      timeoutMs,
-      fetchFn,
-    }),
+  const result = await executeProviderRequest(
+    providerId,
+    auth,
+    (requestAuth) =>
+      describeVideo({
+        buffer: media.buffer,
+        fileName: media.fileName,
+        mime: media.mime,
+        ...requestAuth,
+        baseUrl,
+        headers,
+        request,
+        model,
+        prompt,
+        timeoutMs,
+        fetchFn,
+        signal: params.execution?.signal,
+      }),
+    params.execution,
   );
   return ok({
     kind: "video.description",
@@ -856,16 +701,13 @@ export async function runProviderEntry(params: {
   });
 }
 
-export async function runCliEntry(params: {
-  capability: MediaUnderstandingCapability;
-  entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  attachment: MediaAttachment;
-  cache: MediaAttachmentCache;
-  config?: MediaUnderstandingConfig;
-  request?: MediaRequestOverrides;
-}): Promise<MediaUnderstandingOutput | null> {
+export async function runCliEntry(
+  params: Pick<
+    Parameters<typeof runProviderEntry>[0],
+    "capability" | "entry" | "cfg" | "cache" | "config" | "request" | "execution"
+  > & { ctx: MsgContext; attachment: MediaAttachment },
+): Promise<MediaUnderstandingOutput | null> {
+  assertMediaExecutionCurrent(params.execution);
   const { entry, capability, ctx } = params;
   const attachmentIndex = params.attachment.index;
   const cli = resolveCliModelEntry(entry);
@@ -893,6 +735,7 @@ export async function runCliEntry(params: {
       command,
       mediaPath: attachmentPath,
       outputDir,
+      execution: params.execution,
     });
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
@@ -927,10 +770,14 @@ export async function runCliEntry(params: {
     if (shouldLogVerbose()) {
       logVerbose(`Media understanding via CLI: ${[command, ...argv].join(" ")}`);
     }
+    assertMediaExecutionCurrent(params.execution);
     const { stdout, stderr } = await runExec(command, argv, {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
+      signal: params.execution?.signal,
+      cwd: ["agy", "antigravity"].includes(commandBase(command))
+        ? path.dirname(mediaPath)
+        : undefined,
     });
     const requestedBackend =
       capability === "audio"

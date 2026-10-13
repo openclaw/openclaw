@@ -64,20 +64,15 @@ function normalizeEndpoint(ssh: WorkerSshEndpoint): {
   };
 }
 
-function pinnedKnownHostsLine(params: {
-  host: string;
-  port: number;
-  pinnedHostKey: string;
-}): string {
+function pinnedKnownHosts(host: string, ports: readonly number[], pinnedHostKey: string): string {
   if (
-    params.pinnedHostKey.length > MAX_HOST_KEY_LENGTH ||
-    params.pinnedHostKey.includes("\n") ||
-    params.pinnedHostKey.includes("\r")
+    pinnedHostKey.length > MAX_HOST_KEY_LENGTH ||
+    pinnedHostKey.includes("\n") ||
+    pinnedHostKey.includes("\r")
   ) {
     throw new Error("Pinned worker SSH host key must contain exactly one public key");
   }
-  const trimmed = params.pinnedHostKey.trim();
-  const tokens = trimmed.split(/\s+/u);
+  const tokens = pinnedHostKey.trim().split(/\s+/u);
   const [algorithm, encodedKey] = tokens;
   if (
     tokens.length !== 2 ||
@@ -89,8 +84,9 @@ function pinnedKnownHostsLine(params: {
   ) {
     throw new Error("Pinned worker SSH host key must use OpenSSH public-key format");
   }
-  const hostLabel = params.port === 22 ? params.host : `[${params.host}]:${params.port}`;
-  return `${hostLabel} ${algorithm} ${encodedKey}\n`;
+  return ports
+    .map((port) => `${port === 22 ? host : `[${host}]:${port}`} ${algorithm} ${encodedKey}\n`)
+    .join("");
 }
 
 /** Adapts a provisioned, pinned worker endpoint to the SSH sandbox transport contract. */
@@ -107,15 +103,6 @@ export function resolveWorkerSshSandboxSettings(params: {
   knownHostsData: string;
 } {
   const endpoint = normalizeEndpoint(params.ssh);
-  const knownHostsData = [endpoint.port, ...(params.ssh.fallbackPorts ?? [])]
-    .map((port) =>
-      pinnedKnownHostsLine({
-        host: endpoint.host,
-        port,
-        pinnedHostKey: params.ssh.hostKey,
-      }),
-    )
-    .join("");
   return {
     target: `${endpoint.sshTarget}:${endpoint.port}`,
     command: "ssh",
@@ -124,7 +111,11 @@ export function resolveWorkerSshSandboxSettings(params: {
     ...(params.identity.kind === "path"
       ? { identityFile: params.identity.path }
       : { identityData: params.identity.contents }),
-    knownHostsData,
+    knownHostsData: pinnedKnownHosts(
+      endpoint.host,
+      [endpoint.port, ...(params.ssh.fallbackPorts ?? [])],
+      params.ssh.hostKey,
+    ),
   };
 }
 
@@ -152,15 +143,7 @@ export async function prepareWorkerSsh(params: {
   const pinnedHostKey = params.pinnedHostKey;
   const endpoint = normalizeEndpoint(params.ssh);
   const advertisedPorts = [endpoint.port, ...(params.ssh.fallbackPorts ?? [])];
-  const knownHosts = advertisedPorts
-    .map((port) =>
-      pinnedKnownHostsLine({
-        host: endpoint.host,
-        port,
-        pinnedHostKey,
-      }),
-    )
-    .join("");
+  const knownHosts = pinnedKnownHosts(endpoint.host, advertisedPorts, pinnedHostKey);
   const temporaryDir = await fs.mkdtemp(
     path.resolve(
       resolvePreferredOpenClawTmpDir(),
@@ -309,6 +292,34 @@ export function workerSshOptions(
     "ControlMaster=no",
     "-o",
     "ControlPath=none",
+  ];
+}
+
+export function workerSshCommandPrefix(
+  prepared: PreparedWorkerSsh,
+  port = prepared.port,
+): string[] {
+  return [
+    "ssh",
+    ...workerSshOptions(prepared, { forwarding: "disabled" }),
+    "-a",
+    "-x",
+    "-T",
+    "-p",
+    String(port),
+  ];
+}
+
+export function workerSshCommand(
+  prepared: PreparedWorkerSsh,
+  argv: readonly string[],
+  port = prepared.port,
+): string[] {
+  return [
+    ...workerSshCommandPrefix(prepared, port),
+    "--",
+    prepared.sshTarget,
+    workerSshRemoteCommand(argv),
   ];
 }
 

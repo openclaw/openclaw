@@ -13,11 +13,7 @@ import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
-import {
-  createSessionWriteObservation,
-  type createSessionRowProvenance,
-} from "../../lib/sessions/session-row-provenance.ts";
-import { matchesExistingSession } from "../../lib/sessions/session-row-reconcile.ts";
+import type { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import type { CurrentWorkChange } from "./current-work.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
@@ -34,22 +30,6 @@ export type SessionActivityFilters = {
   personId: string | null;
   query: string;
   time: ActivityTimeFilter;
-};
-
-type ActivityPerson = PresenceViewer & { count: number };
-
-type SessionActivityDay = {
-  key: string;
-  timestamp: number | null;
-  sessions: readonly GatewaySessionRow[];
-};
-
-type SessionActivityProjection = {
-  days: readonly SessionActivityDay[];
-  matchedCount: number;
-  people: readonly ActivityPerson[];
-  sessions: readonly GatewaySessionRow[];
-  timeCount: number;
 };
 
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
@@ -125,7 +105,7 @@ function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): num
 
 type ActivityRowProvenance = ReturnType<typeof createSessionRowProvenance>;
 
-/** Reads own membership; field receipts preserve observations made while the read was pending. */
+/** List reads own membership; events update the held window until the next read. */
 export function reconcileSessionActivityRead(
   incoming: SessionsListResult,
   previous: SessionsListResult | undefined,
@@ -142,10 +122,7 @@ export function reconcileSessionActivityRead(
   const sessions = incoming.sessions.map((row) => {
     const identity = provenance.identity(row);
     const existing = identity ? held.get(identity) : undefined;
-    provenance.observeReadRow(row, revision, row.agentId, existing ? [existing] : []);
-    if (identity) {
-      held.delete(identity);
-    }
+    provenance.observeReadRow(row, revision, row.agentId);
     const merged = existing ? provenance.mergeRow(existing, row, row.agentId) : row;
     orderChanged ||= sessionActivityTimestamp(merged) !== sessionActivityTimestamp(row);
     return merged;
@@ -155,15 +132,7 @@ export function reconcileSessionActivityRead(
       ...incoming,
       sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
     },
-    requiresRefresh: [...held.values()].some((row) => {
-      const sample = provenance.fieldObservation(row, "updatedAt").source.snapshotAt;
-      return (
-        (sample === undefined ? provenance.hasNewerFacts(row, revision) : sample > incoming.ts) &&
-        !incoming.sessions.some((replacement) =>
-          matchesExistingSession(replacement, row.key, provenance.owner(row)),
-        )
-      );
-    }),
+    requiresRefresh: false,
   };
 }
 
@@ -182,7 +151,7 @@ export function reconcileSessionActivity(
       !canApplySessionListSnapshot(
         nextResult,
         change.snapshot,
-        { archivedFilter: "all", limit: 100, excludeSubagents: true },
+        { archivedFilter: "all", limit: 100, excludeSubagents: true, excludeDock: true },
         "activity",
       )
     ) {
@@ -193,17 +162,13 @@ export function reconcileSessionActivity(
       nextResult,
       change.snapshot,
       { archivedFilter: "all" },
-      (row, existing, fields, info) => {
-        provenance.inheritRow(row, existing);
-        provenance.observeFields(
-          row,
-          (info.isAncestorReference ? provenance.fieldNames(existing) : fields).filter(
-            (field) => field !== "activitySummary" || info.hasActivitySummary,
-          ),
-          createSessionWriteObservation(revision, info.updatedAt, undefined, info.snapshotAt),
-          info.agentId,
-        );
-        return provenance.mergeRow(existing, row, info.agentId);
+      (row, existing, _fields, info) => {
+        provenance.observeReadRow(row, revision, info.agentId);
+        return !info.hasActivitySummary &&
+          row.activitySummary === undefined &&
+          existing.activitySummary
+          ? provenance.inheritRow({ ...row, activitySummary: existing.activitySummary }, row)
+          : row;
       },
     ).result;
     if (next) {
@@ -236,13 +201,7 @@ function dayKey(timestamp: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function dayStart(timestamp: number): number {
-  return new Date(timestamp).setHours(0, 0, 0, 0);
-}
-
-export function projectSessionActivity(
-  result: SessionsListResult | undefined,
-): SessionActivityProjection {
+export function projectSessionActivity(result: SessionsListResult | undefined) {
   const visible = result?.sessions ?? [];
   const people = (result?.people ?? []).map((person) => ({
     id: person.identity.id,
@@ -264,7 +223,10 @@ export function projectSessionActivity(
   }
   const days = [...grouped.entries()].map(([key, sessions]) => ({
     key,
-    timestamp: key === "unknown" ? null : dayStart(sessionActivityTimestamp(sessions[0]!)),
+    timestamp:
+      key === "unknown"
+        ? null
+        : new Date(sessionActivityTimestamp(sessions[0]!)).setHours(0, 0, 0, 0),
     sessions,
   }));
   return {

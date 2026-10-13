@@ -35,6 +35,9 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 let spawns = 0;
+const diagnostics = { warnings: [], errors: [] };
+console.warn = (...args) => diagnostics.warnings.push(args.join(" "));
+console.error = (...args) => diagnostics.errors.push(args.join(" "));
 childProcess.spawn = childProcess.spawnSync = () => {
   spawns++;
   throw new Error("Unexpected recursive config reader");
@@ -59,7 +62,7 @@ assert.equal(globalThis.readerImports, 1);
 await assert.rejects(parent.readConfigFileSnapshot(), { code: "candidate-config-read-recursion" });
 assert.throws(() => parent.createConfigIO({ env: {} }).loadConfig(), { code: "candidate-config-read-recursion" });
 assert.equal(spawns, 0);
-console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns }));
+console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns, diagnostics }));
 `;
   const result = spawnSync(node, ["--input-type=module", "--eval", script], {
     encoding: "utf8",
@@ -73,8 +76,60 @@ console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns }))
     },
   });
   expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({ readerImports: 1, spawns: 0 });
-  expect(result.stderr).toContain("[update:warning:candidate-config-read-recursion]");
+  expect(JSON.parse(result.stdout)).toEqual({
+    readerImports: 1,
+    spawns: 0,
+    diagnostics: {
+      warnings: [
+        "[update:warning:candidate-config-read-recursion] A config reader child cannot launch another reader.",
+        "[update:warning:candidate-config-read-recursion] A config reader child cannot launch another reader.",
+      ],
+      errors: [],
+    },
+  });
+  expect(result.stderr).toBe("");
+});
+
+it("reports a reader exit without a result while withholding the reader's stderr", async () => {
+  const root = tempDirs.make("openclaw-update-config-exit-");
+  const dist = path.join(root, "dist");
+  await fs.mkdir(dist);
+  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+  await fs.writeFile(
+    path.join(dist, "io.runtime-Candidate.mjs"),
+    `if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
+  process.stderr.write("synthetic-config-secret\\n");
+  process.exit(7);
+}
+export function createConfigIO() { return { loadConfig: () => ({ valid: true }) }; }
+export async function readConfigFileSnapshot() { return { valid: true }; }
+export function readCurrentConfigForPolicyCheck() { return { valid: true }; }
+`,
+  );
+  writeStableRootRuntimeAliases({ rootDir: root });
+  const script = `
+import assert from "node:assert/strict";
+const warnings = [];
+console.warn = (...args) => warnings.push(args.join(" "));
+const reader = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+await assert.rejects(reader.readConfigFileSnapshot(), { code: "candidate-config-read-failed" });
+assert.throws(() => reader.readCurrentConfigForPolicyCheck(), { code: "candidate-config-read-failed" });
+console.log(JSON.stringify(warnings));
+`;
+  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual(
+    Array.from(
+      { length: 2 },
+      () =>
+        "[update:warning:candidate-config-read-failed] Candidate config read failed: reader process exited with code 7 without a result. The existing service definition was left unchanged. Retry with the updated CLI.",
+    ),
+  );
 });
 
 it("reads candidate config after a package swap without reusing the driver's dependencies", async () => {
@@ -143,6 +198,9 @@ const aliasPath = ${JSON.stringify(path.join(dist, "io.runtime.js"))};
 const candidatePath = ${JSON.stringify(path.join(dist, "io.runtime-Candidate.mjs"))};
 const aliasBytes = await fs.readFile(aliasPath);
 const candidateBytes = await fs.readFile(candidatePath);
+const diagnostics = { warnings: [], errors: [] };
+console.warn = (...args) => diagnostics.warnings.push(args.join(" "));
+console.error = (...args) => diagnostics.errors.push(args.join(" "));
 const driverDependency = await import(dependency);
 assert.equal(driverDependency.generation, 1);
 await fs.writeFile(new URL(dependency), "export const generation = 2; export function probePathCaseInsensitiveSync() { return generation; }\\n");
@@ -175,6 +233,7 @@ await fs.writeFile(candidatePath, candidateBytes);
 await fs.writeFile(aliasPath, aliasBytes);
 await fs.writeFile(new URL(dependency), "export function probePathCaseInsensitiveSync() { return 2; }\\n");
 assert.equal((await io.readBestEffortConfig()).generation, 2);
+console.log(JSON.stringify(diagnostics));
 `;
   const result = spawnSync(node, ["--input-type=module", "--eval", script], {
     cwd: path.dirname(root),
@@ -182,8 +241,14 @@ assert.equal((await io.readBestEffortConfig()).generation, 2);
     timeout: 30_000,
     env: { ...process.env, NODE_OPTIONS: "", NODE_DISABLE_COMPILE_CACHE: "1" },
   });
-  expect(result.stderr).toContain("[update:warning:candidate-config-read-failed]");
   expect(result.status).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual({
+    warnings: [
+      `[update:warning:candidate-config-read-failed] Candidate config read failed: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}. The existing service definition was left unchanged. Retry with the updated CLI.`,
+    ],
+    errors: [],
+  });
 
   for (const { marker, entry } of [
     { marker: "0", entry: path.join(dist, "io.runtime.js") },

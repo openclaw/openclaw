@@ -69,7 +69,6 @@ export async function prepareMSTeamsInboundContent(params: {
           },
           log: params.log,
           deadline: params.deadline,
-          preserveFilenames: false,
         }),
     });
   } catch (err) {

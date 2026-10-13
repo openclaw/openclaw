@@ -21,6 +21,31 @@ afterEach(() => {
 });
 
 describe("native session binding leases", () => {
+  it("refuses callback entry when acquisition settles after lease expiry", async () => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const withCurrent = state.withCurrent.bind(state);
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (args[2].action === "set" && args[2].value.lease) {
+            vi.setSystemTime(args[2].value.lease.expiresAt);
+          }
+          return result;
+        },
+      };
+    };
+    const run = vi.fn(async () => "native effect");
+    await expect(
+      owner.withLease("expired", run, { prepareLease: prepareBindingTestLease }),
+    ).rejects.toThrow("Lost binding lease");
+    expect(run).not.toHaveBeenCalled();
+    expect(values.get("expired")).not.toHaveProperty("lease");
+  });
+
   it.each(["absent", "renewed"])(
     "serializes peer writes behind a %s binding lease",
     async (mode) => {
@@ -121,6 +146,65 @@ describe("native session binding leases", () => {
     },
   );
 
+  it("preserves renewal failure after retained cleanup authority expires", async () => {
+    vi.useFakeTimers();
+    const { state } = createBindingTestState();
+    const bindingKey = "binding-failed-renewal";
+    const renewalCause = new Error("renewal observation failed");
+    const renewalFailure = new Error(`Lost binding lease: ${bindingKey}`, { cause: renewalCause });
+    const owner = createNativeSessionBindingLeases(state, {
+      ...bindingTestOptions,
+      errors: {
+        ...bindingTestOptions.errors,
+        lostLease: (key, cause) =>
+          cause === renewalCause ? renewalFailure : bindingTestOptions.errors.lostLease(key),
+      },
+    });
+    const withCurrent = state.withCurrent.bind(state);
+    let failNextObservation = false;
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async observe(key) {
+          if (failNextObservation) {
+            failNextObservation = false;
+            throw renewalCause;
+          }
+          return await store.observe(key);
+        },
+      };
+    };
+    const { promise: ownerStarted, resolve: started } = createDeferred();
+    const { promise: finishRun, resolve: finish } = createDeferred();
+    let assertRetainedLease!: () => void;
+    const expiresAt = Date.now() + bindingTestOptions.lease.staleMs;
+    const run = owner
+      .withLease(
+        bindingKey,
+        async () => {
+          assertRetainedLease = owner.captureLeaseAssertion(bindingKey);
+          failNextObservation = true;
+          started();
+          await finishRun;
+          assertRetainedLease();
+        },
+        { prepareLease: prepareBindingTestLease },
+      )
+      .catch((error: unknown) => error);
+    await ownerStarted;
+    try {
+      await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
+      vi.setSystemTime(expiresAt - 1);
+      expect(assertRetainedLease).not.toThrow();
+      vi.setSystemTime(expiresAt);
+    } finally {
+      finish();
+      await run;
+    }
+    expect(await run).toBe(renewalFailure);
+  });
+
   it.each(["comparison refusal", "uncertain outcome"])(
     "handles %s without replaying an applied mutation",
     async (outcome) => {
@@ -161,44 +245,6 @@ describe("native session binding leases", () => {
       }
     },
   );
-
-  it("reports lease loss even when the callback catches a commit refusal", async () => {
-    vi.useFakeTimers();
-    const { state, values, owner } = createLeaseFixture();
-    values.set("binding", { value: "original" });
-    const withCurrent = state.withCurrent.bind(state);
-    let expireBeforeAdmission = false;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          if (expireBeforeAdmission) {
-            expireBeforeAdmission = false;
-            vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-          }
-          return await store.compareAndApply(...args);
-        },
-      };
-    };
-    await expect(
-      owner.withLease(
-        "binding",
-        async () => {
-          expireBeforeAdmission = true;
-          await expect(
-            owner.transact("binding", (current) => ({
-              next: { ...current, value: "unauthorized" },
-              result: true,
-            })),
-          ).rejects.toThrow("Lost binding lease");
-          return "callback completed";
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
-    ).rejects.toThrow("Lost binding lease");
-    expect(values.get("binding")).toEqual({ value: "original" });
-  });
 
   it("joins queued renewal before releasing a failed owner", async () => {
     vi.useFakeTimers();

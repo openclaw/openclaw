@@ -45,6 +45,7 @@ import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -319,6 +320,16 @@ async function resumePostCoreUpdateInternal(
           );
           recordDoctorWarnings();
         };
+        const doctorOptions = () => ({
+          opts: params.opts,
+          assertCurrent,
+          root: params.root,
+          yes: params.opts.yes === true,
+          json: params.opts.json === true,
+          timeoutMs: params.timeoutMs,
+          onWarnings: onDoctorWarnings,
+          onDoctorStep,
+        });
         const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
         assertCurrent?.();
         maintenance = await beginDoctorMaintenance({
@@ -331,29 +342,19 @@ async function resumePostCoreUpdateInternal(
         assertCurrent?.();
         // Each fresh Doctor holds its own database fences after admission.
         await maintenance?.releaseState();
-        await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-          await completeSourceUpdateRuntime({
-            root: params.root,
-            sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
-            timeoutMs: params.timeoutMs,
-            lease,
-            beforePersistentEffect: assertCurrent,
-          });
+        await completeSourceUpdateRuntime({
+          root: params.root,
+          sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
+          timeoutMs: params.timeoutMs,
+          assertCurrent,
         });
         assertCurrent?.();
         if (!parentOwnsCompletion) {
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
           const warning = await runUpdateFinalizationDoctorInFreshProcess({
-            opts: params.opts,
+            ...doctorOptions(),
             phase: "post-plugin",
-            assertCurrent,
-            root: params.root,
-            yes: params.opts.yes === true,
-            json: params.opts.json === true,
-            timeoutMs: params.timeoutMs,
-            onWarnings: onDoctorWarnings,
-            onDoctorStep,
           });
           if (warning) {
             doctorWarnings.push(warning);
@@ -361,7 +362,7 @@ async function resumePostCoreUpdateInternal(
           }
         }
 
-        const configSnapshot = await readConfigFileSnapshot({
+        const configSnapshot = await readUpdateConfigFileSnapshot({
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
           observe: false,
@@ -392,16 +393,8 @@ async function resumePostCoreUpdateInternal(
         // Their completion stays here, after the producer releases its lease.
         if (!parentOwnsCompletion) {
           const completed = await completePostCorePluginUpdate({
-            root: params.root,
-            opts: params.opts,
+            ...doctorOptions(),
             pluginUpdate,
-            freshDoctorRequired: pluginUpdate.changed,
-            assertCurrent,
-            yes: params.opts.yes === true,
-            json: params.opts.json === true,
-            timeoutMs: params.timeoutMs,
-            onWarnings: onDoctorWarnings,
-            onDoctorStep,
           });
           pluginUpdate = completed.pluginUpdate;
           recordDoctorWarnings(collectPostCorePluginAdvisories(pluginUpdate));

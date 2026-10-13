@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
@@ -11,7 +12,11 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -100,7 +105,12 @@ beforeEach(() => {
     .mockReturnValue({ sessionId: "media-requester", updatedAt: 1 });
 });
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 function createImageMediaLifecycle() {
+  setRuntimeConfigSnapshot({});
   return createMediaGenerationTaskLifecycle("image");
 }
 
@@ -367,6 +377,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     });
     const lifecycle = createImageMediaLifecycle();
     const handle = await lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
+    assert(handle);
 
     scheduleImageCompletion({
       lifecycle,
@@ -407,6 +418,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       requesterOrigin: { channel: "discord", to: "channel:123" },
       prompt: "proof image",
     });
+    assert(handle);
 
     scheduleImageCompletion({
       lifecycle,
@@ -451,6 +463,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         sessionKey,
         prompt: "proof image",
       });
+      assert(handle);
 
       scheduleImageCompletion({
         lifecycle,

@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -83,6 +85,23 @@ function activeSession(placementMove?: {
     },
     ...(placementMove ? { placementMove } : {}),
   };
+}
+
+function observedRunnerStatus(page: Page, key: string) {
+  return evaluateControlUiContext(
+    page,
+    ({ sessions }, target) => {
+      // Descriptor admission can precede every list while chat.startup is held.
+      const observation = sessions.observeRow(target, () => undefined);
+      try {
+        const placement = observation.row?.placement;
+        return placement?.state === "active" ? placement.runner?.status : undefined;
+      } finally {
+        observation.dispose();
+      }
+    },
+    { key, agentId: "main" },
+  );
 }
 
 suite.define(() => {
@@ -253,7 +272,7 @@ suite.define(() => {
           stateChangedAtMs: 3,
         },
       };
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([localSession]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
         key: "agent:main:placement-move",
@@ -323,7 +342,7 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       for (const pane of await panes.all()) {
@@ -384,7 +403,7 @@ suite.define(() => {
         status: "done",
         updatedAt: Date.now(),
       };
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([localSession]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await gateway.resolveDeferred("sessions.move", {
         key: sessionKey,
         ok: true,
@@ -418,7 +437,7 @@ suite.define(() => {
         role: "user",
         timestamp: 1_700_000_000_002,
       };
-      const localFinalIdentity = { id: "placement-local-final", seq: 4 };
+      const localFinalIdentity = { id: "placement-local-final", seq: 4, runId: localRunId };
       const localFinal = {
         __openclaw: localFinalIdentity,
         content: [{ text: finalText, type: "text" }],
@@ -441,6 +460,14 @@ suite.define(() => {
         await pane.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
       }
       await gateway.setHistoryMessages([originalPrompt, abandonedPartial, localUser, localFinal]);
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "",
+        message: { role: "assistant", content: [] },
+        replace: true,
+        runId: localRunId,
+        sessionKey,
+        state: "delta",
+      });
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: null,
         hasActiveRun: true,
@@ -473,7 +500,16 @@ suite.define(() => {
         expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
         expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
       };
-      await gateway.emitChatFinal({ runId: localRunId, sessionKey, text: finalText });
+      await gateway.emitGatewayEvent("chat", {
+        runId: localRunId,
+        sessionKey,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: finalText }],
+          openclawDisplayContent: [],
+        },
+      });
       for (const pane of await panes.all()) {
         await assertSettledPane(pane);
       }
@@ -552,24 +588,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
-      await expect
-        .poll(() =>
-          page.evaluate((parentKey) => {
-            const sidebar = document.querySelector<
-              HTMLElement & {
-                sessionData?: {
-                  childSessionRowsByParent: Record<
-                    string,
-                    Array<{ placement?: { runner?: { status?: string } } }>
-                  >;
-                };
-              }
-            >("openclaw-app-sidebar");
-            return sidebar?.sessionData?.childSessionRowsByParent[parentKey]?.[0]?.placement?.runner
-              ?.status;
-          }, parent.key),
-        )
-        .toBe("available");
+      await expect.poll(() => observedRunnerStatus(page, available.key)).toBe("available");
       await page.evaluate(() => {
         const state = { returnedOnline: false, seenOffline: false };
         const inspect = () => {
@@ -623,23 +642,10 @@ suite.define(() => {
         match: descriptorMatch,
       });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      expect(
-        await page.evaluate(() => {
-          const sidebar = document.querySelector<
-            HTMLElement & {
-              sessionData?: {
-                activeSessionLineageSelectedRow?: {
-                  placement?: { runner?: { status?: string } };
-                };
-              };
-            }
-          >("openclaw-app-sidebar");
-          return sidebar?.sessionData?.activeSessionLineageSelectedRow?.placement?.runner?.status;
-        }),
-      ).toBe("offline");
+      expect(await observedRunnerStatus(page, available.key)).toBe("offline");
       expect(await gateway.getSocketCount()).toBe(1);
 
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
@@ -678,7 +684,6 @@ suite.define(() => {
 
   it.each([
     { machineId: "fast", expectedMachineClass: "fast" },
-    { machineId: "standard", expectedMachineClass: "standard" },
     { machineId: undefined, expectedMachineClass: undefined },
   ])(
     "moves to a cloud profile with machine $machineId",

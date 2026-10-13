@@ -4,13 +4,7 @@ export type ChatRunToolRecipientState = {
   finalizedAt?: number;
 };
 
-export type ToolEventRecipientRegistry = {
-  add: (runId: string, connId: string) => void;
-  removeConnection: (connId: string) => void;
-  get: (runId: string) => ReadonlySet<string> | undefined;
-  markFinal: (runId: string) => void;
-  pruneExpired: (now?: number) => void;
-};
+export type ToolEventRecipientRegistry = ReturnType<typeof createToolEventRecipientRegistry>;
 
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
@@ -22,7 +16,7 @@ export function createToolEventRecipientRegistry(
     releaseIfEmpty: (runId: string) => void;
   },
   isConnectionActive?: (connId: string) => boolean,
-): ToolEventRecipientRegistry {
+) {
   let nextPruneAt = Infinity;
   const pruneExpired = (now = Date.now()) => {
     if (now < nextPruneAt) {
@@ -82,7 +76,7 @@ export function createToolEventRecipientRegistry(
     }
   };
 
-  const get = (runId: string) => {
+  const get = (runId: string): ReadonlySet<string> | undefined => {
     const entry = store.runs.get(runId)?.toolRecipient;
     if (entry) {
       entry.updatedAt = Date.now();

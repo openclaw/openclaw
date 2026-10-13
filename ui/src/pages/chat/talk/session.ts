@@ -1,9 +1,15 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import type {
+  TalkCatalogResult,
+  TalkClientCreateParams,
+  TalkConfigResult,
+} from "@openclaw/gateway-protocol";
+import type { SchemaContract } from "../../../../../packages/gateway-protocol/src/schema-contract.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import { RealtimeTalkInputController } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -11,6 +17,7 @@ import type {
   RealtimeTalkStatus,
   RealtimeTalkTransport,
 } from "./shared.ts";
+import type { SplitTalkOptions } from "./split.ts";
 import {
   type ClientVoiceSessionOwner,
   ClientVoiceTranscriptQueue,
@@ -22,21 +29,15 @@ import { normalizeLaunchTransport, type RealtimeTalkLaunchTransport } from "./tr
 
 export type { RealtimeTalkStatus };
 
-type RealtimeTalkLaunchOptions = {
-  provider?: string;
-  model?: string;
-  voice?: string;
-  voiceChangeId?: string;
-  transport?: RealtimeTalkLaunchTransport;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  reasoningEffort?: string;
-};
+type RealtimeTalkLaunchOptions = SchemaContract<
+  Omit<TalkClientCreateParams, "sessionKey" | "voiceSessionId" | "mode" | "brain" | "capabilities">
+>;
 
 type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
   videoDeviceId?: string;
+  split?: SplitTalkOptions;
+  playback?: GatewaySpeechPlayback;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -61,16 +62,6 @@ export async function switchActiveRealtimeTalkCameras(
   }
 }
 
-type RealtimeTalkConfigResult = {
-  config?: {
-    talk?: {
-      realtime?: {
-        transport?: unknown;
-      };
-    };
-  };
-};
-
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private selectedTransport: RealtimeTalkLaunchTransport | undefined;
@@ -78,22 +69,31 @@ export class RealtimeTalkSession {
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
   private lifecycleGeneration = 0;
-  private videoEnabled = false;
   private videoOperation = 0;
   private voiceSessionId: string | undefined;
   private transportGeneration = 0;
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
-  private acceptingTranscripts = false;
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
+  private readonly callbacks: RealtimeTalkCallbacks;
 
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly sessionKey: string,
-    private readonly callbacks: RealtimeTalkCallbacks = {},
+    callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
     private readonly localOptions: RealtimeTalkLocalOptions = {},
-  ) {}
+  ) {
+    this.callbacks = {
+      ...callbacks,
+      onStatus: (status, detail) => {
+        if (status === "idle" || status === "error") {
+          this.localOptions.playback?.stop();
+        }
+        callbacks.onStatus?.(status, detail);
+      },
+    };
+  }
 
   async start(): Promise<void> {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
@@ -106,6 +106,40 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
+      if (this.localOptions.split) {
+        const { SplitTalkTransport } = await import("./split.ts");
+        if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+          return;
+        }
+        const transport = new SplitTalkTransport(
+          this.client,
+          this.sessionKey,
+          this.callbacks,
+          this.localOptions.split,
+          this.localOptions.inputDeviceId,
+        );
+        this.pendingStartup = transport;
+        try {
+          const result = await transport.start();
+          if (
+            result === "cancelled" ||
+            this.closed ||
+            lifecycleGeneration !== this.lifecycleGeneration
+          ) {
+            transport.stop();
+            return;
+          }
+          this.transport = transport;
+        } catch (error) {
+          transport.stop();
+          throw error;
+        } finally {
+          if (this.pendingStartup === transport) {
+            this.pendingStartup = null;
+          }
+        }
+        return;
+      }
       const [{ createRealtimeTalkTransport }, providerVideoCapable] = await Promise.all([
         import("./transport.runtime.ts"),
         this.resolveVideoCapability(),
@@ -162,24 +196,18 @@ export class RealtimeTalkSession {
         ownerTransferred = true;
         return;
       }
-      const nextTransportGeneration = lifecycleGeneration;
       if (transport !== "gateway-relay") {
         // SDP setup can already deliver provider items. The logical allocation
         // owns their queue before its still-provisional transport becomes ready.
         this.voiceSessionId = voiceSessionId;
-        this.transportGeneration = nextTransportGeneration;
-        this.acceptingTranscripts = true;
+        this.transportGeneration = lifecycleGeneration;
         this.clientVoiceSessionOwner = owner;
         ownerTransferred = true;
       }
       const callbacks =
         transport === "gateway-relay"
           ? this.callbacks
-          : this.clientOwnedTranscriptCallbacks(
-              voiceSessionId,
-              nextTransportGeneration,
-              owner.signal,
-            );
+          : this.clientOwnedTranscriptCallbacks(voiceSessionId, lifecycleGeneration, owner.signal);
       const transcriptQueue = this.transcriptQueue;
       let nextTransport: RealtimeTalkTransport | null = null;
       const retireCandidate = () => {
@@ -240,8 +268,7 @@ export class RealtimeTalkSession {
       this.selectedTransport = transport;
       if (transport === "gateway-relay") {
         this.voiceSessionId = voiceSessionId;
-        this.transportGeneration = nextTransportGeneration;
-        this.acceptingTranscripts = true;
+        this.transportGeneration = lifecycleGeneration;
         owner.release();
       }
       ownerTransferred = true;
@@ -275,6 +302,7 @@ export class RealtimeTalkSession {
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
         {
+          sessionKey: this.sessionKey,
           ...(requestedProvider ? { provider: requestedProvider } : {}),
           ...(requestedModel ? { model: requestedModel } : {}),
         },
@@ -323,9 +351,9 @@ export class RealtimeTalkSession {
       }
       let transport = options.transport;
       if (!transport) {
-        let result: RealtimeTalkConfigResult;
+        let result: TalkConfigResult;
         try {
-          result = await this.client.request<RealtimeTalkConfigResult>(
+          result = await this.client.request<TalkConfigResult>(
             "talk.config",
             {},
             { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
@@ -397,12 +425,13 @@ export class RealtimeTalkSession {
     this.rememberVideoEnabled(false);
     const detached = this.detachVoiceSession();
     const transport = this.transport;
-    const hadPendingStartup = this.pendingStartup !== null;
+    const pendingStartup = this.pendingStartup;
     const completions: Promise<void>[] = [];
     this.transport = null;
     this.selectedTransport = undefined;
+    this.pendingStartup = null;
     try {
-      completions.push(Promise.resolve(this.stopPendingStartup()));
+      completions.push(Promise.resolve(pendingStartup?.stop({ emitClosed: false })));
     } finally {
       try {
         completions.push(Promise.resolve(transport?.stop()));
@@ -412,17 +441,11 @@ export class RealtimeTalkSession {
         }
       }
     }
-    if (detached || transport || hadPendingStartup) {
+    if (detached || transport || pendingStartup) {
       this.closeCompletion = Promise.all(completions).then(() => undefined);
       void this.closeCompletion.catch(() => undefined);
     }
     return this.closeCompletion;
-  }
-
-  private stopPendingStartup(): void | Promise<void> {
-    const pending = this.pendingStartup;
-    this.pendingStartup = null;
-    return pending?.stop({ emitClosed: false });
   }
 
   private closeUnadoptedVoiceSession(
@@ -494,9 +517,18 @@ export class RealtimeTalkSession {
     );
     this.transcriptItems = transcripts;
     const isCurrent = () =>
-      this.transportGeneration === owningGeneration &&
-      this.voiceSessionId === owningVoiceSessionId &&
-      this.acceptingTranscripts;
+      this.transportGeneration === owningGeneration && this.voiceSessionId === owningVoiceSessionId;
+    const applyTranscript = <T>(operation: () => T): T | undefined => {
+      if (!isCurrent()) {
+        return undefined;
+      }
+      try {
+        return operation();
+      } catch (error) {
+        this.failTranscriptPersistence(owningGeneration, formatUiError(error));
+        return undefined;
+      }
+    };
     return {
       ...this.callbacks,
       onTalkEvent: (event) => {
@@ -514,34 +546,15 @@ export class RealtimeTalkSession {
         }
       },
       onTranscriptItem: (item) => {
-        if (!isCurrent()) {
-          return;
-        }
-        let orders;
-        try {
-          orders = transcripts.observe(item);
-        } catch (error) {
-          this.failTranscriptPersistence(owningGeneration, formatUiError(error));
-          return;
-        }
-        if (orders.length > 0) {
+        const orders = applyTranscript(() => transcripts.observe(item));
+        if (orders?.length) {
           this.callbacks.onTranscriptOrder?.(orders);
         }
       },
       onTranscript: (entry) => {
-        // Retired transports cannot append into a restarted call's write queue.
-        if (!isCurrent()) {
-          return;
-        }
         // Persist before notifying: a consumer callback that stops or throws must
         // not be able to drop an already-finalized utterance from the write tail.
-        let published;
-        try {
-          published = transcripts.publish(entry);
-        } catch (error) {
-          this.failTranscriptPersistence(owningGeneration, formatUiError(error));
-          return;
-        }
+        const published = applyTranscript(() => transcripts.publish(entry));
         if (published) {
           this.callbacks.onTranscript?.(published);
         }
@@ -549,15 +562,8 @@ export class RealtimeTalkSession {
     };
   }
 
-  private failTranscriptPersistence(
-    owningGeneration: number,
-    detail: string = VOICE_TRANSCRIPT_QUEUE_POLICY.overflowMessage,
-  ): void {
-    if (
-      this.transportGeneration !== owningGeneration ||
-      !this.acceptingTranscripts ||
-      !this.voiceSessionId
-    ) {
+  private failTranscriptPersistence(owningGeneration: number, detail: string): void {
+    if (this.transportGeneration !== owningGeneration || !this.voiceSessionId) {
       return;
     }
     void this.retireTransport();
@@ -585,7 +591,6 @@ export class RealtimeTalkSession {
     this.transcriptItems = undefined;
     this.transcriptQueue.seal();
     this.voiceSessionId = undefined;
-    this.acceptingTranscripts = false;
     this.transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
     this.clientVoiceSessionOwner = undefined;
     if (missingItems.length > 0) {
@@ -641,7 +646,7 @@ export class RealtimeTalkSession {
       throw new Error("Camera is unavailable for this realtime session");
     }
     const operation = ++this.videoOperation;
-    const previousEnabled = this.videoEnabled;
+    const previousEnabled = activeRealtimeTalkSessions.has(this);
     this.rememberVideoEnabled(enabled);
     try {
       await transport.setVideoEnabled(enabled);
@@ -657,7 +662,6 @@ export class RealtimeTalkSession {
   }
 
   private rememberVideoEnabled(enabled: boolean): void {
-    this.videoEnabled = enabled;
     if (enabled) {
       activeRealtimeTalkSessions.add(this);
     } else {
@@ -675,7 +679,7 @@ export class RealtimeTalkSession {
   }
 
   async switchCameraIfEnabled(videoDeviceId: string | undefined): Promise<void> {
-    if (!this.videoEnabled) {
+    if (!activeRealtimeTalkSessions.has(this)) {
       return;
     }
     try {

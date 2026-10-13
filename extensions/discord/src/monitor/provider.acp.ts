@@ -8,13 +8,6 @@ type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.run
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
 
-function isLegacyMissingSessionError(message: string): boolean {
-  return (
-    message.includes("Session is not ACP-enabled") ||
-    message.includes("ACP session metadata missing")
-  );
-}
-
 function classifyAcpStatusProbeError(params: {
   error: unknown;
   isStaleRunning: boolean;
@@ -36,7 +29,10 @@ function classifyAcpStatusProbeError(params: {
   }
 
   const message = formatErrorMessage(params.error);
-  if (isLegacyMissingSessionError(message)) {
+  if (
+    message.includes("Session is not ACP-enabled") ||
+    message.includes("ACP session metadata missing")
+  ) {
     return { status: "stale", reason: "session-missing" };
   }
 
@@ -102,6 +98,7 @@ export async function probeDiscordAcpBindingHealth(params: {
       : { status: "uncertain", reason: "status-timeout" };
   }
   if (result.kind === "error") {
+    params.providerSessionRuntime.rethrowIncognitoSessionError(result.error);
     return classifyAcpStatusProbeError({
       error: result.error,
       isStaleRunning,

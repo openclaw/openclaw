@@ -23,6 +23,7 @@ import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lin
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as environmentServiceModule from "./service.js";
+import { registerWorkerDelegationPolicyTests } from "./worker-session-tool-executor.delegation.suite.js";
 import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
 const {
   workerSessionToolTestMocks,
@@ -77,6 +78,22 @@ describe("worker session tool topology", () => {
 
   afterEach(() => resetGlobalHookRunner());
 
+  it("rejects tool publication when the source run closes during preparation", async () => {
+    const started = createDeferred();
+    const prepared = createDeferred<AnyAgentTool[]>();
+    const runtime = getFixture().createToolRuntime({
+      prepareTools: () => {
+        started.resolve();
+        return prepared.promise;
+      },
+    });
+    const pending = runtime.getSurface(identity);
+    await started.promise;
+    getFixture().closeSourceRun();
+    prepared.resolve([]);
+    await expect(pending).rejects.toThrow(/source worker run ended|worker turn authority changed/);
+  });
+
   it.each(["active", "run-ended", "operator-revoked"] as const)(
     "reads presence as the original operator only while its authority is live (%s)",
     async (authorityState) => {
@@ -99,9 +116,9 @@ describe("worker session tool topology", () => {
         await release.promise;
         return snapshot;
       });
-      const tool = getFixture()
-        .createTools()
-        .find((candidate) => candidate.name === "presence")!;
+      const tool = (await getFixture().createTools()).find(
+        (candidate) => candidate.name === "presence",
+      )!;
       const pending = tool.execute("presence-read", {
         action: "person",
         person: "me",
@@ -143,9 +160,9 @@ describe("worker session tool topology", () => {
         },
       ]),
     );
-    const tool = getFixture()
-      .createTools()
-      .find((candidate) => candidate.name === "presence")!;
+    const tool = (await getFixture().createTools()).find(
+      (candidate) => candidate.name === "presence",
+    )!;
     const result = await tool.execute("blocked-presence", {});
     expect(result.details).toMatchObject({ reason: "presence is disabled here" });
     expect(gatewayRequest).not.toHaveBeenCalled();
@@ -231,7 +248,7 @@ describe("worker session tool topology", () => {
         return result;
       },
     );
-    const tools = getFixture().createTools({
+    const tools = await getFixture().createTools({
       name: "skill_workshop",
       label: "Workshop",
       description: "Library",
@@ -281,15 +298,15 @@ describe("worker session tool topology", () => {
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
         return { content: [], details: {} };
       });
-      const tool = getFixture()
-        .createTools({
+      const tool = (
+        await getFixture().createTools({
           name: "skill_workshop",
           label: "Workshop",
           description: "Library",
           parameters: SkillLibraryWorkshopSchema,
           execute: executeWorkshop,
         })
-        .find((candidate) => candidate.name === "skill_workshop")!;
+      ).find((candidate) => candidate.name === "skill_workshop")!;
       await expect(tool.execute("revoked-call", { action: "list" })).rejects.toThrow(
         "tool authority changed",
       );
@@ -726,7 +743,7 @@ describe.each([
     const snapshot = { status: "ok", people: [{ name: "Ada" }] };
     gatewayRequest.mockResolvedValueOnce(snapshot);
 
-    const tool = createTools().find((candidate) => candidate.name === "presence")!;
+    const tool = (await createTools()).find((candidate) => candidate.name === "presence")!;
     const pending = tool.execute("source-presence", { include: ["network", "location"] });
 
     if (source.deniedReason) {
@@ -845,6 +862,8 @@ describe("worker spawn startup composition", () => {
     },
   );
 });
+
+registerWorkerDelegationPolicyTests(fixtureMocks);
 
 describe.each([false, true])(
   "worker spawn parent authority (audit=%s)",

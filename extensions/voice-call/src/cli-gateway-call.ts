@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
+import type { CallBrief } from "./call-brief.js";
 import { writeCliJson } from "./cli-command-io.js";
 import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
@@ -23,6 +24,7 @@ type VoiceCallGatewayMethod =
   | "voicecall.continue"
   | "voicecall.continue.start"
   | "voicecall.continue.result"
+  | "voicecall.steer"
   | "voicecall.speak"
   | "voicecall.dtmf"
   | "voicecall.end"
@@ -140,12 +142,12 @@ export async function pollContinueGateway(
     typeof payload.pollTimeoutMs === "number"
       ? (clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs)
       : fallbackTimeoutMs;
-  const deadlineMs = Date.now() + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
+  const deadlineMs = performance.now() + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
 
   for (;;) {
     // Sleep already clamps to remaining budget; the gateway RPC must too.
     // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       break;
     }
@@ -174,7 +176,7 @@ export async function pollContinueGateway(
     if (result.status !== "pending") {
       throw new Error("voicecall gateway response has unknown operation status");
     }
-    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - performance.now());
     if (sleepMs <= 0) {
       break;
     }
@@ -252,6 +254,7 @@ export async function initiateVoiceCall(params: {
   mode?: string;
   defaultMode?: "notify" | "conversation";
   failureMessage?: string;
+  brief?: CallBrief;
 }): Promise<string> {
   const mode =
     params.mode === "notify" || params.mode === "conversation" ? params.mode : params.defaultMode;
@@ -261,6 +264,7 @@ export async function initiateVoiceCall(params: {
       ...(params.to ? { to: params.to } : {}),
       ...(params.message ? { message: params.message } : {}),
       ...(mode ? { mode } : {}),
+      ...(params.brief ? { brief: params.brief } : {}),
     },
     {
       timeoutMs: resolveOperationTimeout(params.config),
@@ -277,6 +281,7 @@ export async function initiateVoiceCall(params: {
   }
   const result = await runtime.manager.initiateCall(to, undefined, {
     message: params.message,
+    brief: params.brief,
     mode,
   });
   if (!result.success) {

@@ -65,6 +65,7 @@ describe("nightly Full Release Validation", () => {
     // helper's immutable release-ci/* transport ref is the only supported route.
     const text = readTrackedText(nightlyPath);
     expect(text).not.toMatch(/createWorkflowDispatch|gh workflow run|github-script/u);
+    expect(text).toContain("--trusted-workflow-ref main");
     expect(text).not.toMatch(/--ref\s+main|ref:\s*["']?main["']?\s*$/mu);
     expect(Object.keys(nightly.jobs)).toEqual(["validate"]);
     expect(job.permissions).toEqual({ actions: "write", contents: "write" });

@@ -36,8 +36,32 @@ function decodePendingDial(
 export class PendingFaceTimeDialStore {
   #tail: Promise<void> = Promise.resolve();
   readonly #clearing = new Map<string, Promise<boolean>>();
+  readonly #deleteMatching: (expectedDialID: string) => Promise<boolean>;
 
-  constructor(private readonly store: PluginStateKeyedStore<StoredPendingFaceTimeDial>) {}
+  constructor(private readonly store: PluginStateKeyedStore<StoredPendingFaceTimeDial>) {
+    const { observe, compareAndApply, deleteIf } = store;
+    if (observe && compareAndApply) {
+      this.#deleteMatching = async (expectedDialID) => {
+        let observation = await observe(PENDING_DIAL_KEY);
+        for (;;) {
+          const result = await compareAndApply(PENDING_DIAL_KEY, observation.comparison, {
+            operation: "delete",
+            action: observation.value?.dialID === expectedDialID ? "delete" : "keep",
+          });
+          if (result.status !== "conflict") {
+            return result.status === "applied";
+          }
+          observation = result.current;
+        }
+      };
+    } else if (deleteIf) {
+      // Released 2026.9.4 hosts lack comparisons; never select this after a worker failure.
+      this.#deleteMatching = (expectedDialID) =>
+        deleteIf(PENDING_DIAL_KEY, (current) => current.dialID === expectedDialID);
+    } else {
+      throw new Error("FaceTime pending dial cleanup requires atomic plugin-state deletion");
+    }
+  }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const pending = this.#tail.then(operation);
@@ -71,30 +95,9 @@ export class PendingFaceTimeDialStore {
     if (existing) {
       return existing;
     }
-    const clearing = this.#enqueue(async () => {
-      const { observe, compareAndApply } = this.store;
-      if (!observe || !compareAndApply) {
-        // FaceTime supports released 2026.9.4 hosts that predate comparisons.
-        if (!this.store.deleteIf) {
-          throw new Error("FaceTime pending dial cleanup requires atomic plugin-state deletion");
-        }
-        return this.store.deleteIf(
-          PENDING_DIAL_KEY,
-          (current) => current.dialID === expectedDialID,
-        );
-      }
-      let observation = await observe(PENDING_DIAL_KEY);
-      for (;;) {
-        const result = await compareAndApply(PENDING_DIAL_KEY, observation.comparison, {
-          operation: "delete",
-          action: observation.value?.dialID === expectedDialID ? "delete" : "keep",
-        });
-        if (result.status !== "conflict") {
-          return result.status === "applied";
-        }
-        observation = result.current;
-      }
-    }).finally(() => this.#clearing.delete(expectedDialID));
+    const clearing = this.#enqueue(() => this.#deleteMatching(expectedDialID)).finally(() =>
+      this.#clearing.delete(expectedDialID),
+    );
     this.#clearing.set(expectedDialID, clearing);
     return clearing;
   }

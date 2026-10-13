@@ -194,15 +194,6 @@ function decideAndRecordMigration(params: {
         });
         decision = canonical ? "invalid-canonical-repaired" : "legacy-imported";
         removeSource = true;
-      } else {
-        decision = "canonical-preserved";
-        removeSource = canonical.raw_json === params.snapshot.raw;
-      }
-
-      if (decision === "legacy-imported" || decision === "invalid-canonical-repaired") {
-        if (!legacyFile) {
-          throw new Error("exec approvals import decisions require a parsed legacy file");
-        }
         const verified = readExecApprovalsConfigRow(db);
         const verifiedFile = verified ? tryParsePersistedExecApprovals(verified.raw_json) : null;
         const rawMatches = verified?.raw_json === importedRaw;
@@ -217,6 +208,9 @@ function decideAndRecordMigration(params: {
             `SQLite verification failed for the exec approvals migration (raw=${rawMatches}, parsed=${Boolean(fileMatches)})`,
           );
         }
+      } else {
+        decision = "canonical-preserved";
+        removeSource = canonical.raw_json === params.snapshot.raw;
       }
 
       const reportJson = JSON.stringify({

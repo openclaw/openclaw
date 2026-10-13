@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
@@ -15,11 +16,12 @@ import type { SessionMessageCutMutationParams } from "./session-accessor.types.j
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import { executeSessionForkOperation } from "./session-fork-domain.js";
 import type {
   SessionMessageCutCandidate,
-  SessionMessageCutCommit,
   SessionMessageCutIntent,
   SessionMessageCutResult,
+  SessionMessageCutPreconditions,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingWorkerOperation } from "./session-native-binding.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -27,13 +29,14 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 export async function mutateSessionHistoryInWorker(
   params: SessionMessageCutMutationParams,
   resolved: ResolvedSqliteScope,
-  intent: SessionMessageCutCommit["intent"],
+  intent: SessionMessageCutIntent,
   source: DatabasePathIdentity,
   native: (
     intent: SessionMessageCutIntent,
     assertCurrent: () => void,
   ) => Promise<SessionMessageCutResult>,
   selection?: ReturnType<typeof retainPreparedSessionSharingFacts>,
+  preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutResult> {
   params.commitGuard?.();
   if (!source.key.startsWith("file:")) {
@@ -98,84 +101,121 @@ export async function mutateSessionHistoryInWorker(
     assertCurrent,
   );
   assertCurrent();
-  return withSqliteSessionContextReset(
-    resolved,
-    { sessionKey: intent.sourceKey, entry: preparedEntry },
-    async (assertPreparedCurrent) => {
-      const assertHeld = () => {
-        assertCurrent();
-        assertPreparedCurrent();
-      };
-      const entries = [{ sessionKey: intent.sourceKey, entry: preparedEntry }];
-      const captured = captureNativeSessionWorkerDeletion(entries);
-      // Released opaque SDK hooks retain their synchronous transaction visibility.
-      if (hasPreparedNativeSessionDeletion() && !captured) {
-        return native(preparedIntent, assertHeld);
-      }
-      const operation: Omit<
-        Parameters<
-          typeof runSessionEntryWorkerOperation<SessionMessageCutCandidate, SessionMessageCutResult>
-        >[0],
-        "run"
-      > = {
-        database,
-        databaseIdentity: source.key.slice("file:".length),
-        agentId: resolved.agentId,
-        assertCurrent: assertHeld,
-        candidateKind: "session-message-cut" as const,
-        onAcknowledged(candidate: SessionMessageCutCandidate) {
-          if (candidate.result.status === "created") {
-            captured?.committed();
-            if (candidate.projectionNeedsReconcile) {
-              startSessionTranscriptIndexReconcile({
-                ...database,
-                preferredSessionId: candidate.result.entry.sessionId,
-              });
-            }
-            invalidateSessionBranchCache(database.path, [
-              ...candidate.previousSessionIds,
-              candidate.result.entry.sessionId,
-            ]);
+  const prepareContext = (run: (assertCurrent: () => void) => Promise<SessionMessageCutResult>) =>
+    intent.mode === "fork"
+      ? run(() => {})
+      : withSqliteSessionContextReset(
+          resolved,
+          { sessionKey: intent.sourceKey, entry: preparedEntry },
+          run,
+          preconditions?.assertUpstreamCurrent,
+        );
+  return prepareContext(async (assertPreparedCurrent) => {
+    const assertHeld = () => {
+      assertCurrent();
+      assertPreparedCurrent();
+    };
+    const entries = [{ sessionKey: intent.sourceKey, entry: preparedEntry }];
+    const captured =
+      intent.mode === "fork" ? undefined : captureNativeSessionWorkerDeletion(entries);
+    // Released opaque SDK hooks retain their synchronous transaction visibility.
+    if (intent.mode !== "fork" && hasPreparedNativeSessionDeletion() && !captured) {
+      return native(preparedIntent, assertHeld);
+    }
+    const operation: Omit<
+      Parameters<
+        typeof runSessionEntryWorkerOperation<SessionMessageCutCandidate, SessionMessageCutResult>
+      >[0],
+      "run"
+    > = {
+      database,
+      databaseIdentity: source.key.slice("file:".length),
+      agentId: resolved.agentId,
+      assertCurrent: assertHeld,
+      onTransactionFacts(facts) {
+        if (
+          facts === undefined ||
+          (isRecord(facts) &&
+            (facts.kind === "native-binding-ready" ||
+              (facts.kind === "native-binding-storage" && facts.phase === "delete")))
+        ) {
+          preconditions?.assertUpstreamCurrent?.();
+        }
+        return false;
+      },
+      assertCandidate: () => preconditions?.assertUpstreamCurrent?.(),
+      candidateKind: "session-message-cut" as const,
+      onAcknowledged(candidate: SessionMessageCutCandidate) {
+        if (candidate.result.status === "created") {
+          if (candidate.projectionNeedsReconcile) {
+            startSessionTranscriptIndexReconcile({
+              ...database,
+              preferredSessionId: candidate.result.entry.sessionId,
+            });
           }
-        },
-        onCommitted(candidate, published, identity) {
-          if (published) {
-            publishCommittedSessionIdentity(
-              resolved.agentId,
-              identity,
-              published.previous,
-              published.current,
-              published.prepared,
-            );
-          }
-          return candidate.result;
-        },
-      };
-      if (captured) {
-        return runSessionNativeBindingWorkerOperation<
-          SessionMessageCutCandidate,
-          SessionMessageCutResult
-        >({
-          ...operation,
-          entries,
-          captured,
-          execute: (worker, nativeBindings) =>
-            worker.execute({
-              type: "session.messageCut.commit",
-              input: { agentId: resolved.agentId, intent: preparedIntent, nativeBindings },
-            }),
-        });
-      }
+          invalidateSessionBranchCache(database.path, [
+            ...candidate.previousSessionIds,
+            candidate.result.entry.sessionId,
+          ]);
+        }
+      },
+      onCommitted(candidate, published, identity) {
+        if (published) {
+          publishCommittedSessionIdentity(
+            resolved.agentId,
+            identity,
+            published.previous,
+            published.current,
+            published.prepared,
+          );
+        }
+        return candidate.result;
+      },
+    };
+    if (intent.mode === "fork") {
       return runSessionEntryWorkerOperation<SessionMessageCutCandidate, SessionMessageCutResult>({
         ...operation,
         run: (worker, commit) =>
           commit(() =>
-            worker.execute({
-              type: "session.messageCut.commit",
-              input: { agentId: resolved.agentId, intent: preparedIntent },
+            executeSessionForkOperation(worker, database.agentId, {
+              type: "session.messageCut.fork",
+              input: {
+                agentId: resolved.agentId,
+                intent: { ...preparedIntent, mode: "fork" },
+                sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+              },
             }),
           ),
       });
-    },
-  );
+    }
+    const input = {
+      agentId: resolved.agentId,
+      intent: { ...preparedIntent, mode: intent.mode },
+    };
+    if (captured) {
+      return runSessionNativeBindingWorkerOperation<
+        SessionMessageCutCandidate,
+        SessionMessageCutResult
+      >({
+        ...operation,
+        entries,
+        captured,
+        execute: (worker, nativeBindings) =>
+          worker.execute({
+            type: "session.messageCut.commit",
+            input: { ...input, nativeBindings },
+          }),
+      });
+    }
+    return runSessionEntryWorkerOperation<SessionMessageCutCandidate, SessionMessageCutResult>({
+      ...operation,
+      run: (worker, commit) =>
+        commit(() =>
+          worker.execute({
+            type: "session.messageCut.commit",
+            input,
+          }),
+        ),
+    });
+  });
 }

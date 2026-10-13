@@ -268,7 +268,8 @@ function buildHealthTimeoutRecord(
   return {
     accountId,
     lastError: error,
-    probe: { ok: false, timedOut: true, error },
+    // Published updaters treat ok:false as definitive failure. A deadline proves neither outcome.
+    probe: { timedOut: true, error },
   };
 }
 
@@ -285,10 +286,11 @@ async function buildHealthAccountRecord(params: {
   probe: boolean;
   deadlineAtMs: number;
   timeoutMs: number;
+  deadlineFallback: { record: ChannelAccountHealthSummary };
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   runtimeOnly: boolean;
 }): Promise<ChannelAccountHealthSummary> {
-  const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  const timedOut = () => params.deadlineFallback.record;
   const runtimeAccount =
     params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId];
   const runtimeSnapshot =
@@ -359,6 +361,17 @@ async function buildHealthAccountRecord(params: {
     }
     lastProbeAt = Date.now();
   }
+  const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
+  const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
+  const failure = asNullableObjectRecord(snapshotProbe);
+  if (failure?.ok === false && failure.timedOut !== true) {
+    // Later summary hooks cannot erase an observed negative when the outer deadline expires.
+    params.deadlineFallback.record = {
+      accountId: params.accountId,
+      probe: snapshotProbe,
+      ...(typeof failure.error === "string" ? { lastError: failure.error } : {}),
+    };
+  }
   if (Date.now() >= params.deadlineAtMs) {
     return timedOut();
   }
@@ -372,8 +385,6 @@ async function buildHealthAccountRecord(params: {
     });
   }
 
-  const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
-  const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
   const snapshot: ChannelAccountSnapshot =
     probeAccount === undefined
       ? buildChannelAccountSnapshotFromInspection({
@@ -452,24 +463,23 @@ async function buildHealthAccountRecord(params: {
 }
 
 async function runHealthAccountWithinDeadline(
-  params: Parameters<typeof buildHealthAccountRecord>[0],
+  params: Omit<Parameters<typeof buildHealthAccountRecord>[0], "deadlineFallback">,
 ): Promise<ChannelAccountHealthSummary> {
+  const deadlineFallback = { record: buildHealthTimeoutRecord(params.accountId, params.timeoutMs) };
   // Own permit admission and release too: neither a deadline nor shutdown may orphan a hook.
   const operation = trackAsyncWork(async () => {
     const release = await healthOperationPermits.acquire({ deadlineAtMs: params.deadlineAtMs });
     if (!release) {
-      return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+      return deadlineFallback.record;
     }
     try {
-      return await buildHealthAccountRecord(params);
+      return await buildHealthAccountRecord({ ...params, deadlineFallback });
     } finally {
       release();
     }
   });
   const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
-  return result === ABSOLUTE_DEADLINE_EXPIRED
-    ? buildHealthTimeoutRecord(params.accountId, params.timeoutMs)
-    : result;
+  return result === ABSOLUTE_DEADLINE_EXPIRED ? deadlineFallback.record : result;
 }
 
 /** Collects the gateway-owned health snapshot for an explicit trust audience. */

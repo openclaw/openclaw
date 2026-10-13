@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { canUseQuestionPrompts } from "../app/question-prompt-client.ts";
 import {
   createQuestionPromptState,
   disposeQuestionPromptState,
@@ -13,14 +14,12 @@ import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
 } from "../app/question-prompt.ts";
-import { t } from "../i18n/index.ts";
-import { formatUiExternalText } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { activeSessionAgentStatus, sessionRowAttention } from "../lib/session-attention.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
-  SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
@@ -93,8 +92,8 @@ export class SessionAttentionController implements ReactiveController {
     const connected = gateway.snapshot.phase === "connected";
     const client =
       connected &&
-      isGatewayMethodAdvertised({ hello: gateway.snapshot.hello }, "question.list") === true &&
-      typeof gateway.snapshot.client?.request === "function"
+      canUseQuestionPrompts(gateway.snapshot) &&
+      isGatewayMethodAdvertised({ hello: gateway.snapshot.hello }, "question.list") === true
         ? gateway.snapshot.client
         : null;
     if (
@@ -125,8 +124,8 @@ export class SessionAttentionController implements ReactiveController {
   resolveSessionAgentStatus(
     row: Pick<GatewaySessionRow, "agentStatus">,
   ): SessionAgentStatus | undefined {
-    const status = row.agentStatus;
-    if (!status || status.expiresAt <= Date.now() || !status.note.trim()) {
+    const status = activeSessionAgentStatus(row);
+    if (!status) {
       return undefined;
     }
     this.scheduleAgentStatusExpiry(status.expiresAt);
@@ -231,25 +230,8 @@ export class SessionAttentionController implements ReactiveController {
       if (knownAttention.kind !== "none") {
         return knownAttention;
       }
-      const agentStatus = this.resolveSessionAgentStatus(row);
-      if (agentStatus?.attention) {
-        return { kind: "agent", note: agentStatus.note, icon: agentStatus.attention };
-      }
-      const failureAt = row.endedAt ?? row.updatedAt ?? 0;
-      if (
-        (row.status !== "failed" && row.status !== "timeout") ||
-        (row.lastReadAt != null && failureAt <= row.lastReadAt)
-      ) {
-        return SIDEBAR_SESSION_NO_ATTENTION;
-      }
-      const reason =
-        formatUiExternalText(row.lastRunError) ||
-        t(
-          row.status === "timeout"
-            ? "sessionsView.runErrorTimedOut"
-            : "sessionsView.runErrorUnknown",
-        );
-      return { kind: "error", reason };
+      this.resolveSessionAgentStatus(row);
+      return sessionRowAttention(row);
     });
   }
 }

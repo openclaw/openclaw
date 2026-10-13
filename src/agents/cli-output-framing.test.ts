@@ -2,16 +2,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { describe, expect, it, vi } from "vitest";
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import { claudeStreamEvent, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
   return claudeStreamEvent({

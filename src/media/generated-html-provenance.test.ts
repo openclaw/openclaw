@@ -13,6 +13,7 @@ import { stageGatewayWorkspaceMedia } from "../infra/outbound/message-action-gat
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
@@ -131,19 +132,14 @@ describe("generated HTML provenance worker boundary", () => {
         await fs.rm(staged);
       }
       const refusal = new StateDatabaseReadAdmissionInvalidatedError("Writer authority revoked");
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const requests: string[] = [];
-      const interception = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            requests.push(request.stage);
-            if (request.stage === stage) {
-              throw refusal;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const interception = probe.admission(workerAdmission, (request, grant, admit) => {
+        requests.push(request.stage);
+        if (request.stage === stage) {
+          throw refusal;
+        }
+        admit(request, grant);
+      });
       const writing =
         operation === "upsert"
           ? markTrustedGeneratedHtmlPath(staged, replacement)

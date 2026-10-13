@@ -232,7 +232,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         : listAccountIds(cfg).some((candidateAccountId) =>
             isSynologyChatConfigured(cfg, candidateAccountId),
           ),
-    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length}`],
   }),
   introNote: {
     title: t("wizard.synologyChat.setupTitle"),

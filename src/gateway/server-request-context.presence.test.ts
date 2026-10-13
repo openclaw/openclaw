@@ -3,14 +3,12 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
+import { prepareUserProfileCatalog, readUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileDisplay,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+import { ensureProfileForEmail, getUserProfileDisplay } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -176,6 +174,7 @@ describe("createGatewayRequestContext presence", () => {
       const source = ensureProfileForEmail("merge-source@example.test");
       const target = ensureProfileForEmail("merge-target@example.test");
       const unrelatedProfile = ensureProfileForEmail("merge-unrelated@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sourceClient = {
         ...makeProfileClient("merge-source", "merge-source@example.test", {
           profileId: source.id,
@@ -211,7 +210,7 @@ describe("createGatewayRequestContext presence", () => {
       const context = createGatewayRequestContext(params);
 
       const linked = linkEmail("merge-source@example.test", target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       const display = getUserProfileDisplay(linked.id);
       context.refreshConnectedUserProfile?.({
         ...display,
@@ -255,6 +254,7 @@ describe("createGatewayRequestContext presence", () => {
 
   it("coalesces typing activity across a person's tabs and publishes explicit changes after the coalescing window", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const started = 1_800_000_000_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(started);
       const increment = vi.mocked(incrementPresenceVersion);

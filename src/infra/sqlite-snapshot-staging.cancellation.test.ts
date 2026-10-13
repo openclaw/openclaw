@@ -12,10 +12,12 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-staging.js";
@@ -77,6 +79,71 @@ beforeEach(async () => {
     }
     return child;
   });
+});
+
+it("skips empty reclamation passes and observes later snapshot allocations", async () => {
+  const cache = tempDirs.make("sqlite-reclaim-empty-");
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+
+  const unrelated = path.join(cache, "operator-data");
+  const namedFile = path.join(cache, "openclaw-sqlite-readonly-12345-File00");
+  fs.mkdirSync(unrelated);
+  fs.writeFileSync(namedFile, "preserved");
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+
+  const abandoned = path.join(cache, "openclaw-sqlite-readonly-12345-Later0");
+  fs.mkdirSync(abandoned);
+  const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  fs.utimesSync(abandoned, stale, stale);
+  await reclaimAbandonedSqliteSnapshotsAsync(cache);
+  expect(processMocks.execFile).toHaveBeenCalledTimes(1);
+  expect(fs.existsSync(abandoned)).toBe(false);
+  expect(fs.readdirSync(cache).toSorted()).toEqual([path.basename(namedFile), "operator-data"]);
+  expect(fs.readFileSync(namedFile, "utf8")).toBe("preserved");
+});
+
+it("joins a pending reclamation scan and prevents a late launch during shutdown", async () => {
+  const cache = tempDirs.make("sqlite-reclaim-scanning-");
+  const abandoned = path.join(cache, "openclaw-sqlite-readonly-12345-Later0");
+  fs.mkdirSync(abandoned);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const readdir = fs.promises.readdir;
+  vi.spyOn(fs.promises, "readdir").mockImplementation(async (...args) => {
+    const entries = await readdir(...args);
+    if (args[0] === cache) {
+      entered.resolve();
+      await release.promise;
+    }
+    return entries;
+  });
+  const reclamation = reclaimAbandonedSqliteSnapshotsAsync(cache);
+  let shutdown: Promise<void> | undefined;
+  let shutdownSettled = false;
+  try {
+    await Promise.race([
+      entered.promise,
+      reclamation.then(() => {
+        throw new Error("Reclamation settled before its candidate scan");
+      }),
+    ]);
+    shutdown = cleanupSnapshotOperations().then(() => {
+      shutdownSettled = true;
+    });
+    expect((await fs.promises.stat(abandoned)).isDirectory()).toBe(true);
+    expect(shutdownSettled).toBe(false);
+    expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+    release.resolve();
+    await shutdown;
+    await reclamation;
+    expect(processMocks.execFile).toHaveBeenCalledTimes(0);
+    expect(fs.existsSync(abandoned)).toBe(true);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([reclamation, shutdown]);
+  }
 });
 
 function fixture(count = 3, payloadBytes = 4096) {

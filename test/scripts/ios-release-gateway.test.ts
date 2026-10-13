@@ -29,6 +29,7 @@ const tarball = `https://registry.npmjs.org/openclaw/-/openclaw-${version}.tgz`;
 afterEach(() => {
   command.mockReset();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function writeJson(file: string, value: unknown) {
@@ -73,10 +74,18 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
     },
   };
   const requests: string[] = [];
-  const fetch = vi.fn(async (url: string) => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     requests.push(url);
+    const authorization = new Headers(init?.headers).get("Authorization");
     if (url === "https://registry.npmjs.org/openclaw/latest") {
+      expect(authorization).toBeNull();
       return Response.json(state.metadata);
+    }
+    if (
+      process.env.GH_TOKEN === "synthetic-ios-github-token" &&
+      authorization !== "Bearer synthetic-ios-github-token"
+    ) {
+      return Response.json({ message: "API rate limit exceeded" }, { status: 403 });
     }
     if (url.endsWith(`/tags/v${version}`)) {
       return Response.json({
@@ -97,6 +106,8 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const child = new ChildProcess();
+    expect(operation.env).not.toHaveProperty("GH_TOKEN");
+    expect(operation.env).not.toHaveProperty("GITHUB_TOKEN");
     child.stdout = stdout;
     child.stderr = stderr;
     operation.onReady?.(child);
@@ -162,6 +173,8 @@ describe("iOS stable Gateway package qualification", () => {
   it.each([false, true])(
     "freezes the published selection and replays its exact dependency graph (annotated tag: %s)",
     async (annotatedTag) => {
+      vi.stubEnv("GH_TOKEN", annotatedTag ? "synthetic-ios-github-token" : "");
+      vi.stubEnv("GITHUB_TOKEN", "");
       const f = fixture({ annotatedTag });
       const selected = await selectIOSReleaseGateway({
         selectionDir: f.selectionDir,

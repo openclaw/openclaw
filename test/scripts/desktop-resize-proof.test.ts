@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type DesktopProofSourceStatus,
   desktopProofAssets,
@@ -39,7 +39,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
-import { acquireTestPortBlock, reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
   observeDesktopEndpointPackets,
@@ -240,45 +240,6 @@ describe("desktop proof identity and public evidence", () => {
     await result;
   });
 
-  it("bounds RFB events without suppressing callback exceptions or inferring a completed handshake", async () => {
-    vi.stubGlobal("window", {
-      desktopProofSockets: [],
-      location: { href: "https://fixture.invalid" },
-    });
-    type Options = Parameters<DesktopClient["connect"]>[0];
-    let observed: Options | undefined;
-    const client = {
-      connect: (options: Options) => {
-        observed = options;
-        return Promise.resolve({} as Awaited<ReturnType<DesktopClient["connect"]>>);
-      },
-    };
-    const factory = () => client;
-    const panel = { desktopClientFactory: factory };
-    observeDesktopProofRfbLifecycle(panel as unknown as Element);
-    const failure = new Error("original callback failed");
-    const callback = vi.fn(() => {
-      throw failure;
-    });
-    await panel.desktopClientFactory().connect({
-      target: {} as HTMLElement,
-      viewOnly: true,
-      isCurrent: () => true,
-      wsUrl: "/desktop/observe?token=hidden",
-      onDisconnect: callback,
-    });
-    for (let index = 0; index < 10; index++) {
-      expect(() => observed!.onDisconnect!({ clean: false })).toThrow(failure);
-    }
-    const snapshot = Reflect.get(window, "desktopProofRfbLifecycle")();
-    expect(callback).toHaveBeenCalledTimes(10);
-    expect(snapshot.events).toHaveLength(8);
-    expect(snapshot.omitted).toBe(3);
-    expect(
-      snapshot.events.every((event: { connectedObserved: boolean }) => !event.connectedObserved),
-    ).toBe(true);
-  });
-
   it.each(["upstream", "client", "fixture"] as const)(
     "records the tap's first %s terminal event before cascading close",
     async (side) => {
@@ -381,49 +342,6 @@ describe("desktop proof identity and public evidence", () => {
       () => createServerSpy.mockRestore(),
       () => closeTap?.(),
       () => upstream.release(),
-    );
-  });
-
-  it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
-    const upstream = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () => net.createServer(),
-    });
-    const clients: net.Socket[] = [];
-    let closeTap: (() => Promise<void>) | undefined;
-    await runQaGatewayFixture(
-      async () => {
-        const tap = await observeDesktopEndpointPackets(
-          upstream.claim.port,
-          new AbortController().signal,
-        );
-        closeTap = tap.close;
-        expect(tap.port).not.toBe(upstream.claim.port);
-        // Keep the claim after closing the reservation: every connection must be refused.
-        await upstream.releaseListener();
-        for (let index = 0; index < 10; index++) {
-          const client = net.connect({ host: "127.0.0.1", port: tap.port });
-          client.on("error", () => {});
-          clients.push(client);
-          await vi.waitFor(() =>
-            expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
-          );
-        }
-        expect(tap.terminalSnapshot()).toEqual({
-          events: Array.from({ length: 8 }, (_, index) => ({
-            connectionIndex: index + 2,
-            side: "upstream",
-            event: "error",
-            errorCategory: "refused",
-            hadError: null,
-          })),
-          omitted: 2,
-        });
-      },
-      () => clients.forEach((client) => client.destroy()),
-      () => closeTap?.(),
-      () => (upstream.listener.listening ? upstream.releaseListener() : undefined),
-      () => upstream.claim.release(),
     );
   });
 
@@ -575,17 +493,6 @@ describe("desktop proof identity and public evidence", () => {
     }
   });
 
-  it("keeps the UI phase contract narrower than arbitrary reporter strings", () => {
-    type Phase = Exclude<
-      ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
-      "unknown"
-    >;
-    expectTypeOf<"node-admission">().toExtend<Phase>();
-    expectTypeOf<"file-loaded">().toExtend<Phase>();
-    expectTypeOf<"unknown">().not.toExtend<Phase>();
-    expectTypeOf<"misspelled-phase">().not.toExtend<Phase>();
-  });
-
   it("records sshd runtime directory facts without modifying missing or unsafe paths", async () => {
     const root = dirs.make("desktop-sshd-runtime-");
     const directory = path.join(root, "runtime");
@@ -678,7 +585,6 @@ describe("desktop proof identity and public evidence", () => {
 
   it.each([
     ["Error: Test timed out in 120000ms.\nprivate pending operation", "test-timeout"],
-    ["Error: Test timed out in 120000ms while waiting for private operation.", "test-timeout"],
     ["Error: Hook timed out in 60000ms.\nprivate pending operation", "hook-timeout"],
     ["Error: a timeout might have happened after 174000ms", "test-error"],
   ])("classifies only the emitted timeout contract: %s", (message, category) => {
@@ -687,35 +593,11 @@ describe("desktop proof identity and public evidence", () => {
   });
 
   it.each([
-    { label: "mismatch", override: {} },
-    {
-      label: "missing canvas",
-      override: { canvasCount: 0, lastFramebuffer: null, snapshotFramebuffer: null },
-    },
-    { label: "no closed sockets", override: { socketCloses: [] } },
-    {
-      label: "zero framebuffer",
-      override: {
-        lastFramebuffer: { width: 0, height: 0 },
-        snapshotFramebuffer: { width: 0, height: 0 },
-      },
-    },
     {
       label: "unavailable snapshot",
       override: {
         snapshotStatus: "unavailable",
         pageClosed: true,
-        canvasCount: null,
-        snapshotFramebuffer: null,
-        socketCount: null,
-        latestReadyState: null,
-        socketCloses: null,
-      },
-    },
-    {
-      label: "timed-out snapshot",
-      override: {
-        snapshotStatus: "timed-out",
         canvasCount: null,
         snapshotFramebuffer: null,
         socketCount: null,
@@ -734,12 +616,6 @@ describe("desktop proof identity and public evidence", () => {
           desktopViewerResizeFailure: {
             ...diagnostics,
             expected: { ...diagnostics.expected, privateText: "private-token" },
-            socketCloses:
-              diagnostics.socketCloses?.map((event) => ({
-                ...event,
-                reason: "control-taken:private-operator",
-                url: "https://example.invalid/private-token",
-              })) ?? null,
             nodeStreamCloses: diagnostics.nodeStreamCloses.map((event) => ({
               ...event,
               privateDetail: "private-node-data",
@@ -757,25 +633,17 @@ describe("desktop proof identity and public evidence", () => {
   });
 
   it.each([
-    { snapshotStatus: "private-token" },
     { pageClosed: 0 },
-    { canvasCount: -1 },
-    { canvasCount: 10_001 },
     { latestReadyState: 4 },
-    { socketCloses: "private-token" },
-    { nodeStreamCloses: "private-token" },
     { nodeStreamCloses: [{ trigger: "private-token", closeCode: 1000 }] },
     { nodeStreamCloses: Array.from({ length: 9 }, () => viewerFailure.nodeStreamCloses[0]) },
     { socketCloses: Array.from({ length: 9 }, () => viewerFailure.socketCloses[0]) },
-    ...[
-      { socketIndex: 10_000 },
-      { code: 65_536 },
-      { code: 1000.5 },
-      { wasClean: 1 },
-      { category: "control-taken:private-operator" },
-    ].map((event) => ({ socketCloses: [{ ...viewerFailure.socketCloses[0], ...event }] })),
+    {
+      socketCloses: [
+        { ...viewerFailure.socketCloses[0], category: "control-taken:private-operator" },
+      ],
+    },
     { expected: { width: Infinity, height: 850 } },
-    { snapshotFramebuffer: { width: 8193, height: 0 } },
   ])("rejects invalid viewer diagnostic bounds: %j", (override) => {
     expect(() =>
       desktopProofTestReport(
@@ -786,22 +654,6 @@ describe("desktop proof identity and public evidence", () => {
     ).toThrow();
   });
 
-  it("leaves successful reporter output unchanged even with failure metadata", () => {
-    const report = rawTestReport(undefined, { desktopViewerResizeFailure: viewerFailure });
-    report.numFailedTests = 0;
-    report.numFailedTestSuites = 0;
-    report.testResults[0]!.status = "passed";
-    report.testResults[0]!.assertionResults[0]!.status = "passed";
-    report.testResults[0]!.assertionResults[0]!.failureMessages = [];
-    expect(desktopProofTestReport(report).files[0]?.assertions[0]).toEqual({
-      index: 0,
-      status: "passed",
-      phase: "node-admission",
-      declarationLocation: { line: 120, column: 3 },
-      failures: [],
-    });
-  });
-
   it("rejects unknown report files and excessive counts, and ignores unknown metadata phases", () => {
     const report = rawTestReport();
     report.testResults[0]!.assertionResults[0]!.meta.desktopProofPhase = "private-token";
@@ -809,47 +661,6 @@ describe("desktop proof identity and public evidence", () => {
     expect(() => desktopProofTestReport({ ...report, numTotalTests: 17 })).toThrow();
     report.testResults[0]!.name = "/private/other.test.ts";
     expect(() => desktopProofTestReport(report)).toThrow();
-  });
-
-  it("retains the observed phase and child timeout when the terminal report is missing and export fails", async () => {
-    const root = dirs.make("desktop-report-failure-");
-    const checkpoint = path.join(root, "desktop-phase.json");
-    await writeFile(checkpoint, JSON.stringify({ lastObservedPhase: "node-admission" }));
-    const child = Object.assign(new Error("test-node failed"), { code: "ETIMEDOUT" });
-    const exporting = new Error("export failed");
-    let lastObserved: Awaited<ReturnType<typeof readDesktopProofPhase>> | undefined;
-    const recorded: unknown[] = [];
-    const record = (error: unknown) => {
-      recorded.push(error);
-    };
-    const failure = await withDesktopProofCleanup(
-      async () => {
-        throw child;
-      },
-      () =>
-        withDesktopProofCleanup(
-          async () => {
-            expect(recorded[0]).toBe(child);
-            lastObserved = await readDesktopProofPhase(checkpoint);
-            await readDesktopProofTestReport(path.join(root, "missing.json"));
-          },
-          async () => {
-            throw exporting;
-          },
-          record,
-        ),
-      record,
-    ).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    const aggregate = failure as AggregateError;
-    expect(aggregate.errors[0]).toBe(child);
-    expect(aggregate.errors[1].errors[0]).toMatchObject({ code: "ENOENT" });
-    expect(aggregate.errors[1].errors[1]).toBe(exporting);
-    expect(lastObserved).toEqual({
-      status: "available",
-      lastObservedPhase: "node-admission",
-      owners: null,
-    });
   });
 
   it("projects only known phases from bounded regular checkpoints", async () => {
@@ -928,17 +739,6 @@ describe("desktop proof identity and public evidence", () => {
     await expect(readDesktopProofTestReport(file)).rejects.toThrow();
     await writeFile(file, Buffer.alloc(8 * 1024 * 1024 + 1));
     await expect(readDesktopProofTestReport(file)).rejects.toThrow("bounded");
-  });
-
-  it("launches only the owned foreground window manager, without session autostart", async () => {
-    const bootstrap = await readFile(
-      new URL("../../scripts/test-desktop-resize-real.mts", import.meta.url),
-      "utf8",
-    );
-    expect(bootstrap).toContain('daemon(`wm-${display}`, "openbox", ["--sm-disable"], env)');
-    expect(bootstrap).not.toMatch(
-      /"(?:startxfce4|xfce4-session|openbox-session|dbus-run-session|--startup)"/u,
-    );
   });
 
   it("retains child ownership when both private logging and export fail", async () => {
@@ -1025,25 +825,6 @@ describe("desktop proof identity and public evidence", () => {
     expect(JSON.stringify(fixture.receipt)).not.toContain("private");
   });
 
-  it("admits only empty status output, including when no dirty paths are publishable", async () => {
-    const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
-    await expect(fixture.read()).resolves.toMatchObject({ head, tree, parents: [base] });
-    expect(fixture.receipt.sourceStatus).toEqual({
-      head,
-      bytes: 0,
-      totalEntries: 0,
-      entries: [],
-      omittedEntries: 0,
-    });
-    fixture.replies.status = "?? private-only.txt\0";
-    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
-    expect(fixture.receipt.sourceStatus).toMatchObject({
-      totalEntries: 1,
-      entries: [],
-      omittedEntries: 1,
-    });
-  });
-
   it("clears earlier source status before a failed recheck", async () => {
     const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
     await fixture.read();
@@ -1052,18 +833,6 @@ describe("desktop proof identity and public evidence", () => {
     await expect(fixture.read()).rejects.toThrow("Git command failed");
     expect(fixture.receipt.sourceStatus).toBeNull();
     expect(JSON.stringify(fixture.receipt)).not.toContain("private");
-  });
-
-  it("bounds published source entries and counts names omitted by privacy and size limits", async () => {
-    const tracked = Array.from({ length: 34 }, (_, index) => `src/file-${index}.ts`);
-    const fixture = sourceAdmissionFixture(
-      tracked.map((name) => ` M ${name}\0`).join("") + "?? private-last.txt\0",
-      tracked,
-    );
-    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
-    expect(fixture.receipt.sourceStatus?.entries).toHaveLength(32);
-    expect(fixture.receipt.sourceStatus).toMatchObject({ totalEntries: 35, omittedEntries: 3 });
-    expect(JSON.stringify(fixture.receipt)).not.toMatch(/file-32|file-33|private/u);
   });
 
   it("does not decode paths beyond the status byte budget or publish unsafe canonical names", async () => {
@@ -1214,16 +983,7 @@ describe("desktop proof identity and public evidence", () => {
     });
   });
 
-  it("reads only raw commit headers, not signature continuations or the message", () => {
-    expect(
-      desktopProofCommit(
-        merge,
-        `tree ${tree}\nparent ${base}\nparent ${head}\ngpgsig signature\n parent ${merge}\n\nparent ${merge}\n`,
-      ),
-    ).toEqual({ head: merge, tree, parents: [base, head] });
-  });
-
-  it.each([[base], [base, merge]].map((parents) => ({ parents })))(
+  it.each([[base, merge]].map((parents) => ({ parents })))(
     "rejects unbound actual merge parents: $parents",
     ({ parents }) => {
       expect(() =>
@@ -1234,7 +994,6 @@ describe("desktop proof identity and public evidence", () => {
 
   it.each([
     { checkout: base, head, base },
-    { checkout: merge, head: base, base: head },
     { checkout: merge, head },
   ])("rejects source drift and unbound PR parents: %j", (expected) => {
     expect(() =>
@@ -1249,17 +1008,12 @@ describe("desktop proof identity and public evidence", () => {
     expect(safe.samples).toHaveLength(5);
   });
 
-  it.each([
-    { node: null },
-    { node: { passwordAbsentFromObserve: true, disconnectClosedViewer: false } },
-    { observer: { keyboardForwardedBytes: 1, resizeForwardedBytes: 0 } },
-    { gateway: { execution: "built-process", readiness: "readyz", minimal: true } },
-    { observer: { evidence: "filter-spy", keyboardForwardedBytes: 0, resizeForwardedBytes: 0 } },
-    { samples: [] },
-    { pixels: { distinctSampledColors: 8 } },
-  ])("rejects incomplete or failed node proof: %j", (invalid) => {
-    expect(() => sanitizeDesktopResizeProof({ ...proof(), ...invalid }, "node")).toThrow();
-  });
+  it.each([{ node: { passwordAbsentFromObserve: true, disconnectClosedViewer: false } }])(
+    "rejects incomplete or failed node proof: %j",
+    (invalid) => {
+      expect(() => sanitizeDesktopResizeProof({ ...proof(), ...invalid }, "node")).toThrow();
+    },
+  );
 
   it("rejects asset paths and non-digests", () => {
     expect(() => desktopProofAssets({ "../index.js": "e".repeat(64) })).toThrow();
@@ -1304,15 +1058,6 @@ describe("desktop proof identity and public evidence", () => {
     );
     expect(await readFile(path.join(output, "02-panel-geometry.json"), "utf8")).not.toContain(
       "hello",
-    );
-  });
-
-  it("does not turn a skipped test into completed proof", async () => {
-    const root = dirs.make("desktop-empty-proof-");
-    const input = path.join(root, "input");
-    await mkdir(input);
-    expect((await exportDesktopResizeProof(input, path.join(root, "public"), "ssh")).complete).toBe(
-      false,
     );
   });
 

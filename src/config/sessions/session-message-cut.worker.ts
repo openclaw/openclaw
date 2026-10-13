@@ -9,13 +9,34 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutCommit,
+  SessionMessageCutIntent,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingTransaction } from "./session-native-binding.worker.js";
+import type { SessionForkMessageCutCommit } from "./session-parent-fork.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 export function commitSessionMessageCut(
   input: SessionMessageCutCommit,
   context: AgentWorkerOperationContext,
+) {
+  return commitMessageCut(input, context);
+}
+
+export function commitSessionForkMessageCut(
+  input: SessionForkMessageCutCommit,
+  context: AgentWorkerOperationContext,
+) {
+  return commitMessageCut(
+    { agentId: input.agentId, intent: input.intent },
+    context,
+    input.sourceRepositoryWorkspaceId,
+  );
+}
+
+function commitMessageCut(
+  input: Omit<SessionMessageCutCommit, "intent"> & { intent: SessionMessageCutIntent },
+  context: AgentWorkerOperationContext,
+  sourceRepositoryWorkspaceId?: string,
 ) {
   const mutate = (database: OpenClawAgentDatabase) => {
     const intent = input.intent;
@@ -30,6 +51,7 @@ export function commitSessionMessageCut(
       { ...context.options, agentId: input.agentId, sessionKey: intent.sourceKey },
       intent,
       {
+        sourceRepositoryWorkspaceId,
         scheduleProjectionReconcile: false,
         onProjectionReconcileNeeded: () => {
           projectionNeedsReconcile = true;

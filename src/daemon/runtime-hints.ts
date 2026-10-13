@@ -1,4 +1,3 @@
-/** Builds platform-specific log and start hints for daemon status output. */
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -15,7 +14,7 @@ export function buildPlatformRuntimeLogHints(params: {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
-    const logs = resolveGatewaySupervisorLogPaths(env, { platform });
+    const logs = resolveGatewaySupervisorLogPaths(env);
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,

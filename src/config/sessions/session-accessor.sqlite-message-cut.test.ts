@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -12,7 +13,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   appendTranscriptEvent,
-  appendTranscriptMessage,
   forkSessionAtMessage,
   listSessionBranches,
   listSessionParticipantsReadOnly,
@@ -169,30 +169,6 @@ describe("SQLite session message cuts", () => {
     expect(readStoredState(replacementPath)).toEqual(before);
   });
 
-  it("returns authored text without captured context or attachments on fork", async () => {
-    const { env, scope } = await createSession();
-    const text = "Edit only these words";
-    const snapshot = { page: "chat", title: "Captured work" };
-    await appendTranscriptMessage(scope, {
-      eventId: "context-input",
-      parentId: "assistant-2",
-      message: {
-        role: "user",
-        content: text + "\n\nWorking context captured at send time. " + JSON.stringify(snapshot),
-        __openclaw: { workContext: { snapshot, text } },
-      },
-      now: Date.now(),
-    });
-    const params = { agentId, env, sessionKey, entryId: "context-input" };
-    const result = await forkSessionAtMessage({
-      ...params,
-      targetKey: sessionKey + ":context-fork",
-    });
-    expect(result).toMatchObject({ status: "created", editorText: text });
-    expect(result).not.toHaveProperty("editorAttachments");
-    expect(result).not.toHaveProperty("editorMediaRefs");
-  });
-
   it("drains fixture resources before retiring native handles and removing the root", async ({
     onTestFinished,
   }) => {
@@ -273,37 +249,6 @@ describe("SQLite session message cuts", () => {
       });
     },
   );
-
-  it("switches to another tip and rebuilds the active-path projection", async () => {
-    const { env } = await createSession();
-
-    const result = await switchSessionBranch({
-      agentId,
-      env,
-      leafEntryId: "off-path-user",
-      sessionKey,
-    });
-
-    expect(result).toMatchObject({ status: "created", key: sessionKey });
-    if (result.status !== "created") {
-      throw new Error("expected branch switch result");
-    }
-    const activeEventIds = readSessionTranscriptMessageEvents({
-      agentId,
-      env,
-      sessionId: result.entry.sessionId,
-      sessionKey,
-    }).map(({ event }) =>
-      event && typeof event === "object" && "id" in event ? event.id : undefined,
-    );
-    expect(activeEventIds).toEqual(["user-1", "off-path-user"]);
-    expect(result.entry).toMatchObject({
-      agentHarnessId: undefined,
-      claudeCliSessionId: undefined,
-      cliSessionBindings: undefined,
-      cliSessionIds: undefined,
-    });
-  });
 
   it("rewinds by repointing the active leaf and returns the editor text", async () => {
     const { env, scope } = await createSession();
@@ -416,14 +361,21 @@ describe("SQLite session message cuts", () => {
       promptedAt: 7,
     });
 
-    const result = await forkSessionAtMessage({
-      agentId,
-      env,
-      entryId: "user-2",
-      sessionKey: canonicalSourceKey,
-      sessionStoreKey: sessionKey,
-      targetKey,
-    });
+    const sql = observeHostDataSql();
+    let result;
+    try {
+      result = await forkSessionAtMessage({
+        agentId,
+        env,
+        entryId: "user-2",
+        sessionKey: canonicalSourceKey,
+        sessionStoreKey: sessionKey,
+        targetKey,
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     expect(result).toMatchObject({
       status: "created",

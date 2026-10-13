@@ -4,15 +4,31 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
+import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
@@ -21,6 +37,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -44,7 +61,10 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
+import { createPlacementWorkspaceResultOps } from "./placement-workspace-result.js";
+import { createWorkerSessionToolSourceRunner } from "./worker-session-tool-source.js";
 import { prepareWorkerAgentRuntimeIdentity } from "./worker-turn-payload.js";
+import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-claim-close",
@@ -80,6 +100,186 @@ function workerClaimInput(name: string, active: Awaited<ReturnType<typeof advanc
     owner: placementTurnOwner(active),
   };
 }
+
+it("publishes native pending-result postimages before observers and rolls back tentative changes", async () => {
+  const active = await advanceToActive();
+  const claim = await store.claimTurn(workerClaimInput("native-result", active));
+  await store.markWorkspaceResultPending(claim);
+  const pending = store.preparedWorkspaceResult(claim)!;
+  const results = createPlacementWorkspaceResultOps({
+    path: database.path,
+    instanceId: pending.gatewayInstanceId,
+    now: () => 9_000,
+    read: () => database.db,
+    write: (write) => runOpenClawStateWriteTransaction(({ db }) => write(db), { database }),
+  });
+  const observed: Array<number | null | undefined> = [];
+  const unsubscribe = sessionChanges.subscribe(() => {
+    observed.push(store.preparedWorkspaceResult(claim)?.recoveryRequestedAtMs);
+  });
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          results.handoffWorkspaceResultRecovery(claim);
+          throw new Error("rollback native result");
+        },
+        { database },
+      ),
+    ).toThrow("rollback native result");
+    expect(store.preparedWorkspaceResult(claim)).toBe(pending);
+    expect(observed).toEqual([]);
+    results.handoffWorkspaceResultRecovery(claim);
+    expect(store.preparedWorkspaceResult(claim)?.recoveryRequestedAtMs).toBe(9_000);
+    expect(observed).toEqual([9_000]);
+    expect(pending.recoveryRequestedAtMs).toBeNull();
+    results.abandonWorkspaceResult(store.preparedWorkspaceResult(claim)!);
+    expect(store.preparedWorkspaceResult(claim)).toBeUndefined();
+    expect(observed).toEqual([9_000, undefined]);
+  } finally {
+    unsubscribe();
+  }
+});
+
+it("retains worker-parent source predicates through tool execution and rejects a reset before child commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const target: BoundAgentRunSessionTarget = {
+      ...SESSION,
+      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      expectedLifecycleRevision: "parent-lifecycle",
+      expectedWriterRunId: "parent-writer",
+    };
+    const parent = {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: target.expectedLifecycleRevision,
+      activeWriterRunId: target.expectedWriterRunId,
+    };
+    await replaceSessionEntry(target, parent);
+    const active = await advanceToActive();
+    const claim = await store.claimTurn(workerClaimInput("child-source", active));
+    await store.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+    await using source = await prepareWorkerTurnTranscriptSource(target);
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
+      assertSourceCurrent: source,
+      facts: {
+        runId: claim.runId,
+        agentId: SESSION.agentId,
+        ingress: { kind: "worker", boundary: "test.child-source", state: "present" },
+      },
+    });
+    let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+    try {
+      const prepared = await prepareWorkerAgentRuntimeIdentity({
+        agentId: SESSION.agentId,
+        sessionKey: SESSION.sessionKey,
+        sessionTarget: target,
+        promptCacheContext: { boundaryCount: 0 },
+        assertSourceCurrent: source,
+        runtimeInstanceId: active.environmentId,
+        placements: store,
+        turnClaim: claim,
+        turn: {
+          ...SESSION,
+          sessionFile: SESSION.sessionKey,
+          workspaceDir: state.root,
+          prompt: "synthetic worker parent",
+          timeoutMs: 5_000,
+          runId: claim.runId,
+          preparedRunAdmission: admission,
+        },
+      });
+      const runner = createWorkerSessionToolSourceRunner({
+        placements: store,
+        resolveGatewayContext: () => undefined,
+      });
+      const writeChild = (reset: boolean) =>
+        runner({
+          source: { ...SESSION, turnClaim: claim },
+          request: {
+            identity: {
+              environmentId: active.environmentId,
+              ownerEpoch: active.activeOwnerEpoch,
+              sessionId: claim.sessionId,
+              runId: claim.runId,
+              turnClaim: claim,
+              credentialHash: "synthetic-child-source",
+              bundleHash: "synthetic-child-source",
+              rpcSetVersion: 1,
+              protocolFeatures: [],
+              credentialExpiresAtMs: 1,
+            },
+            toolName: "sessions_spawn",
+            request: { toolCallId: "child-source", arguments: {} },
+            tool: () => {
+              host = createAgentHarnessHostCapabilities({
+                attempt: {
+                  ...target,
+                  runId: claim.runId,
+                  admittedRunContext: prepared.admittedRunContext,
+                },
+                pluginId: "synthetic-worker",
+              });
+              return host.capabilities.bindToolSurface([
+                {
+                  ...createStubTool("sessions_spawn"),
+                  execute: async () => {
+                    const guard = captureAgentToolSourceExecutionGuard();
+                    const sql = reset ? undefined : observeHostDataSql();
+                    const child = await patchSessionEntryCore(
+                      { ...target, sessionKey: `agent:main:child-source-${reset}` },
+                      () => {
+                        if (reset) {
+                          replaceSessionEntrySync(target, {
+                            ...parent,
+                            lifecycleRevision: "replacement",
+                          });
+                        }
+                        return { label: "child" };
+                      },
+                      {
+                        workerGuard: { source: guard },
+                        fallbackEntry: {
+                          sessionId: `child-${reset}`,
+                          updatedAt: 1,
+                          parentSessionKey: target.sessionKey,
+                        },
+                        skipMaintenance: true,
+                      },
+                    ).finally(() => sql?.restore());
+                    if (sql) {
+                      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                    }
+                    return { content: [], details: child };
+                  },
+                },
+              ])[0]!;
+            },
+          },
+        });
+      expect((await writeChild(false)).details).toMatchObject({
+        sessionId: "child-false",
+        parentSessionKey: target.sessionKey,
+        label: "child",
+      });
+      host?.close();
+      await expect(writeChild(true)).rejects.toThrow(
+        `Session ${target.sessionId} worker turn authority changed`,
+      );
+      expect(loadSessionEntry(target)?.lifecycleRevision).toBe("replacement");
+      expect(
+        loadSessionEntry({ ...target, sessionKey: "agent:main:child-source-true" }),
+      ).toBeUndefined();
+    } finally {
+      host?.close();
+      await store.releaseTurn(claim);
+      admission.close();
+    }
+  });
+});
 
 it("fences pending tool revocation and cannot revive grants after claim release", async () => {
   const active = await advanceToActive();
@@ -393,11 +593,7 @@ it.each(["preparing", "bound", "final source check"] as const)(
           phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
         );
       }
-      if (phase === "final source check") {
-        expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
-      } else {
-        expect(assertSourceCurrent).not.toHaveBeenCalled();
-      }
+      expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
     } finally {
       preparation?.mockRestore();
       releaseAgentRunDelegatedAuthority(delegated);
@@ -411,7 +607,7 @@ it("retains the original transcript and prompt cache facts while claim authority
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
   const expected = {
-    ...sessionTarget,
+    ...captureSessionTranscriptTargetBinding(sessionTarget),
     expectedLifecycleRevision: "original-lifecycle",
     expectedWriterRunId: claim.runId,
   };
@@ -456,6 +652,7 @@ it("retains the original transcript and prompt cache facts while claim authority
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
   requested.expectedWriterRunId = "replacement-run";
+  requested.env = { ...requested.env, OPENCLAW_STATE_DIR: path.join(root, "replacement-state") };
   try {
     const { capability } = await binding;
     expect(capability.sessionTarget).toEqual(expected);
@@ -612,9 +809,14 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     database: openOpenClawStateDatabase({ path: alias }),
   });
   try {
-    expect(facade.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(await facade.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
+    await facade.retireSessionPlacementAsync({
+      sessionId: local.sessionId,
+      expectedState: "local",
+      expectedGeneration: local.placementGeneration,
+    });
     await facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.releaseTurn(worker);

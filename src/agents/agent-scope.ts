@@ -1,4 +1,3 @@
-/** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -98,7 +97,6 @@ function pruneAutoFallbackPrimaryProbeState(params: {
   pruneMapToMaxSize(params.state, maxKeys || 0);
 }
 
-/** Primary model probe metadata used to validate auto-fallback recovery. */
 export type AutoFallbackPrimaryProbe = {
   provider: string;
   model: string;
@@ -423,18 +421,6 @@ function updateAgentModelPrimary(
 
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
-export function resolveAgentModelPrimaryWriteTarget(
-  cfg: OpenClawConfig,
-  agentId: string,
-  options: { target?: AgentModelPrimaryWriteTarget; forceAgent?: boolean } = {},
-): AgentModelPrimaryWriteTarget {
-  const id = normalizeAgentId(agentId);
-  const target = options.target ?? (options.forceAgent ? "agent" : undefined);
-  return target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))
-    ? "agent"
-    : "defaults";
-}
-
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -443,10 +429,9 @@ export function setAgentEffectiveModelPrimary(
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
   const target = options.target ?? (options.forceAgent ? "agent" : undefined);
-  const resolvedTarget = resolveAgentModelPrimaryWriteTarget(cfg, id, options);
   // An explicit agent target pins the write even without an existing model,
   // so a per-agent override never rewrites the shared default route.
-  if (resolvedTarget === "agent") {
+  if (target !== "defaults" && (target === "agent" || resolveAgentExplicitModelPrimary(cfg, id))) {
     const entry = resolveMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);

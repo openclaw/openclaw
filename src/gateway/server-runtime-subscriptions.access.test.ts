@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -10,7 +11,10 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  readSessionMembersInWorker,
+} from "../config/sessions/session-sharing-store.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   openOpenClawAgentDatabase,
@@ -49,6 +53,7 @@ async function withAccessFixture(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:identity-access",
@@ -225,14 +230,8 @@ it.each([
         });
         return;
       }
-      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const kinds: string[] = [];
       const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
-      if (rollback) {
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-        BEFORE UPDATE OF entry_json ON session_nodes
-        BEGIN SELECT RAISE(ABORT, 'injected reset failure'); END;`);
-      }
       try {
         const reset = applySessionEntryLifecycleMutation({
           agentId: scope.agentId,
@@ -241,14 +240,21 @@ it.each([
           upserts: [
             {
               sessionKey: scope.sessionKey,
-              entry: { ...entry, lifecycleRevision: "after", updatedAt: 2 },
+              entry: {
+                ...entry,
+                ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+                lifecycleRevision: "after",
+                updatedAt: 2,
+              },
               resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
             },
           ],
           skipMaintenance: true,
         });
         if (rollback) {
-          await expect(reset).rejects.toThrow("injected reset failure");
+          await expect(reset).rejects.toThrow(
+            "refusing non-canonical session key write invalid-reset-parent",
+          );
           expect(kinds).toEqual([]);
           expect(readGatewayAccessRevision()).toBe(revision);
         } else {
@@ -259,9 +265,6 @@ it.each([
         expect(loadSessionEntry(scope)?.lifecycleRevision).toBe(rollback ? "before" : "after");
       } finally {
         observe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
     });
   },
@@ -316,7 +319,7 @@ it("invalidates committed compaction access after the run is aborted and removed
       expect(params.chatAbortControllers.has(runId)).toBe(false);
       expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
-      expect(listSessionMembers(scope)).toEqual([]);
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
     } finally {
       abort();
       run.cleanup();

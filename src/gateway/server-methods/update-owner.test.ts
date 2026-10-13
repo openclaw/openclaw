@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -55,47 +59,53 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
 }));
 
 // Prepare the tool surface before case deadlines; execution resolves the current Gateway context.
-const promptUpdateCases = (
-  [
+const promptUpdateCases = await (async () => {
+  const cases = [];
+  for (const { channel, supervisor } of [
     { channel: "slack", supervisor: "launchd" },
     { channel: "discord", supervisor: null },
-  ] as const
-).map(({ channel, supervisor }) => {
-  const config: OpenClawConfig = {
-    plugins: { enabled: false },
-    tools: { profile: "coding" },
-    commands: { ownerAllowFrom: [`${channel}:owner`] },
-  };
-  const { tools } = resolveGatewayScopedTools({
-    cfg: config,
-    sessionKey: `agent:main:${channel}:dm:owner`,
-    messageProvider: channel,
-    accountId: "primary",
-    agentTo: "owner",
-    senderIsOwner: true,
-    channelContext: { sender: { id: "owner" } },
-    surface: "loopback",
-  });
-  return {
-    channel,
-    supervisor,
-    config,
-    toolNames: tools.map((candidate) => candidate.name),
-    tool: expectDefined(
-      tools.find((candidate) => candidate.name === "gateway"),
-      "Gateway-scoped update tool",
-    ),
-  };
-});
+  ] as const) {
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { profile: "coding" },
+      commands: { ownerAllowFrom: [`${channel}:owner`] },
+    };
+    setRuntimeConfigSnapshot(config);
+    const { tools } = await resolveGatewayScopedTools({
+      cfg: config,
+      sessionKey: `agent:main:${channel}:dm:owner`,
+      messageProvider: channel,
+      accountId: "primary",
+      agentTo: "owner",
+      senderIsOwner: true,
+      channelContext: { sender: { id: "owner" } },
+      surface: "loopback",
+    });
+    cases.push({
+      channel,
+      supervisor,
+      config,
+      toolNames: tools.map((candidate) => candidate.name),
+      tool: expectDefined(
+        tools.find((candidate) => candidate.name === "gateway"),
+        "Gateway-scoped update tool",
+      ),
+    });
+  }
+  clearRuntimeConfigSnapshot();
+  return cases;
+})();
 
 describe("update.run current owner authority", () => {
   let config: OpenClawConfig;
   beforeEach(() => {
     config = { commands: { ownerAllowFrom: ["owner"] } };
+    setRuntimeConfigSnapshot(config);
     host.context = { getRuntimeConfig: () => config } as GatewayRequestContext;
   });
 
   async function runOwnerTool(tool: ReturnType<typeof createGatewayTool>, channel = "slack") {
+    setRuntimeConfigSnapshot(config);
     return withGatewayToolCallerIdentity(
       {
         agentId: "main",
@@ -118,6 +128,7 @@ describe("update.run current owner authority", () => {
             change === "unchanged" ? ["owner"] : change === "revoked" ? [] : ["replacement"],
         },
       };
+      setRuntimeConfigSnapshot(config);
       const result =
         change === "channel-less"
           ? await tool.execute("update", { action: "update.run" })
@@ -161,6 +172,7 @@ describe("update.run current owner authority", () => {
     "matches the prompt update path for $channel with supervisor $supervisor",
     async ({ channel, supervisor, config: promptConfig, toolNames, tool }) => {
       config = promptConfig;
+      setRuntimeConfigSnapshot(config);
       detectRespawnSupervisorMock.mockReturnValue(supervisor);
       mockGlobalInstallSurface();
       const prompt = buildAgentSystemPrompt({
@@ -266,6 +278,7 @@ describe("update.run current owner authority", () => {
       detectRespawnSupervisorMock.mockReturnValue(acknowledged ? "launchd" : null);
       const revoke = () => {
         config = { commands: { ownerAllowFrom: ["replacement"] } };
+        setRuntimeConfigSnapshot(config);
       };
       if (acknowledged) {
         sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
@@ -361,6 +374,7 @@ describe("update.run chat restart permission", () => {
     );
     isRestartEnabledMock.mockImplementation(actual.isRestartEnabled);
     config = { commands: { ownerAllowFrom: ["slack:owner"] } };
+    setRuntimeConfigSnapshot(config);
   });
 
   async function runUpdate(
@@ -369,6 +383,7 @@ describe("update.run chat restart permission", () => {
       senderId: "owner",
     },
   ): Promise<UpdateRunPayload> {
+    setRuntimeConfigSnapshot(config);
     const { updateHandlers } = await import("./update.js");
     let payload: UpdateRunPayload | undefined;
     await expectDefined(
@@ -466,6 +481,7 @@ describe("update.run chat restart permission", () => {
         await Promise.race([acknowledgementStarted.promise, running]);
         expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
         config = { commands: { ownerAllowFrom: ["slack:owner"], restart: false } };
+        setRuntimeConfigSnapshot(config);
       } finally {
         acknowledgement.resolve(true);
         await running;

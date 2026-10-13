@@ -13,13 +13,15 @@ import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.j
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import {
   writeSubagentSessionEntry,
   settleSubagentRegistryPersistenceWork,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsForControllerFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -50,9 +52,14 @@ import { refusePendingInputCommit } from "./pending-input-commit.test-support.js
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
-import { registerSessionsSendPrivateCompletionTests } from "./server.private-completion.sessions-send.test-support.js";
+import {
+  createPrivateCompletionRequest,
+  readPrivateCompletionRecorder,
+  registerSessionsSendPrivateCompletionTests,
+} from "./server.private-completion.sessions-send.test-support.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -112,19 +119,8 @@ describe("private subagent completion processing receipts", () => {
       .db.prepare("SELECT * FROM session_pending_inputs WHERE session_id = ?")
       .all(sessionId);
   const transcript = () => sessionAccessor.loadTranscriptEventsSync(scope());
-  const request = (message = "Synthetic private child marker") => ({
-    sessionKey,
-    expectedExistingSessionId: sessionId,
-    idempotencyKey: runId,
-    message,
-    deliver: false,
-    sourceReplyDeliveryMode: "automatic",
-    inputProvenance: {
-      kind: "inter_session",
-      sourceTool: "subagent_announce",
-      sourceSessionKey: "agent:main:subagent:synthetic-child",
-    },
-  });
+  const request = (message?: string) =>
+    createPrivateCompletionRequest({ sessionKey, sessionId, runId, message });
   const dispatch = (message?: string, onAccepted?: () => void) =>
     dispatchGatewayMethodInProcess<Record<string, unknown>>("agent", request(message), {
       privateCompletion: true,
@@ -142,16 +138,7 @@ describe("private subagent completion processing receipts", () => {
     await prepareGatewayReplyRuntimeForTest({ force: true });
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(previousDedupe);
   }
-  function recorder(input: unknown) {
-    const command = input as AgentCommandOpts;
-    expect(command.deliver).toBe(false);
-    expect(command.privateCompletion).toBe(true);
-    expect(command.sessionId).toBe(sessionId);
-    return expectDefined(
-      command.userTurnTranscriptRecorder,
-      "Expected real private input recorder",
-    );
-  }
+  const recorder = (input: unknown) => readPrivateCompletionRecorder(input, sessionId);
 
   registerSessionsSendPrivateCompletionTests(() => ({
     context: kernel.gatewayRequestContext,
@@ -172,9 +159,9 @@ describe("private subagent completion processing receipts", () => {
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {
     const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
-    const stage = sessionAccessor.stageSessionPendingInput;
+    const stage = pendingInputs.stageSessionPendingInput;
     const seed = vi
-      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .spyOn(pendingInputs, "stageSessionPendingInput")
       .mockImplementationOnce(async (target, options) => {
         const previous = expectDefined(
           await stage(target, {
@@ -352,7 +339,7 @@ describe("private subagent completion processing receipts", () => {
         JSON.stringify(event).includes("run-failed-before-reply"),
       );
       expect.soft(failedNotice).toBe(!cancelled);
-      const session = loadSessionEntry(sessionKey).entry;
+      const session = (await loadSessionEntryAsync(sessionKey)).entry;
       expect.soft(session?.status === "failed").toBe(!cancelled);
       expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)).toMatchObject({
         ok: cancelled,
@@ -727,6 +714,7 @@ describe("private subagent completion processing receipts", () => {
         agentId: "main",
         sessionKey: childSessionKey,
         defaultSessionId: childSessionId,
+        lifecycleRevision: "private-descendant-original",
       });
       agentCommandMock.mockImplementationOnce(async (input) => {
         const command = input as AgentCommandOpts;
@@ -787,6 +775,8 @@ describe("private subagent completion processing receipts", () => {
         await registerSubagentRun({
           runId: descendantRunId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: (await loadSessionEntryAsync(childSessionKey)).entry,
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterTurnRunId: runId,
@@ -799,7 +789,7 @@ describe("private subagent completion processing receipts", () => {
         // are admitted; a slow socket handshake must not hide the outstanding wait.
         await expect
           .poll(() =>
-            loadSubagentRunsForControllerFromSqlite(sessionKey).some(
+            listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).some(
               (run) => run.runId === descendantRunId,
             ),
           )
@@ -818,7 +808,7 @@ describe("private subagent completion processing receipts", () => {
           expect(observedTerminal).toBe(true);
         }
         await metadataOverlap.assertCompleted();
-        expect(loadSessionEntry(childSessionKey).entry).toMatchObject({
+        expect((await loadSessionEntryAsync(childSessionKey)).entry).toMatchObject({
           sessionId: childSessionId,
           label: metadataOverlap.label,
           abortedLastRun: true,
@@ -852,7 +842,7 @@ describe("private subagent completion processing receipts", () => {
         value: { status: "timeout", stopReason: "rpc" },
       });
       expect(
-        loadSubagentRunsForControllerFromSqlite(sessionKey).find(
+        listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).find(
           (run) => run.runId === descendantRunId,
         ),
       ).toMatchObject({ endedReason: "subagent-killed", execution: { status: "terminal" } });
@@ -922,18 +912,19 @@ describe("private subagent completion processing receipts", () => {
       );
       expect(active.executionStarted).toBe(true);
       const releaseTerminalWrite = createDeferred();
+      const terminalWrites = createPreparedLifecycleWriteTracker();
       let terminalWrite: Promise<void> | undefined;
-      const persistLifecycle = lifecycleState.persistGatewaySessionLifecycleEvent;
+      const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
       const delayedTerminalWrite =
         kind === "abandoned"
           ? vi
-              .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+              .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
               .mockImplementation((params) => {
+                const persist = prepareLifecycle(params);
                 if (params.event.runId !== runId) {
-                  return persistLifecycle(params);
+                  return persist;
                 }
-                terminalWrite = releaseTerminalWrite.promise.then(() => persistLifecycle(params));
-                return terminalWrite;
+                return terminalWrites.track(() => releaseTerminalWrite.promise.then(persist));
               })
           : undefined;
       active.expiresAtMs = Date.now() - 1;
@@ -959,13 +950,18 @@ describe("private subagent completion processing receipts", () => {
         expect(completions()).toEqual([]);
         if (kind === "abandoned") {
           // Keep the real terminal write and raw execution pending through timeout settlement.
+          await terminalWrites.accepted;
+          terminalWrite = active.projectSessionTerminalPersistence;
           expect(terminalWrite).toBeInstanceOf(Promise);
           await clock.advanceBy(60_000);
-          await inputRecorder.waitForPendingInputSettlement?.();
+          await awaitGateBeforeSettlement(
+            expectDefined(inputRecorder.waitForPendingInputSettlement?.(), "input settlement"),
+            expectDefined(active.projectSessionTerminalPersistence, "terminal persistence"),
+            "Terminal persistence settled before its held write was released",
+          );
           expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
           expect(active.executionSettlement?.status).toBe("pending");
           expect(active.projectSessionTerminalPending).toBe(true);
-          expect(active.projectSessionTerminalPersistence).toBe(terminalWrite);
           expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
             reason: "timed_out",
             status: "timeout",
@@ -979,7 +975,7 @@ describe("private subagent completion processing receipts", () => {
         releaseTerminalWrite.resolve();
         release.resolve();
         try {
-          await terminalWrite;
+          await terminalWrites.drain(...(terminalWrite ? [terminalWrite] : []));
         } finally {
           delayedTerminalWrite?.mockRestore();
         }
@@ -997,6 +993,7 @@ describe("private subagent completion processing receipts", () => {
         }),
       ).toBe(true);
       expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
+      expect(active.projectSessionTerminalPersisted).toBe(true);
       if (kind === "resolved") {
         expect(outcome).toMatchObject({
           reason: "hard_timeout",

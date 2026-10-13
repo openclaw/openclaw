@@ -1,3 +1,5 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Schema-bearing containers shared by the draft-07 through 2020-12 walkers.
 export const SCHEMA_MAP_KEYS = new Set([
   "$defs",
@@ -28,8 +30,44 @@ export const SCHEMA_OBJECT_KEYS = new Set([
 
 /** Containers whose value is a list of nested schemas. */
 export const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
+export const SCHEMA_NESTED_KEYS = new Set([...SCHEMA_OBJECT_KEYS, ...SCHEMA_ARRAY_KEYS].toSorted());
 
 export type SchemaWalk = Generator<SchemaWalk, unknown, unknown>;
+
+export function* walkSchemaArray(
+  schemas: unknown[],
+  visit: (schema: unknown) => SchemaWalk,
+  result: unknown[] = [],
+): SchemaWalk {
+  result.length = schemas.length;
+  for (let index = 0; index < result.length; index += 1) {
+    if (index in schemas) {
+      result[index] = yield visit(schemas[index]);
+    }
+  }
+  return result;
+}
+
+export function* walkSchemaValue(
+  schema: unknown,
+  ancestors: Set<object>,
+  visitObject: (schema: Record<string, unknown>) => SchemaWalk,
+): SchemaWalk {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  if (ancestors.has(schema)) {
+    throw new TypeError("Tool schema contains a circular reference.");
+  }
+  ancestors.add(schema);
+  try {
+    return yield Array.isArray(schema)
+      ? walkSchemaArray(schema, (entry) => walkSchemaValue(entry, ancestors, visitObject))
+      : visitObject(asRecord(schema));
+  } finally {
+    ancestors.delete(schema);
+  }
+}
 
 /** Resume child schema walks on a heap stack, never through recursive yield delegation. */
 export function evaluateSchemaWalk(walk: SchemaWalk): unknown {

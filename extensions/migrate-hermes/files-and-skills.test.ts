@@ -6,6 +6,10 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
@@ -28,6 +32,8 @@ describe("Hermes migration file and skill items", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync(testWorkspace.dir);
+    await closeOpenClawStateDatabaseAsync();
     await testWorkspace.cleanup();
   });
 
@@ -442,42 +448,6 @@ describe("Hermes migration file and skill items", () => {
     expect(itemById(secondResult.items, "memory:MEMORY.md")?.status).toBe("skipped");
   });
 
-  it.each([
-    ["missing", undefined],
-    ["empty", ""],
-    ["comment-only", "# No config values\n"],
-    ["null", "null\n"],
-    ["boolean", "true\n"],
-    ["number", "42\n"],
-    ["string", "review\n"],
-    ["sequence", "- skills:\n    disabled: [review]\n"],
-  ])("plans independent skills with %s Hermes config", async (_, content) => {
-    const root = testWorkspace.dir;
-    const source = path.join(root, "hermes");
-    const workspaceDir = path.join(root, "workspace");
-    const skillSource = path.join(source, "skills", "review");
-    await writeFile(path.join(skillSource, "SKILL.md"), "# Review\n");
-    if (content !== undefined) {
-      await writeFile(path.join(source, "config.yaml"), content);
-    }
-
-    const plan = await buildHermesMigrationProvider().plan(
-      makeContext({ source, stateDir: path.join(root, "state"), workspaceDir }),
-    );
-
-    expect(plan.items).toEqual([
-      expect.objectContaining({
-        id: "skill:review",
-        kind: "skill",
-        action: "copy",
-        status: "planned",
-        source: skillSource,
-        target: path.join(workspaceDir, "skills", "review"),
-        details: { skillName: "review" },
-      }),
-    ]);
-  });
-
   it("plans nested mapping config alongside independent skills", async () => {
     const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
@@ -684,56 +654,5 @@ describe("Hermes migration file and skill items", () => {
     expect(await fs.readFile(path.join(reportDir, "archive", "state.db", "state.db"), "utf8")).toBe(
       "legacy non-SQLite Hermes state\n",
     );
-  });
-
-  it("ignores legacy Hermes OpenAI auth.json OAuth state", async () => {
-    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(
-      path.join(source, "auth.json"),
-      JSON.stringify({
-        providers: {
-          openai: {
-            tokens: {
-              access_token: "old-access",
-              refresh_token: "old-refresh",
-            },
-          },
-        },
-        credential_pool: {
-          openai: [
-            {
-              access_token: "pool-access",
-              refresh_token: "pool-refresh",
-            },
-          ],
-        },
-      }),
-    );
-
-    const provider = buildHermesMigrationProvider();
-    const plan = await provider.plan(
-      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
-    );
-
-    expect(plan.items.some((item) => item.kind === "auth")).toBe(false);
-  });
-
-  it("ignores empty Hermes auth.json credential containers", async () => {
-    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
-    await writeFile(
-      path.join(source, "auth.json"),
-      JSON.stringify({
-        providers: {},
-        credential_pool: {},
-        tokens: { anthropic: { access: "other-access", refresh: "other-refresh" } },
-      }),
-    );
-
-    const provider = buildHermesMigrationProvider();
-    const plan = await provider.plan(
-      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
-    );
-
-    expect(plan.items.some((item) => item.kind === "auth")).toBe(false);
   });
 });

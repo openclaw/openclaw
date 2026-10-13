@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
@@ -421,45 +422,17 @@ describe("legacy config migration end to end", () => {
   });
 
   it("preserves canonical OpenAI personality over the retired prompt overlay", () => {
-    const raw = {
+    const raw: OpenClawConfigWithLegacyRoster = {
       agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },
       plugins: { entries: { openai: { config: { personality: "friendly" } } } },
     };
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.config?.plugins?.entries?.openai?.config?.personality).toBe("friendly");
-    expect(result.config?.agents?.defaults?.promptOverlays).toBeUndefined();
+    expect(result.config?.agents?.defaults).not.toHaveProperty("promptOverlays");
     expect(result.changes).toContain(
       "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
     );
-  });
-
-  it("repairs unsupported OTel grpc once and is then a no-op", () => {
-    const raw = {
-      diagnostics: {
-        otel: {
-          enabled: true,
-          traces: false,
-          metrics: false,
-          logs: true,
-          logsExporter: "stdout",
-          protocol: "grpc",
-        },
-      },
-    };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-
-    expect(result.config?.diagnostics?.otel).toEqual({
-      enabled: true,
-      traces: false,
-      metrics: false,
-      logs: true,
-      logsExporter: "stdout",
-    });
-    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
-    expect(
-      applyLegacyDoctorMigrations(result.config, { sourceConfigBeforeMigrations: result.config }),
-    ).toEqual({ next: null, changes: [] });
   });
 
   it.each([

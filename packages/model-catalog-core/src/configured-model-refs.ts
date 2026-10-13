@@ -65,6 +65,14 @@ export function collectConfiguredModelRefs(
   };
   const collectModelConfig = (path: string, value: unknown, kind: ConfiguredModelRef["kind"]) =>
     visitModelSelectorRefs(value, path, (refPath, ref) => pushModelRef(refPath, ref, kind));
+  const collectReviewerModel = (path: string, tools: Record<string, unknown>) => {
+    const exec = asNonArrayRecord(tools.exec);
+    collectModelConfig(
+      `${path}.exec.reviewer.model`,
+      asOptionalRecord(exec.reviewer)?.model,
+      "selector",
+    );
+  };
   const collectFromAgent = (path: string, agent: unknown, includeEntrySelectors = false) => {
     if (!isRecord(agent)) {
       return;
@@ -101,12 +109,7 @@ export function collectConfiguredModelRefs(
     }
     if (includeEntrySelectors) {
       const tools = asNonArrayRecord(agent.tools);
-      const exec = asNonArrayRecord(tools.exec);
-      collectModelConfig(
-        `${path}.tools.exec.reviewer.model`,
-        asOptionalRecord(exec.reviewer)?.model,
-        "selector",
-      );
+      collectReviewerModel(`${path}.tools`, tools);
       pushModelRef(
         `${path}.tts.summaryModel`,
         asOptionalRecord(agent.tts)?.summaryModel,
@@ -117,12 +120,7 @@ export function collectConfiguredModelRefs(
 
   const root = asNonArrayRecord(config);
   const tools = asNonArrayRecord(root.tools);
-  const exec = asNonArrayRecord(tools.exec);
-  collectModelConfig(
-    "tools.exec.reviewer.model",
-    asOptionalRecord(exec.reviewer)?.model,
-    "selector",
-  );
+  collectReviewerModel("tools", tools);
   const media = asNonArrayRecord(tools.media);
   for (const capability of ["image", "audio", "video"] as const) {
     pushModelRef(

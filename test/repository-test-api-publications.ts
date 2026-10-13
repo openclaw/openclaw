@@ -14,7 +14,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/auth-profiles/runtime-snapshots.ts": Symbol.for(
     "openclaw.runtimeAuthSnapshotsTestApi",
   ),
-  "src/agents/auth-profiles/store.ts": Symbol.for("openclaw.authProfileStoreTestApi"),
   "src/agents/auth-profiles/usage.ts": Symbol.for("openclaw.authProfileUsageTestApi"),
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
@@ -26,7 +25,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
-  "src/agents/sessions/tools/bash.ts": Symbol.for("openclaw.bashToolTestApi"),
   "src/agents/subagents/announce/subagent-announce-delivery.ts": Symbol.for(
     "openclaw.subagentAnnounceDeliveryTestApi",
   ),
@@ -59,9 +57,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.codexRouteSessionRepairTestApi",
   ),
   "src/commands/doctor/shared/stale-auth-order.ts": Symbol.for("openclaw.staleAuthOrderTestApi"),
-  "src/commands/doctor/shared/stale-oauth-profile-shadows.ts": Symbol.for(
-    "openclaw.staleOAuthProfileShadowsTestApi",
-  ),
   "src/cron/service/active-run-cancellation.ts": Symbol.for("openclaw.activeCronTaskRunTestApi"),
   "src/cron/service/timer.ts": Symbol.for("openclaw.cronTimerTestApi"),
   "src/cron/session-reaper.ts": Symbol.for("openclaw.cronSessionReaperTestApi"),
@@ -79,11 +74,9 @@ const publications: Record<string, string | symbol> = {
     "openclaw.sessionLifecycleAdmissionTestApi",
   ),
   "src/sessions/session-upstream-monitor.ts": Symbol.for("openclaw.sessionUpstreamMonitorTestApi"),
-  "src/sessions/user-turn-transcript.ts": Symbol.for("openclaw.userTurnTranscriptTestApi"),
   "src/skills/lifecycle/upload-store.ts": Symbol.for("openclaw.skillUploadStoreTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
-  "src/talk/client-voice-confirmation.ts": Symbol.for("openclaw.clientVoiceConfirmationTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
 };
 

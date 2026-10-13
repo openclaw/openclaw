@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import pMap from "p-map";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -83,8 +84,11 @@ describe("chat metadata with published model owners", () => {
         });
         return entry;
       };
-      const configured = await Promise.all(
-        Array.from({ length: count }, (_, index) => add(index === 0 ? "main" : `agent-${index}`)),
+      // Exercise a large roster without exhausting broker slots during fixture writes.
+      const configured = await pMap(
+        Array.from({ length: count }, (_, index) => (index === 0 ? "main" : `agent-${index}`)),
+        add,
+        { concurrency: 2, stopOnError: false },
       );
       const published = new Map<string, PreparedModelRuntimeSnapshot>();
       const publish = async (entry: Awaited<ReturnType<typeof add>>, force = false) => {
@@ -163,19 +167,22 @@ describe("chat metadata with published model owners", () => {
         expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
         expect(builds).toBe(count + 1);
         const added = await add("added");
-        await expect(runtime.refresh()).rejects.toBeInstanceOf(
+        await runtime.refresh();
+        expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
+        expect(builds).toBe(count + 2);
+        await expect(runtime.read({ agentId: "added" })).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );
         await publish(added);
         await runtime.refresh();
         expect((await runtime.read({ agentId: "added" })).models).toContainEqual(expectedModel);
-        expect(builds).toBe(count + 2);
+        expect(builds).toBe(count + 3);
         delete entries.added;
         await runtime.refresh();
         await expect(runtime.read({ agentId: "added" })).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );
-        expect(builds).toBe(count + 2);
+        expect(builds).toBe(count + 3);
         // Leave substantial linear headroom; fail repeated per-agent roster traversal.
         expect(unchangedReads).toBeLessThanOrEqual(8 * count);
       } finally {

@@ -32,20 +32,7 @@ type ActiveImportedSourceSync = {
   promise: Promise<MemoryWikiImportedSourceSyncResult>;
 };
 
-const activeImportedSourceSyncs = new Map<string, ActiveImportedSourceSync[]>();
-
-function resolveImportedSourceSyncRequestKey(
-  params: SyncMemoryWikiImportedSourcesParams,
-  vaultKey: string,
-): string {
-  return JSON.stringify({
-    ...params.config,
-    vault: {
-      ...params.config.vault,
-      path: vaultKey,
-    },
-  });
-}
+const activeImportedSourceSyncs = new Map<string, Set<ActiveImportedSourceSync>>();
 
 async function syncMemoryWikiImportedSourcesOnce(
   params: SyncMemoryWikiImportedSourcesParams,
@@ -84,9 +71,12 @@ export async function syncMemoryWikiImportedSources(
   params: SyncMemoryWikiImportedSourcesParams,
 ): Promise<MemoryWikiImportedSourceSyncResult> {
   const vaultKey = await resolveMemoryWikiVaultMutationKey(params.config.vault.path);
-  const requestKey = resolveImportedSourceSyncRequestKey(params, vaultKey);
-  const active = activeImportedSourceSyncs.get(vaultKey) ?? [];
-  const matching = active.find(
+  const requestKey = JSON.stringify({
+    ...params.config,
+    vault: { ...params.config.vault, path: vaultKey },
+  });
+  const active = activeImportedSourceSyncs.get(vaultKey) ?? new Set<ActiveImportedSourceSync>();
+  const matching = [...active].find(
     (entry) =>
       entry.requestKey === requestKey &&
       entry.appConfig === params.appConfig &&
@@ -98,27 +88,23 @@ export async function syncMemoryWikiImportedSources(
 
   // Equivalent polls share the whole source-and-index flight. Different
   // snapshots still queue on the common vault transaction boundary.
-  const promise = withMemoryWikiVaultMutation(params.config.vault.path, () => {
-    params.signal?.throwIfAborted();
-    return syncMemoryWikiImportedSourcesOnce(params);
-  });
+  const promise = withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    syncMemoryWikiImportedSourcesOnce(params),
+  );
   const entry: ActiveImportedSourceSync = {
     requestKey,
-    ...(params.appConfig ? { appConfig: params.appConfig } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
+    appConfig: params.appConfig,
+    signal: params.signal,
     promise,
   };
-  active.push(entry);
+  active.add(entry);
   activeImportedSourceSyncs.set(vaultKey, active);
 
   try {
     return await promise;
   } finally {
-    const index = active.indexOf(entry);
-    if (index >= 0) {
-      active.splice(index, 1);
-    }
-    if (active.length === 0 && activeImportedSourceSyncs.get(vaultKey) === active) {
+    active.delete(entry);
+    if (active.size === 0) {
       activeImportedSourceSyncs.delete(vaultKey);
     }
   }
@@ -127,7 +113,7 @@ export async function syncMemoryWikiImportedSources(
 export async function waitForMemoryWikiImportedSourceSyncs(): Promise<void> {
   await Promise.allSettled(
     [...activeImportedSourceSyncs.values()].flatMap((entries) =>
-      entries.map((entry) => entry.promise),
+      [...entries].map((entry) => entry.promise),
     ),
   );
 }

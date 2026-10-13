@@ -18,16 +18,16 @@ import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import {
-  executeWorkerInference,
-  type WorkerInferenceExecutionParams,
-} from "./inference-runtime.js";
+import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";
+import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
+import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
 type Deps = {
   applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
@@ -193,6 +193,7 @@ export function setup(
     accountCatalog?: PreparedAccountCatalogAccess;
     metadataSnapshot?: preparedRuntime.PreparedModelRuntimeSnapshot["metadataSnapshot"];
     pluginRegistry?: PluginRegistry;
+    configuredRuntimeModel?: ProviderRuntimeModel;
     afterModelPreparation?: () => void;
     observeStage?: (
       stage: "factory" | "policy" | "wrapper" | "execution",
@@ -230,7 +231,7 @@ export function setup(
       routeVariants: [],
     },
     configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
+    findConfiguredRuntimeModel: () => options.configuredRuntimeModel,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
@@ -344,9 +345,36 @@ export function setup(
     traceId: "1".repeat(32),
     spanId: "2".repeat(16),
   });
+  const withPreparedInference = async <T>(
+    run: () => Promise<T>,
+    input = params(request(), vi.fn()),
+  ) => {
+    await using lease = await acquireRuntimeLease({
+      config: options.config ?? config,
+      agentId: sessionTarget.agentId,
+      agentDir: "/gateway-agent",
+    });
+    const { inference } = await prepareWorkerTurnModel({
+      target: sessionTarget,
+      modelRef: input.request.modelRef,
+      runtimeSnapshot: lease.snapshot,
+      inferencePlacement: "gateway",
+      turn: { abortSignal: input.signal, workspaceDir: WORKSPACE },
+      assertCurrent: () => {
+        if (!input.isCurrent()) {
+          throw new Error("Worker inference source is no longer current");
+        }
+      },
+    });
+    vi.spyOn(workerTurnOwners, "getWorkerTurnInference").mockReturnValue(inference);
+    return await run();
+  };
   return {
     applyStreamPolicy,
-    executor: executeWorkerInference,
+    executor: (input: Execution) =>
+      withPreparedInference(() => executeWorkerInference(input), input),
+    executePrepared: executeWorkerInference,
+    withPreparedInference,
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
@@ -361,7 +389,6 @@ export function setup(
 export function params(
   inferenceRequest: WorkerInferenceStartParams,
   emit: Execution["emit"],
-  runtimeConfig: OpenClawConfig = config,
 ): Execution {
   return {
     identity,
@@ -370,6 +397,5 @@ export function params(
     signal: new AbortController().signal,
     emit,
     isCurrent: () => true,
-    config: runtimeConfig,
   };
 }

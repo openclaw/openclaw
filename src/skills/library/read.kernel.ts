@@ -4,6 +4,7 @@ import {
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { SkillLibraryError } from "../skill-library-error.js";
@@ -15,25 +16,29 @@ import {
   resolveSkillLibraryPresentationInDatabase,
 } from "./service.kernel.js";
 import {
-  projectSkillLibraryEntry,
+  selectSkillLibraryEntries,
+  resolveSkillLibraryActor,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUpload,
   selectSkillLibraryRevisionMetadata,
-  selectSkillLibraryRow,
   type SkillLibraryAuthority,
 } from "./store.js";
 
-function seed(db: DatabaseSync, authority: SkillLibraryAuthority): SkillLibrarySelection[] {
+function seed(
+  db: DatabaseSync,
+  authority: SkillLibraryAuthority,
+  preparedActor?: ReturnType<typeof resolveSkillLibraryActor>,
+): SkillLibrarySelection[] {
   if (!authority.profileId || !tableExists(db, "skill_library_entries")) {
     return [];
   }
-  const { entries, profileId } = listSkillLibraryInDatabase(db, authority);
-  return entries
+  const actor = preparedActor ?? resolveSkillLibraryActor(db, authority);
+  const { profileId } = actor;
+  return selectSkillLibraryEntries(db, authority, { enabledOnly: true }, actor)
     .filter(
       (entry) =>
-        entry.enabled &&
-        (entry.ownerProfileId === profileId || entry.ownerProfileId === null || entry.shared),
+        entry.ownerProfileId === profileId || entry.ownerProfileId === null || entry.shared,
     )
     .toSorted(
       (a, b) =>
@@ -55,10 +60,11 @@ function change(
   current: readonly SkillLibrarySelection[],
   params: SkillsLibraryActivateParams,
 ) {
+  const actor = resolveSkillLibraryActor(db, authority);
   const next = new Map(current.map((item) => [item.skillId, item]));
   const ids = params.skillId ? [params.skillId] : current.map((item) => item.skillId);
   for (const skillId of ids) {
-    const entry = requireSkillLibraryEntry(db, skillId, authority);
+    const entry = requireSkillLibraryEntry(db, skillId, authority, false, actor);
     if (entry.removed) {
       throw new SkillLibraryError(
         "NOT_FOUND",
@@ -86,11 +92,18 @@ function change(
 
 export const skillLibraryReadOperations = {
   "skillLibrary.read": (input: SkillLibraryReadInput, db: DatabaseSync): SkillLibraryReadOutput => {
+    if (
+      input.kind === "seed" &&
+      (!input.authority.profileId ||
+        getAdmittedSqliteSchemaFacts(db)?.tables.has("skill_library_entries") === false)
+    ) {
+      return { type: "skillLibrary.read", kind: "seed", value: [], profileIds: [] };
+    }
     const profileIds = new Set<string>();
     const authority = hydrateSkillLibraryWorkerAuthority(input.authority, profileIds);
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
-        !["profile", "presentation", "list", "seed"].includes(input.kind) &&
+        !["profile", "presentation", "list", "seed", "session"].includes(input.kind) &&
         !tableExists(db, "skill_library_entries")
       ) {
         if (input.kind === "pins" && !input.params.length) {
@@ -119,14 +132,26 @@ export const skillLibraryReadOperations = {
           return requireSkillLibraryUpload(db, input.params.uploadId, authority);
         case "seed":
           return seed(db, authority);
+        case "session": {
+          const actor = resolveSkillLibraryActor(db, authority);
+          return {
+            selections: seed(db, authority, actor),
+            presentation: resolveSkillLibraryPresentationInDatabase(db, authority, actor),
+          };
+        }
         case "change":
           return change(db, authority, input.params.current, input.params.params);
         case "pins":
           break;
       }
+      const actor = input.params.length ? resolveSkillLibraryActor(db, authority) : undefined;
       return input.params.map((pin) => {
-        const row = selectSkillLibraryRow(db, pin.skillId);
-        const entry = row && projectSkillLibraryEntry(db, row, authority, pin.revision, true);
+        const [entry] = selectSkillLibraryEntries(
+          db,
+          authority,
+          { skillId: pin.skillId, revision: pin.revision, selectedBySession: true },
+          actor,
+        );
         if (!entry) {
           throw new SkillLibraryError(
             "NOT_FOUND",

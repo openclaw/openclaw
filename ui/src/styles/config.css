@@ -1,19 +1,19 @@
-/* ===========================================
-   Config Page
-   ===========================================
-
-   The schema-driven form itself renders through the settings design
+/* The schema-driven form itself renders through the settings design
    language (settings-section/settings-group/settings-row; see
    ui/src/styles/settings.css). This file keeps only the config page
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
 /* Mirrors the .settings-page column so config chrome lines up with it. */
-.config-lead {
+.config-lead,
+.config-content-callout {
   width: 100%;
   max-width: 760px;
   margin: 0 auto;
   padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-lead {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -25,7 +25,6 @@
   flex-shrink: 0;
 }
 
-/* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -34,7 +33,6 @@
   gap: var(--space-2) var(--space-3);
 }
 
-/* Raw mode file operations (open / discard / save) */
 .config-raw-actions {
   display: flex;
   align-items: center;
@@ -64,7 +62,6 @@
   }
 }
 
-/* Diff Panel */
 .config-diff {
   margin: 12px 20px 0;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -147,7 +144,6 @@
   color: var(--ok);
 }
 
-/* Content Area */
 .config-content {
   flex: 1;
   overflow-y: auto;
@@ -176,13 +172,6 @@
 
 .config-content > .settings-page {
   padding-top: 0;
-}
-
-.config-content-callout {
-  width: 100%;
-  max-width: 760px;
-  margin: 0 auto;
-  padding: var(--space-3) var(--space-4) 0;
 }
 
 .config-content-callout .callout {
@@ -247,11 +236,10 @@
   color: var(--accent);
 }
 
-.settings-theme-card__icon svg {
+.settings-theme-card__icon svg,
+.settings-accent-swatch__check svg {
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .settings-theme-card__label {
@@ -497,11 +485,6 @@
   color: var(--accent-foreground);
 }
 
-.settings-accent-swatch__check svg {
-  width: 18px;
-  height: 18px;
-}
-
 .settings-accent-swatch--custom {
   position: relative;
   overflow: hidden;
@@ -544,7 +527,8 @@
   color: var(--theme-chip-bg);
 }
 
-.settings-accent-swatch__reset svg {
+.settings-accent-swatch__reset svg,
+.config-accordion-group__icon svg {
   width: 16px;
   height: 16px;
 }
@@ -566,7 +550,8 @@
   width: 100%;
 }
 
-.settings-theme-import__copy {
+.settings-theme-import__copy,
+.settings-theme-import__meta {
   display: grid;
   gap: 4px;
 }
@@ -603,8 +588,6 @@
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   flex: 0 0 auto;
 }
 
@@ -660,11 +643,6 @@
   gap: 8px;
 }
 
-.settings-theme-import__meta {
-  display: grid;
-  gap: 4px;
-}
-
 .settings-theme-import__meta-value {
   font-size: 12px;
   color: var(--text);
@@ -688,7 +666,8 @@
   color: var(--text);
 }
 
-.settings-text-scale {
+.settings-text-scale,
+.cfg-collection-draft__controls {
   display: grid;
   gap: 8px;
   width: 100%;
@@ -756,7 +735,6 @@
   min-width: 32px;
 }
 
-/* Loading State */
 .config-loading {
   display: flex;
   flex-direction: column;
@@ -776,7 +754,6 @@
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-/* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {
   font-size: 12px;
   color: var(--danger);
@@ -786,7 +763,10 @@
   display: contents;
 }
 
-.cfg-structured-draft__error .settings-row__control {
+.cfg-structured-draft__error .settings-row__control,
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret,
+.cfg-array .settings-row--stacked .settings-row__control {
   width: 100%;
 }
 
@@ -799,24 +779,10 @@
   width: 100%;
 }
 
-.cfg-json-editor > .settings-input,
-.cfg-json-editor > .settings-secret {
-  width: 100%;
-}
-
-.cfg-array .settings-row--stacked .settings-row__control {
-  width: 100%;
-}
-
-.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"],
+.cfg-array .settings-row--stacked .settings-row__control > .lit-content > input[type="number"] {
   flex: 1 1 auto;
   width: auto;
-}
-
-.cfg-collection-draft__controls {
-  display: grid;
-  gap: 8px;
-  width: 100%;
 }
 
 .cfg-collection-draft__actions {
@@ -829,7 +795,6 @@
   border-color: var(--danger);
 }
 
-/* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;
 }
@@ -866,14 +831,16 @@
   }
 }
 
-/* MCP */
-.mcp-page {
+.mcp-page,
+.memory-page__panel {
   display: grid;
   gap: 14px;
+}
+
+.mcp-page {
   margin-top: 12px;
 }
 
-/* Memory */
 .memory-page {
   display: grid;
   gap: 0;
@@ -884,11 +851,6 @@
    does not. */
 .shell--settings .content.content--memory-page {
   scrollbar-gutter: stable;
-}
-
-.memory-page__panel {
-  display: grid;
-  gap: 14px;
 }
 
 /* Overview and Memories render a .settings-page descendant, while Dreams does
@@ -979,7 +941,6 @@
   color: var(--danger);
 }
 
-/* Advanced Settings accordion navigation, rendered by view.ts. */
 .config-accordion-nav {
   margin-bottom: 20px;
 }
@@ -1021,11 +982,6 @@
   align-items: center;
   color: var(--accent);
   opacity: 0.7;
-}
-
-.config-accordion-group__icon svg {
-  width: 16px;
-  height: 16px;
 }
 
 .config-accordion-group__chevron {

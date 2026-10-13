@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
   evaluateWorkflowExpression,
+  evaluateWorkflowCondition,
   readCiWorkflow,
   readWorkflow,
   readWorkflowOutputs,
@@ -22,6 +23,8 @@ describe("published-driver update selection", () => {
   it.each([
     { paths: ["src\\infra\\update-runner.ts"], expected: true },
     { paths: ["src/cli/update-cli/update-command.ts"], expected: true },
+    { paths: ["src/cli/runtime-cleanup-scope.ts"], expected: true },
+    { paths: ["src/cli/runtime-cleanup.ts"], expected: true },
     { paths: ["src/cli/startup-trace.ts"], expected: true },
     { paths: ["src/gateway/server-startup-trace.ts"], expected: true },
     { paths: ["src/state/openclaw-state-lease.ts"], expected: false },
@@ -29,15 +32,16 @@ describe("published-driver update selection", () => {
     { paths: null, expected: true },
     { paths: [], expected: true },
     { paths: [""], expected: true },
-  ])("selects the cross-version cell for $paths: $expected", ({ paths, expected }) => {
-    expect(shouldRunPublishedDriverUpdate(paths)).toBe(expected);
+  ])("retains dispatch owner selection for $paths: $expected", ({ paths, expected }) => {
+    expect(shouldRunPublishedDriverUpdate(paths, "workflow_dispatch")).toBe(expected);
+    expect(shouldRunPublishedDriverUpdate(paths, "pull_request")).toBe(false);
   });
 
   it.each([
     {
       eventName: "pull_request",
       file: "src/infra/update-managed-service-handoff.ts",
-      selected: true,
+      selected: false,
     },
     { eventName: "pull_request", file: "src/state/openclaw-state-lease.ts", selected: false },
     { eventName: "push", file: "src/agents/context-window-guard.ts", selected: true },
@@ -80,11 +84,17 @@ describe("published-driver update selection", () => {
     const job = readCiWorkflow().jobs["published-driver-update"];
     const revision = "a".repeat(40);
     expect(
-      evaluateWorkflowExpression(`\${{ ${job.if} }}`, {
+      evaluateWorkflowCondition(job.if, {
         eventName,
         repository: "openclaw/openclaw",
         runAttempt: 1,
         sha: revision,
+        additionalNeeds: {
+          "build-artifacts": {
+            result: "failure",
+            outputs: { published_driver_artifact_id: "fixture-run-artifact" },
+          },
+        },
         preflightOutputs: { ...result.outputs, checkout_revision: revision },
       }),
     ).toBe(selected);
@@ -449,18 +459,21 @@ docker_e2e_run_with_harness() {
       repository: "openclaw/openclaw",
       runAttempt: 1,
       sha: "a".repeat(40),
+      additionalNeeds: {
+        "build-artifacts": { outputs: { published_driver_artifact_id: "fixture-run-artifact" } },
+      },
       preflightOutputs: {
         run_published_driver_update: "true",
         checkout_revision: "b".repeat(40),
       },
     };
-    expect(
-      evaluateWorkflowExpression(`\${{ ${workflow.jobs["published-driver-update"].if} }}`, context),
-    ).toBe(false);
+    expect(evaluateWorkflowCondition(workflow.jobs["published-driver-update"].if, context)).toBe(
+      false,
+    );
     const notice = workflow.jobs["ci-gate"].steps.find(
       (step: WorkflowStep) => step.name === "Record published-driver dispatch limitation",
     );
-    expect(evaluateWorkflowExpression(`\${{ ${notice.if} }}`, context)).toBe(true);
+    expect(evaluateWorkflowCondition(notice.if, context)).toBe(true);
     expect(notice.run).toContain("no published-driver cell proof for the selected revision");
   });
 });

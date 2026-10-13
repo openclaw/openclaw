@@ -251,23 +251,6 @@ describe("Codex catalog live settings", () => {
     expect(abandonClient).not.toHaveBeenCalled();
   });
 
-  it("uses settings notifications in filtering and preserves equivalent open-source settings without a lookup", async () => {
-    const { a, b, index, methods } = await fixture();
-    a.send(liveSettingsEvent);
-    b.send(liveSettingsEvent);
-    b.client.close();
-    expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([
-      expect.objectContaining({
-        threadId: "thread-1",
-        cwd: "/workspace/live",
-        modelProvider: "live-provider",
-      }),
-    ]);
-    expect(methods).toEqual(["thread/list"]);
-    a.client.close();
-    expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);
-  });
-
   it("withdraws settings only when their supporting source reports notLoaded", async () => {
     const { a, b, index, methods } = await fixture();
     a.send(liveSettingsEvent);

@@ -168,6 +168,7 @@ describe("Codex managed workspace process authority", () => {
       } finally {
         await terminateProcessOwner();
       }
+      expect(processes.get("owned-child")?.exitCode).toBe(tty ? 1 : 143);
       expect(terminate).toHaveBeenCalledOnce();
       expect(runShellCommand).not.toHaveBeenCalled();
       expect(server.children.size).toBe(0);

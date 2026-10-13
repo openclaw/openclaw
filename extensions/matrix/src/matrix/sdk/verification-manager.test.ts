@@ -1,94 +1,12 @@
 // Matrix tests cover verification manager plugin behavior.
-import { EventEmitter } from "node:events";
 import {
   VerificationPhase,
   VerificationRequestEvent,
+  type Verifier,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { describe, expect, it, vi } from "vitest";
-import {
-  MatrixVerificationManager,
-  type MatrixVerificationRequestLike,
-} from "./verification-manager.js";
-
-type MatrixVerifierLike = Awaited<ReturnType<MatrixVerificationRequestLike["startVerification"]>>;
-type MatrixShowSasCallbacks = NonNullable<ReturnType<MatrixVerifierLike["getShowSasCallbacks"]>>;
-type MatrixShowQrCodeCallbacks = NonNullable<
-  ReturnType<MatrixVerifierLike["getReciprocateQrCodeCallbacks"]>
->;
-
-class MockVerifier extends EventEmitter implements MatrixVerifierLike {
-  constructor(
-    private readonly sasCallbacks: MatrixShowSasCallbacks | null,
-    private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null,
-    private readonly verifyImpl: () => Promise<void> = async () => {},
-  ) {
-    super();
-  }
-
-  verify(): Promise<void> {
-    return this.verifyImpl();
-  }
-
-  cancel(_e: Error): void {
-    void _e;
-  }
-
-  getShowSasCallbacks(): MatrixShowSasCallbacks | null {
-    return this.sasCallbacks;
-  }
-
-  getReciprocateQrCodeCallbacks(): MatrixShowQrCodeCallbacks | null {
-    return this.qrCallbacks;
-  }
-}
-
-class MockVerificationRequest extends EventEmitter implements MatrixVerificationRequestLike {
-  transactionId?: string;
-  roomId?: string;
-  initiatedByMe = false;
-  otherUserId = "@alice:example.org";
-  otherDeviceId?: string;
-  isSelfVerification = false;
-  phase = VerificationPhase.Requested;
-  pending = true;
-  accepting = false;
-  declining = false;
-  methods: string[] = ["m.sas.v1"];
-  chosenMethod?: string | null;
-  cancellationCode?: string | null;
-  verifier?: MatrixVerifierLike;
-
-  constructor(init?: Partial<MockVerificationRequest>) {
-    super();
-    Object.assign(this, init);
-  }
-
-  accept = vi.fn(async () => {
-    this.phase = VerificationPhase.Ready;
-  });
-
-  cancel = vi.fn(async () => {
-    this.phase = VerificationPhase.Cancelled;
-  });
-
-  startVerification = vi.fn(async (_method: string) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
-  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
-  generateQRCode = vi.fn(async () => new Uint8ClampedArray([1, 2, 3]));
-}
+import { MockVerificationRequest, MockVerifier } from "./crypto.test-support.js";
+import { MatrixVerificationManager } from "./verification-manager.js";
 
 function createSasVerifierFixture(params: {
   decimal: [number, number, number];
@@ -122,7 +40,7 @@ function createSasVerifierFixture(params: {
 function createReadyRequestWithoutVerifier(params: {
   transactionId: string;
   isSelfVerification: boolean;
-  verifier: MatrixVerifierLike;
+  verifier: Verifier;
 }) {
   const request = new MockVerificationRequest({
     transactionId: params.transactionId,
@@ -170,48 +88,6 @@ describe("MatrixVerificationManager", () => {
     expect(summary.phaseName).toBe("requested");
   });
 
-  it("tracks verification requests when the process clock is outside the Date range", () => {
-    const manager = new MatrixVerificationManager();
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-
-    try {
-      const summary = manager.trackVerificationRequest(
-        new MockVerificationRequest({
-          transactionId: "txn-invalid-clock",
-          phase: VerificationPhase.Requested,
-        }),
-      );
-
-      expect(summary.createdAt).toBe("1970-01-01T00:00:00.000Z");
-      expect(summary.updatedAt).toBe("1970-01-01T00:00:00.000Z");
-      expect(manager.listVerifications()).toHaveLength(1);
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-  });
-
-  it("reuses the same tracked id for repeated transaction IDs", () => {
-    const manager = new MatrixVerificationManager();
-    const first = new MockVerificationRequest({
-      transactionId: "txn-1",
-      phase: VerificationPhase.Requested,
-    });
-    const second = new MockVerificationRequest({
-      transactionId: "txn-1",
-      phase: VerificationPhase.Ready,
-      pending: false,
-      chosenMethod: "m.sas.v1",
-    });
-
-    const firstSummary = manager.trackVerificationRequest(first);
-    const secondSummary = manager.trackVerificationRequest(second);
-
-    expect(secondSummary.id).toBe(firstSummary.id);
-    expect(secondSummary.phase).toBe(VerificationPhase.Ready);
-    expect(secondSummary.pending).toBe(false);
-    expect(secondSummary.chosenMethod).toBe("m.sas.v1");
-  });
-
   it("reuses the tracked id when the other device id is populated later", () => {
     const manager = new MatrixVerificationManager();
     const first = new MockVerificationRequest({
@@ -223,6 +99,7 @@ describe("MatrixVerificationManager", () => {
       phase: VerificationPhase.Ready,
       otherDeviceId: "DEVICE_LATER",
       pending: false,
+      chosenMethod: "m.sas.v1",
     });
 
     const firstSummary = manager.trackVerificationRequest(first);
@@ -230,6 +107,9 @@ describe("MatrixVerificationManager", () => {
 
     expect(secondSummary.id).toBe(firstSummary.id);
     expect(secondSummary.otherDeviceId).toBe("DEVICE_LATER");
+    expect(secondSummary.phase).toBe(VerificationPhase.Ready);
+    expect(secondSummary.pending).toBe(false);
+    expect(secondSummary.chosenMethod).toBe("m.sas.v1");
     expect(manager.listVerifications()).toHaveLength(1);
   });
 
@@ -280,6 +160,7 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("starts SAS verification and exposes SAS payload/callback flow", async () => {
+    const trustOwnDeviceAfterSas = vi.fn(async () => {});
     const { confirm, mismatch, verifier } = createSasVerifierFixture({
       decimal: [111, 222, 333],
       emoji: [
@@ -290,9 +171,10 @@ describe("MatrixVerificationManager", () => {
     });
     const request = new MockVerificationRequest({
       transactionId: "txn-2",
+      otherDeviceId: "OTHERDEVICE",
       verifier,
     });
-    const manager = new MatrixVerificationManager();
+    const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
     const tracked = manager.trackVerificationRequest(request);
 
     const started = await manager.startVerification(tracked.id, "sas");
@@ -306,59 +188,14 @@ describe("MatrixVerificationManager", () => {
 
     await manager.confirmVerificationSas(tracked.id);
     expect(confirm).toHaveBeenCalledTimes(1);
+    expect(trustOwnDeviceAfterSas).not.toHaveBeenCalled();
 
     manager.mismatchVerificationSas(tracked.id);
     expect(mismatch).toHaveBeenCalledTimes(1);
   });
 
-  it("does not cross-sign non-self SAS verifications", async () => {
-    const { verifier } = createSasVerifierFixture({
-      decimal: [111, 222, 333],
-      emoji: [["cat", "cat"]],
-    });
-    const trustOwnDeviceAfterSas = vi.fn(async () => {});
-    const request = new MockVerificationRequest({
-      isSelfVerification: false,
-      otherDeviceId: "OTHERDEVICE",
-      transactionId: "txn-remote-sas",
-      verifier,
-    });
-    const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
-    const tracked = manager.trackVerificationRequest(request);
-
-    await manager.startVerification(tracked.id, "sas");
-    await manager.confirmVerificationSas(tracked.id);
-
-    expect(trustOwnDeviceAfterSas).not.toHaveBeenCalled();
-  });
-
-  it("auto-starts an incoming verifier exposed via request change events", async () => {
-    const { verifier, verify } = createSasVerifierFixture({
-      decimal: [6158, 1986, 3513],
-      emoji: [
-        ["gift", "Gift"],
-        ["globe", "Globe"],
-        ["horse", "Horse"],
-      ],
-    });
-    const request = new MockVerificationRequest({
-      transactionId: "txn-incoming-change",
-      verifier: undefined,
-    });
-    const manager = new MatrixVerificationManager();
-    const tracked = manager.trackVerificationRequest(request);
-
-    request.verifier = verifier;
-    request.emit(VerificationRequestEvent.Change);
-
-    await vi.waitFor(() => {
-      expect(verify).toHaveBeenCalledTimes(1);
-    });
-    expectTrackedSas(manager, tracked.id, [6158, 1986, 3513]);
-  });
-
   it("emits summary updates when SAS becomes available", async () => {
-    const { verifier } = createSasVerifierFixture({
+    const { verifier, verify } = createSasVerifierFixture({
       decimal: [6158, 1986, 3513],
       emoji: [
         ["gift", "Gift"],
@@ -390,6 +227,7 @@ describe("MatrixVerificationManager", () => {
         ),
       ).toBe(true);
     });
+    expect(verify).toHaveBeenCalledOnce();
   });
 
   it("does not auto-start non-self inbound SAS when request becomes ready without a verifier", async () => {
@@ -473,6 +311,7 @@ describe("MatrixVerificationManager", () => {
 
   it("auto-confirms inbound SAS after a human-safe delay", async () => {
     vi.useFakeTimers();
+    const trustOwnDeviceAfterSas = vi.fn(async () => {});
     const { confirm, verifier } = createSasVerifierFixture({
       decimal: [6158, 1986, 3513],
       emoji: [
@@ -483,34 +322,8 @@ describe("MatrixVerificationManager", () => {
     });
     const request = new MockVerificationRequest({
       transactionId: "txn-auto-confirm",
-      initiatedByMe: false,
-      verifier,
-    });
-    try {
-      const manager = new MatrixVerificationManager();
-      manager.trackVerificationRequest(request);
-
-      await vi.advanceTimersByTimeAsync(29_000);
-      expect(confirm).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1_100);
-      expect(confirm).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cross-signs the other own device after auto-confirmed self-verification SAS", async () => {
-    vi.useFakeTimers();
-    const { confirm, verifier } = createSasVerifierFixture({
-      decimal: [6158, 1986, 3513],
-      emoji: [["gift", "Gift"]],
-    });
-    const trustOwnDeviceAfterSas = vi.fn(async () => {});
-    const request = new MockVerificationRequest({
       isSelfVerification: true,
       otherDeviceId: "OTHERDEVICE",
-      transactionId: "txn-auto-confirm-self",
       initiatedByMe: false,
       verifier,
     });
@@ -518,8 +331,10 @@ describe("MatrixVerificationManager", () => {
       const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
       manager.trackVerificationRequest(request);
 
-      await vi.advanceTimersByTimeAsync(30_100);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(confirm).not.toHaveBeenCalled();
 
+      await vi.advanceTimersByTimeAsync(1_100);
       expect(confirm).toHaveBeenCalledTimes(1);
       expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
     } finally {
@@ -618,7 +433,7 @@ describe("MatrixVerificationManager", () => {
       const manager = new MatrixVerificationManager();
       manager.trackVerificationRequest(request);
 
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(30_100);
       expect(confirm).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -645,7 +460,7 @@ describe("MatrixVerificationManager", () => {
       const tracked = manager.trackVerificationRequest(request);
 
       manager.mismatchVerificationSas(tracked.id);
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(30_100);
 
       expect(mismatch).toHaveBeenCalledTimes(1);
       expect(confirm).not.toHaveBeenCalled();

@@ -20,15 +20,7 @@ import {
 } from "./http-utils.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
-type OpenAiModelObject = {
-  id: string;
-  object: "model";
-  created: number;
-  owned_by: string;
-  permission: [];
-};
-
-function toOpenAiModel(id: string): OpenAiModelObject {
+function toOpenAiModel(id: string) {
   return {
     id,
     object: "model",

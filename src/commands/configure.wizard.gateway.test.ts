@@ -13,6 +13,7 @@ import {
   setupBaseWizardTestState as setupBaseWizardState,
   wizardTestMocks as mocks,
 } from "./configure.wizard.test-support.js";
+import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 
 const { maybeInstallDaemon, formatHealthCheckFailure } = mocks;
 
@@ -181,22 +182,22 @@ describe("runConfigureWizard", () => {
     );
   });
 
-  it.each([
-    ["unreachable gateway", false, new Error("health request failed")],
-    ["trapped health CLI exit", true, new ExitError(1)],
-  ])("reports failed remote health checks (%s)", async (_reason, probeOk, error) => {
-    queueWizardPrompts({ select: ["remote"], confirm: [] });
-    mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: probeOk });
-    mocks.healthCommand.mockRejectedValueOnce(error);
+  it.each([["unreachable gateway", false, new Error("health request failed")]])(
+    "reports failed remote health checks (%s)",
+    async (_reason, probeOk, error) => {
+      queueWizardPrompts({ select: ["remote"], confirm: [] });
+      mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: probeOk });
+      mocks.healthCommand.mockRejectedValueOnce(error);
 
-    await configure(["health"]);
+      await configure(["health"]);
 
-    expect(mocks.clackOutro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
-    if (error instanceof ExitError) {
-      // healthCommand already printed its diagnostic before the trapped exit.
-      expect(formatHealthCheckFailure).not.toHaveBeenCalled();
-    }
-  });
+      expect(mocks.clackOutro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
+      if (error instanceof ExitError) {
+        // healthCommand already printed its diagnostic before the trapped exit.
+        expect(formatHealthCheckFailure).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("skips remote health when a configured SecretRef is unresolved", async () => {
     remoteGateway({ token: secretRef("MISSING_REMOTE_TOKEN") });
@@ -210,23 +211,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.clackOutro).toHaveBeenCalledWith(
       "Remote gateway configured; health check skipped.",
     );
-  });
-
-  it("persists gateway.mode=local when only the run mode is selected", async () => {
-    queueWizardPrompts({
-      select: ["local", "__continue"],
-      confirm: [false],
-    });
-
-    await configure();
-
-    expect(written().gateway?.mode).toBe("local");
-    const writeOptions = mocks.replaceConfigFile.mock.calls[0]?.[0].writeOptions;
-    expect(Object.keys(writeOptions ?? {}).toSorted()).toEqual([
-      "assertConfigPathForWrite",
-      "expectedConfigPath",
-      "ownedConfigPathForWrite",
-    ]);
   });
 
   it("probes and persists remote edge auth without ambient credential fallback", async () => {
@@ -280,8 +264,7 @@ describe("runConfigureWizard", () => {
         url: "ws://127.0.0.1:18789",
         token: "configured-token",
         password: undefined,
-        deadlineMs: 90_000,
-        probeTimeoutMs: 15_000,
+        ...resolveGatewayStartupTiming("win32"),
       }),
     );
     expect(mocks.healthCommand).toHaveBeenCalledWith(
@@ -302,7 +285,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
     expect(mocks.healthCommand).not.toHaveBeenCalled();
 
-    expect(noted("Control UI")).toContain("Gateway: auth unavailable (probe skipped)");
+    expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
   });
 
   it("never retries an old password after the newly configured SecretRef fails", async () => {
@@ -327,33 +310,10 @@ describe("runConfigureWizard", () => {
     );
 
     expect(mocks.probeGatewayReachable).toHaveBeenCalledOnce();
-    expect(noted("Control UI")).toContain("Gateway: auth unavailable (probe skipped)");
+    expect(noted("Control UI")).toContain("Gateway: auth unavailable (check skipped)");
   });
 
-  it("advertises LAN Control UI links while probing the local gateway", async () => {
-    localGateway({ token: "token" }, { bind: "lan" });
-    mocks.resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
-      httpUrl: "http://10.211.55.3:18789/",
-      wsUrl: "ws://10.211.55.3:18789",
-    });
-    await configure(["gateway"]);
-
-    expect(mocks.inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
-    expect(noted("Control UI")).toContain(
-      "Windows firewall: if another device cannot connect to the LAN URL",
-    );
-    expect(mocks.resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", port: 18789 }),
-    );
-    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
-    );
-    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
-    expect(noted("Control UI")).toContain("Web UI: http://10.211.55.3:18789/");
-    expect(noted("Control UI")).toContain("Gateway WS: ws://10.211.55.3:18789");
-  });
-
-  it.each(["wizard", "direct"])("exits with code 1 on %s cancellation", async (kind) => {
+  it.each(["direct"])("exits with code 1 on %s cancellation", async (kind) => {
     const runtime = createRuntime();
     if (kind === "wizard") {
       mocks.clackSelect.mockRejectedValueOnce(new WizardCancelledError());

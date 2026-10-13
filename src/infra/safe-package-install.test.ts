@@ -45,11 +45,9 @@ describe("safe npm install helpers", () => {
   it("builds script-free npm install args", () => {
     expect(
       createSafeNpmInstallArgs({
-        omitDev: true,
         omitPeer: true,
         legacyPeerDeps: true,
         ignoreWorkspaces: true,
-        loglevel: "error",
         noAudit: true,
         noFund: true,
       }),

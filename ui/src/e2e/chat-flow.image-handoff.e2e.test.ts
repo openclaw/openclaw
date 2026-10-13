@@ -183,7 +183,15 @@ suite.define(() => {
               __openclaw: {
                 id: "pending:accepted-image-input",
                 mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
-                media: [{ path: source, contentType: "image/png", fileName: "stable-preview.png" }],
+                media: [
+                  {
+                    path: source,
+                    contentType: "image/png",
+                    fileName: "stable-preview.png",
+                    width: 180,
+                    height: 180,
+                  },
+                ],
               },
             },
           };

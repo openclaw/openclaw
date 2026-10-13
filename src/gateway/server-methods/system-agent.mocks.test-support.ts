@@ -10,15 +10,11 @@ const setupInferenceDetectionMocks = vi.hoisted(() => ({
   detectSetupInferenceIsolated: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  appendTranscriptTurnAsync: vi.fn(),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
   readTranscriptTailAsync: vi
     .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
     .mockResolvedValue([]),
-  readTranscriptTail: vi.fn<
-    (limit: number) => Array<{ role: "user" | "assistant"; text: string; at: number }>
-  >(() => []),
 }));
 const greetingMocks = vi.hoisted(() => ({
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
@@ -39,17 +35,24 @@ vi.mock("../../system-agent/setup-inference.js", () => ({
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
 }));
+// mock-isolation: Keep audit persistence local for gateway policy tests; audit-worker tests own durable proof.
 vi.mock("../../system-agent/transcript-store.js", () => ({
-  appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
-  appendTranscriptTurn: transcriptStoreMocks.appendTranscriptTurn,
-  appendTranscriptTurnAsync: transcriptStoreMocks.appendTranscriptTurnAsync,
-  readTranscriptTail: transcriptStoreMocks.readTranscriptTail,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
   readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
 }));
 vi.mock("../../system-agent/greeting.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../system-agent/greeting.js")>();
   return {
     ...actual,
+    createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
     acknowledgeSystemAgentGreetingDelivery: greetingMocks.acknowledgeSystemAgentGreetingDelivery,
     loadSystemAgentGreetingFacts: greetingMocks.loadSystemAgentGreetingFacts,
     resolveSystemAgentGreeting: greetingMocks.resolveSystemAgentGreeting,

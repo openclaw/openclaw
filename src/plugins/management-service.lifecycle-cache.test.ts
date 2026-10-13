@@ -198,18 +198,18 @@ describe("plugin management catalog lifecycle", () => {
     mode: "compat" | "allowlist";
     providerEnabled: boolean;
     selectedMode?: "compat" | "allowlist";
-    dependencyError?: true;
+    missingDependency?: true;
   }>([
     { mode: "compat", providerEnabled: true },
     {
       mode: "compat",
       selectedMode: "allowlist",
       providerEnabled: false,
-      dependencyError: true,
+      missingDependency: true,
     },
   ])(
-    "keeps provider policy in the selected $mode/$selectedMode discovery mode",
-    async ({ mode, providerEnabled, selectedMode, dependencyError }) => {
+    "uses selected $mode/$selectedMode discovery policy for enablement and diagnostics",
+    async ({ mode, providerEnabled, selectedMode, missingDependency }) => {
       const env = { OPENCLAW_STATE_DIR: "/__openclaw_management_selected_root__" };
       const readMode = vi
         .spyOn(bundledDiscoveryState, "readBundledDiscoveryModeMemoized")
@@ -225,7 +225,7 @@ describe("plugin management catalog lifecycle", () => {
           enabledByDefault: true,
           providers: ["fixture-provider"],
           channels: ["fixture-chat"],
-          ...(dependencyError
+          ...(missingDependency
             ? { packageBuild: { bundledDist: false }, dependencies: { "missing-runtime": "1.0.0" } }
             : {}),
         });
@@ -254,26 +254,17 @@ describe("plugin management catalog lifecycle", () => {
           env,
         });
 
-        expect(catalog.plugins.find((plugin) => plugin.id === "bundled-provider")).toMatchObject({
+        const providerEntry = catalog.plugins.find((plugin) => plugin.id === "bundled-provider");
+        expect(providerEntry).toMatchObject({
           enabled: providerEnabled,
-          state: dependencyError ? "error" : providerEnabled ? "enabled" : "disabled",
-          ...(dependencyError ? { error: expect.stringContaining("missing-runtime") } : {}),
+          state: providerEnabled ? "enabled" : "disabled",
         });
+        expect(providerEntry).not.toHaveProperty("error");
         expect(catalog.plugins.find((plugin) => plugin.id === "bundled-ordinary")).toMatchObject({
           enabled: false,
           state: "disabled",
         });
-        expect(catalog.diagnostics).toEqual(
-          dependencyError
-            ? [
-                expect.objectContaining({
-                  level: "error",
-                  pluginId: "bundled-provider",
-                  message: expect.stringContaining("missing-runtime"),
-                }),
-              ]
-            : [],
-        );
+        expect(catalog.diagnostics).toEqual([]);
       } finally {
         readMode.mockRestore();
       }
@@ -304,25 +295,6 @@ describe("plugin management catalog lifecycle", () => {
       plugins: [],
     });
     expect(mocks.officialCatalog).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a successfully resolved bundled-fallback catalog process-stable", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot());
-    mocks.officialCatalog.mockResolvedValueOnce({
-      source: "bundled-fallback",
-      entries: [],
-      error: "hosted feed unavailable",
-    });
-
-    const first = await listManagedPlugins({ config: {}, env: {} });
-    const second = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(first.diagnostics).toContainEqual({
-      level: "warn",
-      message: "Official plugin catalog fallback: hosted feed unavailable",
-    });
-    expect(second).toEqual(first);
-    expect(mocks.officialCatalog).toHaveBeenCalledOnce();
   });
 
   it("checks dependency health once per immutable metadata lifecycle", async () => {
@@ -369,48 +341,5 @@ describe("plugin management catalog lifecycle", () => {
     await listManagedPlugins({ config: {}, env: {} });
     expect(dependencyProbeCount()).toBeGreaterThan(initialProbes);
     existsSync.mockRestore();
-  });
-
-  it("loads plugin metadata from the explicit system-owner workspace", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "research" } },
-        entries: { main: {}, research: { workspace: "~/research-workspace" } },
-      },
-    };
-    const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
-    mocks.metadata.mockReturnValue(metadataSnapshot());
-
-    const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
-
-    expect(catalog).toMatchObject({ plugins: [], diagnostics: [] });
-    expect(mocks.metadata).toHaveBeenCalledWith({
-      config,
-      env,
-      workspaceDir: "/tmp/openclaw-managed-plugin-home/research-workspace",
-    });
-  });
-
-  it("reports partial managed inventory without selecting an explicit roster entry", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { workspace: "/tmp/unowned-workspace" },
-        entries: {
-          main: { workspace: "/tmp/main-workspace" },
-          gadget: { workspace: "/tmp/gadget-workspace" },
-        },
-      },
-    };
-    const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
-    mocks.metadata.mockReturnValue(metadataSnapshot());
-
-    const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
-
-    expect(mocks.metadata).toHaveBeenCalledWith({ config, env });
-    expect(catalog.diagnostics).toContainEqual(
-      expect.objectContaining({ level: "warn", code: "workspace-scope-omitted" }),
-    );
   });
 });

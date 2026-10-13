@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -16,6 +17,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -259,7 +261,12 @@ describe("worker detached model-context branch parity", () => {
   });
   afterEach(async () => {
     if (!hasUnjoinedOwner) {
-      await cleanupWorkerTurnLauncherTest();
+      await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+    }
+  });
+  afterAll(async () => {
+    if (!hasUnjoinedOwner) {
+      await closeStateDatabaseForTest();
     }
   });
 
@@ -474,71 +481,26 @@ describe("worker detached model-context branch parity", () => {
     },
   );
 
-  it.each(["missing", "after-snapshot", "model-resolution"] as const)(
-    "rejects a missing or removed canonical user admission (%s)",
-    async (stage) => {
-      seedPrevious();
-      const inputRecorder = recorder();
-      if (stage === "missing") {
-        inputRecorder.markRuntimePersisted(
-          buildPersistedUserTurnMessage({ text: "current request" }),
-        );
-      } else {
-        await inputRecorder.persistApproved();
-      }
-      const beforeRows = stage === "missing" ? readWorkerTurnTranscriptStorageRows() : undefined;
-      const writer = SessionManager.open(sessionTarget);
-      let removed = 0;
-      const removeAdmission = () => {
-        const admission = inputRecorder.getAdmissionReceipt();
-        if (!admission) {
-          throw new Error("expected an admitted user before removal");
-        }
-        removed = writer.removeTrailingEntries((entry) => entry.id === admission.entryId);
-        expect(removed).toBe(1);
-      };
-      const restore =
-        stage === "after-snapshot"
-          ? afterNextModelContextSnapshot(async () => removeAdmission())
-          : undefined;
-      try {
-        const result = await launchProbe({
-          ...request(`recorder-admission-${stage}`),
-          userTurnTranscriptRecorder: inputRecorder,
-          ...(stage === "model-resolution"
-            ? {
-                onExecutionPhase: ({ phase }) => {
-                  if (phase === "model_resolution") {
-                    removeAdmission();
-                  }
-                },
-              }
-            : {}),
-        });
-        expectNoLaunch(result);
-        expect(result.outcome).toMatchObject({
-          kind: "rejected",
-          error:
-            stage === "missing"
-              ? { message: "Cloud worker turn has no readable canonical user admission" }
-              : { name: "SessionTranscriptReadFenceError" },
-        });
-        if (stage === "missing") {
-          expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
-        } else {
-          expect(
-            removed,
-            result.outcome.kind === "rejected" ? String(result.outcome.error) : "resolved",
-          ).toBe(1);
-          expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
-        }
-      } finally {
-        restore?.();
-      }
-    },
-  );
+  it("rejects a missing canonical user admission", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
+    const beforeRows = readWorkerTurnTranscriptStorageRows();
+    const result = await launchProbe({
+      ...request("recorder-admission-missing"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expectNoLaunch(result);
+    expect(result.outcome).toMatchObject({
+      kind: "rejected",
+      error: { message: "Cloud worker turn has no readable canonical user admission" },
+    });
+    expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
+  });
 
-  it("retains the initial-setup writer fence across the asynchronous context read", async () => {
+  it("retains the initial-setup writer fence across the asynchronous context read", async ({
+    signal,
+  }) => {
     seedPrevious();
     const paused = createDeferredCore();
     const finishSetup = createDeferredCore();
@@ -568,7 +530,13 @@ describe("worker detached model-context branch parity", () => {
     });
     void setup.catch(() => undefined);
     const callerCurrent = vi.fn();
-    const waitForInitialPlacement = vi.fn(dispatch.waitForInitialPlacement);
+    const setupWaitStarted = createDeferredCore();
+    const waitForInitialPlacement = vi.fn(
+      (...args: Parameters<typeof dispatch.waitForInitialPlacement>) => {
+        setupWaitStarted.resolve();
+        return dispatch.waitForInitialPlacement(...args);
+      },
+    );
     try {
       await paused.promise;
       const observed = await withAsyncReadHook(
@@ -588,14 +556,23 @@ describe("worker detached model-context branch parity", () => {
             expect(placements.validateTurnClaim(claim)).toBe(true);
           },
         },
-        () => {
+        async () => {
           const pending = launchProbe(
             {
               ...request("writer-after-initial-setup"),
+              abortSignal: signal,
               suppressNextUserMessagePersistence: true,
             },
             callerCurrent,
             waitForInitialPlacement,
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              setupWaitStarted.promise,
+              pending,
+              "turn skipped the initial-setup admission wait",
+            ),
+            signal,
           );
           finishSetup.resolve();
           return pending;

@@ -99,6 +99,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | Metric                                                    | Type      | Labels                                                                                    |
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
+| `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
@@ -108,11 +109,16 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
+| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request`, `startup`, `steer`, or `queued`)                             |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
+| `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
 | `openclaw_gateway_rpc_outcomes_total`                     | counter   | `phase`, `outcome`                                                                        |
 | `openclaw_run_completed_total`                            | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                           | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
+| `openclaw_secret_egress_requests_total`                   | counter   | `outcome`, `substituted`                                                                  |
+| `openclaw_tool_catalog_total`                             | counter   | `mode`, `source`                                                                          |
+| `openclaw_tool_catalog_tools_total`                       | counter   | `mode`, `source`                                                                          |
 | `openclaw_model_call_total`                               | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_call_duration_seconds`                    | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_failover_total`                           | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
@@ -144,6 +150,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_queue_lane_size`                                | gauge     | `lane`                                                                                    |
 | `openclaw_queue_lane_wait_seconds`                        | histogram | `lane`                                                                                    |
 | `openclaw_session_state_total`                            | counter   | `reason`, `state`                                                                         |
+| `openclaw_sessions_active`                                | gauge     | `state` (`running`, `queued`)                                                             |
+| `openclaw_gateway_active_work`                            | gauge     | `kind` (`agentRuns`, `chatRuns`, `queuedTurns`)                                           |
 | `openclaw_session_queue_depth`                            | gauge     | `state`                                                                                   |
 | `openclaw_session_turn_created_total`                     | counter   | `agent`, `channel`, `trigger`                                                             |
 | `openclaw_session_stuck_total`                            | counter   | `reason`, `state`                                                                         |
@@ -162,8 +170,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_bytes`                            | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
-| `openclaw_worker_count`                                   | gauge     | none                                                                                      |
-| `openclaw_worker_heap_sampled_count`                      | gauge     | none                                                                                      |
+| `openclaw_worker_count`                                   | gauge     | none (aggregate), `script`                                                                |
+| `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
+| `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
+| `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
+| `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
@@ -203,8 +214,12 @@ Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
-samples in the shared 2,048-sample cap. A duration histogram occupies one sample
-but expands into 19 scrape series (buckets, sum, and count). The response-size
+samples in the shared 2,048-sample cap. An RPC duration histogram occupies one sample
+but expands into 44 scrape series (41 finite buckets, `+Inf`, sum, and count).
+The four timing histograms therefore use 176 scrape series per method, compared
+with 76 previously. Including request and exclusive-sample counters and both
+byte histograms gives 236 series per fully observed method (23,600 for 100
+methods), plus shared outcome totals. The response-size
 and signed heap-delta histograms expand into 20 and 38 series respectively; see
 [RPC response size and heap changes](/gateway/diagnostics#rpc-response-size-and-heap-changes). Existing samples keep
 updating when the cap fills; unseen RPC or other operational samples are refused
@@ -212,6 +227,51 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+The four RPC timing histograms use these finite upper bounds, in seconds:
+
+```text
+0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08,
+0.1, 0.125, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8,
+1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8,
+10, 12.5, 15, 20, 25, 30, 60, 120, 300, 600
+```
+
+Between 10 ms and 30 s, adjacent bounds differ by at most a factor of 4/3.
+Quantiles still interpolate within a bucket; they are estimates, not exact
+observations. For example, a 995 ms p99 in the previous layout could represent
+samples anywhere in the 500–1,000 ms bucket. The new layout splits that interval
+at 600 and 800 ms. Other duration histograms retain their existing layouts.
+The exporter uses classic Prometheus text histograms, not native histograms.
+
+All previous boundaries remain available for threshold alerts. During upgrades,
+keep targets with different bucket layouts separate for `histogram_quantile`,
+or filter to the old common `le` values before aggregation. Wait for a full
+query rate window after every target has upgraded before comparing quantiles
+using the new boundaries; do not mix old and new layouts in recording rules.
+
+### HTTP cancellations
+
+`openclaw_gateway_http_cancelled_total` counts HTTP requests cancelled before
+completion, with `source="client"` for disconnected clients and
+`source="shutdown"` for Gateway shutdown. These expected cancellations do not
+produce unhandled-request error logs. The metric carries no request URLs, file
+paths, or client identifiers and follows the existing diagnostics enablement
+and asynchronous queue limits.
+Normal HTTP cancellations are not retained in the stability event buffer.
+
+### Worktree preparation
+
+`openclaw_worktree_preparation_seconds` records each managed checkout or sandbox
+preparation, including failures. `kind` distinguishes `managed` creation from
+`sandbox` projection and backend readiness. `template` distinguishes `warm`,
+`cold`, `unavailable`, and `reused` existing projections; `outcome` is `returned`
+or `threw`. `phase=total` is the complete elapsed time. Other fixed phases are
+`allocate`, `checkout`, `setup`, `templatePrepare`, `templateApply`, `snapshot`,
+`synchronizeCanonical`, `synchronizeProjection`, `workspaceLayout`, and
+`containerStart`. Only entered phases are recorded. Nested phases are inclusive
+and must not be summed. No paths, session identifiers, or template keys become
+metric labels.
 
 ### Catalog list stages
 
@@ -251,6 +311,46 @@ unchanged.
 An OpenTelemetry exporter with traces disabled does not request phase events.
 A configured Prometheus exporter records these observations as metrics without
 requiring OpenTelemetry traces.
+
+### Current sessions and work
+
+Use `openclaw_sessions_active` for current session load. Its two series count
+running and queued sessions using the same live-run projection as
+`sessions.list` with `activeOnly: true`. The count covers the full operator
+roster, including global and unknown sessions, before pagination; archived
+sessions and cron-run history use the list's default exclusions. Compare with an
+unfiltered operator list using `includeGlobal: true` and `includeUnknown: true`,
+not a list restricted to one agent or viewer.
+
+`openclaw_gateway_active_work` exposes three counts from the Gateway's existing
+active-work snapshot:
+
+| `kind`        | Meaning                                                                                |
+| ------------- | -------------------------------------------------------------------------------------- |
+| `agentRuns`   | Admitted agent run contexts, including work that is not visible in the session roster. |
+| `chatRuns`    | Registered chat runs that have not been aborted or requested registration cleanup.     |
+| `queuedTurns` | Queued chat turns that have not been aborted.                                          |
+
+These categories overlap. Do not sum them to obtain a total run or session
+count. They cover session and run activity, not the complete suspension-blocker
+inventory; zero alone does not establish that the Gateway can suspend.
+Both gauges refresh on owner changes while the exporter is active,
+without polling or reading transcripts. They return to zero when the relevant
+work drains. Before the Gateway projection is ready, and after it stops, the
+series are absent rather than reporting an assumed idle state.
+
+`openclaw_session_state_total` is a **cumulative counter of state observations
+since exporter start**, not a current session count or a count of unique
+sessions. Repeated observations of `processing` keep increasing it; completion
+does not decrement it. For example, `processing=60` can coexist with zero live
+sessions. Use `rate(openclaw_session_state_total[5m])` to measure observation
+frequency. `openclaw_session_queue_depth` is likewise only the latest observed
+individual session queue depth per diagnostic state, not total queued work.
+
+```promql
+sum(openclaw_sessions_active)
+openclaw_gateway_active_work{kind="queuedTurns"}
+```
 
 ### Runtime identity
 
@@ -301,6 +401,91 @@ exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
+### Worker request queues
+
+`openclaw_worker_queue_depth{kind}` reports requests awaiting dispatch across
+worker owners of that kind. It includes SQLite writer capacity waiters and scoped
+read-only requests, and excludes requests that already hold an execution slot.
+`openclaw_worker_queue_wait_seconds{kind,request_class}` measures enqueue to
+dispatch; `openclaw_worker_request_seconds{kind,request_class}` measures dispatch
+to reply or failure. Both use the existing duration histogram buckets. Cancellation
+before dispatch removes the queued request without adding a duration sample.
+
+`openclaw_worker_request_phase_seconds{kind,request_class,phase}` breaks completed
+SQLite writer requests into observed intervals, using the same histogram buckets:
+
+| Phase      | Interval                                                                 |
+| ---------- | ------------------------------------------------------------------------ |
+| `dispatch` | Slot allocation through host preparation to the first `postMessage`.     |
+| `delivery` | First `postMessage` to worker receipt, including cold worker startup.    |
+| `input`    | Worker receipt to complete command reconstruction, including all frames. |
+| `prepare`  | Command reconstruction to backend execution.                             |
+| `execute`  | Backend execution, including owner code, admission exchanges, and SQL.   |
+| `result`   | Execution end through cleanup, serialization, and result framing.        |
+| `reply`    | Final reply preparation and posting through broker receipt.              |
+
+The Prometheus subscription enables these timestamps without a restart or a
+diagnostic flag. Large result transfers remain in `result`; input and result
+frames produce one sample per phase for the complete request. Missing or invalid
+intervals produce no sample. Open, close, and failed requests may omit phases they
+never reached. `postMessage` completion overlaps worker activity and is not added
+as another phase. Caller scheduling after broker receipt is outside these phases.
+
+Task kinds use their registered runtime entrypoint names, such as `gitOperations`,
+`preparedModelCatalog`, `codeModeNode`, and `sessionTranscript`. Standalone bundled
+workers have fixed names such as `diskBudget`, `memorySearch`, and `teamReports`.
+Unrecognized SDK worker filenames use `extension`; arbitrary filenames and paths never become
+labels. This replaces the broad `compute` and `other` task buckets and renames
+previous grouped task kinds, so update queries that select those older labels.
+
+SQLite transport kinds remain `sqlite_read` and `sqlite_writer`. Request classes
+retain `open`, `close`, `transcript_read`, `sessions`, `transcripts`,
+`domain_execute`, `plugin_state`, `auth_profiles`, and `cron`. Other commands use a
+fixed operation family, such as `workerInference`, `capture`, or `diagnostic`.
+Audit writer, database lifecycle, and state lease commands have finer labels such
+as `audit.writer.process`, `database.inspectIdle`, and `stateLease.renew`.
+Unknown commands retain `execute`; unknown request classes become `other`.
+The allowlists bound cardinality without publishing session IDs, database paths,
+command suffixes, or caller-provided names. The exporter's shared series cap still
+applies.
+
+The `transcripts` request family includes stored event appends and retention.
+
+Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
+bounded operation-family classifier as SQLite writers. Examples include
+`devicePairing`, `acpSessions`, `workers`, and `cron`; standalone admission reads
+use `admit`. The read owner supplies the operation before queue admission, so
+queue wait and execution use the same class without labeling request payloads.
+
+Dispatch is the host scheduler's allocation of a slot, not a worker-side CPU
+timestamp. Request duration includes preparation, cold worker startup, transport,
+host exchanges, and I/O. General task pools report `task`; SQLite commands retain
+their bounded operation family. These metrics do not separate individual pools
+for the same worker entrypoint, and unscoped one-shot inspection subprocesses are
+outside the queue gauge. Identity and avatar pools share compute admission with other compute pools;
+their queue wait does not by itself prove their own worker limit is too small.
+
+Observations use the existing asynchronous diagnostic queue and begin when a
+consumer subscribes. Queue drops can lose samples or leave a gauge at its last
+delivered value until another request updates it. Check
+`openclaw_diagnostic_async_queue_dropped_total` before interpreting a saturated
+interval. No worker limits, scheduling order, or cancellation behavior change.
+
+```promql
+# Worker wait p99, by kind and bounded request family
+histogram_quantile(0.99,
+  sum by (le, kind, request_class) (rate(openclaw_worker_queue_wait_seconds_bucket[5m])))
+
+# Request classes occupying dispatch slots for the most wall time
+sum by (kind, request_class) (rate(openclaw_worker_request_seconds_sum[5m]))
+
+# Where SQLite writer requests spend their observed wall time
+sum by (request_class, phase) (rate(openclaw_worker_request_phase_seconds_sum[5m]))
+
+# Shared-state read rate, by operation family
+sum by (request_class) (rate(openclaw_worker_request_seconds_count{kind="stateRead"}[5m]))
+```
+
 ### Memory and process churn
 
 `openclaw_memory_bytes` exposes `rss`, `heap_total`, `heap_used`, `external`,
@@ -318,14 +503,26 @@ most one outstanding request per Worker. Samples expire after 60 seconds and
 are removed when the Worker exits. Compare `openclaw_worker_heap_sampled_count`
 with `openclaw_worker_count`: startup, unavailable APIs, and stalled Workers can
 produce partial totals. No heap snapshot or extra sampling timer is created.
+Both count metrics also expose `script="..."` series: `openclaw_worker_count`
+counts all live Workers for that script, including those awaiting or missing a
+fresh sample, while `openclaw_worker_heap_sampled_count` counts its fresh samples.
+The original unlabeled series retain the aggregate totals. Select
+`{script!=""}` when summing script series to avoid counting the aggregate again.
 `openclaw_worker_heap_used_bytes{script="..."}` sums fresh heap samples for each
 Worker script. Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
 `.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series
-disappears when it has no live, fresh samples. Memory-pressure logs include the
+disappears when it has no live, fresh samples; its count series disappear when
+it has no live Workers. Memory-pressure logs include the
 same byte counts and Worker coverage counts, plus `workerHeaps`: the five largest
 individual fresh Worker heaps as `{script, heapUsed, heapTotal}` (bytes), using the same
 bounded script names.
+
+Session transcript database lanes retire after five idle minutes, releasing their
+isolate heaps along with retained readers. A request resets the lane's idle
+deadline; active reads and host callbacks finish before retirement. The next
+request recreates the lane's workers through normal database admission. The
+separate SQLite handle retention window remains 30 minutes.
 
 `openclaw_worker_started_total{script="..."}` and
 `openclaw_worker_retired_total{script="...",reason="..."}` expose cumulative
@@ -478,6 +675,17 @@ increase(openclaw_gc_duration_seconds_count[5m])
   - increase(openclaw_gc_duration_seconds_bucket{le="1"}[5m])
 ```
 
+Run, harness-run, model-call (including synthetic model turns), and message-dispatch
+duration histograms preserve the existing bounds through 600 seconds and add
+900, 1800, and 3600 seconds. Each label set expands into 22 scrape series.
+Other duration histograms keep their existing bounds.
+
+Percentiles remain bucket-based estimates; observations above one hour still
+fall only in `+Inf`. Upgrading cannot recover the distribution of historical
+overflow samples. During a rolling upgrade, avoid pooling instances with
+different bucket layouts, and use a query window containing only samples from
+the new layout when evaluating long-run percentiles.
+
 <Tip>
 Prefer `gen_ai_client_token_usage` for cross-provider dashboards: it follows the OpenTelemetry GenAI semantic conventions and is consistent with metrics from non-OpenClaw GenAI services.
 </Tip>
@@ -530,6 +738,6 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
 ## Related
 
 - [Diagnostics export](/gateway/diagnostics) — local diagnostics zip for support bundles
-- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` probes
+- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` checks
 - [Logging](/logging) — file-based logging
 - [OpenTelemetry export](/gateway/opentelemetry) — OTLP push for traces, metrics, and logs

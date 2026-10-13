@@ -396,11 +396,12 @@ describe("cross-OS release checks workflow", () => {
     expect(crossOs.with?.previous_version).toBe(
       "${{ needs.prepare_release_package.outputs.upgrade_baseline }}",
     );
+    expect(crossOs.with?.workflow_ref).toBe("${{ github.sha }}");
     expect(docker.with?.published_upgrade_survivor_baseline).toBe(
       "${{ format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) }}",
     );
     expect(packageAcceptance.with?.published_upgrade_survivor_baseline).toBe(
-      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}",
+      "${{ inputs.qualification_baselines_json != '' && fromJSON(inputs.qualification_baselines_json).upgradeBaseline || (needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest') }}",
     );
   });
 

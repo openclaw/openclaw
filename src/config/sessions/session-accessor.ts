@@ -5,7 +5,7 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
-export { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
+export { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 export {
   bindSessionPendingInputSources,
   listSessionPendingInputs,
@@ -76,7 +76,6 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-  SessionLifecycleTranscriptInfo,
   SessionParentForkDecision,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
@@ -104,7 +103,6 @@ export type {
   SessionTranscriptVisibleMessageEventRow,
   SessionTranscriptWriteLockAccessorContext,
   SessionTranscriptWriteScope,
-  SessionTranscriptWriteTransactionContext,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -133,7 +131,6 @@ export {
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   ensureTranscriptGenerationsForCanonicalRepair,
-  hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
   listSessionChildEntriesReadOnly,
@@ -178,6 +175,7 @@ export {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   markSessionAbortTarget,
+  matchesSessionAbortTargetOwner,
   recordInboundSessionMeta,
   resolveSessionAbortTarget,
   resolveSessionParentForkDecision,
@@ -189,15 +187,10 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-export {
-  updateSessionProfileInvolvement,
-  updateSessionProfileInvolvementAsync,
-} from "./session-involvement-store.js";
-export {
-  MAX_SESSION_PARTICIPANTS,
-  recordSessionParticipant,
-  type RecordSessionParticipantResult,
-} from "./session-accessor.sqlite-participants.js";
+export { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
+export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
+export type { RecordSessionParticipantResult } from "./session-accessor.sqlite-participants.native.js";
+export { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 export { type SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 export {
   listCanonicalSessionRepairFacts,
@@ -231,7 +224,6 @@ export {
 } from "./session-accessor.reset.js";
 export {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
@@ -242,16 +234,13 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptSuffixEventsBoundedSync,
   persistCompactionBoundaryWithSessionEntrySync,
   persistCompactionBoundaryWithSessionEntryAsync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
-  readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
-  readSessionTranscriptMessageByEventId,
   readTranscriptRawDelta,
   readTranscriptMutationAtSync,
   readTranscriptMutationStateSync,
@@ -259,9 +248,6 @@ export {
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   validatePreparedAssistantAppendSync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
-  replaceSessionWithBranchedTranscript,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
@@ -269,7 +255,7 @@ export {
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
-  withTranscriptWriteTransaction,
+  withTranscriptWriteSequence,
 } from "./session-accessor.transcript.js";
 export {
   appendTranscriptMessages,
@@ -303,7 +289,6 @@ export {
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeTarget,
-  resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
 } from "./session-accessor.transcript-target.js";
 
 export {

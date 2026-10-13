@@ -156,14 +156,12 @@ export function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   };
 }
 
-export function buildDirectoryInstallResult(params: {
-  pluginId: string;
-  targetDir: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
-}): InstallPluginResult {
+export function buildDirectoryInstallResult(
+  params: Pick<
+    Extract<InstallPluginResult, { ok: true }>,
+    "pluginId" | "targetDir" | "manifestName" | "version" | "extensions" | "setup"
+  >,
+): InstallPluginResult {
   return {
     ok: true,
     pluginId: params.pluginId,
@@ -271,7 +269,16 @@ export async function resolvePreparedDirectoryInstallTarget(params: {
   requestedMode: "install" | "update";
   nameEncoder?: (pluginId: string) => string;
 }): Promise<{ ok: true; target: PreparedInstallTarget } | { ok: false; error: string }> {
-  const targetDirResult = await resolvePluginInstallTarget(params);
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : resolveDefaultPluginExtensionsDir();
+  const targetDirResult = await params.runtime.resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
+    nameEncoder: params.nameEncoder,
+  });
   if (!targetDirResult.ok) {
     return targetDirResult;
   }
@@ -328,46 +335,27 @@ export async function runInstallSourceScan(params: {
   }
 }
 
-export async function installPluginDirectoryIntoExtensions(params: {
-  sourceDir: string;
-  pluginId: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
-  targetDir?: string;
-  extensionsDir?: string;
-  logger: PluginInstallLogger;
-  timeoutMs: number;
-  workTimeoutMs?: number | null;
-  mode: "install" | "update";
-  dryRun: boolean;
-  copyErrorPrefix: string;
-  hasDeps: boolean;
-  sourceHardlinks?: "package-manager" | "reject";
-  depsLogMessage: string;
-  afterCopy?: (installedDir: string) => Promise<void>;
-  afterInstall?: (
-    installedDir: string,
-  ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
-  nameEncoder?: (pluginId: string) => string;
-  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-  beforePersistentApply?: () => void;
-}): Promise<InstallPluginResult> {
+export async function installPluginDirectoryIntoExtensions(
+  params: Parameters<typeof buildDirectoryInstallResult>[0] & {
+    sourceDir: string;
+    logger: PluginInstallLogger;
+    timeoutMs: number;
+    workTimeoutMs?: number | null;
+    mode: "install" | "update";
+    dryRun: boolean;
+    copyErrorPrefix: string;
+    hasDeps: boolean;
+    sourceHardlinks?: "package-manager" | "reject";
+    depsLogMessage: string;
+    afterInstall?: (
+      installedDir: string,
+    ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
+  },
+): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  let targetDir = params.targetDir;
-  if (!targetDir) {
-    const targetDirResult = await resolvePluginInstallTarget({
-      runtime,
-      pluginId: params.pluginId,
-      extensionsDir: params.extensionsDir,
-      nameEncoder: params.nameEncoder,
-    });
-    if (!targetDirResult.ok) {
-      return targetDirResult;
-    }
-    targetDir = targetDirResult.targetDir;
-  }
+  const targetDir = params.targetDir;
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
     targetPath: targetDir,
@@ -394,7 +382,6 @@ export async function installPluginDirectoryIntoExtensions(params: {
     omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
-    afterCopy: params.afterCopy,
     beforePersistentApply: params.beforePersistentApply,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
@@ -433,24 +420,6 @@ export async function installPluginDirectoryIntoExtensions(params: {
   const result = buildDirectoryInstallResult({ ...params, targetDir });
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
-}
-
-async function resolvePluginInstallTarget(params: {
-  runtime: PluginInstallRuntime;
-  pluginId: string;
-  extensionsDir?: string;
-  nameEncoder?: (pluginId: string) => string;
-}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : resolveDefaultPluginExtensionsDir();
-  return await params.runtime.resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: params.pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
-    nameEncoder: params.nameEncoder,
-  });
 }
 
 export async function resolveEffectiveInstallMode(params: {

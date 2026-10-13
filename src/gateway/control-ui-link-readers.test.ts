@@ -12,10 +12,7 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginDescriptors,
 } from "./control-ui-plugin-tabs.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
-} from "./methods/registry.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 
 function setup() {
   const { config, registry } = createPluginRegistryFixture();
@@ -56,10 +53,7 @@ function setup() {
   };
   setActivePluginRegistry(registry.registry);
   const methods = () =>
-    createGatewayMethodRegistry(
-      createPluginGatewayMethodDescriptors(registry.registry),
-      registry.registry,
-    );
+    createGatewayMethodRegistry(registry.registry.gatewayMethodDescriptors, registry.registry);
   const readers = (scopes: readonly string[]) => listControlUiLinkReaders(scopes, methods());
   return { registry, register, readers, methods };
 }

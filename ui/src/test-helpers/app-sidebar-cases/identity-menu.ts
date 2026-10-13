@@ -7,7 +7,7 @@ import {
   resolveUpdateAttentionDismissal,
 } from "../../components/sidebar-attention-dismissals.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar footer identity menu", () => {
   it("opens Profile from the Owner header without a self user", async () => {
@@ -15,7 +15,8 @@ describe("AppSidebar footer identity menu", () => {
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
       createSessions("main", ["agent:main:main"]),
     );
-    sidebar.onNavigate = vi.fn();
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
     sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
     await sidebar.updateComplete;
 
@@ -27,7 +28,7 @@ describe("AppSidebar footer identity menu", () => {
     expect(header?.querySelector('[data-viewer-id="owner"]')?.textContent).toContain("O");
     menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: header }, bubbles: true }));
     await sidebar.updateComplete;
-    expect(sidebar.onNavigate).toHaveBeenCalledWith("profile", {
+    expect(onNavigate).toHaveBeenCalledWith("profile", {
       hash: "#settings-profile-identity",
     });
   });

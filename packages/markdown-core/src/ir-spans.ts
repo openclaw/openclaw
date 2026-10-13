@@ -3,6 +3,38 @@ import type {
   AssistantTranscriptRoleHeaderKind,
 } from "./assistant-transcript-headers.js";
 
+/** A replacement in the original text's UTF-16 coordinates; equal bounds insert text. */
+export type MarkdownTextEdit = { start: number; end: number; text: string };
+
+/** Apply disjoint edits; equal-position insertions keep caller order and shift their boundary. */
+export function applyMarkdownTextEdits(text: string, edits: readonly MarkdownTextEdit[]) {
+  let output = "";
+  let cursor = 0;
+  const shifts = edits
+    .toSorted((a, b) => a.start - b.start || a.end - b.end)
+    .map((edit) => {
+      output += text.slice(cursor, edit.start) + edit.text;
+      cursor = edit.end;
+      return { end: edit.end, shift: output.length - cursor };
+    });
+  return {
+    text: output + text.slice(cursor),
+    mapOffset: (offset: number): number => {
+      let low = 0;
+      let high = shifts.length;
+      while (low < high) {
+        const middle = low + Math.floor((high - low) / 2);
+        if ((shifts[middle]?.end ?? Number.POSITIVE_INFINITY) <= offset) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      return offset + (shifts[low - 1]?.shift ?? 0);
+    },
+  };
+}
+
 export type MarkdownStyle =
   | "bold"
   | "italic"
@@ -106,7 +138,6 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
     if (
       previous &&
       previous.end === span.start &&
-      previous.type === span.type &&
       previous.kind === span.kind &&
       previous.role === span.role
     ) {

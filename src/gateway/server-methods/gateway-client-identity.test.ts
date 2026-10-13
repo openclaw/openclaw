@@ -9,6 +9,7 @@ import {
   createUserTurnInputController,
 } from "./chat-send-user-turn.test-support.js";
 import {
+  authenticatedProfileUnavailableError,
   gatewayClientSenderFields,
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
@@ -80,6 +81,17 @@ describe("gateway client identity", () => {
     expect(gatewayClientSenderFields(client)).toEqual({});
     expect(gatewayClientSessionCreator(client)).toBeUndefined();
   });
+
+  it("reports unavailable profiles without loading the GitHub plugin surface", () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    for (const cause of [undefined, new Error("profile store unavailable")]) {
+      expect(authenticatedProfileUnavailableError(cause)).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Authenticated profile verification is unavailable"),
+        retryAfterMs: 1_000,
+      });
+    }
+  });
 });
 
 describe("chat send command authority", () => {
@@ -116,11 +128,6 @@ describe("chat send command authority", () => {
   it.each([
     { name: "verified human", overrides: {}, allowed: true },
     {
-      name: "verified provider login",
-      overrides: { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true },
-      allowed: true,
-    },
-    {
       name: "fallback owner attribution",
       overrides: { authenticatedUserId: undefined },
       allowed: false,
@@ -156,7 +163,52 @@ describe("chat send command authority", () => {
     expect(context).not.toHaveProperty("SenderId");
   });
 
-  it.each([true, false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
+  it.each(["revoked", "aborted", "rebound", "synthetic"] as const)(
+    "uses live person ingress command authority without a proxy login and rejects %s authority",
+    (change) => {
+      const lifetime = new AbortController();
+      let current = true;
+      const actor = { kind: "operator" as const, profileId: "profile-ada" };
+      const client = createClient({ authenticatedUserId: undefined });
+      const internal: NonNullable<GatewayClient["internal"]> = {
+        operatorRoleActor: actor,
+        remoteIngressPrincipal: {
+          bindingId: "synthetic-command-grant",
+          authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "1" },
+          preparedSessionProfile: {
+            profileId: "profile-ada",
+            role: null,
+            githubLogin: null,
+            aliases: new Set(),
+          },
+          operatorRoleActor: actor,
+          scopes: ["operator.write"],
+          signal: lifetime.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Grant revoked");
+            }
+          },
+        },
+      };
+      client.internal = internal;
+      const context = resolveChatSendCallerContext(client);
+      expect(authorize(context).isAuthorizedSender).toBe(true);
+      expect(authorize(context, "profile-other").isAuthorizedSender).toBe(false);
+      if (change === "revoked") {
+        current = false;
+      } else if (change === "aborted") {
+        lifetime.abort();
+      } else if (change === "rebound") {
+        client.authenticatedUserProfile!.profileId = "profile-other";
+      } else {
+        internal.syntheticClient = true;
+      }
+      expect(authorize(context).isAuthorizedSender).toBe(false);
+    },
+  );
+
+  it.each([false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
     const client = createClient(hasProfile ? {} : { authenticatedUserProfile: undefined });
     client.connect.client = {
       id: "cli",
@@ -218,7 +270,7 @@ describe("chat send command authority", () => {
     "admission",
     "synthetic",
     "owner",
-  ] as const)("retires verified requester context after %s changes", async (change) => {
+  ] as const)("retires verified requester context after %s changes", (change) => {
     const lifetime = new AbortController();
     const client = createClient({
       authenticatedUserId: change === "owner" ? undefined : "ada@example.test",
@@ -227,7 +279,7 @@ describe("chat send command authority", () => {
     });
     let current = true;
     const { controller } = createUserTurnInputController("Change my theme");
-    const { ctx } = await prepareChatSendUserTurn({
+    const { ctx } = prepareChatSendUserTurn({
       request: {
         inboundMessage: "Change my theme",
         clientInfo: client.connect.client,

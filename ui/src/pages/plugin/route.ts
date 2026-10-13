@@ -47,7 +47,7 @@ export const page = definePage({
     params: pluginPageParams(options.location.search),
   }),
   component: () =>
-    import("./plugin-page.ts").then(() => ({
+    import("./plugin-page.tsx").then(() => ({
       header: true,
       render: (data: unknown) => {
         const ref = (data ?? { pluginId: "", id: "", params: {} }) as PluginTabRef & {

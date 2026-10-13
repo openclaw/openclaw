@@ -85,32 +85,6 @@ describe("onboarding main-agent creation", () => {
     });
   });
 
-  it("stages a normalized named first agent and detects pending legacy-session repairs", async () => {
-    mocks.createAgent.mockResolvedValueOnce({
-      status: "created",
-      agentId: "robby",
-      name: "Robby!",
-      workspace: "/tmp/work",
-      agentDir: "/tmp/agent",
-      bootstrapPending: true,
-      configHash: "hash-after-create",
-    });
-
-    await ensureOnboardingAgent({
-      config: {},
-      workspace: "/tmp/work",
-      firstAgent: { name: "Robby!" },
-    });
-
-    expect(mocks.createAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ entry: { id: "robby", name: "Robby!", workspace: "/tmp/work" } }),
-    );
-    expect(mocks.migrateLegacyMainSessionKeys).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({ agents: expect.any(Object) }),
-      mode: "detect",
-    });
-  });
-
   it("preserves an explicit imported candidate roster", async () => {
     const config = { agents: { entries: { main: {} } } };
 

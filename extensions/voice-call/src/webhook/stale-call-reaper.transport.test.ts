@@ -95,6 +95,7 @@ describe("stale-call reaper provider transport", () => {
           storePath: "/tmp/openclaw-voice-call-proof.json",
           transcriptWaiters: new Map(),
           maxDurationTimers: new Map(),
+          notifyHangupTimers: new Map(),
           endCallOperations: new Map(),
         };
         const manager = {

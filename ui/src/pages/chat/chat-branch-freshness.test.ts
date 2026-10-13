@@ -82,9 +82,13 @@ describe("chat branch freshness", () => {
     return { request, state };
   }
 
-  it.each(["assistant", "toolResult"])(
-    "refreshes preserved branches after a persisted %s message without reloading the page",
-    async (role) => {
+  it.each([
+    { role: "assistant", historyPending: false },
+    { role: "toolResult", historyPending: false },
+    { role: "assistant", historyPending: true },
+  ])(
+    "refreshes branches after persisted $role (history pending: $historyPending)",
+    async ({ role, historyPending }) => {
       const original = {
         leafEntryId: "original-reply",
         headline: "Original reply",
@@ -97,7 +101,7 @@ describe("chat branch freshness", () => {
         messageCount: 2,
         active: true,
       };
-      const { state } = createSessionEventState({
+      const { request, state } = createSessionEventState({
         chatBranches: [original],
         chatBranchesSessionKey: "agent:main:main",
         chatBranchesConnectionEpoch: 1,
@@ -105,31 +109,38 @@ describe("chat branch freshness", () => {
       const listBranches = vi
         .mocked(state.sessions.listBranches)
         .mockResolvedValue([replacement, original]);
-      // Ordinary history reads and streamed text do not change the persisted graph.
-      await loadChatHistory(state);
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: {
-          sessionKey: state.sessionKey,
-          runId: "replacement-run",
-          state: "delta",
-          deltaText: "Replacement",
-          message: { role: "assistant", content: [{ type: "text", text: "Replacement" }] },
-        },
-      });
-      expect(state.chatStream).toBe("Replacement");
-      expect(listBranches).not.toHaveBeenCalled();
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: {
-          sessionKey: state.sessionKey,
-          runId: "replacement-run",
-          state: role === "toolResult" ? "aborted" : "final",
-          message: { role: "assistant", content: "Replacement reply" },
-        },
-      });
+      const history = createDeferred<{ messages: []; sessionId: string }>();
+      let pending: ReturnType<typeof loadChatHistory> | undefined;
+      if (historyPending) {
+        request.mockReturnValueOnce(history.promise);
+        pending = loadChatHistory(state);
+      } else {
+        // Ordinary history reads and streamed text do not change the persisted graph.
+        await loadChatHistory(state);
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId: "replacement-run",
+            state: "delta",
+            deltaText: "Replacement",
+            message: { role: "assistant", content: [{ type: "text", text: "Replacement" }] },
+          },
+        });
+        expect(state.chatStream).toBe("Replacement");
+        expect(listBranches).not.toHaveBeenCalled();
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId: "replacement-run",
+            state: role === "toolResult" ? "aborted" : "final",
+            message: { role: "assistant", content: "Replacement reply" },
+          },
+        });
+      }
       handlePageGatewayEvent(state, {
         type: "event",
         event: "session.message",
@@ -141,45 +152,16 @@ describe("chat branch freshness", () => {
           message: { role, content: "Replacement reply" },
         },
       });
+      if (historyPending) {
+        history.resolve({ messages: [], sessionId: "selected-session" });
+        await pending;
+      }
       await vi.waitFor(() => expect(state.chatBranches).toEqual([replacement, original]));
       const reads = listBranches.mock.calls.length;
       await loadChatHistory(state);
       expect(listBranches).toHaveBeenCalledTimes(reads);
     },
   );
-
-  it("refreshes branches after an append races an in-flight history read", async () => {
-    const original = {
-      leafEntryId: "original",
-      headline: "Original reply",
-      messageCount: 2,
-      active: false,
-    };
-    const replacement = { ...original, leafEntryId: "replacement", active: true };
-    const { request, state } = createSessionEventState({
-      chatBranches: [original],
-      chatBranchesSessionKey: "agent:main:main",
-      chatBranchesConnectionEpoch: 1,
-    });
-    const history = createDeferred<{ messages: []; sessionId: string }>();
-    request.mockReturnValueOnce(history.promise);
-    vi.mocked(state.sessions.listBranches).mockResolvedValue([replacement, original]);
-    const pending = loadChatHistory(state);
-    handlePageGatewayEvent(state, {
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: state.sessionKey,
-        hasActiveRun: false,
-        messageId: "replacement",
-        messageSeq: 4,
-        message: { role: "assistant", content: "Replacement reply" },
-      },
-    });
-    history.resolve({ messages: [], sessionId: "selected-session" });
-    await pending;
-    await vi.waitFor(() => expect(state.chatBranches).toEqual([replacement, original]));
-  });
 
   it("retires a pre-append branch read and defers hidden-pane refresh until presentation", async () => {
     const original = {

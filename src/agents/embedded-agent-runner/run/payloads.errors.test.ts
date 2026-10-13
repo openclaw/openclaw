@@ -16,7 +16,9 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 });
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -135,13 +137,6 @@ describe("buildEmbeddedRunPayloads", () => {
       content: [{ type: "text", text: errorJson }],
       ...overrides,
     });
-  const makeStoppedAssistant = () =>
-    makeAssistant({
-      stopReason: "stop",
-      errorMessage: undefined,
-      content: [],
-    });
-
   const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
     // Overloaded JSON is normalized into stable copy rather than replayed as a
     // raw provider object.
@@ -180,18 +175,25 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { sandbox: { mode: "off" } },
+          worker: { sandbox: { mode: "all" } },
+        },
+      },
+      tools: { sandbox: { tools: { deny: ["browser"] } } },
+    };
     const payloads = buildPayloads({
       agentId,
       sessionKey: "global",
-      config: {
-        agents: {
-          entries: {
-            main: { sandbox: { mode: "off" } },
-            worker: { sandbox: { mode: "all" } },
-          },
-        },
-        tools: { sandbox: { tools: { deny: ["browser"] } } },
-      },
+      config,
+      sandboxRuntime: resolvePreparedSandboxRuntimeStatus({
+        cfg: config,
+        agentId,
+        sessionKey: "global",
+        preparedSessionEntry: null,
+      }),
       lastAssistant: makeAssistant({ errorMessage: "unknown tool: browser", content: [] }),
     });
     expect(payloads).toEqual([
@@ -354,9 +356,16 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it.each([true, undefined])(
-    "keeps terminal errors suppressed after a completed message-tool reply (final=%s)",
-    (sourceReplyFinal) => {
+  it.each(
+    [true, undefined].flatMap((sourceReplyFinal) =>
+      ([undefined, "delivered"] as const).map((sourceReplyDeliveryState) => ({
+        sourceReplyFinal,
+        sourceReplyDeliveryState,
+      })),
+    ),
+  )(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=$sourceReplyFinal, canonical=$sourceReplyDeliveryState)",
+    ({ sourceReplyFinal, sourceReplyDeliveryState }) => {
       const payloads = buildPayloads({
         lastAssistant: makeAssistant({
           stopReason: "error",
@@ -365,6 +374,7 @@ describe("buildEmbeddedRunPayloads", () => {
         }),
         didSendViaMessagingTool: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState,
         messagingToolSentTargets: [
           {
             tool: "message",
@@ -380,9 +390,57 @@ describe("buildEmbeddedRunPayloads", () => {
     },
   );
 
-  it("suppresses structured provider error messages in user-facing reply payloads", () => {
+  it.each(
+    (["pending", "delivered"] as const).flatMap((earlierDelivery) =>
+      (["pending", "missing"] as const).map((currentDelivery) => ({
+        earlierDelivery,
+        currentDelivery,
+      })),
+    ),
+  )(
+    "scopes error recovery to current custody ($earlierDelivery then $currentDelivery)",
+    ({ earlierDelivery, currentDelivery }) => {
+      const earlier = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Do not repeat the completed answer." }],
+      });
+      const payloads = buildPayloads({
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplyDeliveryState: currentDelivery,
+        didDeliverSourceReplyViaMessageTool: false,
+        assistantTexts: ["Do not repeat the completed answer."],
+        answerSegments: [
+          {
+            textEnd: 1,
+            messageEnd: 1,
+            finalMessageStart: 1,
+            lastAssistant: earlier,
+            sourceReplyDeliveryState: earlierDelivery,
+          },
+        ],
+        messagingToolSourceReplyPayloads:
+          earlierDelivery === "delivered"
+            ? [{ text: "Completed answer.", sourceReplyFinal: true }]
+            : [],
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          content: [],
+          errorMessage: "Current input failed.",
+        }),
+      });
+      expect(payloads).toEqual([
+        ...(earlierDelivery === "delivered"
+          ? [expect.objectContaining({ text: "Completed answer." })]
+          : []),
+        ...(currentDelivery === "missing"
+          ? [expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true })]
+          : []),
+      ]);
+    },
+  );
+
+  it("preserves the rejection message without the response envelope", () => {
     const rawError =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET_CANARY_69737"}}';
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Invalid service_tier argument"},"private":"SECRET_CANARY_69737"}';
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "error",
@@ -392,11 +450,11 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+      text: String.raw`LLM request rejected: Invalid service\_tier argument`,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
-    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+    expectNoPayloadTextContaining(payloads, "invalid_request_error");
   });
 
   it("surfaces actionable numeric provider limits without replaying the raw error", () => {
@@ -417,7 +475,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");
   });
 
-  it("keeps numeric limits generic for non-token parameters", () => {
+  it("preserves numeric limits for non-token parameters", () => {
     const rawError = "400 account_id (1234567890123456) exceeds maximum length (8)";
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
@@ -428,10 +486,10 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+      text: String.raw`LLM request rejected: account\_id \(1234567890123456\) exceeds maximum length \(8\)`,
       isError: true,
     });
-    expectNoPayloadTextContaining(payloads, "1234567890123456");
+    expectNoPayloadTextContaining(payloads, "provider maximum");
   });
 
   it("does not infer a token maximum from unrelated trailing digits", () => {
@@ -445,7 +503,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+      text: String.raw`LLM request rejected: max\_tokens 384000 exceeds maximum for model gpt\-5`,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "provider maximum of 5");
@@ -488,7 +546,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "Param Incorrect");
   });
 
-  it("suppresses escaped structured provider error messages in user-facing reply payloads", () => {
+  it("normalizes escaped structured rejection messages", () => {
     const rawError =
       '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET\\nCANARY_69737"}}';
     const payloads = buildPayloads({
@@ -500,12 +558,10 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+      text: String.raw`LLM request rejected: SECRET CANARY\_69737`,
       isError: true,
     });
-    expectNoPayloadTextContaining(payloads, "SECRET");
-    expectNoPayloadTextContaining(payloads, "CANARY_69737");
-    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+    expectNoPayloadTextContaining(payloads, "invalid_request_error");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -715,7 +771,11 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
-      lastAssistant: makeStoppedAssistant(),
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: errorJsonPretty }],
+      }),
     });
 
     expectSinglePayloadText(payloads, errorJsonPretty.trim());

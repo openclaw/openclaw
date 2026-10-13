@@ -254,7 +254,7 @@ const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.log(JSON.stringify(process.argv[4] === "dist-tags"
   ? [{ latest: "2026.9.2", "extended-stable": "2026.8.35" }]
-  : ["2026.7.1-2", "2026.8.1", "2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2"]));
+  : ["2026.6.34", "2026.7.1-2", "2026.8.1", "2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2"]));
 `,
         { mode: 0o755 },
       );
@@ -322,7 +322,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       });
       const expanded = entrypoint === "update-migration" || standaloneSelectors.has(entrypoint);
       const expectedBaselines = expanded
-        ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.8.33"
+        ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.6.34"
         : `openclaw@${entrypoint === "minimum" ? "2026.6.1" : "2026.7.1-2"}`;
       expect(readFileSync(output, "utf8")).toBe(
         `baselines=${expectedBaselines}\nbaseline_scope=${expanded ? "legacy-operator-state" : "all-scenarios"}\nbaseline=openclaw@2026.7.1-2\n`,
@@ -363,7 +363,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
           ["openclaw@2026.9.2", "legacy-operator-state"],
           ["openclaw@2026.9.1", "legacy-operator-state"],
           ["openclaw@2026.8.35", "legacy-operator-state"],
-          ["openclaw@2026.8.33", "legacy-operator-state"],
+          ["openclaw@2026.6.34", "legacy-operator-state"],
           ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
         ]);
       }
@@ -384,14 +384,22 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
   it.each<BaselineFixture & { name: string; expected: string[] }>([
     { name: "fallback", args: { fallback: "2026.6.1" }, expected: ["2026.6.1"] },
     ...[
-      { extended: undefined, expected: ["2026.9.2", "2026.9.1", "2026.8.33"] },
-      { extended: "2026.8.35", expected: ["2026.9.2", "2026.9.1", "2026.8.35", "2026.8.33"] },
-      { extended: "2026.8.33", expected: ["2026.9.2", "2026.9.1", "2026.8.33"] },
+      { extended: undefined, expected: ["2026.9.2", "2026.9.1", "2026.6.34"] },
+      { extended: "2026.8.35", expected: ["2026.9.2", "2026.9.1", "2026.8.35", "2026.6.34"] },
+      { extended: "2026.8.33", expected: ["2026.9.2", "2026.9.1", "2026.8.33", "2026.6.34"] },
     ].map(({ extended, expected }) => ({
       name: `supported lines with extended-stable ${extended}`,
       args: { requested: "supported-lines" },
       tags: { latest: "2026.9.2", ...(extended ? { "extended-stable": extended } : {}) },
-      versions: ["2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2", "2026.9.3-beta.1", "2026.9.3"],
+      versions: [
+        "2026.6.34",
+        "2026.8.33",
+        "2026.8.35",
+        "2026.9.1",
+        "2026.9.2",
+        "2026.9.3-beta.1",
+        "2026.9.3",
+      ],
       expected,
     })),
     {
@@ -402,8 +410,8 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         "candidate-published": "false",
       },
       tags: { latest: "2026.9.3" },
-      versions: ["2026.8.33", "2026.9.2", "2026.9.3"],
-      expected: ["2026.9.2", "2026.8.33"],
+      versions: ["2026.6.34", "2026.8.33", "2026.9.2", "2026.9.3"],
+      expected: ["2026.9.2", "2026.6.34"],
     },
     {
       name: "six supported stable releases, deduplicating explicit versions",
@@ -499,12 +507,12 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       },
       {
         tags: { latest: "2026.9.2", "extended-stable": "2026.8.99" },
-        versions: ["2026.8.33", "2026.9.1", "2026.9.2"],
+        versions: ["2026.6.34", "2026.8.33", "2026.9.1", "2026.9.2"],
         error: "npm extended-stable must name a published extended-stable version",
       },
       ...["2026.9.1", "2026.8.35-1", "2026.8.35-beta.1"].map((extended) => ({
         tags: { latest: "2026.9.2", "extended-stable": extended },
-        versions: ["2026.8.33", "2026.9.1", "2026.9.2", extended],
+        versions: ["2026.6.34", "2026.8.33", "2026.9.1", "2026.9.2", extended],
         error: "npm extended-stable must name a published extended-stable version",
       })),
       {

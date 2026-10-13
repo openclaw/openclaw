@@ -122,11 +122,8 @@ function readTelegramLifecycleEvent(params: {
   let previous = providerKey ? params.messageByProviderId.get(providerKey) : undefined;
   if (!previous && providerKey && providerMessageId) {
     const pending = params.pendingByChat.get(chatId) ?? [];
-    if (pending.length === 1) {
-      const pendingMessage = pending[0];
-      if (!pendingMessage) {
-        return null;
-      }
+    const pendingMessage = pending.length === 1 ? pending[0] : undefined;
+    if (pendingMessage) {
       previous = pendingMessage;
       pendingMessage.id = providerMessageId;
       params.messageByProviderId.set(providerKey, pendingMessage);
@@ -257,19 +254,13 @@ async function createCrablineState(params: {
           outboundEvents.push(lifecycle);
         }
       }
-      const normalizedEvent =
-        params.adapter.channel === "telegram" &&
-        isRecord(event) &&
-        isRecord(event.body) &&
-        normalizeStringifiedOptionalString(event.body.chat_id)
-          ? {
-              ...event,
-              body: {
-                ...event.body,
-                chat_id: normalizeStringifiedOptionalString(event.body.chat_id),
-              },
-            }
-          : event;
+      let normalizedEvent = event;
+      if (params.adapter.channel === "telegram" && isRecord(event) && isRecord(event.body)) {
+        const chatId = normalizeStringifiedOptionalString(event.body.chat_id);
+        if (chatId) {
+          normalizedEvent = { ...event, body: { ...event.body, chat_id: chatId } };
+        }
+      }
       const observation = params.adapter.createOutboundObservation({ event: normalizedEvent });
       if (!observation) {
         return;
@@ -463,57 +454,51 @@ function createQaCrablineTransport(params: {
         selection.channel === "signal"
           ? normalizeCrablineSignalGatewayConfig(rawConfig)
           : rawConfig;
+      let channels: OpenClawConfig["channels"];
       if (selection.channel === "discord") {
         const discord = config.channels?.discord;
         const senderAllowlist = transportPolicy?.senderAllowlist?.map(resolveDiscordQaId);
         const dmAllowlist = senderAllowlist ?? discord?.allowFrom ?? ["*"];
         const wildcardGuild = discord?.guilds?.["*"];
         const wildcardChannel = wildcardGuild?.channels?.["*"];
-        return {
-          ...config,
-          channels: {
-            ...config.channels,
-            discord: {
-              ...discord,
-              ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
-              allowFrom: [...dmAllowlist],
-              ...(dmAllowlist.includes("*") ? {} : { dmPolicy: "allowlist" as const }),
-              ...(senderAllowlist ? { groupPolicy: "allowlist" as const } : {}),
-              guilds: {
-                ...discord?.guilds,
-                "*": {
-                  ...wildcardGuild,
-                  ...(senderAllowlist ? { users: [...senderAllowlist] } : {}),
-                  channels: {
-                    ...wildcardGuild?.channels,
-                    "*": {
-                      ...wildcardChannel,
-                      ...(transportPolicy?.requireGroupMention ? { requireMention: true } : {}),
-                    },
+        channels = {
+          discord: {
+            ...discord,
+            ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
+            allowFrom: [...dmAllowlist],
+            ...(dmAllowlist.includes("*") ? {} : { dmPolicy: "allowlist" as const }),
+            ...(senderAllowlist ? { groupPolicy: "allowlist" as const } : {}),
+            guilds: {
+              ...discord?.guilds,
+              "*": {
+                ...wildcardGuild,
+                ...(senderAllowlist ? { users: [...senderAllowlist] } : {}),
+                channels: {
+                  ...wildcardGuild?.channels,
+                  "*": {
+                    ...wildcardChannel,
+                    ...(transportPolicy?.requireGroupMention ? { requireMention: true } : {}),
                   },
                 },
               },
             },
           },
-        } satisfies QaTransportGatewayConfig;
-      }
-      if (selection.channel !== "telegram") {
-        return config as QaTransportGatewayConfig;
-      }
-      const senderAllowlist = transportPolicy?.senderAllowlist?.map(
-        (senderId) => adapter.createAgentDelivery({ target: `dm:${senderId}` }).providerTargetKey,
-      );
-      if (
-        !transportPolicy?.requireGroupMention &&
-        !senderAllowlist &&
-        !transportPolicy?.topLevelReplies
-      ) {
-        return config as QaTransportGatewayConfig;
-      }
-      return {
-        ...config,
-        channels: {
-          ...config.channels,
+        };
+      } else {
+        if (selection.channel !== "telegram") {
+          return config as QaTransportGatewayConfig;
+        }
+        const senderAllowlist = transportPolicy?.senderAllowlist?.map(
+          (senderId) => adapter.createAgentDelivery({ target: `dm:${senderId}` }).providerTargetKey,
+        );
+        if (
+          !transportPolicy?.requireGroupMention &&
+          !senderAllowlist &&
+          !transportPolicy?.topLevelReplies
+        ) {
+          return config as QaTransportGatewayConfig;
+        }
+        channels = {
           telegram: {
             ...config.channels?.telegram,
             ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
@@ -532,8 +517,9 @@ function createQaCrablineTransport(params: {
               },
             },
           },
-        },
-      } as QaTransportGatewayConfig;
+        };
+      }
+      return { ...config, channels: { ...config.channels, ...channels } };
     },
 
     waitReady: (input: Parameters<QaTransportAdapter["waitReady"]>[0]) =>
@@ -625,7 +611,7 @@ function createQaCrablineTransport(params: {
         ],
         reportNotes: [
           ...createOpenClawCrablineChannelReportNotes(selection),
-          "Provider readiness records the strict startup probe before Gateway traffic; the same provider instance passed its final health probe.",
+          "Provider readiness records the strict startup check before Gateway traffic; the same provider instance passed its final health check.",
           `Full unmodified runtime transcript: ${path.relative(outputDir, adapter.manifest.recorderPath)}.`,
         ],
       };

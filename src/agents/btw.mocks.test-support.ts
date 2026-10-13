@@ -90,9 +90,10 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
 }));
 
+// mock-isolation: BTW fixtures supply their own auth and model registries without opening real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
-  discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+  discoverModelsAsync: async (...args: unknown[]) => discoverModelsMock(...args),
 }));
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
@@ -152,15 +153,19 @@ vi.mock("./model-discovery-context.js", () => ({
   resolveModelPluginMetadataSnapshot: () => undefined,
 }));
 
-vi.mock("./embedded-agent-runner/model.js", () => ({
+vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embedded-agent-runner/model.js")>()),
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
-  resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
+// mock-isolation: Side-question runs use controlled auth results without host credential discovery.
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStoreAsync: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
@@ -339,11 +344,17 @@ vi.mock("../logging/diagnostic.js", () => ({
   },
 }));
 
+// mock-isolation: BTW fixtures supply transcript events without opening the transcript database.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
-  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesCoreMock(...args),
-  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
   loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
+}));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryInWorker: async (...args: unknown[]) => loadSessionEntryMock(...args),
+  readSessionEntrySummariesInWorker: async (...args: unknown[]) =>
+    listSessionEntriesCoreMock(...args),
 }));
 
 export {

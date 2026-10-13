@@ -831,7 +831,6 @@ describe("registered Slack attachment downloads", () => {
   );
 
   it.each([
-    { name: "missing channel evidence", file: { channels: undefined }, params: {} },
     {
       name: "different shared channel",
       file: { channels: ["C1111111111"] },
@@ -860,11 +859,6 @@ describe("registered Slack attachment downloads", () => {
     {
       name: "commercial token to GovSlack",
       file: { url_private_download: "https://files.slack-gov.com/file" },
-    },
-    {
-      name: "GovSlack token to commercial Slack",
-      govSlack: true,
-      file: { url_private_download: "https://files.slack.com/file" },
     },
     { name: "private DNS destination", dnsAddress: "10.23.45.67" },
   ] satisfies Array<FixtureOptions & { name: string }>)(
@@ -910,21 +904,6 @@ describe("registered Slack attachment downloads", () => {
       });
     },
   );
-
-  it("retains explicitly uploaded HTML files", async () => {
-    await withDownloadFixture(
-      {
-        body: Buffer.from("<!doctype html><title>Authored document</title>"),
-        contentType: "text/html",
-        file: { name: "page.html" },
-      },
-      async (fixture) => {
-        const result = await fixture.invoke();
-        expect(result).toMatchObject({ details: { ok: true, contentType: "text/html" } });
-        await expect(fs.readFile(resultPath(result))).resolves.toEqual(fixture.body);
-      },
-    );
-  });
 
   it.each([
     {

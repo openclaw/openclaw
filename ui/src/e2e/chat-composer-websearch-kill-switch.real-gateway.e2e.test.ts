@@ -7,6 +7,11 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../../scripts/lib/local-build-metadata-paths.mts";
+import { createConfigIO } from "../../../src/config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.ts";
 import type { SessionToolOverrides } from "../../../src/config/sessions/session-tool-overrides.ts";
 import {
@@ -14,13 +19,14 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -126,14 +132,11 @@ function observeRequests(page: Page) {
 
 async function settleSelection(page: Page) {
   // Observe a rendered frame, then a read on this same real Gateway connection.
-  await page.evaluate(async () => {
+  await evaluateControlUiContext(page, async (context) => {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
-    };
-    await app.runtime.context.gateway.snapshot.client.request("health", {});
+    await context.gateway.snapshot.client!.request("health", {});
   });
 }
 
@@ -223,22 +226,31 @@ for (const globallyEnabled of [false, true]) {
       instance = owner;
       try {
         expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
-        for (const scenario of scenarios) {
-          // A persisted legacy true is read directly; current sessions.patch normalizes it away.
-          const entry = await upsertSessionEntryCore(
-            {
-              agentId: "main",
-              sessionKey: `agent:main:websearch-${scenario.name}`,
-              env: owner.env,
-            },
-            {
-              sessionId: `websearch-${scenario.name}`,
-              updatedAt: Date.now(),
-              label: `Synthetic web search ${scenario.name}`,
-              toolOverrides: scenario.overrides,
-            },
-          );
-          expect(entry?.toolOverrides).toEqual(scenario.overrides);
+        const config = await createConfigIO({
+          env: owner.env,
+          configPath: owner.state.configPath,
+        }).loadConfigAsync();
+        setRuntimeConfigSnapshot(config);
+        try {
+          for (const scenario of scenarios) {
+            // A persisted legacy true is read directly; current sessions.patch normalizes it away.
+            const entry = await upsertSessionEntryCore(
+              {
+                agentId: "main",
+                sessionKey: `agent:main:websearch-${scenario.name}`,
+                env: owner.env,
+              },
+              {
+                sessionId: `websearch-${scenario.name}`,
+                updatedAt: Date.now(),
+                label: `Synthetic web search ${scenario.name}`,
+                toolOverrides: scenario.overrides,
+              },
+            );
+            expect(entry?.toolOverrides).toEqual(scenario.overrides);
+          }
+        } finally {
+          clearRuntimeConfigSnapshot();
         }
         await owner.startGateway();
         return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
@@ -285,7 +297,13 @@ for (const globallyEnabled of [false, true]) {
             url.hash = fragment;
             await runQaGatewayFixture(
               async () => {
-                expect((await page.goto(url.toString()))?.status()).toBe(200);
+                const sessionDocument = url.pathname.startsWith("/chat/");
+                expect((await page.goto(url.toString()))?.status()).toBe(
+                  sessionDocument ? 404 : 200,
+                );
+                if (sessionDocument) {
+                  await enterControlUiSession(page);
+                }
                 await waitForControlUiGatewayReady(page);
                 observed.assets = await verifyServedBundle(page, suite.server.baseUrl);
                 await run(page, traffic);

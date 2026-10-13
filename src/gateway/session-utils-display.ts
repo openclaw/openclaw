@@ -9,11 +9,10 @@ import {
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   isTerminalSessionStatus,
-  buildGroupDisplayName,
-  buildGroupDisplayTitle,
   resolveSessionGoalDisplayState,
   type InternalSessionEntry as SessionEntry,
 } from "../config/sessions.js";
+import { buildGroupDisplayName, buildGroupDisplayTitle } from "../config/sessions/group-display.js";
 import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
@@ -157,9 +156,7 @@ export function projectGatewaySessionRunState(params: {
         : "interrupted";
     fields.status = liveSubagentRunActive
       ? subagentStatus
-      : fields.status === "running"
-        ? undefined
-        : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
+      : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
     const ownsInterruptedSession =
       entry?.lifecycleRunId === subagentRun.runId ||
       (entry?.lifecycleRunId === undefined && entry?.lastRunId === subagentRun.runId) ||
@@ -177,14 +174,24 @@ export function projectGatewaySessionRunState(params: {
       fields.lastRunError ??=
         "Restart recovery could not reach the parent. Inspect the child session before continuing.";
     }
+    // A lifecycle start after the spawn run ended belongs to a follow-up turn; do not refill
+    // its cleared terminal fields from the finished spawn run.
+    const fallbackEndedAt =
+      typeof fields.startedAt === "number" &&
+      typeof endedAt === "number" &&
+      fields.startedAt > endedAt
+        ? undefined
+        : endedAt;
     fields.startedAt =
       (liveSubagentRunActive ? undefined : fields.startedAt) ??
       getSubagentSessionStartedAt(subagentRun);
-    fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? endedAt);
+    fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? fallbackEndedAt);
     fields.runtimeMs = liveSubagentRunActive
       ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (fields.runtimeMs ??
-        (typeof endedAt === "number" ? getSubagentSessionRuntimeMs(subagentRun, now) : undefined));
+        (typeof fallbackEndedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
+          : undefined));
   }
   return { subagentRun, subagentOwner, fields };
 }

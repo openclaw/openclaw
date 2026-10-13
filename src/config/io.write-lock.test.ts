@@ -2,30 +2,24 @@ import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withExecutor } from "./config-executor.test-support.js";
 import { createConfigIO, writeConfigFile } from "./io.js";
+import * as configWriteSafety from "./io.write-safety.js";
 import {
-  mutateConfigFile,
   mutateConfigFileWithRetry,
   replaceConfigFile,
   resolveConfigIncludeWriteBoundary,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "./mutate.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 import { withConfigWriteLock } from "./write-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -44,31 +38,8 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function withConfigExecutor(
-  home: string,
-  operation: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-lock-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await operation(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
-}
-
 describe("direct config writer exclusion", () => {
-  it.each(["replace", "snapshot", "mutate", "retry"] as const)(
+  it.each(["snapshot", "retry"] as const)(
     "rejects changed %s path provenance before creating the canonical lock directory",
     async (flow) => {
       const stateDir = tempDirs.make("openclaw-config-revoked-admission-");
@@ -88,13 +59,13 @@ describe("direct config writer exclusion", () => {
           };
           const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
           const mutation =
-            flow === "replace" || flow === "snapshot"
+            flow === "snapshot"
               ? replaceConfigFile({
-                  ...(flow === "snapshot" ? { snapshot } : {}),
+                  snapshot,
                   writeOptions: options,
                   nextConfig,
                 })
-              : (flow === "retry" ? mutateConfigFileWithRetry : mutateConfigFile)({
+              : mutateConfigFileWithRetry({
                   writeOptions: options,
                   mutate: (draft) => {
                     draft.gateway = nextConfig.gateway;
@@ -120,39 +91,63 @@ describe("direct config writer exclusion", () => {
         const io = createConfigIO({ env, observe: false, pluginValidation: "skip" });
         const { writeOptions } = await io.readConfigFileSnapshotForWrite();
         let attempts = 0;
+        const sharedGuardCalls: number[] = [];
+        const guardFactory = vi.spyOn(configWriteSafety, "createConfigFileWriteGuard");
 
-        await withConfigExecutor(stateDir, async (assertCurrent, revoke) => {
-          await expect(
-            transformConfigFileWithRetry({
-              maxAttempts: 2,
-              writeOptions: {
-                ...writeOptions,
-                assertCurrent,
-                observe: false,
-                skipPluginValidation: true,
-                skipRuntimeSnapshotRefresh: true,
-              },
-              transform: async (config, { attempt }) => {
-                attempts += 1;
-                if (attempt === 0) {
-                  await fs.writeFile(configPath, concurrentRaw);
-                } else {
-                  await io.writeConfigFile(
-                    { gateway: { mode: "local", port: 19003 } },
-                    {
-                      preCommitRuntimePreflight: async () => {
-                        revoke();
+        try {
+          await withExecutor(stateDir, "config-lock-fence", async (assertCurrent, revoke) => {
+            const sharedAuthority = vi.fn(assertCurrent);
+            await expect(
+              transformConfigFileWithRetry({
+                maxAttempts: 2,
+                writeOptions: {
+                  ...writeOptions,
+                  assertCurrent: sharedAuthority,
+                  observe: false,
+                  skipPluginValidation: true,
+                  skipRuntimeSnapshotRefresh: true,
+                },
+                transform: async (config, { attempt }) => {
+                  attempts += 1;
+                  if (attempt === 0) {
+                    await fs.writeFile(configPath, concurrentRaw);
+                  } else {
+                    await replaceConfigFile({
+                      io,
+                      nextConfig: { gateway: { mode: "local", port: 19003 } },
+                      writeOptions: {
+                        ...writeOptions,
+                        assertConfigPathForWrite: composeConfigWriteAssertions(
+                          writeOptions.assertConfigPathForWrite,
+                          sharedAuthority,
+                        ),
+                        beforeCommit: async () => {
+                          const publicationGuard = guardFactory.mock.lastCall?.[2];
+                          if (!publicationGuard) {
+                            throw new Error("Missing config publication guard");
+                          }
+                          sharedAuthority.mockClear();
+                          publicationGuard();
+                          sharedGuardCalls.push(sharedAuthority.mock.calls.length);
+                          await Promise.resolve();
+                          publicationGuard();
+                          sharedGuardCalls.push(sharedAuthority.mock.calls.length);
+                          revoke();
+                        },
                       },
-                    },
-                  );
-                }
-                return { nextConfig: { ...config, gateway: { mode: "local", port: 19001 } } };
-              },
-            }),
-          ).rejects.toThrow(/executor ownership is no longer current|source ownership changed/);
-        });
+                    });
+                  }
+                  return { nextConfig: { ...config, gateway: { mode: "local", port: 19001 } } };
+                },
+              }),
+            ).rejects.toThrow(/executor ownership is no longer current|source ownership changed/);
+          });
+        } finally {
+          guardFactory.mockRestore();
+        }
 
         expect(attempts).toBe(2);
+        expect(sharedGuardCalls).toEqual([1, 2]);
         expect(await fs.readFile(configPath, "utf8")).toBe(concurrentRaw);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       },
@@ -351,54 +346,58 @@ describe("included config writer exclusion", () => {
           const sourceConfig = structuredClone(snapshot.sourceConfig);
           sourceConfig.gateway = { ...sourceConfig.gateway, port: 19001 };
           let preflightReached = false;
-          await withConfigExecutor(stateDir, async (assertCurrent, revokeExecutor) => {
-            const mutation = withConfigWriteLock(
-              configPath,
-              () => {
-                if (revoke) {
-                  revokeExecutor();
-                }
-                return replaceConfigFile({
-                  snapshot,
-                  sourceConfig,
-                  writeOptions: {
-                    ...writeOptions,
-                    observe: false,
-                    skipPluginValidation: true,
-                    skipRuntimeSnapshotRefresh: true,
-                    preCommitRuntimePreflight: async () => {
-                      preflightReached = true;
+          await withExecutor(
+            stateDir,
+            "config-lock-fence",
+            async (assertCurrent, revokeExecutor) => {
+              const mutation = withConfigWriteLock(
+                configPath,
+                () => {
+                  if (revoke) {
+                    revokeExecutor();
+                  }
+                  return replaceConfigFile({
+                    snapshot,
+                    sourceConfig,
+                    writeOptions: {
+                      ...writeOptions,
+                      observe: false,
+                      skipPluginValidation: true,
+                      skipRuntimeSnapshotRefresh: true,
+                      preCommitRuntimePreflight: async () => {
+                        preflightReached = true;
+                      },
                     },
-                  },
-                });
-              },
-              env,
-              assertCurrent,
-            );
-            if (revoke) {
-              await expect(mutation).rejects.toThrow(
-                /executor ownership is no longer current|source ownership changed/,
+                  });
+                },
+                env,
+                assertCurrent,
               );
-              expect(preflightReached).toBe(false);
-              expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-              expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(backupRaw);
-              await expect(fs.stat(`${includePath}.bak.1`)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            } else {
-              await expect(mutation).resolves.toMatchObject({
-                persistedSourceConfig: { gateway: { mode: "local", port: 19001 } },
-              });
-              expect(preflightReached).toBe(true);
-              expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
-                mode: "local",
-                port: 19001,
-              });
-              expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
-              expect(await fs.readFile(`${includePath}.bak.1`, "utf8")).toBe(backupRaw);
-            }
-            expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
-          });
+              if (revoke) {
+                await expect(mutation).rejects.toThrow(
+                  /executor ownership is no longer current|source ownership changed/,
+                );
+                expect(preflightReached).toBe(false);
+                expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+                expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(backupRaw);
+                await expect(fs.stat(`${includePath}.bak.1`)).rejects.toMatchObject({
+                  code: "ENOENT",
+                });
+              } else {
+                await expect(mutation).resolves.toMatchObject({
+                  persistedSourceConfig: { gateway: { mode: "local", port: 19001 } },
+                });
+                expect(preflightReached).toBe(true);
+                expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
+                  mode: "local",
+                  port: 19001,
+                });
+                expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
+                expect(await fs.readFile(`${includePath}.bak.1`, "utf8")).toBe(backupRaw);
+              }
+              expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+            },
+          );
         },
       );
     },

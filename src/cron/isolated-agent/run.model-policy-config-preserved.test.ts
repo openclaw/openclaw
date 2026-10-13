@@ -3,11 +3,13 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveExtraParams } from "../../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MemorySearchConfig } from "../../config/types.tools.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveCronModelSelection } from "./model-selection.js";
@@ -174,7 +176,7 @@ describe("resolveCronAgentConfig model policy preservation", () => {
     });
   });
 
-  it.each(["agent", "session", "hook"] as const)(
+  it.each(["agent", "hook"] as const)(
     "keeps the selected owner's metadata for the %s model",
     async (source) => {
       const snapshot = (workspaceDir: string, model: string) => ({
@@ -237,8 +239,7 @@ describe("resolveCronAgentConfig model policy preservation", () => {
               kind: "agentTurn",
               message: "scheduled work",
             },
-            sessionEntry:
-              source === "session" ? { providerOverride: "custom", modelOverride: "legacy" } : {},
+            sessionEntry: {},
             isGmailHook: source === "hook",
           }),
         );
@@ -316,5 +317,44 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     expect(resolvedSandbox.browser.autoStart).toBe(false);
     expect(resolvedSandbox.prune.idleHours).toBe(1);
     expect(resolvedSandbox.prune.maxAgeDays).toBe(7);
+  });
+});
+
+describe("resolveCronAgentConfig memory search preservation", () => {
+  it("keeps global memory search defaults when the agent override is partial", () => {
+    const defaultMemorySearch = {
+      enabled: true,
+      provider: "openai",
+      model: "text-embedding-3-large",
+      sources: ["memory", "sessions"],
+      remote: { apiKey: "redacted" },
+      query: { maxResults: 6 },
+    } satisfies MemorySearchConfig;
+    const agentMemorySearch = {
+      rememberAcrossConversations: true,
+      query: { maxResults: 10 },
+    } satisfies MemorySearchConfig;
+    const { agentDefaults } = resolveCronAgentConfig({
+      config: {},
+      agentConfigOverride: { memory: { search: agentMemorySearch } },
+    });
+    const runCfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: {
+        defaults: agentDefaults,
+        entries: { main: { memory: { search: agentMemorySearch } } },
+      },
+      memory: { search: defaultMemorySearch },
+    };
+
+    expect(agentDefaults).not.toHaveProperty("memory");
+    expect(resolveMemorySearchConfig(runCfg, "main")).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-large",
+      sources: ["memory", "sessions"],
+      remote: { apiKey: "redacted" },
+      rememberAcrossConversations: true,
+      query: { maxResults: 10 },
+    });
   });
 });

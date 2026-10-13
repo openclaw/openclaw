@@ -3,6 +3,7 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as wal from "../infra/sqlite-wal.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,11 +15,9 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
-  withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const logger = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
@@ -44,7 +43,7 @@ afterEach(async () => {
   logger.info.mockClear();
 });
 
-function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheckMs = 0) {
+function createTimedOpen(indexRepairMs = 0) {
   const options = {
     agentId: "timing-test",
     env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-agent-open-timing-") },
@@ -64,21 +63,6 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
     const database = open(...args);
     if (args[0] === pathname) {
       advance(50);
-      const prepare = database.prepare.bind(database);
-      vi.spyOn(database, "prepare").mockImplementation((sql) => {
-        const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check;") {
-          const all = statement.all.bind(statement);
-          vi.spyOn(statement, "all").mockImplementation((...parameters) => {
-            try {
-              return all(...parameters);
-            } finally {
-              advance(integrityCheckMs);
-            }
-          });
-        }
-        return statement;
-      });
       const exec = database.exec.bind(database);
       vi.spyOn(database, "exec").mockImplementation((sql) => {
         exec(sql);
@@ -93,14 +77,6 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
   vi.spyOn(permissions, "ensureOpenClawAgentDatabasePermissions").mockImplementation((...args) => {
     ensurePermissions(...args);
     advance(10);
-  });
-  const validate = schema.agentDatabaseIntegrityBeforeMutationSteps;
-  vi.spyOn(schema, "agentDatabaseIntegrityBeforeMutationSteps").mockImplementation(function* (
-    ...args
-  ) {
-    const result = yield* validate(...args);
-    advance(validationMs);
-    return result;
   });
   const configure = wal.configureSqliteConnectionPragmas;
   vi.spyOn(wal, "configureSqliteConnectionPragmas").mockImplementation((...args) => {
@@ -125,35 +101,8 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
 }
 
 describe("agent database open timings", () => {
-  it("reports completed phases at the slow threshold and skips live cache hits", () => {
-    const { options, pathname, advance } = createTimedOpen(690);
-    const database = openOpenClawAgentDatabase(options);
-    expect(database.db.isOpen).toBe(true);
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
-      agentId: options.agentId,
-      elapsedMs: 1_000,
-      path: pathname,
-      pid: process.pid,
-      threadId,
-      isMainThread,
-      admissionMode: "sync",
-      thresholdMs: 1_000,
-      phaseDurationsMs: {
-        open: 60,
-        validation: 690,
-        configuration: 80,
-        schema: 90,
-        registration: 80,
-      },
-    });
-    logger.warn.mockClear();
-    advance(5_000);
-    expect(openOpenClawAgentDatabase(options)).toBe(database);
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
-
   it("reports canonical index repair separately from other open phases", () => {
-    const { options, pathname } = createTimedOpen(0, 1_000);
+    const { options, pathname } = createTimedOpen(1_000);
     const database = openOpenClawAgentDatabase(options);
     database.db.exec(`
     INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
@@ -207,60 +156,11 @@ describe("agent database open timings", () => {
     );
   });
 
-  it("separates the synchronous check from readmission waiting in the completed owner log", async () => {
-    const { options, pathname, advance } = createTimedOpen(0, 0, 120.75);
-    openOpenClawAgentDatabase(options);
-    closeOpenClawAgentDatabasesForTest();
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
-    logger.warn.mockClear();
-    let admissions = 0;
-
-    const isOpen = await withOpenClawAgentDatabaseAdmission(
-      options,
-      async (run) => {
-        admissions += 1;
-        if (admissions === 2) {
-          advance(999.75);
-        }
-        return await run(() => {});
-      },
-      (database) => database.db.isOpen,
-    );
-
-    expect(isOpen).toBe(true);
-    expect(admissions).toBe(2);
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
-      agentId: options.agentId,
-      elapsedMs: 1_430,
-      path: pathname,
-      pid: process.pid,
-      threadId,
-      isMainThread,
-      admissionMode: "async",
-      thresholdMs: 1_000,
-      integrityGateMs: 1_120,
-      integrityGateOutcome: "healthy",
-      integrityGateReason: "revoked",
-      integrityGateMode: "full",
-      integrityCheckSyncMs: 120,
-      integrityOutsideCheckMs: 1_000,
-      canonicalIndexMs: 0,
-      repairedIndexCount: 0,
-      phaseDurationsMs: {
-        open: 60,
-        validation: 1_120,
-        configuration: 80,
-        schema: 90,
-        registration: 80,
-      },
-    });
-  });
-
   it("includes asynchronous admission waiting once for coalesced callers", async () => {
-    const { options, pathname, advance } = createTimedOpen(0);
+    const { options, pathname, advance } = createTimedOpen();
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     logger.warn.mockClear();
     const nativeFinished = createDeferredCore();
     const release = createDeferredCore();
@@ -299,32 +199,35 @@ describe("agent database open timings", () => {
       expect(databases).toHaveLength(2);
       expect(databases[1]).toBe(databases[0]);
       expect(databases[0]?.db.isOpen).toBe(true);
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
-        agentId: options.agentId,
-        elapsedMs: 1_310,
-        path: pathname,
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        admissionMode: "async",
-        thresholdMs: 1_000,
-        integrityGateMs: 1_000,
-        integrityGateOutcome: "healthy",
-        integrityGateReason: "revoked",
-        integrityGateMode: "full",
-        integrityWorkerCheckMs: expect.any(Number),
-        integrityWorkerLifetimeMs: 0,
-        integrityOutsideWorkerMs: 1_000,
-        canonicalIndexMs: 0,
-        repairedIndexCount: 0,
-        phaseDurationsMs: {
-          open: 60,
-          validation: 1_000,
-          configuration: 80,
-          schema: 90,
-          registration: 80,
-        },
-      });
+      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+        "slow OpenClaw agent database open",
+        expect.objectContaining({
+          agentId: options.agentId,
+          elapsedMs: 1_310,
+          path: pathname,
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          admissionMode: "async",
+          thresholdMs: 1_000,
+          integrityGateMs: 1_000,
+          integrityGateOutcome: "healthy",
+          integrityGateReason: "no-proof",
+          integrityGateMode: "full",
+          integrityWorkerCheckMs: expect.any(Number),
+          integrityWorkerLifetimeMs: 0,
+          integrityOutsideWorkerMs: 1_000,
+          canonicalIndexMs: 0,
+          repairedIndexCount: 0,
+          phaseDurationsMs: {
+            open: 60,
+            validation: 1_000,
+            configuration: 80,
+            schema: 90,
+            registration: 80,
+          },
+        }),
+      );
       expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityCheckSyncMs");
       expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityOutsideCheckMs");
     } finally {

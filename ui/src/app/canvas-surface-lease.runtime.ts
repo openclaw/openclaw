@@ -15,20 +15,10 @@ const RETRY_START_MS = 1_000;
 // gateways to one cheap refresh request per five minutes per tab.
 const RETRY_MAX_MS = 5 * 60_000;
 
-type CanvasSurfaceRefresh = {
-  canvasUrl: string;
-  expiresAtMs?: number;
-};
-
-type CanvasSurfaceLease = {
-  start: (helloUrl: string | undefined) => void;
-  stop: () => void;
-};
-
 export function createCanvasSurfaceLease(params: {
   request: (method: string, params: unknown) => Promise<unknown>;
   onChange: (url: string | null) => void;
-}): CanvasSurfaceLease {
+}) {
   let currentUrl: string | null = null;
   let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let inFlight: { generation: number; promise: Promise<void> } | null = null;
@@ -96,7 +86,7 @@ export function createCanvasSurfaceLease(params: {
         const delayMs =
           refreshed.expiresAtMs === undefined
             ? MISSING_EXPIRY_RENEWAL_DELAY_MS
-            : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS);
+            : refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS;
         schedule(delayMs, expectedGeneration);
       })
       .catch((error: unknown) => {
@@ -114,19 +104,18 @@ export function createCanvasSurfaceLease(params: {
   };
 
   return {
-    start(helloUrl) {
+    start(this: void, helloUrl: string | undefined) {
       generation += 1;
       started = true;
       consecutiveFailures = 0;
       clearScheduledRenewal();
-      const trimmedUrl = helloUrl?.trim();
-      currentUrl = trimmedUrl ? trimmedUrl : null;
+      currentUrl = helloUrl?.trim() || null;
       params.onChange(currentUrl);
       if (currentUrl) {
         renew(generation);
       }
     },
-    stop() {
+    stop(this: void) {
       if (!started && currentUrl === null && timer === null) {
         return;
       }
@@ -140,7 +129,7 @@ export function createCanvasSurfaceLease(params: {
   };
 }
 
-function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undefined {
+function parseCanvasSurfaceRefresh(value: unknown) {
   if (!value || typeof value !== "object") {
     return undefined;
   }

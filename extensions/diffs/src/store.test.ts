@@ -354,7 +354,6 @@ describe("DiffArtifactStore", () => {
     store = new DiffArtifactStore({
       rootDir,
       blobStore,
-      cleanupIntervalMs: 60_000,
     });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
@@ -363,7 +362,7 @@ describe("DiffArtifactStore", () => {
 
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
 
-    vi.setSystemTime(new Date(now.getTime() + 61_000));
+    vi.setSystemTime(new Date(now.getTime() + 301_000));
     await createViewerArtifact(store, { html: "<html>three</html>", title: "Three" });
 
     expect(cleanupSpy).toHaveBeenCalledTimes(2);
@@ -376,7 +375,7 @@ describe("createDiffsHttpHandler", () => {
   let cleanupRootDir: () => Promise<void>;
 
   async function handleLocalGet(url: string) {
-    const handler = createDiffsHttpHandler({ store });
+    const handler = createDiffsHttpHandler({ store, resolveAccessConfig: () => ({}) });
     const res = createMockServerResponse();
     const handled = await handler(
       localReq({
@@ -487,7 +486,10 @@ describe("createDiffsHttpHandler", () => {
     async ({ request, headers, trustedProxies, allowRemoteViewer, expectedStatusCode }) => {
       const artifact = await createViewerArtifact(store);
 
-      const handler = createDiffsHttpHandler({ store, allowRemoteViewer, trustedProxies });
+      const handler = createDiffsHttpHandler({
+        store,
+        resolveAccessConfig: () => ({ allowRemoteViewer, trustedProxies }),
+      });
       const res = createMockServerResponse();
       const handled = await handler(
         request({
@@ -514,7 +516,10 @@ describe("createDiffsHttpHandler", () => {
     ["::ffff:127.0.0.2", 200],
   ] as const)("classifies viewer client address %s", async (remoteAddress, expectedStatusCode) => {
     const artifact = await createViewerArtifact(store);
-    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: false });
+    const handler = createDiffsHttpHandler({
+      store,
+      resolveAccessConfig: () => ({ allowRemoteViewer: false }),
+    });
     const res = createMockServerResponse();
 
     await handler(
@@ -533,7 +538,10 @@ describe("createDiffsHttpHandler", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-08-19T12:00:00Z").getTime();
     vi.setSystemTime(startedAt);
-    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+    const handler = createDiffsHttpHandler({
+      store,
+      resolveAccessConfig: () => ({ allowRemoteViewer: true }),
+    });
 
     const recordMisses = async (count: number) => {
       for (let i = 0; i < count; i++) {
@@ -557,7 +565,10 @@ describe("createDiffsHttpHandler", () => {
   });
 
   it("keeps loopback viewer requests outside the remote failure limiter", async () => {
-    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+    const handler = createDiffsHttpHandler({
+      store,
+      resolveAccessConfig: () => ({ allowRemoteViewer: true }),
+    });
 
     for (let i = 0; i < 41; i++) {
       const miss = createMockServerResponse();

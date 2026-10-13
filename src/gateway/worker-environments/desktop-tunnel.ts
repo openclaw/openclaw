@@ -14,11 +14,13 @@ import {
   DesktopSessionStoppedError,
   type DesktopSessionRegistry,
 } from "../desktop/session-registry.js";
+import { isSuccess } from "./bootstrap-command.js";
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
   type WorkerSshIdentityResolver,
   workerSshCommandOptions,
+  workerSshCommandPrefix,
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
@@ -60,19 +62,9 @@ class WorkerDesktopUnsupportedError extends Error {
   }
 }
 
-function successful(result: Awaited<ReturnType<WorkerSshRunner["run"]>>): boolean {
-  return result.termination === "exit" && result.code === 0;
-}
-
 function desktopSshCommand(prepared: PreparedWorkerSsh, argv: readonly string[]): string[] {
   return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(prepared.port),
+    ...workerSshCommandPrefix(prepared),
     "--",
     prepared.sshTarget,
     workerSshRemoteCommand(argv),
@@ -107,7 +99,15 @@ export function createWorkerDesktopTunnels(deps: {
       "replaced",
     );
 
-  const createSessionHooks = (request: DesktopAcquireRequest) => {
+  async function acquire(request: DesktopAcquireRequest): Promise<DesktopAcquireResult> {
+    if (request.desktop.username) {
+      throw new Error(
+        "Managed desktop account authentication requires the worker node transport; reprovision with node enrollment",
+      );
+    }
+    if (platform === "win32") {
+      throw new WorkerDesktopUnsupportedError();
+    }
     let prepared: PreparedWorkerSsh | undefined;
     let child: WorkerSshProcess | undefined;
     let stopRequested = false;
@@ -184,7 +184,7 @@ export function createWorkerDesktopTunnels(deps: {
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
         assertCurrent();
-        if (!successful(result)) {
+        if (!isSuccess(result)) {
           throw workerSshProcessError(result.stderr);
         }
         vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
@@ -199,38 +199,22 @@ export function createWorkerDesktopTunnels(deps: {
       };
     };
 
-    return {
-      start,
-      teardown: async () => {
-        stopRequested = true;
-        await child?.stop();
-      },
-      dispose: async () => {
-        await prepared?.dispose();
-      },
-    };
-  };
-
-  async function acquire(request: DesktopAcquireRequest): Promise<DesktopAcquireResult> {
-    if (request.desktop.username) {
-      throw new Error(
-        "Managed desktop account authentication requires the worker node transport; reprovision with node enrollment",
-      );
-    }
-    if (platform === "win32") {
-      throw new WorkerDesktopUnsupportedError();
-    }
-    const hooks = createSessionHooks(request);
     try {
       sessions.claimOwnerEpoch(request.environmentId, request.ownerEpoch);
       // Register before abort callbacks can reenter Stop; the registry defers source startup.
       const acquiring = sessions.acquire({
         sourceKey: request.environmentId,
         ownerEpoch: request.ownerEpoch,
-        ...hooks,
         start: async (isCurrent, stopOwner) => {
           await fencing;
-          return await hooks.start(isCurrent, stopOwner);
+          return await start(isCurrent, stopOwner);
+        },
+        teardown: async () => {
+          stopRequested = true;
+          await child?.stop();
+        },
+        dispose: async () => {
+          await prepared?.dispose();
         },
       });
       const fencing = stopReplacedAppLaunches(request.environmentId, request.ownerEpoch);
@@ -317,7 +301,7 @@ export function createWorkerDesktopTunnels(deps: {
             signal: abortController.signal,
           }),
         );
-        if (!successful(result)) {
+        if (!isSuccess(result)) {
           throw workerSshProcessError(result.stderr || result.stdout);
         }
       } finally {

@@ -1,16 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 function createPrefixOnlyChannelPlugin(
@@ -37,19 +41,6 @@ function createPrefixOnlyChannelPlugin(
   };
 }
 
-function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
-  const base = createPrefixOnlyChannelPlugin(id, [id]);
-  return {
-    ...base,
-    config: {
-      ...base.config,
-      // Mirrors twitch/discord: an unlisted or credential-suppressed account
-      // resolves to a not-enabled account, which must NOT read as operator intent.
-      isEnabled: () => false,
-    },
-  };
-}
-
 export function setCronValidationTestRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -67,11 +58,6 @@ export function setCronValidationTestRegistry(): void {
         pluginId: "slack",
         plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
         source: "test:slack",
-      },
-      {
-        pluginId: "twitch",
-        plugin: createEnablementHostileChannelPlugin("twitch"),
-        source: "test:twitch",
       },
       {
         pluginId: "msteams",
@@ -165,7 +151,10 @@ export function createCronTestContext(
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
-      wake: vi.fn(() => ({ ok: true }) as const),
+      wake: vi.fn(async (opts: Parameters<CronService["wake"]>[0]) => {
+        opts.commitGuard?.();
+        return { ok: true } as const;
+      }),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       readScratch: vi.fn<CronService["readScratch"]>(async () => ({ currentRevision: 0 })),
       writeScratch: vi.fn(
@@ -203,8 +192,8 @@ export function createCronTestContext(
           const pageJobs = filteredJobs.slice(offset, offset + limit);
           const nextOffset = offset + pageJobs.length;
           return {
-            jobs: pageJobs,
-            snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
+            jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
+            snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
             total,
             offset,
             limit,
@@ -412,4 +401,47 @@ export function createCronTestInvoker(
     });
     return { context, respond };
   };
+}
+
+export function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
+}
+
+export const requireRecord = createRequireRecord("record", "expected-label-object");
+
+export function requireCronAddPayload(
+  context: ReturnType<typeof createCronTestContext>,
+): Record<string, unknown> {
+  return requireRecord(context.cron.add.mock.calls[0]?.[0], "cron.add payload");
+}
+
+export function expectResponseError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
+) {
+  const call = respond.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected response call");
+  }
+  expect(call[0]).toBe(false);
+  expect(call[1]).toBeUndefined();
+  const error = requireRecord(call[2], "response error");
+  if (expected.code) {
+    expect(error.code).toBe(expected.code);
+  }
+  if (expected.messageIncludes) {
+    expect(String(error.message)).toContain(expected.messageIncludes);
+  }
+  if (expected.details) {
+    expect(error.details).toEqual(expected.details);
+  }
+}
+
+export function callerClientWithCronCreatorAuthority(
+  grant: CronCreatorAuthorityGrant,
+): GatewayClient {
+  const client = createCronCallerClient("ops");
+  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
+  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
+  return client;
 }

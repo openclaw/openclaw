@@ -1,3 +1,4 @@
+import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
 import type {
@@ -66,7 +67,7 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
   /** Private invocation fence, consumed only before registration transfers ownership. */
-  assertActive?: () => void;
+  assertActive?: SessionSourceAssertion;
 };
 
 export type SpawnSubagentResult = {
@@ -94,3 +95,7 @@ export type SpawnSubagentResult = {
   | { status: "accepted"; context: SpawnSubagentContextMode }
   | { status: "forbidden" | "error"; context?: never }
 );
+
+export function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
+  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
+}

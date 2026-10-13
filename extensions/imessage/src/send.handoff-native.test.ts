@@ -11,6 +11,31 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
+
+afterEach(() => {
+  effectGate.prepare = undefined;
+});
+
 type SendMessage = typeof import("./send.js").sendMessageIMessage;
 type NativeRpcRequest = {
   id: number;
@@ -209,6 +234,32 @@ describe("iMessage caller authority at native request boundaries", () => {
       value: { messageId, receipt: { platformMessageIds: [messageId] } },
     });
   }
+
+  it("rechecks the native CLI handoff after preparing scheduled send authority", async () => {
+    const fixture = handoff("immediate");
+    const preparing = createDeferred<void>();
+    const prepared = createDeferred<void>();
+    releases.push(() => prepared.resolve());
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+    };
+    const mediaPath = state.path("attachment.pdf");
+    fs.writeFileSync(mediaPath, "%PDF-1.4\nsynthetic attachment");
+    const sending = fixture.send("", { mediaUrl: mediaPath, mediaLocalRoots: [state.root] });
+    await Promise.race([
+      preparing.promise,
+      sending.then((outcome) => {
+        throw new Error("CLI send bypassed authority preparation", { cause: outcome });
+      }),
+    ]);
+    expect(fixture.readRecords()).toEqual([]);
+    fixture.retire();
+    prepared.resolve();
+    await expect(sending).resolves.toEqual({ error: fixture.retired });
+    expect(fixture.readRecords()).toEqual([]);
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
 
   it("stops after a native group lookup when the caller retires without marking a send", async ({
     signal,

@@ -101,16 +101,20 @@ it("commits targeted and session-wide aborts without replacing session edits or 
   expect(frames.filter((frame) => frame.event === "sessions.changed")).toHaveLength(2);
 });
 
-it.for(["direct", "descendant"] as const)(
+it.for(["direct", "descendant", "targeted"] as const)(
   "settles %s activity for every later read after a session-only abort",
   async (activity, { connect }) => {
     const active = {
       key: "agent:main:main",
       updatedAt: 1_000,
-      status: activity === "direct" ? "running" : "done",
-      hasActiveRun: activity === "direct",
-      hasActiveSubagentRun: activity === "descendant",
-      ...(activity === "direct" ? { activeRunIds: ["cached-run"] } : {}),
+      status: activity === "descendant" ? "done" : "running",
+      hasActiveRun: activity !== "descendant",
+      hasActiveSubagentRun: activity !== "direct",
+      ...(activity === "targeted"
+        ? { activeRunIds: ["run-a", "run-b"] }
+        : activity === "direct"
+          ? { activeRunIds: ["cached-run"] }
+          : {}),
     };
     const other = { key: "agent:main:other", status: "running", hasActiveRun: true };
     const { request } = await connect({
@@ -118,14 +122,29 @@ it.for(["direct", "descendant"] as const)(
       sessions: [active, other],
       sessionInfo: active,
       methodResponses: {
-        "sessions.abort": { ok: true, abortedRunId: null, status: "no-active-run" },
+        "sessions.abort":
+          activity === "targeted"
+            ? { ok: true, abortedRunId: "run-a", status: "aborted" }
+            : { ok: true, abortedRunId: null, status: "no-active-run" },
       },
     });
+    if (activity === "targeted") {
+      await request("sessions.abort", { key: active.key, runId: "run-a" });
+      expect(
+        (await request("sessions.describe", { key: active.key })).payload.session,
+      ).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+        hasActiveSubagentRun: true,
+        activeRunIds: ["run-b"],
+      });
+    }
     await request("sessions.abort", { key: active.key, clearQueued: true });
     // The Gateway computes these rows at read time, so no read issued after Stop may
     // republish the pre-Stop activity with an older timestamp.
     const settled = {
       key: active.key,
+      status: activity === "targeted" ? "killed" : "done",
       hasActiveRun: false,
       hasActiveSubagentRun: false,
       activeRunIds: [],
@@ -141,7 +160,7 @@ it.for(["direct", "descendant"] as const)(
     }
     expect((await request("sessions.list")).payload.sessions).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ ...settled, status: "done" }),
+        expect.objectContaining(settled),
         expect.objectContaining({ key: other.key, status: "running", hasActiveRun: true }),
       ]),
     );
@@ -182,15 +201,19 @@ it("registers a started send for targeted abort without cancelling another run o
 });
 
 it.for([
-  { event: "final", outcome: "done", otherRun: false },
-  { event: "error", outcome: "failed", otherRun: false },
-  { event: "aborted", outcome: "killed", otherRun: false },
-  { event: "final", outcome: "done", otherRun: true },
-  { event: "error", outcome: "failed", otherRun: true },
-  { event: "aborted", outcome: "killed", otherRun: true },
+  { event: "final", outcome: "done", otherRun: false, newerEvent: null },
+  { event: "error", outcome: "failed", otherRun: false, newerEvent: null },
+  { event: "aborted", outcome: "killed", otherRun: false, newerEvent: null },
+  { event: "final", outcome: "done", otherRun: true, newerEvent: null },
+  { event: "error", outcome: "failed", otherRun: true, newerEvent: null },
+  { event: "aborted", outcome: "killed", otherRun: true, newerEvent: null },
+  { event: "error", outcome: "done", otherRun: true, newerEvent: "final" },
+  { event: "error", outcome: "failed", otherRun: true, newerEvent: "error" },
+  { event: "error", outcome: "killed", otherRun: true, newerEvent: "aborted" },
+  { event: "error", outcome: "killed", otherRun: true, newerEvent: "abort receipt" },
 ])(
-  "retains $event before a started ACK (other active run: $otherRun)",
-  async ({ event, outcome, otherRun }, { connect }) => {
+  "retains $event before a started ACK (other run: $otherRun, newer event: $newerEvent)",
+  async ({ event, outcome, otherRun, newerEvent }, { connect }) => {
     const key = "agent:main:fast-completion";
     const diagnostic = "Provider request failed: session store unavailable. Retry after recovery.";
     const initial = {
@@ -216,9 +239,39 @@ it.for([
     expect((await request("sessions.list")).payload.sessions).toEqual([
       expect.objectContaining(initial),
     ]);
+    let newerCompletion: unknown;
+    if (newerEvent) {
+      if (newerEvent === "abort receipt") {
+        await request("chat.abort", { sessionKey: key, runId: "other-run" });
+      } else {
+        controls.emit("chat", {
+          sessionKey: key,
+          runId: "other-run",
+          state: newerEvent,
+          ...(newerEvent === "error" ? { errorMessage: "Later run failed" } : {}),
+        });
+      }
+      newerCompletion = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
+      expect(newerCompletion).toMatchObject({
+        status: outcome,
+        activeRunIds: [],
+        hasActiveRun: false,
+        abortedLastRun: outcome === "killed",
+      });
+      if (newerEvent === "error") {
+        expect(newerCompletion).toHaveProperty("lastRunError", "Later run failed");
+      } else {
+        expect(newerCompletion).not.toHaveProperty("lastRunError");
+      }
+      expect(response(id)).toBeUndefined();
+    }
     controls.resolveDeferred("chat.send");
     await flush();
     expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
+    if (newerEvent) {
+      expect((await request("sessions.list")).payload.sessions).toEqual([newerCompletion]);
+      return;
+    }
     expect((await request("sessions.list")).payload.sessions).toEqual([
       expect.objectContaining({
         key,
@@ -275,61 +328,6 @@ it.for([
 );
 
 it.for([
-  { event: "final", outcome: "done" },
-  { event: "error", outcome: "failed" },
-  { event: "aborted", outcome: "killed" },
-  { event: "abort receipt", outcome: "killed" },
-])(
-  "preserves newer $event before the first delayed send ACK",
-  async ({ event, outcome }, { connect }) => {
-    const key = "agent:main:delayed-completion";
-    const { send, response, request, controls } = await connect({
-      sessions: [{ key, status: "running", hasActiveRun: true, activeRunIds: ["other-run"] }],
-      deferredMethods: ["chat.send"],
-      methodResponses: { "chat.send": { runId: "fast-run", status: "started" } },
-    });
-    const id = await send("chat.send", {
-      sessionKey: key,
-      message: "Complete before acknowledgment",
-      idempotencyKey: "fast-run",
-    });
-    controls.emit("chat", {
-      sessionKey: key,
-      runId: "fast-run",
-      state: "error",
-      errorMessage: "Earlier run failed",
-    });
-    if (event === "abort receipt") {
-      await request("chat.abort", { sessionKey: key, runId: "other-run" });
-    } else {
-      controls.emit("chat", {
-        sessionKey: key,
-        runId: "other-run",
-        state: event,
-        ...(event === "error" ? { errorMessage: "Later run failed" } : {}),
-      });
-    }
-    const completed = (await request("chat.startup", { sessionKey: key })).payload.sessionInfo;
-    expect(completed).toMatchObject({
-      status: outcome,
-      activeRunIds: [],
-      hasActiveRun: false,
-      abortedLastRun: outcome === "killed",
-    });
-    if (event === "error") {
-      expect(completed).toHaveProperty("lastRunError", "Later run failed");
-    } else {
-      expect(completed).not.toHaveProperty("lastRunError");
-    }
-    expect(response(id)).toBeUndefined();
-    controls.resolveDeferred("chat.send");
-    await flush();
-    expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
-    expect((await request("sessions.list")).payload.sessions).toEqual([completed]);
-  },
-);
-
-it.for([
   { targeted: true, outcome: "success" },
   { targeted: false, outcome: "success" },
   { targeted: true, outcome: "not-aborted" },
@@ -375,43 +373,3 @@ it.for([
     );
   },
 );
-
-it("settles only the targeted run when a session abort names a runId", async ({ connect }) => {
-  const active = {
-    key: "agent:main:main",
-    updatedAt: 1_000,
-    status: "running",
-    hasActiveRun: true,
-    hasActiveSubagentRun: true,
-    activeRunIds: ["run-a", "run-b"],
-  };
-  const { request } = await connect({
-    sessionKey: active.key,
-    sessions: [active],
-    sessionInfo: active,
-    methodResponses: {
-      "sessions.abort": { ok: true, abortedRunId: "run-a", status: "aborted" },
-    },
-  });
-  const describe = async () =>
-    (await request("sessions.describe", { key: active.key })).payload.session;
-  await request("sessions.abort", { key: active.key, runId: "run-a" });
-  // The Gateway cascades to sibling runs and descendants only without a runId.
-  expect(await describe()).toEqual(
-    expect.objectContaining({
-      status: "running",
-      hasActiveRun: true,
-      hasActiveSubagentRun: true,
-      activeRunIds: ["run-b"],
-    }),
-  );
-  await request("sessions.abort", { key: active.key, clearQueued: true });
-  expect(await describe()).toEqual(
-    expect.objectContaining({
-      status: "killed",
-      hasActiveRun: false,
-      hasActiveSubagentRun: false,
-      activeRunIds: [],
-    }),
-  );
-});

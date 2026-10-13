@@ -45,11 +45,17 @@ export function assertControlUiE2eOwnership(
         return;
       }
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+        if (node.expression.text === "createGatewayHttpServer") {
+          ownsPrivateServer = true;
+          return;
+        }
         // A Gateway or Vite proxy acquired by the suite owns its UI server;
         // a separate backend in a test can still use the shared UI bundle.
         if (
           inSuiteServer &&
           (node.expression.text === "createOpenClawTestInstance" ||
+            node.expression.text === "createBackgroundWorkInstance" ||
+            node.expression.text === "createWaitClockInstance" ||
             node.expression.text === "startBuiltControlUiE2eServer" ||
             node.expression.text === "startProductionControlUiE2eServer" ||
             node.expression.text === "startProviderBrowserLoginFixture" ||
@@ -112,14 +118,17 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/agent-switch-roster.e2e.test.ts",
     "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
     "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+    "ui/src/e2e/browser-capabilities.e2e.test.ts",
     "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
     "ui/src/e2e/child-session-load-errors.e2e.test.ts",
     "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
@@ -133,9 +142,11 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
+    "ui/src/e2e/session-management.promotion.e2e.test.ts",
     "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   ]);
@@ -207,7 +218,7 @@ export function assertControlUiE2eOwnership(
   expect(localSelected[1]).toEqual([
     "ui/src/e2e/board-fixture.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
-    "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+    "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);

@@ -1,15 +1,8 @@
-/**
- * Effective OAuth credential resolver.
- * Allows external CLI bootstrap credentials to fill unusable local profile state.
- */
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import {
-  isSafeToAdoptBootstrapOAuthIdentity,
-  shouldBootstrapFromExternalCliCredential,
-} from "./oauth-shared.js";
+import { isSafeToAdoptBootstrapOAuthIdentity } from "./oauth-shared.js";
 import type { OAuthCredential } from "./types.js";
 
 export type OAuthBootstrapCredentialReader = (params: {
@@ -52,11 +45,7 @@ export function resolveEffectiveOAuthCredentialCore(params: {
     );
     return params.credential;
   }
-  const shouldBootstrap = shouldBootstrapFromExternalCliCredential({
-    existing: params.credential,
-    imported,
-  });
-  if (shouldBootstrap) {
+  if (hasUsableOAuthCredential(imported)) {
     authProfilesLog.debug("resolved oauth credential from external cli bootstrap", {
       profileId: params.profileId,
       provider: imported.provider,
@@ -68,7 +57,6 @@ export function resolveEffectiveOAuthCredentialCore(params: {
   return params.credential;
 }
 
-/** Resolves the effective OAuth credential, optionally reading external CLI bootstrap state. */
 export function resolveEffectiveOAuthCredential(params: {
   profileId: string;
   credential: OAuthCredential;

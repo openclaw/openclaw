@@ -9,8 +9,8 @@ import {
 } from "../../../test-helpers/application-context.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "../first-run-setup.ts";
-import "../model-setup-page.ts";
 import type { ModelSetupPageState } from "../state.ts";
+import { createPage, mountModelSetupPage } from "./solid-page.test-support.tsx";
 
 export type TestModelSetupPage = HTMLElement & {
   routeData?: ModelSetupRouteData;
@@ -135,11 +135,12 @@ export async function mountPage(
   },
 ): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+  const page = createPage(context);
   vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
   page.routeData = { firstRun: fixture.firstRun };
   provider.append(page);
   document.body.append(provider);
+  mountModelSetupPage(page);
   await page.updateComplete;
   await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
   return { page, provider };

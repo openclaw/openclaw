@@ -1,15 +1,22 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
-import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
+import {
+  getFreePort,
+  readProcessTreeCpuMs,
+  startGatewayRssSampling,
+} from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
+  buildGatewayBenchCommand,
   classifyGatewayReadyLog,
   CliArgumentError,
   collectOutputLines,
@@ -20,6 +27,7 @@ import {
   formatMs,
   formatStats,
   hasHelpFlag,
+  parseGatewayBenchRuntimeOptions,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveCases as resolveGatewayBenchCases,
@@ -30,7 +38,7 @@ import {
   summarizeNumbers,
   summarizeTraceStats,
   type InitialProbeResult,
-  type SummaryStats,
+  type GatewayBenchRuntimeOptions,
   parseCliArgs,
   writeGatewayBenchConfig,
   writePluginFixtures,
@@ -54,8 +62,6 @@ type GatewayBenchCase = {
   runByDefault?: boolean;
 };
 
-type ProbeResult = InitialProbeResult;
-
 type GatewaySample = {
   completionMs: number | null;
   cpuCoreRatio: number | null;
@@ -65,33 +71,17 @@ type GatewaySample = {
   firstOutputMs: number | null;
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
-  healthz: ProbeResult;
+  healthz: InitialProbeResult;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   maxRssMb: number | null;
   outputTail: string;
-  readyz: ProbeResult;
+  readyz: InitialProbeResult;
   signal: string | null;
   startupTrace: Record<string, number>;
 };
 
-type CaseResult = {
-  id: string;
-  name: string;
-  samples: GatewaySample[];
-  summary: {
-    completionMs: SummaryStats | null;
-    firstOutputMs: SummaryStats | null;
-    cpuCoreRatio: SummaryStats | null;
-    cpuMs: SummaryStats | null;
-    gatewayReadyLogMs: SummaryStats | null;
-    healthzMs: SummaryStats | null;
-    httpListenLogMs: SummaryStats | null;
-    maxRssMb: SummaryStats | null;
-    readyzMs: SummaryStats | null;
-    startupTrace: Record<string, SummaryStats>;
-  };
-};
+type CaseResult = ReturnType<typeof summarizeCase>;
 
 type BenchmarkFailure = {
   id: string;
@@ -99,7 +89,7 @@ type BenchmarkFailure = {
   sampleIndex: number;
 };
 
-type CliOptions = {
+type CliOptions = GatewayBenchRuntimeOptions & {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
@@ -131,6 +121,8 @@ const VALUE_FLAGS = new Set([
   "--case",
   "--cpu-prof-dir",
   "--entry",
+  "--gateway-runtime",
+  "--gateway-cpus",
   "--heap-prof-dir",
   "--installed-cohort",
   "--output",
@@ -344,6 +336,8 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     for (const flag of [
       "--case",
       "--entry",
+      "--gateway-runtime",
+      "--gateway-cpus",
       "--runs",
       "--warmup",
       "--cpu-prof-dir",
@@ -359,6 +353,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   return {
+    ...parseGatewayBenchRuntimeOptions(flags),
     cases: installedCohort ? [] : resolveCases(flags.get("--case") ?? []),
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
@@ -384,6 +379,8 @@ Usage:
 Options:
   --case <id>          Specific case id to run; repeatable
   --entry <path>       Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
+  --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --runs <n>           Measured runs per case (default: ${DEFAULT_RUNS})
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
@@ -400,7 +397,7 @@ Case ids:
 `);
 }
 
-function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): CaseResult {
+function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   const startupTrace = summarizeTraceStats(samples, (sample) => sample.startupTrace);
   const summarize = (read: (sample: GatewaySample) => number | null) =>
     summarizeNumbers(
@@ -740,14 +737,16 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
   return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
 }
 
-async function runGatewaySample(options: {
-  benchCase: GatewayBenchCase;
-  cpuProfDir?: string;
-  entry: string;
-  heapProfDir?: string;
-  sampleIndex: number;
-  timeoutMs: number;
-}): Promise<GatewaySample> {
+async function runGatewaySample(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
+    entry: string;
+    heapProfDir?: string;
+    sampleIndex: number;
+    timeoutMs: number;
+  },
+): Promise<GatewaySample> {
   return await withGatewayBenchRoot(async (root) => {
     const port = await getFreePort();
     const configPath = writeConfig(root, options.benchCase);
@@ -768,10 +767,9 @@ async function runGatewaySample(options: {
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
-    let maxRssMb: number | null = null;
     let childExited = false;
     let child: ChildProcessWithoutNullStreams | undefined;
-    let rssTimer: ReturnType<typeof setInterval> | undefined;
+    let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
       const nodeOptions = [
@@ -787,23 +785,22 @@ async function runGatewaySample(options: {
         ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
       ];
       const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
-      child = spawn(process.execPath, childArgs, {
+      const command = buildGatewayBenchCommand(childArgs, options);
+      child = spawn(command.command, command.args, {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
         stdio: ["pipe", "pipe", "pipe"],
       });
+      try {
+        await once(child, "spawn");
+      } catch (error) {
+        child = undefined;
+        throw error;
+      }
       const startedChild = child;
       const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
-      const sampleRss = () => {
-        const rssMb = readProcessRssMb(startedChild.pid);
-        if (rssMb != null) {
-          maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-        }
-      };
-      sampleRss();
-      rssTimer = setInterval(sampleRss, 100);
-      rssTimer.unref?.();
+      rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
         childExited = true;
       });
@@ -862,11 +859,9 @@ async function runGatewaySample(options: {
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
       const exit = await stopChild(startedChild);
-      sampleRss();
+      const maxRssMb = rssSampler.sample();
       child = undefined;
-      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
-        flushPartial: true,
-      });
+      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
         completionMs,
@@ -887,9 +882,7 @@ async function runGatewaySample(options: {
         startupTrace,
       };
     } finally {
-      if (rssTimer) {
-        clearInterval(rssTimer);
-      }
+      rssSampler?.stop();
       if (child) {
         await stopChild(child).catch(() => undefined);
       }
@@ -897,25 +890,23 @@ async function runGatewaySample(options: {
   });
 }
 
-async function runCase(options: {
-  benchCase: GatewayBenchCase;
-  cpuProfDir?: string;
-  entry: string;
-  heapProfDir?: string;
-  runs: number;
-  timeoutMs: number;
-  warmup: number;
-}): Promise<CaseResult> {
+async function runCase(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
+    entry: string;
+    heapProfDir?: string;
+    runs: number;
+    timeoutMs: number;
+    warmup: number;
+  },
+): Promise<CaseResult> {
   const samples: GatewaySample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
     const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      cpuProfDir: options.cpuProfDir,
-      entry: options.entry,
-      heapProfDir: options.heapProfDir,
+      ...options,
       sampleIndex: index + 1,
-      timeoutMs: options.timeoutMs,
     });
     if (index >= options.warmup) {
       samples.push(sample);
@@ -999,27 +990,18 @@ async function main() {
   }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        cpuProfDir: options.cpuProfDir,
-        entry: options.entry,
-        heapProfDir: options.heapProfDir,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {
     entry: options.entry,
+    gatewayRuntime: options.gatewayRuntime,
+    gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
     results,
   };
   if (options.output) {
-    mkdirSync(path.dirname(options.output), { recursive: true });
-    writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
+    writeBenchmarkJson(payload, options.output);
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));

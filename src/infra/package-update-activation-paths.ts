@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
+import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+// Published openclaw@2026.9.8 recovery helper; newer writers keep full verification.
+export const LEGACY_PACKAGE_RECOVERY_HELPER =
+  "e08dfc1fb3ba7962f9e01d7a6770117c6cd77406b3fa4f7ba94788a670030ba0";
 
 export function packageActivationRuntimeIdentity(file: string): string {
   const stat = fs.lstatSync(file, { bigint: true });
@@ -31,13 +38,6 @@ export function capturePackageActivationRuntime(
 export function resolvePackageActivationAnchor(installKey: string): string {
   const key = createHash("sha256").update(installKey).digest("hex").slice(0, 24);
   return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
-}
-
-export function isPackageActivationControlName(name: string): boolean {
-  return (
-    name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
-    /^[a-f0-9]{24}\.control$/u.test(name.slice(PACKAGE_ACTIVATION_PREFIX.length))
-  );
 }
 
 export function resolvePackageActivationControl(anchor: string): string {
@@ -98,8 +98,9 @@ export function privatePackageActivationIdentity(
       .replace(/[^A-Za-z0-9_.-]/gu, "_")
       .slice(0, 64);
     const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
-    throw new Error(
-      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.`,
+    throw packageUpdateRefusal(
+      "package-recovery-permissions-unsafe",
+      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.${!directory && stat.nlink !== 1 ? " Run openclaw doctor --fix." : ""}`,
     );
   }
   return value;
@@ -119,29 +120,17 @@ export function assertPackageActivationLayout(anchor: string): void {
 
 /** A receipt is a read-only completion fact, never a grant for another effect. */
 export function isPackageActivationComplete(
-  anchor: string,
+  _anchor: string,
   record: PackageActivationRecord,
 ): boolean {
   if (record.phase === "superseded") {
-    if (
-      record.intent?.kind !== "superseded-by-manual-install" &&
-      record.intent?.kind !== "recovery-lease-identity-changed"
-    ) {
+    if (!record.intent || !("settled" in record.intent)) {
       throw new Error("Package supersession fact is missing.");
     }
-    if (
-      !record.intent.settled ||
-      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
-      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false })
-    ) {
-      return false;
-    }
-    const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
-    return (
-      packageActivationIdentity(retained, true) === record.descriptor.anchorIdentity &&
-      packageActivationIdentity(path.join(retained, "recovery.mjs"), false) ===
-        record.descriptor.helperIdentity
-    );
+    // Settlement already relinquished rollback custody. Retained evidence may
+    // be inspected, moved, or removed without reviving the closed operation.
+    // Archival is maintenance, not another recovery obligation.
+    return record.intent.settled;
   }
   if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
     return false;
@@ -149,15 +138,15 @@ export function isPackageActivationComplete(
   if (record.intent.identity !== record.descriptor.helperIdentity) {
     throw new Error("Final helper unlink identity is invalid.");
   }
-  for (const file of [anchor, resolvePackageActivationHelper(anchor)]) {
-    try {
-      fs.lstatSync(file);
-      return false;
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-        throw error;
-      }
-    }
-  }
+  // The final unlink intent follows verified retirement of rollback custody.
+  // A helper left by an interrupted unlink or a later replacement is cleanup,
+  // not permission to restore an earlier generation or block a new update.
   return true;
+}
+
+export function resolveImmutableRecoveryCommand(
+  reference: ImmutableRecoveryRuntimeReference,
+  descriptor: ImmutableInstallDescriptor,
+): string {
+  return `${quoteCliArg(descriptor.runtime.path)} ${quoteCliArg(reference.helperPath)}`;
 }

@@ -58,7 +58,17 @@ const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 
 function getSessionsSendTool(options?: Parameters<typeof createOpenClawTools>[0]) {
-  const tool = createOpenClawTools(options).find((candidate) => candidate.name === "sessions_send");
+  const tool = createOpenClawTools(
+    options?.config
+      ? {
+          ...options,
+          config: {
+            ...options.config,
+            session: { ...options.config.session, store: testState.sessionStorePath },
+          },
+        }
+      : options,
+  ).find((candidate) => candidate.name === "sessions_send");
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }
@@ -69,7 +79,10 @@ function expectSessionsSendDetails(
   result: { details?: unknown },
   expected: { reply: string; sessionKey: string },
 ): void {
-  expect(result.details).toMatchObject({ status: "ok", ...expected });
+  expect(result.details, JSON.stringify(result.details)).toMatchObject({
+    status: "ok",
+    ...expected,
+  });
 }
 
 async function writeConfig(config: OpenClawConfig) {
@@ -78,7 +91,11 @@ async function writeConfig(config: OpenClawConfig) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config)}\n`, "utf-8");
+  const fixtureConfig = {
+    ...config,
+    session: { ...config.session, store: testState.sessionStorePath },
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(fixtureConfig)}\n`, "utf-8");
 }
 
 async function emitLifecycleAssistantReply(params: {
@@ -269,11 +286,15 @@ describe("sessions_send gateway loopback", () => {
 
     const tool = getSessionsSendTool();
 
-    const result = await tool.execute("call-loopback", {
-      sessionKey: "main",
-      message: body,
-      timeoutSeconds: 5,
-    });
+    const result = await tool
+      .execute("call-loopback", {
+        sessionKey: "main",
+        message: body,
+        timeoutSeconds: 5,
+      })
+      .catch((error: unknown) => {
+        throw new Error(`sessions_send tool execution failed: ${String(error)}`, { cause: error });
+      });
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0];
@@ -290,6 +311,8 @@ describe("sessions_send gateway loopback", () => {
       method: "chat.history",
       params: { sessionKey: "main", limit: 10 },
       timeoutMs: 5_000,
+    }).catch((error: unknown) => {
+      throw new Error(`sessions_send history read failed: ${String(error)}`, { cause: error });
     });
     // Observe both receiving and persisted body failures before ending the case.
     expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);
@@ -363,6 +386,23 @@ describe("sessions_send agent targeting", () => {
   it.each([
     { name: "default cross-agent access", tools: undefined },
     {
+      name: "send-only edge with agent-scoped reads",
+      tools: { sessions: { visibility: "agent" } },
+      send: ["orion"],
+    },
+    {
+      name: "empty send list with otherwise broad access",
+      tools: { sessions: { visibility: "all" } },
+      send: [],
+      error: "tools.agentToAgent.send",
+    },
+    {
+      name: "unlisted send destination",
+      tools: { sessions: { visibility: "all" } },
+      send: ["different-agent"],
+      error: "tools.agentToAgent.send",
+    },
+    {
       name: "disabled agent-to-agent access",
       tools: { agentToAgent: { enabled: false } },
       error: "Agent-to-agent messaging is disabled",
@@ -372,9 +412,14 @@ describe("sessions_send agent targeting", () => {
       tools: { agentToAgent: { allow: ["main"] } },
       error: "denied by tools.agentToAgent.allow",
     },
-  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; error?: string }>)(
+  ] satisfies Array<{
+    name: string;
+    tools: OpenClawConfig["tools"];
+    send?: string[];
+    error?: string;
+  }>)(
     "enforces $name when targeting a configured agent main session by agentId",
-    async ({ tools, error }) => {
+    async ({ tools, error, send }) => {
       const dir = tempDirs.make("openclaw-sessions-send-agent-");
       const config: OpenClawConfig = {
         ...(tools ? { tools } : {}),
@@ -384,7 +429,10 @@ describe("sessions_send agent targeting", () => {
             systemAgent: { agentId: "main" },
             sessionStore: { agentId: "main" },
           },
-          entries: { main: {}, orion: {} },
+          entries: {
+            main: send ? { tools: { agentToAgent: { send } } } : {},
+            orion: {},
+          },
         },
       };
 

@@ -1,14 +1,20 @@
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import {
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
+} from "../state/user-profile-list.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -26,7 +32,11 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   setControlUiPluginAuthCookieForRequest,
 } from "./http-auth-utils.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import type { OperatorScope } from "./operator-scopes.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -36,13 +46,20 @@ function issueCookie(
   {
     pluginId = "example",
     generation = resolveControlUiPluginAuthCookieGeneration("generation", getRuntimeConfig()),
-  }: { pluginId?: string; generation?: string } = {},
+    scopes = ["operator.read"],
+    request,
+  }: {
+    pluginId?: string;
+    generation?: string;
+    scopes?: OperatorScope[];
+    request?: IncomingMessage;
+  } = {},
 ): string {
   const { res, setHeader } = makeMockHttpResponse();
   setControlUiPluginAuthCookie(
     res,
-    [{ pluginId, path: "/plugins/example", match: "prefix", scopes: ["operator.read"] }],
-    { generation, ...(profileId ? { profileId } : {}) },
+    [{ pluginId, path: "/plugins/example", match: "prefix", scopes }],
+    { generation, ...(profileId ? { profileId } : {}), request },
   );
   const value = setHeader.mock.calls.at(-1)?.[1];
   const header = Array.isArray(value) ? value[0] : value;
@@ -83,7 +100,150 @@ async function withRoleConfig(run: () => Promise<void>) {
 }
 
 describe("Control UI plugin auth cookie profile binding", () => {
-  afterEach(() => resetPluginRuntimeStateForTest());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("caps a broader signed read cookie on remote native and panel reads without changing direct authority", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const auth = {
+          mode: "token",
+          token: "synthetic-cookie-ceiling",
+          allowTailscale: false,
+        } as const;
+        const authGeneration = resolveSharedGatewaySessionGeneration(auth);
+        const generation = resolveControlUiPluginAuthCookieGeneration(
+          authGeneration,
+          getRuntimeConfig(),
+        );
+        const signedScopes: OperatorScope[] = [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ];
+        for (const remote of [false, true]) {
+          const req = createGatewayRequest({
+            path: "/plugins/example/session",
+            headers: {},
+          });
+          if (remote) {
+            markGatewayIngressTransport(req, {
+              kind: "remote-forwarded",
+              context: createRemoteControlUiIngressTestContext({
+                operatorScopeCeiling: ["operator.read"],
+              }),
+            });
+          }
+          const cookie = issueCookie(remote ? "gateway-owner" : undefined, {
+            generation,
+            scopes: signedScopes,
+            request: req,
+          });
+          req.headers.cookie = cookie;
+          if (remote) {
+            const direct = createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+            });
+            expect(
+              resolveControlUiPluginAuthCookieGrants(direct, {
+                requestPath: "/plugins/example/session",
+                generation,
+              }),
+            ).toEqual([]);
+            direct.destroy();
+            const other = createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+            });
+            markGatewayIngressTransport(other, {
+              kind: "remote-forwarded",
+              context: createRemoteControlUiIngressTestContext(),
+            });
+            expect(
+              resolveControlUiPluginAuthCookieGrants(other, {
+                requestPath: "/plugins/example/session",
+                generation,
+              }),
+            ).toEqual([]);
+            other.destroy();
+          }
+          const expected = remote ? ["operator.read"] : signedScopes;
+          expect(
+            resolveControlUiPluginAuthCookieGrants(req, {
+              requestPath: "/plugins/example/session",
+              generation,
+            })[0]?.scopes,
+          ).toEqual(expected);
+          const res = new ServerResponse(req);
+          try {
+            const admission = await authorizePluginGatewayHttpRequestOrReply({
+              req,
+              res,
+              auth,
+              requestPath: "/plugins/example/session",
+              resolveOperatorScopes: () => [],
+            });
+            expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
+            expect(admission?.requestAuth.revalidate).toBeTypeOf("function");
+            await admission?.requestAuth.revalidate?.();
+            expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
+          } finally {
+            res.destroy();
+            req.destroy();
+          }
+        }
+      },
+    });
+  });
+
+  it("prepares cold cookie profile facts and revalidates demotion without caller-thread SQL", async () => {
+    await withRoleConfig(async () => {
+      const profile = ensureProfileForEmail("cold-reader@example.test");
+      setUserProfileRole(profile.id, "writer");
+      const auth = {
+        mode: "token",
+        token: "synthetic-cookie-reader",
+        allowTailscale: false,
+      } as const;
+      const cookie = issueCookie(profile.id, {
+        generation: resolveControlUiPluginAuthCookieGeneration(
+          resolveSharedGatewaySessionGeneration(auth),
+          getRuntimeConfig(),
+        ),
+      });
+      const { res } = makeMockHttpResponse();
+      const sql = observeHostDataSql();
+      try {
+        const admitted = await authorizePluginGatewayHttpRequestOrReply({
+          req: { method: "GET", headers: { cookie } } as IncomingMessage,
+          res,
+          auth,
+          requestPath: "/plugins/example/session",
+          resolveOperatorScopes: () => [],
+        });
+        expect(admitted?.requestAuth).toMatchObject({
+          authenticatedUserProfile: { profileId: profile.id },
+          controlUiPluginGrants: [{ scopes: ["operator.read"] }],
+        });
+        await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
+        expect(sql.queries).toEqual([]);
+        await setCanonicalUserProfileRole(profile.id, "denied");
+        sql.queries.length = 0;
+        await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+        res.destroy();
+        invalidateOperatorRolePolicy(profile.id);
+      }
+    });
+  });
 
   it("uses an explicit owner credential independently of a revoked ambient visitor cookie", async () => {
     await withRoleConfig(async () => {
@@ -175,11 +335,9 @@ describe("Control UI plugin auth cookie profile binding", () => {
             setControlUiPluginAuthCookieForRequest(
               { headers: {} } as IncomingMessage,
               issued.res,
-              "tailscale",
-              true,
               generation,
               getRuntimeConfig(),
-              undefined,
+              CLI_DEFAULT_OPERATOR_SCOPES,
               profile.id,
             ),
           ).toEqual([
@@ -236,6 +394,8 @@ describe("Control UI plugin auth cookie profile binding", () => {
           cfg: { gateway: { trustedProxies } },
           run: async () => {
             const profile = ensureProfileForEmail("plugin-reader@example.test");
+            const catalog = await prepareUserProfileCatalog();
+            onTestFinished(catalog.release);
             expect(authorizeCookie(issueCookie(profile.id))?.requestAuth).toMatchObject({
               authenticatedUserProfile: { profileId: profile.id },
               controlUiPluginGrants: [{ scopes: ["operator.read"] }],
@@ -279,8 +439,71 @@ describe("Control UI plugin auth cookie profile binding", () => {
   );
 
   it.each([
-    { name: "mixed profiles", profiles: ["viewer", "another-profile"], roles: false },
-    { name: "mixed bound and unbound grants", profiles: ["viewer", undefined], roles: false },
+    { name: "mixed profiles", profiles: ["first", "second"], response: "open" },
+    { name: "mixed bound and unbound grants", profiles: ["first", undefined], response: "open" },
+    { name: "an ended response", profiles: ["first"], response: "ended" },
+    { name: "a destroyed response", profiles: ["first"], response: "destroyed" },
+  ] as const)("avoids profile storage for $name", async ({ profiles, response }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const profileIds = profiles.map((profile) =>
+        profile ? ensureProfileForEmail(`${profile}-cookie-reader@example.test`).id : undefined,
+      );
+      expect(isUserProfileCatalogReady()).toBe(false);
+      const auth = {
+        mode: "token",
+        token: "synthetic-denial-token",
+        allowTailscale: false,
+      } as const;
+      const generation = resolveControlUiPluginAuthCookieGeneration(
+        resolveSharedGatewaySessionGeneration(auth),
+        getRuntimeConfig(),
+      );
+      const cookie = profileIds
+        .map((profile, index) =>
+          issueCookie(profile, { pluginId: index ? "overlap" : "example", generation }),
+        )
+        .join("; ");
+      const req = { method: "GET", headers: { cookie } } as IncomingMessage;
+      expect(
+        resolveControlUiPluginAuthCookieGrants(req, {
+          requestPath: "/plugins/example/session",
+          generation,
+        }),
+      ).toHaveLength(profiles.length);
+      const { res } = makeMockHttpResponse();
+      if (response !== "open") {
+        res.statusCode = 204;
+        if (response === "ended") {
+          res.end();
+        } else {
+          res.destroy();
+        }
+      }
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const sql = observeHostDataSql();
+      try {
+        await expect(
+          authorizePluginGatewayHttpRequestOrReply({
+            req,
+            res,
+            auth,
+            requestPath: "/plugins/example/session",
+            resolveOperatorScopes: () => [],
+          }),
+        ).resolves.toBeNull();
+        expect(res.statusCode).toBe(response === "open" ? 401 : 204);
+        expect(sql.queries).toEqual([]);
+        expect(reads).not.toHaveBeenCalled();
+      } finally {
+        sql.restore();
+        reads.mockRestore();
+        res.destroy();
+      }
+    });
+  });
+
+  it.each([
     {
       name: "retired generation",
       profiles: ["viewer"],
@@ -310,6 +533,7 @@ describe("Control UI plugin auth cookie profile binding", () => {
         const profile = ensureProfileForEmail("plugin-reader@example.test");
         setUserProfileRole(profile.id, role);
         const cookie = issueCookie(profile.id);
+        const catalog = await prepareUserProfileCatalog();
         try {
           expect(authorizeCookie(cookie)?.requestAuth).toMatchObject({
             authenticatedUserProfile: { profileId: profile.id },
@@ -321,6 +545,7 @@ describe("Control UI plugin auth cookie profile binding", () => {
             { pluginId: "example", scopes: [] },
           ]);
         } finally {
+          catalog.release();
           invalidateOperatorRolePolicy(profile.id);
         }
       });

@@ -1,6 +1,6 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { PolicyDataHandlingEvidence, PolicyEvidence } from "../policy-state.js";
+import type { PolicyDataHandlingEvidence } from "../policy-state.js";
 import {
   collectPolicyShapeFindings,
   createOrderedPolicyShape,
@@ -50,13 +50,6 @@ export function dataHandlingPolicyShapeFindings(
     }
   }
   return collectPolicyShapeFindings(findings());
-}
-
-export function dataHandlingEntries(
-  evidence: PolicyEvidence,
-  kind: PolicyDataHandlingEvidence["kind"],
-): readonly PolicyDataHandlingEvidence[] {
-  return (evidence.dataHandling ?? []).filter((entry) => entry.kind === kind);
 }
 
 export function dataHandlingLabel(entry: PolicyDataHandlingEvidence): string {

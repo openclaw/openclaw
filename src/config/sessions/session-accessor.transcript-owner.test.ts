@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   appendTranscriptMessage,
@@ -15,10 +18,15 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "./session-accessor.sqlite-entry.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -46,6 +54,89 @@ function turnOptions(config: OpenClawConfig, content: string) {
 }
 
 describe("transcript turn logical ownership", () => {
+  it.each([
+    { phase: "selection", replay: false },
+    { phase: "selection", replay: true },
+    { phase: "transaction", replay: false },
+    { phase: "transaction", replay: true },
+  ])(
+    "rejects revoked write authority before commit ($phase, replay: $replay)",
+    async ({ phase, replay }) => {
+      await withTempHome(async (home) => {
+        const scope = {
+          agentId: "main",
+          sessionId: "source-authority-session",
+          sessionKey: "agent:main:main",
+          storePath: path.join(home, "sessions.json"),
+        };
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          lifecycleRevision: "source-generation",
+          updatedAt: 1,
+        });
+        const append = {
+          eventId: "source-authority-message",
+          message: { role: "assistant", content: "Original completion" },
+        };
+        const options = {
+          config: { session: { store: scope.storePath } },
+          expectedSessionId: scope.sessionId,
+          expectedLifecycleRevision: "source-generation",
+          messages: [append],
+          updateMode: "none" as const,
+        };
+        if (replay) {
+          await persistSessionTranscriptTurn(scope, options);
+        }
+        const before = await loadTranscriptEvents(scope);
+        const entryBefore = loadSessionEntry(scope);
+        let current = true;
+        let committed = false;
+        const turn = withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: scope,
+            assertCommitAllowed: () => {
+              if (!current) {
+                throw new Error("original source authority revoked");
+              }
+            },
+            withTranscriptWrite: async (write) => await write(),
+          },
+          () =>
+            persistSessionTranscriptTurn(scope, {
+              ...options,
+              messages: [
+                {
+                  ...append,
+                  shouldAppend: async () => {
+                    // Row identity stays valid; the original live authority expires
+                    // across selection's await or inside the real transaction.
+                    if (phase === "selection") {
+                      current = false;
+                    }
+                    return true;
+                  },
+                  shouldAppendInTransaction: () => {
+                    if (phase === "transaction") {
+                      current = false;
+                    }
+                    return true;
+                  },
+                },
+              ],
+              onMessageCommitted: () => {
+                committed = true;
+              },
+            }),
+        );
+        await expect(turn).rejects.toThrow("original source authority revoked");
+        expect(committed).toBe(false);
+        expect(await loadTranscriptEvents(scope)).toEqual(before);
+        expect(loadSessionEntry(scope)).toEqual(entryBefore);
+      });
+    },
+  );
+
   it("completes committed custody before a queued cancellation can interrupt the receipt", async () => {
     await withTempHome(async (home) => {
       const scope = {
@@ -440,3 +531,60 @@ describe("transcript turn logical ownership", () => {
     });
   });
 });
+
+it.each(["authority", "idempotency"] as const)(
+  "commits a %s-guarded turn without decoding unrelated tool results",
+  async (guardKind) => {
+    await withOpenClawTestState({ label: "guarded-turn-write-hold" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const scope = {
+        agentId: "main",
+        sessionId: "guarded-turn",
+        sessionKey: "agent:main:guarded-turn",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      appendTranscriptMessageSync(scope, {
+        message: {
+          role: "toolResult",
+          toolCallId: "large-result",
+          toolName: "read",
+          content: [{ type: "text", text: "synthetic tool output ".repeat(8000) }],
+          isError: false,
+          timestamp: 1,
+        },
+      });
+      const codec = resolveZstdCodec();
+      if (!codec) {
+        throw new Error("Transcript hold regression requires native zstd support");
+      }
+      const decode = vi.spyOn(codec, "decompress");
+      const guard = vi.fn(() => true);
+      try {
+        const committed = await persistSessionTranscriptTurn(scope, {
+          expectedSessionId: scope.sessionId,
+          updateMode: "none",
+          touchSessionEntry: true,
+          messages: [
+            {
+              message: {
+                role: "assistant",
+                content: "completed",
+                timestamp: 2,
+                idempotencyKey: "fresh-reply",
+              },
+              ...(guardKind === "authority"
+                ? { shouldAppendInTransaction: guard }
+                : { idempotencyLookup: "scan-assistant" as const }),
+            },
+          ],
+        });
+        expect(committed.appendedCount).toBe(1);
+        expect(guard).toHaveBeenCalledTimes(guardKind === "authority" ? 1 : 0);
+        expect(decode).not.toHaveBeenCalled();
+      } finally {
+        decode.mockRestore();
+      }
+    });
+  },
+);

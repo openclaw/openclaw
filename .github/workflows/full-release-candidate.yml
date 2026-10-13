@@ -138,6 +138,8 @@ jobs:
       include_live_suites: false
       enable_prepublish_plugin_registry: true
       published_upgrade_survivor_scenarios: ${{ join(fromJSON(inputs.request_json).upgradeSurvivorScenarios, ',') }}
+      published_upgrade_survivor_baseline: ${{ fromJSON(inputs.request_json).upgradeBaseline }}
+      published_upgrade_survivor_baselines: ${{ join(fromJSON(inputs.request_json).upgradeSurvivorBaselines, ' ') }}
       allow_frozen_target_scenario_omissions: ${{ fromJSON(inputs.request_json).allowFrozenTargetScenarioOmissions }}
       allow_unreleased_changelog: ${{ fromJSON(inputs.request_json).allowUnreleasedChangelog }}
       release_test_profile: ${{ fromJSON(inputs.request_json).releaseProfile }}

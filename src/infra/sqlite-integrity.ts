@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   readStableSqliteFileGeneration,
@@ -28,10 +29,17 @@ export type SqliteIntegrityCheck = {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  integrityGateReason?: "revoked" | "stale-lease" | "dirty-receipt" | "no-proof" | "lease-class";
-  integrityGateMode?: "full";
+  because?: string;
+  integrityGateReason?:
+    | "revoked"
+    | "stale-lease-full"
+    | "process-death"
+    | "dirty-receipt"
+    | "no-proof"
+    | "lease-class";
+  integrityGateMode?: "full" | "deferred";
   integrityGateMs?: number;
-  integrityGateOutcome?: "healthy" | "failed" | "cached";
+  integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
   integrityCheckSyncMs?: number;
   integrityOutsideCheckMs?: number;
   integrityWorkerCheckMs?: number;
@@ -188,6 +196,9 @@ export function assertSqliteIntegrity(
 ): SqliteIntegrityChecks {
   const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   runSqliteForeignKeyCheck(database, databaseLabel);
+  if (check === "integrity_check") {
+    recordSqliteDatabaseIntegrity(database);
+  }
   return { integrityCheck };
 }
 
@@ -198,14 +209,9 @@ export function confirmSqliteFileIntegrity(
 ): SqliteIntegrityConfirmation {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let initial: SqliteFileGeneration;
-    try {
-      initial = readStableSqliteFileGeneration(pathname);
-    } catch (error) {
-      return unboundSqliteIntegrityFailure(error);
-    }
-
     let database: DatabaseSync;
     try {
+      initial = readStableSqliteFileGeneration(pathname);
       database = openNodeSqliteDatabase(pathname, { readOnly: true });
     } catch (error) {
       // A failed SQLite open exposes no descriptor identity. Path snapshots
@@ -314,9 +320,7 @@ function runSqliteCheck(
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(
-    `SQLite ${pragma} failed for ${databaseLabel}: ${details}. Run openclaw doctor --fix for explicit repair; if repair is refused, preserve the database and WAL and restore a verified backup.`,
-  );
+  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
@@ -385,7 +389,12 @@ function readTaskDeliveryCascadeForeignKeyId(database: DatabaseSync): bigint | u
 }
 
 function createSqliteIntegrityError(message: string, cause?: unknown): Error {
-  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  const error =
+    cause === undefined
+      ? new Error(
+          `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`,
+        )
+      : new Error(message, { cause });
   error.name = "SqliteIntegrityError";
   return error;
 }

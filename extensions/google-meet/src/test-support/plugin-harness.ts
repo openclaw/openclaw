@@ -57,6 +57,28 @@ export function captureStdout() {
   };
 }
 
+export function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T>;
+export function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T;
+export function withPlatform<T>(
+  platform: NodeJS.Platform,
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
+  const originalPlatform = process.platform;
+  const restore = () => Object.defineProperty(process, "platform", { value: originalPlatform });
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    const result = fn();
+    if (result instanceof Promise) {
+      return result.finally(restore);
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
 export function setupGoogleMeetPlugin(
   plugin: GoogleMeetTestPluginEntry,
   config: Record<string, unknown> = {},

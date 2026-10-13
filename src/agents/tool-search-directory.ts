@@ -182,10 +182,10 @@ function formatToolSearchCatalogDirectory(
         : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
       guidance +=
-        " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
+        " Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
     } else if (mode === "directory") {
       guidance +=
-        " Call a unique deferred tool name directly, or use tool_call with its id and args.";
+        " Call a unique deferred tool name directly, or use dispatch_action with its id and args.";
     }
     const footerChars =
       guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);

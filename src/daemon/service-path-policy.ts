@@ -1,4 +1,3 @@
-/** Classifies service PATH entries that should not be frozen into daemons. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
-// Service PATH policy keeps managed services away from user shell package-manager paths.
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");

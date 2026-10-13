@@ -1,10 +1,8 @@
 import type { DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-/** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
 
-/** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
 
 /** Platform service adapter contract shared by inspection and lifecycle owners. */
@@ -42,7 +40,6 @@ export type GatewayService = {
   ) => Promise<GatewayServiceRuntime>;
 };
 
-/** Arguments required to render/install a managed gateway service. */
 export type GatewayServiceInstallArgs = {
   /** Required by managed writers when explicit runtime intent is already stored. */
   runtimePinUpdate?: DaemonRuntimePinUpdate;
@@ -71,6 +68,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** One caller-owned budget for native activation and its recovery. */
+  deadline?: { remainingMs: () => number; signal: AbortSignal };
   /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
   onRestartAttempted?: () => void;
   /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
@@ -183,7 +182,8 @@ export type SystemdServiceReadBinding = {
 };
 
 export type GatewayServiceCommandInspection =
-  | { kind: "absent" | "present" }
+  | { kind: "absent" }
+  | { kind: "present"; command?: GatewayServiceCommandConfig }
   | { kind: "unavailable"; error: unknown };
 
 /** Selected native unit for one inspection; never a service mutation grant. */

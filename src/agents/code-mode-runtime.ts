@@ -13,14 +13,6 @@ import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
-const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
-const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
-const DEFAULT_MAX_PENDING_TOOL_CALLS = 16;
-const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
-const DEFAULT_SEARCH_LIMIT = 8;
-const DEFAULT_MAX_SEARCH_LIMIT = 50;
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
 export const CODE_MODE_RESUME_MARGIN_MS = 250;
 // Reserve the resume floor plus dispatch/settlement slack so a call that runs
@@ -33,7 +25,6 @@ export const MAX_HEADLESS_WALL_CLOCK_MS = 900_000;
 export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
 export const MAX_HEADLESS_TOOL_CALLS = 200;
 
-/** Resolved Code Mode runtime limits. */
 export type CodeModeConfig = Omit<AgentToolSurfacePresentation["codeMode"], "enabled"> & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
@@ -114,53 +105,26 @@ export function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-/** Resolves Code Mode runtime limits from config. */
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,
   model?: { provider: string; modelId: string },
 ): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId, model);
-  const maxSearchLimit = clampNumber(
-    readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
-    1,
-    DEFAULT_MAX_SEARCH_LIMIT,
-  );
+  const limit = (key: string, fallback: number, min: number, max: number) =>
+    clampNumber(readPositiveInteger(raw[key], fallback), min, max);
+  const maxSearchLimit = limit("maxSearchLimit", 50, 1, 50);
   return {
     enabled: readEnabled(raw.enabled),
     executor: readExecutor(raw.executor),
     mode: "only",
-    timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
-    memoryLimitBytes: clampNumber(
-      readPositiveInteger(raw.memoryLimitBytes, DEFAULT_MEMORY_LIMIT_BYTES),
-      1024 * 1024,
-      1024 * 1024 * 1024,
-    ),
-    maxOutputBytes: clampNumber(
-      readPositiveInteger(raw.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
-      1024,
-      10 * 1024 * 1024,
-    ),
-    maxSnapshotBytes: clampNumber(
-      readPositiveInteger(raw.maxSnapshotBytes, DEFAULT_MAX_SNAPSHOT_BYTES),
-      1024,
-      256 * 1024 * 1024,
-    ),
-    maxPendingToolCalls: clampNumber(
-      readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
-      1,
-      MAX_CODE_MODE_PENDING_TOOL_CALLS,
-    ),
-    snapshotTtlSeconds: clampNumber(
-      readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),
-      1,
-      24 * 60 * 60,
-    ),
-    searchDefaultLimit: clampNumber(
-      readPositiveInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
-      1,
-      maxSearchLimit,
-    ),
+    timeoutMs: limit("timeoutMs", 10_000, 100, 60_000),
+    memoryLimitBytes: limit("memoryLimitBytes", 64 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
+    maxOutputBytes: limit("maxOutputBytes", 64 * 1024, 1024, 10 * 1024 * 1024),
+    maxSnapshotBytes: limit("maxSnapshotBytes", 10 * 1024 * 1024, 1024, 256 * 1024 * 1024),
+    maxPendingToolCalls: limit("maxPendingToolCalls", 16, 1, MAX_CODE_MODE_PENDING_TOOL_CALLS),
+    snapshotTtlSeconds: limit("snapshotTtlSeconds", 900, 1, 24 * 60 * 60),
+    searchDefaultLimit: limit("searchDefaultLimit", 8, 1, maxSearchLimit),
     maxSearchLimit,
   };
 }
@@ -220,7 +184,7 @@ export function resolveCodeModeHeadlessConfig(
 export function readCode(args: unknown): {
   code: string;
   restartSafe: boolean;
-  required: boolean;
+  awaitResults: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -239,9 +203,9 @@ export function readCode(args: unknown): {
       "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
   }
-  const required = params.required;
-  if (required !== undefined && typeof required !== "boolean") {
-    throw new ToolInputError("required must be a boolean.");
+  const awaitResults = params.awaitResults;
+  if (awaitResults !== undefined && typeof awaitResults !== "boolean") {
+    throw new ToolInputError("awaitResults must be a boolean.");
   }
   const restartSafe = params.restartSafe;
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
@@ -250,7 +214,7 @@ export function readCode(args: unknown): {
   return {
     code,
     restartSafe: restartSafe === true,
-    required: required === true,
+    awaitResults: awaitResults === true,
   };
 }
 

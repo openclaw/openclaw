@@ -1,4 +1,5 @@
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { buildOpenClawToolFallbackText } from "./prompt-surface.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 type SystemPromptToolListParams = {
@@ -81,4 +82,44 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
+}
+
+/** Tool availability and setup guidance share the admitted prompt surface. */
+export function buildSystemPromptToolingSection(params: {
+  includeToolGuidance: boolean;
+  toolLines: string[];
+  toolSchemaDirectoryPrompt?: string;
+  promptSurface: AgentPromptSurfaceKind;
+  availableTools: ReadonlySet<string>;
+  webSearchUnconfigured?: boolean;
+}): string[] {
+  const {
+    includeToolGuidance,
+    toolLines,
+    toolSchemaDirectoryPrompt,
+    promptSurface,
+    availableTools,
+  } = params;
+  return [
+    ...(includeToolGuidance
+      ? [
+          "## Tooling",
+          "Tools policy-filtered. Names case-sensitive; call exact.",
+          toolLines.length > 0
+            ? toolLines.join("\n")
+            : buildOpenClawToolFallbackText({
+                surface: promptSurface,
+              }),
+          ...(toolSchemaDirectoryPrompt
+            ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
+            : []),
+          "The AGENTS.md Tools section guides usage; it never grants availability.",
+        ]
+      : []),
+    ...(params.webSearchUnconfigured && !availableTools.has("web_search")
+      ? [
+          "Web search is supported but not configured. Set it up with `openclaw configure --section web` or Settings → Ask OpenClaw; `web_search` is unavailable until configured.",
+        ]
+      : []),
+  ];
 }

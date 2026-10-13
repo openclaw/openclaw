@@ -1,7 +1,9 @@
 import * as http from "node:http";
 import * as https from "node:https";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { classifyTransientNetworkErrorCode, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -20,8 +22,16 @@ const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 /** Wall-clock budget for outgoing webhook requests including response body. */
 const POST_REQUEST_TIMEOUT_MS = 30_000;
-let lastSendTime = 0;
-let sendQueue: Promise<void> = Promise.resolve();
+
+type SendSlotState = {
+  tail: Promise<void>;
+  lastSendTime: number;
+  waiters: number;
+};
+
+// Pace sends per incoming webhook endpoint so a burst on one account cannot
+// head-of-line block an independent account's webhook.
+const sendSlots = new Map<string, SendSlotState>();
 
 const UNPROVEN_TRANSPORT_ERROR_BRANCH = "unproven transport error branch";
 
@@ -59,7 +69,6 @@ function isProvenPreConnectFailure(error: unknown): boolean {
   return foundPreConnectLeaf;
 }
 
-// --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
 //   - Outgoing webhook user_id: per-integration sequential ID (e.g. 1)
 //   - Chat API user_id: global internal ID (e.g. 4)
@@ -110,7 +119,7 @@ const ChatUserListResponseSchema = z.object({
 
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export async function sendMessage(
   incomingUrl: string,
@@ -119,30 +128,52 @@ export async function sendMessage(
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
+  const effect = captureEffectAuthority();
   const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  const acceptedChunks: string[] = [];
   for (const chunk of chunks.length > 0 ? chunks : [text]) {
-    // Synology Chat API requires numeric user_ids to specify the recipient.
-    const body = buildWebhookBody({ text: chunk }, userId);
-    // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
-    await waitForSendSlot();
-    await onPlatformSendDispatch?.();
-    let result: SynologyHostedFileSendResult["status"];
+    let initiated = false;
     try {
-      result = await retryAsync(() => doPost(incomingUrl, body, allowInsecureSsl), {
-        attempts: 3,
-        minDelayMs: 0,
-        shouldRetry: isProvenPreConnectFailure,
-        delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
-        sleep: async (delayMs) => {
-          await sleepWithAbort(delayMs);
-          await waitForSendSlot();
-          await onPlatformSendDispatch?.();
+      // Synology Chat API requires numeric user_ids to specify the recipient.
+      const body = buildWebhookBody({ text: chunk }, userId);
+      // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
+      await waitForSendSlot(incomingUrl);
+      await onPlatformSendDispatch?.();
+      const result = await retryAsync(
+        () => {
+          initiated = false;
+          return effect.initiate(() => {
+            initiated = true;
+            return doPost(incomingUrl, body, allowInsecureSsl);
+          });
         },
-      });
-    } catch {
-      return false;
-    }
-    if (result !== "accepted") {
+        {
+          attempts: 3,
+          minDelayMs: 0,
+          shouldRetry: (error) => initiated && isProvenPreConnectFailure(error),
+          delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
+          sleep: async (delayMs) => {
+            initiated = false;
+            await sleepWithAbort(delayMs);
+            await waitForSendSlot(incomingUrl);
+            await onPlatformSendDispatch?.();
+          },
+        },
+      );
+      if (result !== "accepted") {
+        throw new Error(`Failed to send message to Synology Chat (${result})`);
+      }
+      acceptedChunks.push(chunk);
+    } catch (error) {
+      if (acceptedChunks.length > 0) {
+        throw createChannelPartialDeliveryError(error, {
+          visibleReplySent: true,
+          content: acceptedChunks.join(""),
+        });
+      }
+      if (!initiated) {
+        throw error;
+      }
       return false;
     }
   }
@@ -156,6 +187,7 @@ export async function sendHostedFileUrl(
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
+  const effect = captureEffectAuthority();
   let body: string;
   try {
     body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
@@ -163,25 +195,27 @@ export async function sendHostedFileUrl(
     return { status: "not-dispatched" };
   }
 
-  await waitForSendSlot();
+  await waitForSendSlot(incomingUrl);
   await onPlatformSendDispatch?.();
 
+  let initiated = false;
   try {
-    return { status: await doPost(incomingUrl, body, allowInsecureSsl) };
+    const status = await effect.initiate(() => {
+      initiated = true;
+      return doPost(incomingUrl, body, allowInsecureSsl);
+    });
+    return { status };
   } catch (error) {
+    if (!initiated) {
+      throw error;
+    }
     // Proven pre-connect failures cannot have queued the capability. All other
     // transport errors stay indeterminate because Synology may have the POST.
     return { status: isProvenPreConnectFailure(error) ? "not-dispatched" : "indeterminate" };
   }
 }
 
-/**
- * Fetch the list of Chat users visible to this bot via the user_list API.
- * Results are cached for CACHE_TTL_MS to avoid excessive API calls.
- *
- * The user_list endpoint uses the same base URL as the chatbot API but
- * with method=user_list instead of method=chatbot.
- */
+// Cache user lists for CACHE_TTL_MS to avoid excessive API calls.
 async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
@@ -279,16 +313,39 @@ async function fetchChatUsers(
   });
 }
 
-async function waitForSendSlot(): Promise<void> {
-  const next = sendQueue.then(async () => {
-    const elapsed = Date.now() - lastSendTime;
+async function waitForSendSlot(incomingUrl: string): Promise<void> {
+  pruneIdleSendSlots();
+  const slot = sendSlots.get(incomingUrl) ?? {
+    tail: Promise.resolve(),
+    lastSendTime: 0,
+    waiters: 0,
+  };
+  sendSlots.set(incomingUrl, slot);
+  slot.waiters += 1;
+  const next = slot.tail.then(async () => {
+    const elapsed = Date.now() - slot.lastSendTime;
     if (elapsed < MIN_SEND_INTERVAL_MS) {
       await sleep(MIN_SEND_INTERVAL_MS - elapsed);
     }
-    lastSendTime = Date.now();
+    slot.lastSendTime = Date.now();
   });
-  sendQueue = next.catch(() => {});
-  await next;
+  slot.tail = next.catch(() => {});
+  try {
+    await next;
+  } finally {
+    slot.waiters -= 1;
+  }
+}
+
+function pruneIdleSendSlots(): void {
+  const now = Date.now();
+  for (const [incomingUrl, slot] of sendSlots) {
+    // Retire a slot only after its cooldown elapses so a follow-up send to the
+    // same endpoint still honors the minimum interval.
+    if (slot.waiters === 0 && now - slot.lastSendTime >= MIN_SEND_INTERVAL_MS) {
+      sendSlots.delete(incomingUrl);
+    }
+  }
 }
 
 function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
@@ -319,8 +376,6 @@ function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
  * Synology Chat outgoing webhooks send a user_id that may NOT match the
  * Chat-internal user_id needed by the chatbot API (method=chatbot).
  * The webhook's "username" field corresponds to the Chat user's "nickname".
- *
- * @returns The correct Chat user_id, or undefined if not found
  */
 export async function resolveLegacyWebhookNameToChatUserId(params: {
   incomingUrl: string;

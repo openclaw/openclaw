@@ -138,7 +138,20 @@ export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): Sid
   return next;
 }
 
-export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
+function selectPanel(layout: SidebarLayout, column: SidebarColumn, panelId: string): void {
+  column.activePanelId = panelId;
+  layout.open = true;
+  if (layout.expanded) {
+    layout.expanded = false;
+    delete layout.expandedSide;
+  }
+}
+
+export function openSlot(
+  layout: SidebarLayout,
+  slot: SidebarSlotId,
+  options?: { activate?: boolean },
+): SidebarLayout {
   const next = structuredClone(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
     return next.expandedSide ? setSidebarExpanded(next, false) : next;
@@ -151,11 +164,8 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
     panel = { id: nextPanelId(next, slot), slot };
     column.panels.push(panel);
   }
-  column.activePanelId = panel.id;
-  next.open = true;
-  if (next.expanded) {
-    next.expanded = false;
-    delete next.expandedSide;
+  if (options?.activate !== false) {
+    selectPanel(next, column, panel.id);
   }
   return next;
 }
@@ -198,12 +208,7 @@ export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLa
   const next = structuredClone(layout);
   const column = next.columns.find((entry) => entry.panels.some((panel) => panel.id === panelId));
   if (column && panelId !== next.mainPanelId) {
-    column.activePanelId = panelId;
-    next.open = true;
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
+    selectPanel(next, column, panelId);
   }
   return next;
 }
@@ -234,13 +239,9 @@ export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLay
   const next = structuredClone(layout);
   if (open) {
     next.columns[0] ??= createSidebarColumn();
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
   }
   next.open = open;
-  if (!open && next.expandedSide) {
+  if (open ? next.expanded : next.expandedSide) {
     next.expanded = false;
     delete next.expandedSide;
   }
@@ -266,6 +267,28 @@ export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId: strin
   next.expanded = true;
   next.expandedSide = true;
   return next;
+}
+
+const narrowPresentations = new WeakMap<SidebarLayout, SidebarLayout>();
+
+/**
+ * How a narrow pane shows a layout. It can only stack its side panel under the
+ * main view, which leaves a list-and-detail panel too little room, so an open
+ * Subagents or Processes panel is shown focused in place. The layout itself is
+ * unchanged: a wider pane shows that panel beside the main view again.
+ */
+export function presentNarrowSidebarLayout(layout: SidebarLayout): SidebarLayout {
+  const slot =
+    layout.open === true && !layout.expanded ? sidebarActivePanel(layout)?.slot : undefined;
+  if (slot !== "subagents" && slot !== "processes") {
+    return layout;
+  }
+  let presented = narrowPresentations.get(layout);
+  if (!presented) {
+    presented = { ...layout, expanded: true, expandedSide: true };
+    narrowPresentations.set(layout, presented);
+  }
+  return presented;
 }
 
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {

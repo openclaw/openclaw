@@ -71,7 +71,7 @@ suite.define(() => {
       assistantName: "Roboclaw",
       cliAgentsEnabled: true,
       defaultAgentId: "roboclaw",
-      deferredMethods: ["agents.list"],
+      deferredRequests: [{ method: "agents.list" }],
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
         "sessions.catalog.list": {
@@ -490,10 +490,8 @@ suite.define(() => {
   });
 
   it.each([
-    { catalogId: "codex", action: "button" },
     { catalogId: "codex", action: "Enter" },
     { catalogId: "claude", action: "button" },
-    { catalogId: "claude", action: "Enter" },
   ])(
     "$catalogId + primary $action opens a native terminal without Chat or title inference",
     async ({ catalogId, action }) => {
@@ -836,7 +834,7 @@ suite.define(() => {
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Research" })
         .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();

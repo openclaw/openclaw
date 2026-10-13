@@ -294,7 +294,6 @@ it.each([false, true])(
 );
 
 it.each([
-  ["unavailable", "The selected runtime is no longer available."],
   ["retired before commit", "The selected runtime is no longer available."],
   ["sandbox", "requires a sandbox"],
   ["worker", "cannot select a runtime without cloud placement support"],
@@ -342,6 +341,11 @@ it.each([
     };
     target.context.workerSessionPlacementService = {
       getMany: () => new Map([[before.sessionId, placement]]),
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: () => placement,
+        release: () => {},
+      }),
     };
   }
   await expect(target.execute({ model: "fixture/native" })).rejects.toThrow(message);

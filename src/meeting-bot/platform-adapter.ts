@@ -82,7 +82,6 @@ function browserResultString(result: unknown): string | undefined {
 const optionalBrowserString = z.string().optional().catch(undefined);
 const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
 const optionalBrowserNumber = z.number().optional().catch(undefined);
-const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
 const meetingTranscriptLineSchema = z
   .object({
     at: optionalBrowserString,
@@ -98,15 +97,15 @@ const meetingTranscriptLineSchema = z
   }));
 
 const meetingTranscriptLinesSchema = z
-  .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+  .array(meetingTranscriptLineSchema.nullable().catch(null))
   .transform((lines) => lines.filter((line) => line !== null));
 
 const meetingCaptionLinesSchema = z
   .array(
-    z.union([
-      meetingTranscriptLineSchema.and(z.object({ source: z.unknown().optional() })),
-      invalidBrowserArrayItemSchema,
-    ]),
+    meetingTranscriptLineSchema
+      .and(z.object({ source: z.unknown().optional() }))
+      .nullable()
+      .catch(null),
   )
   .transform((lines) => lines.filter((line) => line !== null));
 
@@ -134,7 +133,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   url: optionalBrowserString,
   title: optionalBrowserString,
   notes: z
-    .array(z.union([z.string(), invalidBrowserArrayItemSchema]))
+    .array(z.string().nullable().catch(null))
     .transform((notes) => notes.filter((note) => note !== null))
     .optional()
     .catch(undefined),

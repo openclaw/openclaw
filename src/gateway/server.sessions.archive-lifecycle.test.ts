@@ -28,7 +28,7 @@ import {
 } from "./server.sessions.archive-lifecycle.test-support.js";
 import {
   resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "./session-sharing.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -230,7 +230,7 @@ test("identity changes fence archive before cancellation and force fresh authori
     if (!authorized.authorization) {
       throw new Error("expected captured archive authorization");
     }
-    const sharingTarget = resolveSessionSharingTarget({
+    const sharingTarget = await resolveSessionSharingTargetAsync({
       cfg: requestContext.getRuntimeConfig(),
       sessionKey,
     });
@@ -481,7 +481,11 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:archive-worker-recheck";
   const sessionId = "session-archive-worker-recheck";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const retained = {
+    abortedLastRun: true,
+    lifecycleRunId: "retained-worker-run",
+  };
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, retained) } });
   const release = vi.fn();
   const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
@@ -502,6 +506,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(retained);
   expect(release).toHaveBeenCalledOnce();
 });
 

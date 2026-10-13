@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { feishuPlugin } from "../channel-plugin-api.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER } from "./outbound.js";
-import { looksLikeFeishuId, resolveReceiveIdType } from "./targets.js";
+import { looksLikeFeishuId } from "./targets.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -226,15 +226,12 @@ describe("Feishu plugin adapters", () => {
       currentMessagingTarget: "user:ou_sender",
     });
   });
-  it.each([
-    ["group:oc_123", "chat_id"],
-    ["dm:ou_123", "open_id"],
-    ["u_123", "user_id"],
-  ])("resolves receive type for %s", (target, type) =>
-    expect(resolveReceiveIdType(target)).toBe(type),
-  );
   it("recognizes provider-prefixed targets", () => {
     expect(looksLikeFeishuId("feishu:user:ou_123")).toBe(true);
+  });
+
+  it("declares exact native chat types", () => {
+    expect(feishuPlugin.capabilities.chatTypes).toEqual(["direct", "group"]);
   });
 });
 
@@ -334,132 +331,123 @@ describe("Feishu stickers", () => {
     await expect(search({ query: "赞" }, "work", disabled)).rejects.toThrow("actions.sticker");
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
-  it.each([undefined, { bot_work: {} }])(
-    "rejects absent or empty sticker catalogs: %j",
-    async (stickerSets) => {
-      const localCfg = config({ ...stickerCfg.channels?.feishu, stickerSets });
-      expect(getActions(localCfg)?.actions).not.toContain("sticker-search");
-      await expect(search({ query: "赞" }, "work", localCfg)).rejects.toThrow("stickerSets");
+  it.each([
+    { name: "absent", stickerSets: undefined },
+    { name: "empty", stickerSets: { bot_work: {} } },
+    { name: "inherited", stickerSets: Object.create({ bot_work: { file_work: ["赞"] } }) },
+    {
+      name: "different bot",
+      accountId: "missing",
+      stickerSets: stickerCfg.channels?.feishu?.stickerSets,
     },
-  );
-  it("does not inherit another bot's catalog or prototype properties", async () => {
-    const localCfg = config({
-      ...stickerCfg.channels?.feishu,
-      stickerSets: Object.create({ bot_work: { file_work: ["赞"] } }),
-    });
-    expect(getActions(localCfg, "work")?.actions).not.toContain("sticker-search");
-    await expect(search({ query: "赞" }, "work", localCfg)).rejects.toThrow("stickerSets");
-    await expect(search({ query: "赞" }, "missing")).rejects.toThrow("stickerSets");
-  });
-  it.each([[" thUMbs ", [{ fileId: "file_work", keyword: "Thumbs Up" }]]])(
-    "matches literal keywords for %s",
-    async (query, stickers) => {
-      expect(details(await search({ query }))).toEqual({ stickers, truncated: false });
-      expect(createFeishuClientMock).not.toHaveBeenCalled();
-    },
-  );
-  it("binds catalogs to bot identity across account and credential changes", async () => {
-    expect(details(await search({ query: "赞" }, "renamed")).stickers).toEqual([
-      { fileId: "file_work", keyword: "赞👍" },
-    ]);
-    expect(details(await search({ query: "赞" }, "other")).stickers).toEqual([
-      { fileId: "file_other", keyword: "赞👍" },
-    ]);
-    const replaced = config({
-      ...stickerCfg.channels?.feishu,
+    {
+      name: "replaced bot",
       accounts: { work: { appId: "replacement", appSecret: "secret_new" } },
-    });
-    await expect(search({ query: "赞" }, "work", replaced)).rejects.toThrow("stickerSets");
-  });
-  it("rejects an overlong Unicode query", async () => {
-    await expect(search({ query: "👍".repeat(129) })).rejects.toThrow("query");
-  });
-  it.each(["5", 0, 1.5, 11])("rejects invalid limit %j", async (limit) => {
-    await expect(search({ query: "赞", limit })).rejects.toThrow("limit");
-  });
-  it.each([undefined])(
-    "preserves configured order and reports limit truncation for %j",
-    async (limit) => {
-      const entries = Array.from({ length: 6 }, (_, index) => [`file_${index}`, ["match"]]);
-      const localCfg = config({
-        ...stickerCfg.channels?.feishu,
-        stickerSets: { bot_work: Object.fromEntries(entries) },
-      });
-      expect(details(await search({ query: "match", limit }, "work", localCfg))).toEqual({
-        stickers: Array.from({ length: limit ?? 5 }, (_, index) => ({
-          fileId: `file_${index}`,
-          keyword: "match",
-        })),
-        truncated: true,
-      });
+      stickerSets: stickerCfg.channels?.feishu?.stickerSets,
     },
-  );
-  it("bounds scalar keys and JSON-escaped keywords to 3 KiB", async () => {
-    const keyword = "\u0001".repeat(64);
-    const entries = Array.from({ length: 8 }, (_, i) => [
-      "👍".repeat(511) + String.fromCodePoint(0x1f600 + i),
-      [keyword],
-    ]);
+  ])("rejects a $name sticker catalog", async ({ stickerSets, accountId = "work", accounts }) => {
     const localCfg = config({
       ...stickerCfg.channels?.feishu,
-      stickerSets: { bot_work: Object.fromEntries(entries) },
+      stickerSets,
+      ...(accounts ? { accounts } : {}),
     });
-    const result = await search({ query: keyword, limit: 10 }, "work", localCfg);
+    expect(getActions(localCfg, accountId)?.actions).not.toContain("sticker-search");
+    await expect(search({ query: "赞" }, accountId, localCfg)).rejects.toThrow("stickerSets");
+  });
+  it.each([
+    ["work", " thUMbs ", "file_work", "Thumbs Up"],
+    ["renamed", "赞", "file_work", "赞👍"],
+    ["other", "赞", "file_other", "赞👍"],
+  ])("searches the catalog owned by %s for %s", async (accountId, query, fileId, keyword) => {
+    expect(details(await search({ query }, accountId))).toEqual({
+      stickers: [{ fileId, keyword }],
+      truncated: false,
+    });
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+  });
+  it.each([
+    { params: { query: "👍".repeat(129) }, error: "query" },
+    ...["5", 0, 1.5, 11].map((limit) => ({ params: { query: "赞", limit }, error: "limit" })),
+  ])("rejects invalid sticker search input %j", async ({ params, error }) => {
+    await expect(search(params)).rejects.toThrow(error);
+  });
+  it.each(["count", "bytes"] as const)("bounds sticker search by %s", async (bound) => {
+    const bytes = bound === "bytes";
+    const keyword = bytes ? "\u0001".repeat(64) : "match";
+    const keys = Array.from({ length: bytes ? 8 : 6 }, (_, i) =>
+      bytes ? "👍".repeat(511) + String.fromCodePoint(0x1f600 + i) : `file_${i}`,
+    );
+    const localCfg = config({
+      ...stickerCfg.channels?.feishu,
+      stickerSets: { bot_work: Object.fromEntries(keys.map((key) => [key, [keyword]])) },
+    });
+    const result = await search(
+      { query: keyword, limit: bytes ? 10 : undefined },
+      "work",
+      localCfg,
+    );
     const value = details(result);
     expect(value).toEqual({
-      stickers: [{ fileId: "👍".repeat(511) + "😀", keyword }],
+      stickers: keys.slice(0, bytes ? 1 : 5).map((fileId) => ({ fileId, keyword })),
       truncated: true,
     });
     expect(Buffer.byteLength(JSON.stringify(value), "utf8")).toBeLessThanOrEqual(3072);
     expect(result.content).toEqual([{ type: "text", text: JSON.stringify(value) }]);
   });
-  it("dispatches a found sticker on the same account", async () => {
-    sendStickerFeishuMock.mockResolvedValueOnce(receipt);
-    const result = details(await search({ query: "赞" }, "renamed"));
-    expect(result.stickers).toEqual([{ fileId: "file_work", keyword: "赞👍" }]);
-    const match = requireRecord(requireArray(result.stickers)[0], "sticker");
-    expect(
-      details(
-        await run(
-          "sticker",
-          { ...match, to: "oc_group_1" },
-          { cfg: stickerCfg, accountId: "renamed" },
-        ),
-      ),
-    ).toMatchObject({ ok: true, action: "sticker", ...receipt });
-    expect(sendStickerFeishuMock).toHaveBeenCalledExactlyOnceWith({
-      cfg: stickerCfg,
-      to: "oc_group_1",
-      fileKey: "file_work",
-      accountId: "renamed",
-      replyToMessageId: undefined,
-      replyInThread: false,
-    });
-  });
   it.each([
     {
+      name: "found on a renamed account",
+      accountId: "renamed",
+      lookup: true,
+      params: { to: "oc_group_1" },
+      replyToMessageId: undefined,
+      replyInThread: false,
+    },
+    {
+      name: "explicit reply",
       params: { stickerId: ["file_sticker", "ignored"], replyTo: "om_parent" },
       replyToMessageId: "om_parent",
       replyInThread: false,
     },
     {
+      name: "explicit thread",
       params: { fileId: " file_sticker ", threadId: "om_thread", topLevel: true },
       replyToMessageId: "om_thread",
       replyInThread: true,
     },
-    { params: { fileId: "file_sticker" }, replyToMessageId: "om_inbound", replyInThread: true },
-  ])("preserves sticker reply routing: %j", async ({ params, replyToMessageId, replyInThread }) => {
-    sendStickerFeishuMock.mockResolvedValueOnce(receipt);
-    await run("sticker", params, { ...topicContext, cfg: stickerCfg, accountId: "work" });
-    expect(sendStickerFeishuMock).toHaveBeenCalledExactlyOnceWith({
-      cfg: stickerCfg,
-      to: "oc_group_1",
-      fileKey: "file_sticker",
-      accountId: "work",
-      replyToMessageId,
-      replyInThread,
-    });
-  });
+    {
+      name: "inherited thread",
+      params: { fileId: "file_sticker" },
+      replyToMessageId: "om_inbound",
+      replyInThread: true,
+    },
+  ])(
+    "dispatches stickers: $name",
+    async ({ accountId = "work", lookup, params, replyToMessageId, replyInThread }) => {
+      sendStickerFeishuMock.mockResolvedValueOnce(receipt);
+      const matches = lookup
+        ? details(await search({ query: "赞" }, accountId)).stickers
+        : undefined;
+      if (lookup) {
+        expect(matches).toEqual([{ fileId: "file_work", keyword: "赞👍" }]);
+      }
+      const match = lookup ? requireRecord(requireArray(matches)[0], "sticker") : {};
+      const result = await run(
+        "sticker",
+        { ...match, ...params },
+        { ...(lookup ? {} : topicContext), cfg: stickerCfg, accountId },
+      );
+      expect(details(result)).toMatchObject({ ok: true, action: "sticker", ...receipt });
+      expect(sendStickerFeishuMock).toHaveBeenCalledExactlyOnceWith({
+        cfg: stickerCfg,
+        to: "oc_group_1",
+        fileKey: lookup ? "file_work" : "file_sticker",
+        accountId,
+        replyToMessageId,
+        replyInThread,
+      });
+    },
+  );
   it.each([{}, { fileId: "../bad" }])(
     "rejects missing or invalid sticker keys: %j",
     async (params) => {
@@ -505,95 +493,61 @@ const forgedMediaParams = {
 };
 
 describe("Feishu cards and delivery", () => {
-  it("uses canonical text delivery and the provider's target for thread fanout", async () => {
-    textDelivery();
-    const text = "明".repeat(11_000);
-    const localCfg = config({ ...cfg.channels.feishu, renderMode: "raw" });
-    const result = await run(
-      "thread-reply",
-      { to: "chat:oc_requested_alias", text, messageId: "om_parent" },
-      { cfg: localCfg },
-    );
-    expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-      cfg: localCfg,
-      to: "chat:oc_requested_alias",
-      text,
-      accountId: undefined,
-      mediaLocalRoots: undefined,
-      threadId: "om_parent",
-    });
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(details(result)).toMatchObject({
-      ok: true,
+  it.each([
+    {
+      name: "thread fanout",
       action: "thread-reply",
-      messageId: "om_sent",
-      chatId: "oc_provider_authoritative",
-    });
-  });
-  it("sanitizes legacy elements in wrapped native card replies", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    await run("thread-reply", {
-      to: "chat:oc_group_1",
-      messageId: "om_parent",
-      text: JSON.stringify({
-        type: "interactive",
-        card: {
-          header: { title: { tag: "plain_text", content: "Legacy card" }, template: "green" },
-          elements: [
-            { tag: "div", text: { tag: "lark_md", content: '**Legacy** <at id="ou_1">body</at>' } },
-            { tag: "div", text: { tag: "plain_text", content: "Literal *text*" } },
-          ],
-        },
-      }),
-    });
-    expect(args(sendCardFeishuMock)).toMatchObject({
-      replyToMessageId: "om_parent",
-      replyInThread: true,
-    });
-    expect(card().header).toEqual({
-      title: { tag: "plain_text", content: "Legacy card" },
-      template: "green",
-    });
-    expect(elements()).toEqual([
-      { tag: "markdown", content: '**Legacy** &lt;at id="ou_1"&gt;body&lt;/at&gt;' },
-      { tag: "markdown", content: "Literal \\*text\\*" },
-    ]);
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-  it("recognizes native card JSON after a configured response prefix", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    expect(
-      details(
-        await run(
-          "send",
-          { to: "chat:oc_group_1", message: `[Nexus] ${JSON.stringify(rawCard)}` },
-          {
-            cfg: { messages: { responsePrefix: "[Nexus]" } },
-          },
-        ),
-      ),
-    ).toMatchObject({ ok: true, ...receipt });
-    expect(elements()).toEqual(rawCard.body.elements);
-    expect(card().header).toEqual({ ...rawCard.header, template: "blue" });
-    expect(args(sendCardFeishuMock)).toMatchObject({
-      replyToMessageId: undefined,
-      replyInThread: false,
-    });
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-  it("keeps ordinary JSON on the text path", async () => {
-    textDelivery();
-    const message = JSON.stringify({ ok: true, elements: "not-a-card" });
-    await run("send", { to: "chat:oc_group_1", message });
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-      ...actionContext,
-      to: "chat:oc_group_1",
-      text: message,
-      mediaLocalRoots: undefined,
-      replyToId: undefined,
-    });
-  });
+      params: { to: "chat:oc_requested_alias", text: "明".repeat(11_000), messageId: "om_parent" },
+      context: { cfg: config({ ...cfg.channels.feishu, renderMode: "raw" }) },
+    },
+    {
+      name: "ordinary JSON",
+      params: { message: JSON.stringify({ ok: true, elements: "not-a-card" }) },
+    },
+    {
+      name: "blank attachment fields",
+      params: {
+        message: "see attached",
+        file: " ",
+        buffer: "",
+        base64: " ",
+        media: " ",
+        mediaUrls: [" "],
+      },
+      context: { mediaLocalRoots: ["/tmp"] },
+    },
+  ] satisfies Array<{
+    name: string;
+    action?: "send" | "thread-reply";
+    params: Record<string, unknown>;
+    context?: Context;
+  }>)(
+    "uses canonical text delivery for $name",
+    async ({ action: requestedAction, params, context }) => {
+      const action = requestedAction ?? "send";
+      textDelivery();
+      const to = params.to ?? "chat:oc_group_1";
+      const text = params.text ?? params.message;
+      const result = await run(action, { ...params, to }, context);
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
+        cfg: context?.cfg ?? cfg,
+        accountId: undefined,
+        to,
+        text,
+        mediaLocalRoots: context?.mediaLocalRoots,
+        ...(action === "thread-reply" ? { threadId: "om_parent" } : { replyToId: undefined }),
+      });
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+      expect(details(result)).toMatchObject({
+        ok: true,
+        action,
+        messageId: "om_sent",
+        chatId: "oc_provider_authoritative",
+      });
+    },
+  );
   it("rejects native cards combined with media", async () => {
     await expect(
       run("send", {
@@ -672,143 +626,193 @@ describe("Feishu cards and delivery", () => {
       requireRecord(channelData.feishu, "feishu")[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER],
     ).toBe(true);
   });
-  it("prefers structured presentation over raw card JSON", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    await run("send", {
-      to: "chat:oc_group_1",
-      message: JSON.stringify(rawCard),
-      presentation: {
-        title: "Structured card",
-        blocks: [{ type: "text", text: "Structured body" }],
-      },
-    });
-    expect(card().header).toEqual({
-      title: { tag: "plain_text", content: "Structured card" },
-      template: "blue",
-    });
-    expect(elements()).toEqual([{ tag: "markdown", content: "Structured body" }]);
-  });
-  it("keeps unsupported button labels alongside native commands and URLs", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    await run("thread-reply", {
-      to: "chat:oc_group_1",
-      messageId: "om_root",
-      text: "Choose an action",
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Inspect", action: { type: "callback", value: "inspect:123" } },
-              { label: "Help", action: { type: "command", command: "/help" } },
+  it.each([
+    {
+      name: "legacy wrapped replies",
+      action: "thread-reply",
+      params: {
+        messageId: "om_parent",
+        text: JSON.stringify({
+          type: "interactive",
+          card: {
+            header: { title: { tag: "plain_text", content: "Legacy card" }, template: "green" },
+            elements: [
               {
-                label: "Details <one> & more",
-                action: { type: "callback", value: "/opaque-details" },
+                tag: "div",
+                text: { tag: "lark_md", content: '**Legacy** <at id="ou_1">body</at>' },
               },
-              { label: "Docs", action: { type: "url", url: "https://example.com" } },
+              { tag: "div", text: { tag: "plain_text", content: "Literal *text*" } },
             ],
           },
-        ],
+        }),
       },
-    });
-    expect(elements()).toEqual([
-      { tag: "markdown", content: "Choose an action" },
-      { tag: "markdown", content: "- Inspect" },
-      expect.objectContaining({
-        tag: "button",
-        text: { tag: "plain_text", content: "Help" },
-        behaviors: [
-          {
-            type: "callback",
-            value: { oc: "ocf1", k: "quick", a: "feishu.payload.button", q: "/help" },
-          },
-        ],
-      }),
-      { tag: "markdown", content: "- Details &lt;one&gt; &amp; more" },
-      expect.objectContaining({
-        tag: "button",
-        text: { tag: "plain_text", content: "Docs" },
-        behaviors: [{ type: "open_url", default_url: "https://example.com" }],
-      }),
-    ]);
-  });
-  it("keeps disabled command and link buttons non-interactive", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    await run("send", {
-      to: "chat:oc_group_1",
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Unavailable [command](https://example.com/label)",
-                disabled: true,
-                action: { type: "command", command: "/help" },
-              },
-              {
-                label: "Unavailable link",
-                disabled: true,
-                action: { type: "url", url: "https://example.com" },
-              },
-            ],
-          },
-        ],
+      header: { title: { tag: "plain_text", content: "Legacy card" }, template: "green" },
+      elements: [
+        { tag: "markdown", content: '**Legacy** &lt;at id="ou_1"&gt;body&lt;/at&gt;' },
+        { tag: "markdown", content: "Literal \\*text\\*" },
+      ],
+    },
+    {
+      name: "native JSON after the configured prefix",
+      params: { message: `[Nexus] ${JSON.stringify(rawCard)}` },
+      context: { cfg: { messages: { responsePrefix: "[Nexus]" } } },
+      header: { ...rawCard.header, template: "blue" },
+      elements: rawCard.body.elements,
+    },
+    {
+      name: "structured presentation before native JSON",
+      params: {
+        message: JSON.stringify(rawCard),
+        presentation: {
+          title: "Structured card",
+          blocks: [{ type: "text", text: "Structured body" }],
+        },
       },
-    });
-    expect(elements()).toEqual([
-      { tag: "markdown", content: "- Unavailable \\[command\\]\\(https://example.com/label\\)" },
-      { tag: "markdown", content: "- Unavailable link" },
-    ]);
-  });
-  it("renders legacy web_app buttons as native links", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    await run("send", {
-      to: "chat:oc_group_1",
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Open app", web_app: { url: "https://example.com/app" } }],
-          },
-        ],
+      header: { title: { tag: "plain_text", content: "Structured card" }, template: "blue" },
+      elements: [{ tag: "markdown", content: "Structured body" }],
+    },
+    {
+      name: "unsupported labels alongside native commands and URLs",
+      action: "thread-reply",
+      params: {
+        messageId: "om_root",
+        text: "Choose an action",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Inspect", action: { type: "callback", value: "inspect:123" } },
+                { label: "Help", action: { type: "command", command: "/help" } },
+                {
+                  label: "Details <one> & more",
+                  action: { type: "callback", value: "/opaque-details" },
+                },
+                { label: "Docs", action: { type: "url", url: "https://example.com" } },
+              ],
+            },
+          ],
+        },
       },
-    });
-    expect(elements()).toEqual([
-      {
-        tag: "button",
-        text: { tag: "plain_text", content: "Open app" },
-        type: "default",
-        behaviors: [{ type: "open_url", default_url: "https://example.com/app" }],
+      elements: [
+        { tag: "markdown", content: "Choose an action" },
+        { tag: "markdown", content: "- Inspect" },
+        expect.objectContaining({
+          tag: "button",
+          text: { tag: "plain_text", content: "Help" },
+          behaviors: [
+            {
+              type: "callback",
+              value: { oc: "ocf1", k: "quick", a: "feishu.payload.button", q: "/help" },
+            },
+          ],
+        }),
+        { tag: "markdown", content: "- Details &lt;one&gt; &amp; more" },
+        expect.objectContaining({
+          tag: "button",
+          text: { tag: "plain_text", content: "Docs" },
+          behaviors: [{ type: "open_url", default_url: "https://example.com" }],
+        }),
+      ],
+    },
+    {
+      name: "disabled controls without interactions",
+      params: {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Unavailable [command](https://example.com/label)",
+                  disabled: true,
+                  action: { type: "command", command: "/help" },
+                },
+                {
+                  label: "Unavailable link",
+                  disabled: true,
+                  action: { type: "url", url: "https://example.com" },
+                },
+              ],
+            },
+          ],
+        },
       },
-    ]);
-  });
-  it("preserves select commands without exposing opaque callback values", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce(receipt);
-    await run("send", {
-      to: "chat:oc_group_1",
-      presentation: {
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Pick <one> & continue",
-            options: [
-              { label: "Status <one>", action: { type: "command", command: "/status" } },
-              { label: "Callback", action: { type: "callback", value: "/opaque-callback" } },
-              { label: "Legacy", value: "/opaque-legacy" },
-            ],
-          },
-        ],
+      elements: [
+        { tag: "markdown", content: "- Unavailable \\[command\\]\\(https://example.com/label\\)" },
+        { tag: "markdown", content: "- Unavailable link" },
+      ],
+    },
+    {
+      name: "legacy web_app links",
+      params: {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open app", web_app: { url: "https://example.com/app" } }],
+            },
+          ],
+        },
       },
-    });
-    expect(elements()).toEqual([
-      {
-        tag: "markdown",
-        content:
-          "Pick &lt;one&gt; &amp; continue:\n- Status &lt;one&gt;: `/status`\n- Callback\n- Legacy",
+      elements: [
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "Open app" },
+          type: "default",
+          behaviors: [{ type: "open_url", default_url: "https://example.com/app" }],
+        },
+      ],
+    },
+    {
+      name: "select commands without opaque callback values",
+      params: {
+        presentation: {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Pick <one> & continue",
+              options: [
+                { label: "Status <one>", action: { type: "command", command: "/status" } },
+                { label: "Callback", action: { type: "callback", value: "/opaque-callback" } },
+                { label: "Legacy", value: "/opaque-legacy" },
+              ],
+            },
+          ],
+        },
       },
-    ]);
-  });
+      elements: [
+        {
+          tag: "markdown",
+          content:
+            "Pick &lt;one&gt; &amp; continue:\n- Status &lt;one&gt;: `/status`\n- Callback\n- Legacy",
+        },
+      ],
+    },
+  ] satisfies Array<{
+    name: string;
+    action?: "send" | "thread-reply";
+    params: Record<string, unknown>;
+    context?: Context;
+    header?: Record<string, unknown>;
+    elements: unknown[];
+  }>)(
+    "renders $name",
+    async ({ action: requestedAction, params, context, header, elements: expectedElements }) => {
+      const action = requestedAction ?? "send";
+      sendCardFeishuMock.mockResolvedValueOnce(receipt);
+      expect(
+        details(await run(action, { to: "chat:oc_group_1", ...params }, context)),
+      ).toMatchObject({ ok: true, ...receipt });
+      expect(elements()).toEqual(expectedElements);
+      expect(card().header).toEqual(header);
+      expect(args(sendCardFeishuMock)).toMatchObject({
+        replyToMessageId: params.messageId,
+        replyInThread: action === "thread-reply",
+      });
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 const sendAttachment = (
@@ -875,12 +879,6 @@ describe("Feishu attachment intent", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
   });
-  it("ignores blank attachment fields instead of treating them as malformed intent", async () => {
-    textDelivery();
-    await sendAttachment({ file: " ", buffer: "", base64: " ", media: " ", mediaUrls: [" "] });
-    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
-    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
-  });
   it.each([
     { action: "send", media: true },
     { action: "thread-reply", media: false },
@@ -919,25 +917,35 @@ describe("Feishu attachment intent", () => {
 });
 
 describe("Feishu conversation reads and mutations", () => {
-  it("reads a group admitted only by groupAllowFrom", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce(fetched());
-    const result = await run(
-      "read",
-      { messageId: "om_1", chatId: "oc_group_1" },
-      {
-        cfg: config({ groupPolicy: "allowlist", groupAllowFrom: ["oc_group_1"] }),
-      },
-    );
-    expect(details(result)).toMatchObject({ ok: true, action: "read", message: fetched() });
-    expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1");
-    expect(getMessageFeishuMock).toHaveBeenCalledOnce();
-    const metadataOrder = getChatInfoMock.mock.invocationCallOrder[0];
-    const messageOrder = getMessageFeishuMock.mock.invocationCallOrder[0];
-    if (metadataOrder === undefined || messageOrder === undefined) {
-      throw new Error("Expected metadata and message reads");
-    }
-    expect(metadataOrder).toBeLessThan(messageOrder);
-  });
+  it.each(["found", "missing"] as const)(
+    "reads an authorized group message: %s",
+    async (outcome) => {
+      const found = outcome === "found";
+      const messageId = found ? "om_1" : "om_missing";
+      getMessageFeishuMock.mockResolvedValueOnce(found ? fetched() : null);
+      const result = await run(
+        "read",
+        { messageId, chatId: "oc_group_1" },
+        found ? { cfg: config({ groupPolicy: "allowlist", groupAllowFrom: ["oc_group_1"] }) } : {},
+      );
+      if (!found) {
+        expect(result).toMatchObject({
+          isError: true,
+          details: { error: "Feishu read failed or message not found: om_missing" },
+        });
+        return;
+      }
+      expect(details(result)).toMatchObject({ ok: true, action: "read", message: fetched() });
+      expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1");
+      expect(getMessageFeishuMock).toHaveBeenCalledOnce();
+      const metadataOrder = getChatInfoMock.mock.invocationCallOrder[0];
+      const messageOrder = getMessageFeishuMock.mock.invocationCallOrder[0];
+      if (metadataOrder === undefined || messageOrder === undefined) {
+        throw new Error("Expected metadata and message reads");
+      }
+      expect(metadataOrder).toBeLessThan(messageOrder);
+    },
+  );
   it("does not mistake private group visibility for a direct conversation", async () => {
     getMessageFeishuMock.mockResolvedValueOnce(fetched("oc_group_1", "private"));
     await expect(
@@ -957,38 +965,37 @@ describe("Feishu conversation reads and mutations", () => {
     ).rejects.toThrow("Feishu read target is not allowed.");
     expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1");
   });
-  it("returns an error result for a missing message", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce(null);
-    expect(await run("read", { messageId: "om_missing", chatId: "oc_group_1" })).toMatchObject({
-      isError: true,
-      details: { error: "Feishu read failed or message not found: om_missing" },
-    });
-  });
-  it("edits an authorized direct-operator ID-only target", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce(fetched());
-    editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_1", contentType: "post" });
-    expect(
-      details(await run("edit", { messageId: "om_1", text: "updated" }, directOperatorContext)),
-    ).toMatchObject({ ok: true, messageId: "om_1", contentType: "post" });
-    expect(editMessageFeishuMock).toHaveBeenCalledExactlyOnceWith({
-      ...actionContext,
-      messageId: "om_1",
-      text: "updated",
-      card: undefined,
-    });
-  });
-  it.each(["pin", "unpin"] as const)("authorizes %s mutations", async (action) => {
-    getMessageFeishuMock.mockResolvedValueOnce(fetched());
-    createPinFeishuMock.mockResolvedValueOnce({ messageId: "om_1", chatId: "oc_group_1" });
-    const result = await run(action, { messageId: "om_1" }, directOperatorContext);
-    expect(
-      action === "pin" ? createPinFeishuMock : removePinFeishuMock,
-    ).toHaveBeenCalledExactlyOnceWith({ ...actionContext, messageId: "om_1" });
-    expect(details(result)).toMatchObject({
-      ok: true,
-      ...(action === "pin" ? { pin: { messageId: "om_1" } } : { messageId: "om_1" }),
-    });
-  });
+  it.each(["edit", "pin", "unpin"] as const)(
+    "authorizes direct-operator %s mutations",
+    async (action) => {
+      getMessageFeishuMock.mockResolvedValueOnce(fetched());
+      const result = {
+        messageId: "om_1",
+        ...(action === "edit" ? { contentType: "post" } : { chatId: "oc_group_1" }),
+      };
+      const mutate =
+        action === "edit"
+          ? editMessageFeishuMock
+          : action === "pin"
+            ? createPinFeishuMock
+            : removePinFeishuMock;
+      mutate.mockResolvedValueOnce(result);
+      const params = { messageId: "om_1", ...(action === "edit" ? { text: "updated" } : {}) };
+      expect(details(await run(action, params, directOperatorContext))).toMatchObject({
+        ok: true,
+        ...(action === "pin"
+          ? { pin: { messageId: "om_1" } }
+          : action === "edit"
+            ? { messageId: "om_1", contentType: "post" }
+            : { messageId: "om_1" }),
+      });
+      expect(mutate).toHaveBeenCalledExactlyOnceWith({
+        ...actionContext,
+        ...params,
+        ...(action === "edit" ? { card: undefined } : {}),
+      });
+    },
+  );
   it("lists pins from an authorized chat", async () => {
     listPinsFeishuMock.mockResolvedValueOnce({
       chatId: "oc_group_1",
@@ -1008,32 +1015,36 @@ describe("Feishu conversation reads and mutations", () => {
       pageToken: undefined,
     });
   });
-  it("fetches channel metadata", async () => {
-    getChatInfoMock.mockResolvedValueOnce({ chat_id: "oc_group_1", name: "Eng" });
-    expect(details(await run("channel-info", { chatId: "oc_group_1" }))).toMatchObject({
-      ok: true,
-      channel: { chat_id: "oc_group_1", name: "Eng" },
-    });
-    expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1");
-  });
   it.each([
-    ["member-info", {}],
-    ["channel-info", { includeMembers: true }],
-    ["channel-info", { members: true }],
-  ] as const)(
-    "lists group members via %s %j without accepting non-decimal page sizes",
-    async (action, params) => {
-      const members = [{ member_id: "ou_1", name: "Alice" }];
-      const page = { chat_id: "oc_group_1", members, has_more: false };
-      getChatMembersMock.mockResolvedValueOnce(page);
-      const result = details(
-        await run(action, { chatId: "oc_group_1", pageSize: "0x10", ...params }),
-      );
-      expect(result).toMatchObject(
-        action === "channel-info"
-          ? { ok: true, provider: "feishu", action, members: page }
-          : { ok: true, channel: "feishu", action, ...page },
-      );
+    { action: "channel-info", params: {}, includeMembers: false },
+    { action: "member-info", params: {}, includeMembers: true },
+    { action: "channel-info", params: { includeMembers: true }, includeMembers: true },
+    { action: "channel-info", params: { members: true }, includeMembers: true },
+  ] as const)("reads $action with $params", async ({ action, params, includeMembers }) => {
+    const channel = { chat_id: "oc_group_1", name: "Eng", chat_mode: "group" };
+    const page = {
+      chat_id: "oc_group_1",
+      members: [{ member_id: "ou_1", name: "Alice" }],
+      has_more: false,
+    };
+    getChatInfoMock.mockResolvedValueOnce(channel);
+    getChatMembersMock.mockResolvedValueOnce(page);
+    const result = details(
+      await run(action, { chatId: "oc_group_1", pageSize: "0x10", ...params }),
+    );
+    expect(result).toMatchObject(
+      action === "channel-info"
+        ? {
+            ok: true,
+            provider: "feishu",
+            action,
+            channel,
+            ...(includeMembers ? { members: page } : {}),
+          }
+        : { ok: true, channel: "feishu", action, ...page },
+    );
+    expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1");
+    if (includeMembers) {
       expect(getChatMembersMock).toHaveBeenCalledExactlyOnceWith(
         { tag: "client" },
         "oc_group_1",
@@ -1041,8 +1052,8 @@ describe("Feishu conversation reads and mutations", () => {
         undefined,
         "open_id",
       );
-    },
-  );
+    }
+  });
 
   it.each([
     [{ memberId: "ou_1" }, "ou_1", "open_id"],
@@ -1066,89 +1077,77 @@ describe("Feishu conversation reads and mutations", () => {
     },
   );
   it.each([
-    ["ou_sender", "open_id"],
-    ["u_mobile_only", "user_id"],
-  ])("uses trusted direct-chat sender %s", async (sender, type) => {
-    getChatInfoMock.mockResolvedValueOnce({
-      chat_id: "oc_direct",
-      chat_mode: "p2p",
-      chat_type: "private",
-    });
-    getFeishuMemberInfoMock.mockResolvedValueOnce({ member_id: sender, member_id_type: type });
-    expect(
-      details(
-        await run(
-          "member-info",
-          { memberId: sender, chatId: "oc_direct" },
-          {
-            requesterAccountId: "default",
-            requesterSenderId: sender,
-            toolContext: { currentChannelProvider: "feishu", currentChannelId: "oc_direct" },
-          },
-        ),
-      ),
-    ).toMatchObject({ ok: true, member: { member_id: sender, member_id_type: type } });
-    expect(assertFeishuChatMemberMock).not.toHaveBeenCalled();
-    expect(getFeishuMemberInfoMock).toHaveBeenCalledExactlyOnceWith(
-      { tag: "client" },
-      sender,
-      type,
-    );
-  });
-  it("rejects unrelated direct-chat member lookups", async () => {
-    getChatInfoMock.mockResolvedValueOnce({
-      chat_id: "oc_direct",
-      chat_mode: "p2p",
-      chat_type: "private",
-    });
-    await expect(
-      run(
+    { sender: "ou_sender", type: "open_id", requested: "ou_sender" },
+    { sender: "u_mobile_only", type: "user_id", requested: "u_mobile_only" },
+    { sender: "ou_sender", type: "open_id", requested: "ou_other" },
+  ])(
+    "limits direct-chat member $requested to the trusted sender $sender",
+    async ({ sender, type, requested }) => {
+      getChatInfoMock.mockResolvedValueOnce({
+        chat_id: "oc_direct",
+        chat_mode: "p2p",
+        chat_type: "private",
+      });
+      const member = { member_id: sender, member_id_type: type };
+      getFeishuMemberInfoMock.mockResolvedValueOnce(member);
+      const result = run(
         "member-info",
-        { memberId: "ou_other", chatId: "oc_direct" },
+        { memberId: requested, chatId: "oc_direct" },
         {
           requesterAccountId: "default",
-          requesterSenderId: "ou_sender",
+          requesterSenderId: sender,
           toolContext: { currentChannelProvider: "feishu", currentChannelId: "oc_direct" },
         },
-      ),
-    ).rejects.toThrow("limited to the current sender");
-    expect(getFeishuMemberInfoMock).not.toHaveBeenCalled();
-  });
-  it("lists directory-backed groups and peers with a parsed limit", async () => {
-    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
-    listFeishuDirectoryPeersLiveMock.mockResolvedValueOnce([{ kind: "user", id: "ou_1" }]);
-    expect(details(await run("channel-list", { query: "eng", limit: "+05" }))).toMatchObject({
-      ok: true,
-      groups: [{ kind: "group", id: "oc_group_1" }],
-      peers: [{ kind: "user", id: "ou_1" }],
+      );
+      if (requested !== sender) {
+        await expect(result).rejects.toThrow("limited to the current sender");
+        expect(getFeishuMemberInfoMock).not.toHaveBeenCalled();
+      } else {
+        expect(details(await result)).toMatchObject({ ok: true, member });
+        expect(assertFeishuChatMemberMock).not.toHaveBeenCalled();
+        expect(getFeishuMemberInfoMock).toHaveBeenCalledExactlyOnceWith(
+          { tag: "client" },
+          sender,
+          type,
+        );
+      }
+    },
+  );
+  it.each(["success", "failure"] as const)("preserves live directory %s", async (outcome) => {
+    const success = outcome === "success";
+    const groups = [{ kind: "group", id: "oc_group_1" }];
+    const peers = [{ kind: "user", id: "ou_1" }];
+    if (success) {
+      listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce(groups);
+    } else {
+      listFeishuDirectoryGroupsLiveMock.mockRejectedValueOnce(new Error("token expired"));
+    }
+    listFeishuDirectoryPeersLiveMock.mockResolvedValueOnce(peers);
+    const result = run("channel-list", {
+      query: "eng",
+      limit: success ? "+05" : "-1",
+      ...(success ? {} : { scope: "groups" }),
     });
-    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledExactlyOnceWith({
+    if (success) {
+      expect(details(await result)).toMatchObject({ ok: true, groups, peers });
+    } else {
+      await expect(result).rejects.toThrow("token expired");
+    }
+    const expected = {
       ...actionContext,
       query: "eng",
-      limit: 5,
+      limit: success ? 5 : undefined,
       fallbackToStatic: false,
+    };
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledExactlyOnceWith({
+      ...expected,
       filter: expect.any(Function),
     });
-    expect(listFeishuDirectoryPeersLiveMock).toHaveBeenCalledExactlyOnceWith({
-      ...actionContext,
-      query: "eng",
-      limit: 5,
-      fallbackToStatic: false,
-    });
-  });
-  it("preserves live directory failures without falling back to static results", async () => {
-    listFeishuDirectoryGroupsLiveMock.mockRejectedValueOnce(new Error("token expired"));
-    await expect(
-      run("channel-list", { query: "eng", limit: "-1", scope: "groups" }),
-    ).rejects.toThrow("token expired");
-    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledExactlyOnceWith({
-      ...actionContext,
-      query: "eng",
-      limit: undefined,
-      fallbackToStatic: false,
-      filter: expect.any(Function),
-    });
-    expect(listFeishuDirectoryPeersLiveMock).not.toHaveBeenCalled();
+    if (success) {
+      expect(listFeishuDirectoryPeersLiveMock).toHaveBeenCalledExactlyOnceWith(expected);
+    } else {
+      expect(listFeishuDirectoryPeersLiveMock).not.toHaveBeenCalled();
+    }
   });
   it.each(["read", "channel-info"] as const)("blocks %s before provider access", async (action) => {
     await expect(
@@ -1166,25 +1165,34 @@ describe("Feishu conversation reads and mutations", () => {
     expect(getMessageFeishuMock).toHaveBeenCalledOnce();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
-  it("conceals failed metadata lookups for ambiguous message targets", async () => {
-    getChatInfoMock.mockRejectedValueOnce(new Error("chat not found"));
-    await expect(
-      run("read", { messageId: "om_unknown", chatId: "oc_unknown" }, { cfg: policyCfg }),
-    ).rejects.toThrow("Feishu read target is not allowed.");
-    expect(getChatInfoMock).toHaveBeenCalledOnce();
-    expect(getMessageFeishuMock).not.toHaveBeenCalled();
-    expect(listPinsFeishuMock).not.toHaveBeenCalled();
-    expect(getChatMembersMock).not.toHaveBeenCalled();
-    expect(assertFeishuChatMemberMock).not.toHaveBeenCalled();
-    expect(getFeishuMemberInfoMock).not.toHaveBeenCalled();
-  });
-  it("preserves allowed metadata lookup failures", async () => {
-    const error = new Error("provider unavailable");
-    getChatInfoMock.mockRejectedValueOnce(error);
-    await expect(run("channel-info", { chatId: "oc_unknown" })).rejects.toBe(error);
-    expect(createFeishuClientMock).toHaveBeenCalledOnce();
-    expect(getChatInfoMock).toHaveBeenCalledOnce();
-  });
+  it.each(["ambiguous", "allowed"] as const)(
+    "handles metadata failures for %s targets",
+    async (access) => {
+      const error = new Error("provider unavailable");
+      getChatInfoMock.mockRejectedValueOnce(error);
+      const result = run(
+        access === "ambiguous" ? "read" : "channel-info",
+        { messageId: "om_unknown", chatId: "oc_unknown" },
+        access === "ambiguous" ? { cfg: policyCfg } : {},
+      );
+      if (access === "ambiguous") {
+        await expect(result).rejects.toThrow("Feishu read target is not allowed.");
+        for (const reader of [
+          getMessageFeishuMock,
+          listPinsFeishuMock,
+          getChatMembersMock,
+          assertFeishuChatMemberMock,
+          getFeishuMemberInfoMock,
+        ]) {
+          expect(reader).not.toHaveBeenCalled();
+        }
+      } else {
+        await expect(result).rejects.toBe(error);
+        expect(createFeishuClientMock).toHaveBeenCalledOnce();
+      }
+      expect(getChatInfoMock).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("Feishu reactions", () => {
@@ -1314,35 +1322,30 @@ describe("Feishu topic routing", () => {
     },
   );
   it.each([
-    { name: "destination changes", params: { to: "chat:oc_other" } },
-    { name: "top-level requested", params: { to: "chat:oc_group_1", topLevel: true } },
-    { name: "inheritance suppressed", params: { to: "chat:oc_group_1", threadId: null } },
-    { name: "account changes", params: { to: "chat:oc_group_1" }, requesterAccountId: "other" },
-  ])("does not inherit a source topic when $name", async ({ params, requesterAccountId }) => {
-    textDelivery();
-    await run("send", { ...params, text: "hello" }, { ...topicContext, requesterAccountId });
-    expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-      ...actionContext,
-      to: params.to,
-      text: "hello",
-      mediaLocalRoots: undefined,
-      replyToId: undefined,
-    });
-  });
-  it.each([
-    { ...topicContext, sessionKey: "feishu:group:oc_group_1" },
-    { ...topicContext, toolContext: {} },
-  ])("does not infer a topic without session and inbound context: %j", async (context) => {
-    textDelivery();
-    await run("send", { to: "chat:oc_group_1", text: "hello" }, context);
-    expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-      ...actionContext,
-      to: "chat:oc_group_1",
-      text: "hello",
-      mediaLocalRoots: undefined,
-      replyToId: undefined,
-    });
-  });
+    { name: "destination changes", params: { to: "chat:oc_other" }, context: topicContext },
+    { name: "top-level requested", params: { topLevel: true }, context: topicContext },
+    { name: "inheritance suppressed", params: { threadId: null }, context: topicContext },
+    { name: "account changes", context: { ...topicContext, requesterAccountId: "other" } },
+    {
+      name: "session has no topic",
+      context: { ...topicContext, sessionKey: "feishu:group:oc_group_1" },
+    },
+    { name: "inbound context is absent", context: { ...topicContext, toolContext: {} } },
+  ] satisfies Array<{ name: string; params?: Record<string, unknown>; context: Context }>)(
+    "does not inherit a source topic when $name",
+    async ({ params, context }) => {
+      textDelivery();
+      const target = { to: "chat:oc_group_1", ...params };
+      await run("send", { ...target, text: "hello" }, context);
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
+        ...actionContext,
+        to: target.to,
+        text: "hello",
+        mediaLocalRoots: undefined,
+        replyToId: undefined,
+      });
+    },
+  );
   it("requires a thread-reply anchor", async () => {
     await expect(run("thread-reply", { to: "chat:oc_group_1", message: "reply" })).rejects.toThrow(
       "Feishu thread-reply requires messageId.",

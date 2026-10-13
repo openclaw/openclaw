@@ -22,21 +22,18 @@ import {
   saveCronStore,
 } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { readCronRunReceiptCurrentFactsInDatabase } from "../store/run-receipt-read.js";
 import {
-  readCronRunReceiptCurrentJob,
-  CronRunReceiptRevisionError,
+  claimCronRunReceiptInDatabaseForTest,
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+} from "../store/run-receipt-store.test-support.js";
 import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
-import { stop } from "./ops-lifecycle.js";
 import {
   applyCronRuntimeRowsToState,
   publishDurableNextRunChanges,
 } from "./runtime-publication.js";
-import { armTimer } from "./timer.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
 
@@ -264,7 +261,7 @@ describe("cron runtime row publication", () => {
     }
   });
 
-  it("reads only the receipt's exact job and still rejects a malformed target", async () => {
+  it("bounds receipt reads to the exact job and omits a malformed target", async () => {
     const { storePath } = runtimeStoreFixtures.makeStorePath();
     const now = Date.now();
     const jobs = Array.from({ length: 128 }, (_, index) =>
@@ -288,17 +285,19 @@ describe("cron runtime row publication", () => {
       }),
     );
     try {
-      readCronRunReceiptCurrentJob({
-        handle,
-        resolveAgentId: (current) => current.agentId ?? "main",
-      });
+      const readFacts = () =>
+        readCronRunReceiptCurrentFactsInDatabase(openOpenClawStateDatabase().db, {
+          type: "cron.currentReceipt",
+          handle,
+          includeJob: true,
+          includeAvailability: true,
+        });
+      expect(readFacts().receipt?.receiptId).toBe(handle.receiptId);
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(2);
       openOpenClawStateDatabase()
         .db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?")
         .run(handle.storeKey, job.id);
-      expect(() => readCronRunReceiptCurrentJob({ handle, resolveAgentId: () => "main" })).toThrow(
-        CronRunReceiptRevisionError,
-      );
+      expect(readFacts().job).toBeUndefined();
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
       reads.restore();
@@ -369,7 +368,7 @@ describe("cron runtime row publication", () => {
     }
   });
 
-  it("adds a sibling-imported row to memory before arming its timer", () => {
+  it("publishes a sibling-imported row and its durable deadline", () => {
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:00:00.000Z");
     vi.setSystemTime(now);
@@ -392,10 +391,8 @@ describe("cron runtime row publication", () => {
     state.store = { version: 1, jobs: [resident] };
 
     applyCronRuntimeRowsToState(state, [imported]);
-    armTimer(state);
 
     expect(state.store.jobs.map((job) => job.id)).toEqual([resident.id, imported.id]);
-    expect(state.timer).not.toBeNull();
-    stop(state);
+    expect(state.durableNextRunAtMsByJobId.get(imported.id)).toBe(now + 60_000);
   });
 });

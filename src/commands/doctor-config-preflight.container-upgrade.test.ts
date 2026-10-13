@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
@@ -114,15 +115,18 @@ describe("container image replacement Doctor repair and startup readiness", () =
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir);
       const original = fs.readFileSync(databasePath);
-      await withAgentDatabaseStartupAdmission(async () => {
-        await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
-          code: 78,
-        });
-        expect(fs.readFileSync(databasePath)).toEqual(original);
-        await repairContainerState();
-        await runStartupConfigPreflight({ gateway: true });
-        expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
-      });
+      await withAgentDatabaseStartupAdmission(
+        async () => {
+          await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
+            code: 78,
+          });
+          expect(fs.readFileSync(databasePath)).toEqual(original);
+          await repairContainerState();
+          await runStartupConfigPreflight({ gateway: true });
+          expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
+        },
+        { deferInspections: false },
+      );
       const backups = fs
         .readdirSync(path.dirname(databasePath))
         .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
@@ -311,6 +315,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
         main.db.prepare("SELECT session_key, current_session_id FROM session_nodes").all(),
       ).toEqual([{ session_key: "agent:main:upgrade", current_session_id: "upgrade" }]);
 
+      const retiredPath = path.join(stateDir, "settings", "voicewake.json");
+      const retiredBytes = '{"triggers":["leave-for-doctor"]}\n';
+      fs.mkdirSync(path.dirname(retiredPath), { recursive: true });
+      fs.writeFileSync(retiredPath, retiredBytes);
       await withAgentDatabaseStartupAdmission(
         async () => {
           await runStartupConfigPreflight({ gateway: true });
@@ -322,11 +330,17 @@ describe("container image replacement Doctor repair and startup readiness", () =
               code: "agent-database-ownership-mismatch",
             }),
           ]);
+          expect(readStartupMigrationWarning()).toContain("belongs to agent main");
+          expect(readStartupMigrationWarning()).toContain(
+            "Preserve and inspect this database before accepting a fresh agent.",
+          );
+          expect(readStartupMigrationWarning()).toContain(retiredPath);
         },
         { deferInspections: false },
       );
 
       expect(fs.readFileSync(auxiliaryPath)).toEqual(preservedBytes);
+      expect(fs.readFileSync(retiredPath, "utf8")).toBe(retiredBytes);
       expect(() => openOpenClawAgentDatabase({ agentId: "auxiliary" })).toThrow(
         "belongs to agent main",
       );

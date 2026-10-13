@@ -53,18 +53,6 @@ type LineWebhookTarget = {
   runtime: RuntimeEnv;
 };
 
-async function registerLineWebhookTarget(
-  params: Parameters<typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>>[0],
-  bot: ReturnType<typeof createLineBot>,
-) {
-  try {
-    return registerWebhookTargetWithPluginRoute(params);
-  } catch (error) {
-    await Promise.allSettled([bot.stop()]);
-    throw error;
-  }
-}
-
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
 function startLineLoadingKeepalive(params: {
@@ -72,12 +60,7 @@ function startLineLoadingKeepalive(params: {
   userId: string;
   accountId?: string;
 }): () => void {
-  let stopped = false;
-
   const trigger = () => {
-    if (stopped) {
-      return;
-    }
     void showLoadingAnimation(params.userId, {
       cfg: params.cfg,
       accountId: params.accountId,
@@ -88,13 +71,7 @@ function startLineLoadingKeepalive(params: {
   trigger();
   const timer = setInterval(trigger, 18_000);
 
-  return () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    clearInterval(timer);
-  };
+  return () => clearInterval(timer);
 }
 
 export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
@@ -291,63 +268,61 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
     getTargets: () => lineWebhookTargets.get(webhookRouteKey) ?? [],
     runtime,
   });
-  const registrationParams: Parameters<
-    typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
-  >[0] = {
-    targetsByPath: lineWebhookTargets,
-    target: {
-      accountId: resolvedAccountId,
-      bot,
-      channelSecret: secret,
-      path: normalizedPath,
-      runtime,
-    },
-    route: {
-      auth: "plugin",
-      pluginId: "line",
-      source: "line-webhook",
-      accountId: resolvedAccountId,
-      log: (msg) => logVerbose(msg),
-      throwOnFailure: true,
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          await handleWebhook(req, res);
-          return;
-        }
-
-        const requestLifecycle = beginWebhookRequestPipelineOrReject({
-          req,
-          res,
-          inFlightLimiter: lineWebhookInFlightLimiter,
-          inFlightKey: `line:${webhookRouteKey}`,
-        });
-        if (!requestLifecycle.ok) {
-          return;
-        }
-
-        try {
-          await handleWebhook(req, res);
-        } finally {
-          requestLifecycle.release();
-        }
+  let unregisterHttp: () => void;
+  try {
+    ({ unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+      targetsByPath: lineWebhookTargets,
+      target: {
+        accountId: resolvedAccountId,
+        bot,
+        channelSecret: secret,
+        path: normalizedPath,
+        runtime,
       },
-    },
-  };
-  const { unregister: unregisterHttp } = await registerLineWebhookTarget(registrationParams, bot);
+      route: {
+        auth: "plugin",
+        pluginId: "line",
+        source: "line-webhook",
+        accountId: resolvedAccountId,
+        log: (msg) => logVerbose(msg),
+        throwOnFailure: true,
+        handler: async (req, res) => {
+          if (req.method !== "POST") {
+            await handleWebhook(req, res);
+            return;
+          }
+
+          const requestLifecycle = beginWebhookRequestPipelineOrReject({
+            req,
+            res,
+            inFlightLimiter: lineWebhookInFlightLimiter,
+            inFlightKey: `line:${webhookRouteKey}`,
+          });
+          if (!requestLifecycle.ok) {
+            return;
+          }
+
+          try {
+            await handleWebhook(req, res);
+          } finally {
+            requestLifecycle.release();
+          }
+        },
+      },
+    }));
+  } catch (error) {
+    await Promise.allSettled([bot.stop()]);
+    throw error;
+  }
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
   statusSink?.(channelReadyPatch());
 
-  let stopped = false;
   let stopPromise: Promise<void> | undefined;
   const stopHandler = (): Promise<void> => {
     if (stopPromise) {
       return stopPromise;
     }
-    if (stopped) {
-      return Promise.resolve();
-    }
-    stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     stopPromise = bot.stop().finally(() => {

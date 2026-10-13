@@ -582,10 +582,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
 
-    const silenceThresholdMs =
-      typeof this.config.silenceDurationMs === "number"
-        ? Math.max(0, Math.floor(this.config.silenceDurationMs))
-        : DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
+    const silenceThresholdMs = this.config.silenceDurationMs ?? DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
     this.consecutiveSilenceMs += Math.round(
       realtimeVoiceAudioDurationMs(this.audioFormat, audio.length),
     );
@@ -730,6 +727,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const hadConnection = Boolean(
       this.connectionOwner || this.connectAttempt || this.session || this.reconnectTimer,
     );
+    const session = this.detachSession({ clearInputAudio: true });
+    session?.close();
+    if (hadConnection) {
+      this.notifyClose("completed");
+    }
+  }
+
+  private detachSession({ clearInputAudio }: { clearInputAudio: boolean }): Session | null {
     this.intentionallyClosed = true;
     this.connected = false;
     this.setupCompleteReceived = false;
@@ -738,9 +743,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.pendingAudio.clear();
-    this.consecutiveSilenceMs = 0;
-    this.audioStreamEnded = false;
+    if (clearInputAudio) {
+      this.pendingAudio.clear();
+      this.consecutiveSilenceMs = 0;
+      this.audioStreamEnded = false;
+    }
     this.resetToolCallOwnership();
     this.flushPendingTranscripts();
     const owner = this.connectionOwner;
@@ -748,10 +755,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.cancelConnectAttempt(owner);
     const session = this.session;
     this.session = null;
-    session?.close();
-    if (hadConnection) {
-      this.notifyClose("completed");
-    }
+    return session;
   }
 
   isConnected(): boolean {
@@ -892,7 +896,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             return;
           }
         }
-        continue;
       }
     }
     if (content.generationComplete || content.interrupted || content.turnComplete) {
@@ -971,21 +974,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.terminalError = error;
-    this.intentionallyClosed = true;
-    this.connected = false;
-    this.setupCompleteReceived = false;
-    this.sessionConfigured = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
-    this.resetToolCallOwnership();
-    this.flushPendingTranscripts();
-    const owner = this.connectionOwner;
-    this.connectionOwner = undefined;
-    this.cancelConnectAttempt(owner);
-    const session = this.session;
-    this.session = null;
+    const session = this.detachSession({ clearInputAudio: false });
     try {
       this.config.onError?.(error);
     } finally {

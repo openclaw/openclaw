@@ -1,17 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
-import {
-  admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
-  runSqliteReadOperationSync,
-  type SqliteSchemaFacts,
-} from "../infra/sqlite-schema-facts.js";
-import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
@@ -35,7 +28,8 @@ import {
 } from "./openclaw-state-db-read-connection.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { withCurrentOpenClawStateReadScope } from "./openclaw-state-db-readonly.js";
-import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
+import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
+import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 /** Mutating maintenance can retain an independent current reader under its exact source lifetime. */
@@ -64,20 +58,28 @@ export function createOpenClawStateCurrentWarmReader<T>(
         const native = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname, {
           readOnly: true,
         });
-        if (!native?.db.isOpen) {
+        const liveSource = allowsMaintenanceLiveAuthorityReads(scope, pathname);
+        if (!native?.db.isOpen && !liveSource) {
           return { available: false };
         }
-        const sourceScope = getOpenClawDatabaseMaintenanceResourceScope(native.db);
+        const sourceScope = native && getOpenClawDatabaseMaintenanceResourceScope(native.db);
         if (sourceScope && sourceScope !== scope) {
           return { available: false };
         }
-        const identity = requireOpenClawStateDatabaseIdentity(native);
-        if (!canReadWarmNativeSourceIndependently(native, pathname, identity.key)) {
+        const admission = captureOpenClawStateDatabaseReadAdmission(pathname);
+        const identity = native ? requireOpenClawStateDatabaseIdentity(native) : admission.identity;
+        if (
+          !identity.key.startsWith("file:") ||
+          (native && !canReadWarmNativeSourceIndependently(native, pathname, identity.key))
+        ) {
           return { available: false };
         }
-        const admission = captureOpenClawStateDatabaseReadAdmission(pathname);
-        const retained = retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read");
-        if (!retained) {
+        // Doctor's post-backup live source belongs to this scope even without a
+        // cached writer; private pre-backup inspection still needs source retention.
+        const retained = native
+          ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+          : undefined;
+        if (native && !retained) {
           return { available: false };
         }
         let connection: ReturnType<typeof openOpenClawStateReadConnection>;
@@ -85,7 +87,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
           connection = openOpenClawStateReadConnection(pathname, pathname, identity.key);
         } catch (error) {
           try {
-            retained.release();
+            retained?.release();
           } catch (cleanupError) {
             throwSqliteLifecycleErrors(
               [error, cleanupError],
@@ -102,7 +104,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
           }
           scope?.assertReadAdmission();
           admission.assertCurrent();
-          retained.assertCurrent();
+          retained?.assertCurrent();
           assertExistingDatabaseIdentity(pathname, identity.key);
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             pathname,
@@ -119,8 +121,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
               operation,
               openStateSchemaReadAdmission,
             );
-            assertCurrent();
-            retained.observe();
+            retained?.observe();
             return result;
           },
         };
@@ -135,7 +136,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
               return;
             }
             connection.close();
-            retained.release();
+            retained?.release();
             active = false;
             if (bound === reader) {
               bound = undefined;
@@ -152,16 +153,6 @@ export function createOpenClawStateCurrentWarmReader<T>(
   };
 }
 
-const currentReaderSchemaAdmissions = new WeakMap<
-  DatabaseSync,
-  {
-    facts: SqliteSchemaFacts;
-    existingSchema: boolean;
-    admission?: OpenClawStateSchemaReadAdmission;
-    legacyAdmission: boolean;
-  }
->();
-
 /** An independent current reader keeps composite policy rows in one bounded snapshot. */
 function runOpenClawStateCurrentReadConnection<T>(
   connection: OpenClawStateReadConnection,
@@ -173,56 +164,20 @@ function runOpenClawStateCurrentReadConnection<T>(
   const errors: unknown[] = [];
   let result!: T;
   try {
-    const previous = currentReaderSchemaAdmissions.get(db);
-    // The schema owner observes foreign commits. Ordinary lease heartbeats keep
-    // these facts; schema changes revoke them before this reader re-admits.
-    const facts =
-      previous && !previous.legacyAdmission
-        ? runSqliteReadOperationSync(db, () => getAdmittedSqliteSchemaFacts(db))
-        : undefined;
-    if (
-      !previous ||
-      previous.admission !== openStateSchemaReadAdmission ||
-      previous.legacyAdmission ||
-      previous.facts !== facts
-    ) {
-      closeAdmission = openStateSchemaReadAdmission?.(db);
-    }
-    const existingSchema = isExistingOpenClawStateSchema(pathname, db);
-    const admit = () => {
-      const current = getAdmittedSqliteSchemaFacts(db);
-      const accepted = currentReaderSchemaAdmissions.get(db);
-      if (
-        !current ||
-        accepted?.facts !== current ||
-        accepted.existingSchema !== existingSchema ||
-        accepted.admission !== openStateSchemaReadAdmission
-      ) {
-        assertStateReadSchema(db, pathname);
-        admitSqliteSchema(db);
-        const admitted = getAdmittedSqliteSchemaFacts(db);
-        if (!admitted) {
-          throw new Error("Current shared-state reader could not retain schema admission");
-        }
-        currentReaderSchemaAdmissions.set(db, {
-          facts: admitted,
-          existingSchema,
-          admission: openStateSchemaReadAdmission,
-          legacyAdmission: closeAdmission !== undefined,
-        });
-      }
-    };
-    runSqliteReadOperationSync(db, admit);
-    result = runSqlitePinnedReadSnapshotSync(db, () => {
+    // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
+    closeAdmission = openStateSchemaReadAdmission?.(db);
+    runSqliteReadOperationSync(db, () => {
+      // The schema owner already retains validation for this physical database.
+      admitStateSchemaFacts(db, pathname);
+      assertStateReadSchema(db, pathname);
+    });
+    result = runSqliteReadSnapshotSync(db, () => {
       const value = operation(connection.database);
       if (isPromiseLike(value)) {
         throw new SqliteCoordinatorError("SQLite current-authority read must remain synchronous");
       }
       return value;
     });
-    // A foreign schema publication can arrive between admission and the query's
-    // snapshot. Recheck its admitted facts before returning policy rows.
-    runSqliteReadOperationSync(db, admit);
   } catch (error) {
     errors.push(error);
   }

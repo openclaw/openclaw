@@ -9,15 +9,7 @@ import {
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 
-type ResponseDeliveryWaiter = {
-  result: Promise<boolean>;
-  cancel: () => void;
-};
-
-export function createResponseDeliveryWaiter(
-  res: ServerResponse,
-  onDelivered: () => void,
-): ResponseDeliveryWaiter {
+export function createResponseDeliveryWaiter(res: ServerResponse, onDelivered: () => void) {
   const { promise: result, resolve } = createDeferred<boolean>();
   const settle = (delivered: boolean) => {
     res.removeListener("finish", onFinish);

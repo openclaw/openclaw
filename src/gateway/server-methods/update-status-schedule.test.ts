@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { UpdateCampaignController } from "../../infra/update-campaign.js";
 import {
   currentUpdateCheckLifecycle,
   type UpdateCheckLifecycle,
 } from "../../infra/update-check-lifecycle.js";
+import { resolveDevGitCommits } from "../../infra/update-git-metadata.js";
+import { createDevGitStatus } from "../../infra/update-startup-git.test-support.js";
 import { resetUpdateAvailableStateForTest } from "../../infra/update-startup.js";
 import {
+  getUpdateAvailable,
   getUpdateSchedule,
   resetUpdateStatusState,
   setUpdateScheduleCache,
@@ -31,9 +35,14 @@ vi.mock("../../infra/update-install-status.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: install,
 }));
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../../infra/update-git-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-git-metadata.js")>()),
+  resolveDevGitCommits: vi.fn(),
+}));
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
-  refreshLatestUpdateRestartSentinel: async () => null,
+  prepareLatestUpdateRestartSentinel: async () => null,
 }));
 
 let lifecycle: UpdateCheckLifecycle;
@@ -45,6 +54,7 @@ beforeEach(() => {
   campaignOwner = new UpdateCampaignController(lifecycle.scheduler);
   lifecycle.campaign = campaignOwner;
   history.mockClear();
+  vi.mocked(resolveDevGitCommits).mockReset().mockResolvedValue([]);
   install.mockReset().mockRejectedValue(new Error("discovery unavailable"));
   resolveManager.mockReset().mockResolvedValue(null);
 });
@@ -263,10 +273,18 @@ it.each([false, true])(
       installReceipt: null,
       status: { root: null, installKind: "package", packageManager: "npm" },
     });
-    const result = await status(
-      { update: { channel: "dev", auto: { enabled: false } } },
-      { refreshCheckout: true },
-    );
+    const config = { update: { channel: "dev" as const, auto: { enabled: false } } };
+    const respond = vi.fn();
+    await updateStatusHandlers["update.status"]!({
+      params: { refreshCheckout: true },
+      respond,
+      context: { getRuntimeConfig: () => config },
+    } as never);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Could not check the latest update. Try again.",
+    });
+    const result = await status(config);
     expect(result.schedule).toMatchObject({
       channel: "stable",
       target,
@@ -327,6 +345,192 @@ it("omits app-owned install and stale package targets from the protocol schedule
   expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
   expect(result.updateAvailable).toBeNull();
 });
+
+it.each([
+  { channel: "stable", initialized: true },
+  { channel: "beta", initialized: true },
+  { channel: "stable", initialized: false },
+  { channel: "beta", initialized: false },
+] as const)(
+  "reports a refreshed immutable preparation without activation on $channel with initialized=$initialized",
+  async ({ channel, initialized }) => {
+    const immutable = {
+      root: "/opt/openclaw",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+    };
+    const discovered = {
+      root: immutable.currentPath,
+      installReceipt: null,
+      status: {
+        root: immutable.currentPath,
+        installKind: "immutable",
+        packageManager: "unknown",
+        immutable,
+      },
+    };
+    install.mockResolvedValue(discovered);
+    if (initialized) {
+      await lifecycle.initialize();
+    }
+    setUpdateScheduleCache({
+      next: {
+        channel,
+        autoEnabled: true,
+        install: { kind: "package" },
+        target: { kind: "package", version: "99.0.0" },
+      },
+    });
+    const prepared = {
+      sha: "b".repeat(40),
+      path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+      buildDigest: "c".repeat(64),
+      preparedAtMs: 123,
+    };
+    install.mockResolvedValue({
+      ...discovered,
+      status: { ...discovered.status, immutable: { ...immutable, prepared } },
+    });
+
+    const result = await status(
+      { update: { channel, auto: { enabled: true } } },
+      { refreshCheckout: true },
+    );
+
+    expect(result.schedule).toEqual({
+      channel,
+      autoEnabled: false,
+      install: { kind: "immutable", immutable: { ...immutable, prepared } },
+    });
+    expect(result.updateAvailable).toBeNull();
+    expect(install).toHaveBeenCalledWith(true, expect.any(AbortSignal));
+    expect((await lifecycle.initialize()).status.immutable?.prepared).toEqual(prepared);
+
+    install.mockResolvedValue({
+      root: immutable.currentPath,
+      installReceipt: null,
+      status: { root: immutable.currentPath, installKind: "unknown", packageManager: "unknown" },
+    });
+    const unowned = await status(
+      { update: { channel, auto: { enabled: false } } },
+      { refreshCheckout: true },
+    );
+    expect(unowned.schedule.install).toEqual({ kind: "unknown" });
+  },
+);
+
+it.for([
+  { channel: "beta", applying: false },
+  { channel: "beta", applying: true },
+] as const)(
+  "preserves a no-op refresh after initialization (applying=$applying)",
+  async ({ channel, applying }, { signal }) => {
+    let config: OpenClawConfig = { update: { channel: "beta", auto: { enabled: false } } };
+    if (applying) {
+      announcePackageCampaign();
+      expect(campaignOwner.adopt().status).toBe("adopted");
+    }
+    const priorSchedule = getUpdateSchedule();
+    const priorCampaign = campaignOwner.getState();
+    const entered = createDeferred();
+    const resume = createDeferred();
+    install.mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+      return { root: "/opt/openclaw", installReceipt: null, status: createDevGitStatus() };
+    });
+    const availableChanged = vi.fn();
+    const scheduleChanged = vi.fn();
+    lifecycle.onUpdateAvailableChange = availableChanged;
+    lifecycle.onUpdateScheduleChange = scheduleChanged;
+    const respond = vi.fn();
+    const refreshing = updateStatusHandlers["update.status"]!({
+      params: { refreshCheckout: true },
+      respond,
+      context: { getRuntimeConfig: () => config },
+    } as never);
+    try {
+      await withinTest(entered.promise, signal);
+      config = { update: { ...(channel ? { channel } : {}), auto: { enabled: false } } };
+      resume.resolve();
+      await refreshing;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ effectiveChannel: "beta" }),
+      );
+      expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
+      expect(getUpdateAvailable()).toBeNull();
+      expect(getUpdateSchedule()).toBe(priorSchedule);
+      expect(campaignOwner.getState()).toBe(priorCampaign);
+      expect(availableChanged).not.toHaveBeenCalled();
+      expect(scheduleChanged).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await refreshing;
+    }
+  },
+);
+
+it.for([
+  { tag: "v2026.10.0-beta.1", configured: false },
+  { tag: "v2026.9.30", configured: false },
+  { tag: "v2026.10.0-beta.1", configured: true },
+  { tag: "v2026.9.30", configured: true },
+] as const)(
+  "revalidates the inferred channel from fresh Git identity (tag=$tag, configured=$configured)",
+  async ({ tag, configured }) => {
+    const config: OpenClawConfig = {
+      update: { ...(configured ? { channel: "dev" as const } : {}), auto: { enabled: true } },
+    };
+    install.mockResolvedValue({
+      root: "/opt/openclaw",
+      installReceipt: null,
+      status: createDevGitStatus(),
+    });
+    await lifecycle.initialize();
+    const fresh = createDevGitStatus({ branch: "HEAD" });
+    install.mockResolvedValue({
+      root: "/opt/openclaw",
+      installReceipt: null,
+      status: { ...fresh, git: { ...fresh.git, tag } },
+    });
+    const availableChanged = vi.fn();
+    const scheduleChanged = vi.fn();
+    const announce = vi.fn();
+    lifecycle.onUpdateAvailableChange = availableChanged;
+    lifecycle.onUpdateScheduleChange = scheduleChanged;
+    lifecycle.announceDevGitUpdate = announce;
+    const respond = vi.fn();
+    await updateStatusHandlers["update.status"]!({
+      params: { refreshCheckout: true },
+      respond,
+      context: { getRuntimeConfig: () => config },
+    } as never);
+    if (configured) {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          effectiveChannel: "dev",
+          updateAvailable: expect.objectContaining({ upstreamSha: "upstream-sha" }),
+        }),
+      );
+      expect(announce).toHaveBeenCalledOnce();
+    } else {
+      const effectiveChannel = tag.includes("-beta.") ? "beta" : "stable";
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ effectiveChannel, updateAvailable: null }),
+      );
+      expect(getUpdateAvailable()).toBeNull();
+      expect(getUpdateSchedule()).toMatchObject({ channel: effectiveChannel });
+      expect(getUpdateSchedule()?.target).toBeUndefined();
+      expect(lifecycle.installStatus?.status.git?.tag).toBe(tag);
+      expect(availableChanged).not.toHaveBeenCalled();
+      expect(scheduleChanged).toHaveBeenCalledExactlyOnceWith(getUpdateSchedule());
+      expect(announce).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it.each([false, true])(
   "refreshes native immutable facts on ordinary status without consulting OCM (enabled=%s)",
@@ -415,5 +619,58 @@ it.each([false, true])(
       { refreshCheckout: true },
     );
     expect(unowned.schedule.install).toEqual({ kind: "unknown" });
+  },
+);
+
+it.each([false, true])(
+  "preserves immutable status after optional discovery fails (refreshCheckout=%s)",
+  async (refreshCheckout) => {
+    const immutable = {
+      root: "/opt/openclaw",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+    };
+    install.mockResolvedValueOnce({
+      root: immutable.currentPath,
+      installReceipt: null,
+      status: {
+        root: immutable.currentPath,
+        installKind: "immutable",
+        packageManager: "unknown",
+        immutable,
+      },
+    });
+    await lifecycle.initialize();
+    install.mockRejectedValueOnce(new Error("discovery unavailable"));
+    const respond = vi.fn();
+    const warn = vi.fn();
+
+    await updateStatusHandlers["update.status"]!({
+      params: { refreshCheckout },
+      respond,
+      context: { getRuntimeConfig: () => ({}), logGateway: { warn } },
+    } as never);
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(resolveManager).not.toHaveBeenCalled();
+    if (refreshCheckout) {
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "Could not check the latest update. Try again.",
+      });
+      expect(history).not.toHaveBeenCalled();
+    } else {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "immutable", immutable },
+          },
+        }),
+      );
+      expect(history).toHaveBeenCalledOnce();
+    }
   },
 );

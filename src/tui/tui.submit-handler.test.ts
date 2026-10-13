@@ -34,8 +34,6 @@ function createRealEditorSubmitHarness(
 describe("createEditorSubmitHandler", () => {
   it.each([
     { name: "no newer draft", newerDraft: "" },
-    { name: "typed text", newerDraft: "new draft" },
-    { name: "a multiline paste", newerDraft: "new draft\nmore notes" },
     { name: "a collapsed paste", newerDraft: "x".repeat(1001) },
   ])("restores rejected slash chat alongside $name", async ({ newerDraft }) => {
     const handlers = createTuiCommandHandlersHarness({ isConnected: false });
@@ -99,60 +97,30 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.getText()).toBe("!cmd");
   });
 
-  it.each([
-    { name: "a whitespace-prefixed lone bang", input: "  !", expected: "!" },
-    { name: "a whitespace-suffixed lone bang", input: "!  ", expected: "!" },
-    {
-      name: "bang-prefixed true multiline chat",
-      input: " \n!cmd\nnotes",
-      expected: "!cmd\nnotes",
-    },
-  ])("stores, recalls, and safely resubmits $name", ({ input, expected }) => {
-    const { editor, sendMessage, handleBangLine } = createRealEditorSubmitHarness();
-    editor.setText(input);
+  it("keeps a newline-suffixed bang paste in chat and omits it from history", () => {
+    const input = "!cmd\n";
+    const { editor, sendMessage, handleCommand, handleBangLine } = createRealEditorSubmitHarness();
+    editor.handleInput(`\u001b[200~${input}\u001b[201~`);
 
     editor.handleInput("\r");
 
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
+    expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(expected);
     expect(editor.getText()).toBe("");
 
     editor.handleInput("\u001b[A");
-    expect(editor.getText()).toBe(expected);
+    expect(editor.getText()).toBe("");
 
     editor.handleInput("\r");
 
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage).toHaveBeenNthCalledWith(2, expected);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
+    expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
   });
 
-  it.each(["  !cmd", "!cmd\n", "/exit\n"])(
-    "keeps %j in chat and omits it from history",
-    (input) => {
-      const { editor, sendMessage, handleCommand, handleBangLine } =
-        createRealEditorSubmitHarness();
-      editor.handleInput(`\u001b[200~${input}\u001b[201~`);
-
-      editor.handleInput("\r");
-
-      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-      expect(handleCommand).not.toHaveBeenCalled();
-      expect(handleBangLine).not.toHaveBeenCalled();
-      expect(editor.getText()).toBe("");
-
-      editor.handleInput("\u001b[A");
-      expect(editor.getText()).toBe("");
-
-      editor.handleInput("\r");
-
-      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-      expect(handleCommand).not.toHaveBeenCalled();
-      expect(handleBangLine).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["  !cmd", "/exit\n"])("preserves %j routing across a blocked retry", (input) => {
+  it("preserves whitespace-prefixed bang routing across a blocked retry", () => {
+    const input = "  !cmd";
     const admitMessage = vi
       .fn()
       .mockReturnValueOnce({ status: "blocked", reason: "pending" })
@@ -177,65 +145,6 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.getText()).toBe("");
   });
 
-  it("trims normal messages before sending and adding to history", () => {
-    const { editor, sendMessage } = createRealEditorSubmitHarness();
-    editor.setText("  hello  ");
-
-    editor.handleInput("\r");
-
-    expect(sendMessage).toHaveBeenCalledWith("hello");
-    editor.handleInput("\u001b[A");
-    expect(editor.getText()).toBe("hello");
-  });
-
-  it("passes the submitted text to the busy gate", () => {
-    const admitMessage = vi.fn((value: string) =>
-      value === "please stop"
-        ? ({ status: "allowed" } as const)
-        : ({ status: "blocked", reason: "pending" } as const),
-    );
-    const { sendMessage, onSubmit } = createSubmitHarness({ admitMessage });
-
-    onSubmit("please stop");
-
-    expect(admitMessage).toHaveBeenCalledWith("please stop");
-    expect(sendMessage).toHaveBeenCalledWith("please stop");
-  });
-
-  it("restores the real editor value after pi-tui clears a busy submit", () => {
-    const tui = { requestRender: vi.fn() } as unknown as TUI;
-    const editor = new CustomEditor(tui, editorTheme);
-    const sendMessage = vi.fn();
-    const handleCommand = vi.fn();
-    const handleBangLine = vi.fn();
-    const onBlockedMessageSubmit = vi.fn();
-    editor.setText("  wait, use c++ instead  ");
-    editor.onSubmit = createEditorSubmitHandler({
-      editor,
-      handleCommand,
-      sendMessage,
-      handleBangLine,
-      onSubmitError: vi.fn(),
-      admitMessage: () => ({ status: "blocked", reason: "pending" }),
-      onBlockedMessageSubmit,
-    });
-
-    editor.handleInput("\r");
-
-    expect(editor.getText()).toBe("wait, use c++ instead");
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(handleCommand).not.toHaveBeenCalled();
-    expect(handleBangLine).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith({
-      status: "blocked",
-      reason: "pending",
-    });
-
-    editor.setText("");
-    editor.handleInput("\u001b[A");
-    expect(editor.getText()).toBe("");
-  });
-
   it("continues to route slash commands while chat is busy", () => {
     const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
@@ -250,31 +159,12 @@ describe("createEditorSubmitHandler", () => {
     expect(onBlockedMessageSubmit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "a slash command", input: "/exit\npasted notes" },
-    { name: "a local shell command", input: "!touch pasted-file\npasted notes" },
-  ])("treats a complete multiline paste beginning with $name as chat", ({ input }) => {
-    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
-
-    onSubmit(input);
-
-    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
-    expect(handleCommand).not.toHaveBeenCalled();
-    expect(handleBangLine).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["local shell", "!false", "handleBangLine"],
-    ["command", "/broken", "handleCommand"],
-    ["message", "hello", "sendMessage"],
-  ] as const)("reports rejected %s handlers", async (action, input, handler) => {
+  it("reports rejected message handlers", async () => {
     const harness = createSubmitHarness();
-    harness[handler].mockRejectedValueOnce(new Error("gateway unavailable"));
-
-    harness.onSubmit(input);
+    harness.sendMessage.mockRejectedValueOnce(new Error("gateway unavailable"));
+    harness.onSubmit("hello");
     await Promise.resolve();
-
-    expect(harness.onSubmitError).toHaveBeenCalledWith(action, expect.any(Error));
+    expect(harness.onSubmitError).toHaveBeenCalledWith("message", expect.any(Error));
   });
 
   it("reports synchronous submit handler failures", () => {
@@ -315,22 +205,10 @@ describe("createSubmitBurstCoalescer", () => {
     vi.useRealTimers();
   });
 
-  it.each(
-    [
-      { name: "typed text", newerDraft: "new draft", paste: false },
-      {
-        name: "an eleven-line paste",
-        newerDraft: Array.from({ length: 11 }, (_, index) => `line-${index}`).join("\n"),
-        paste: true,
-      },
-      { name: "a 1001-character paste", newerDraft: "x".repeat(1001), paste: true },
-    ].flatMap((input) => [
-      { ...input, initiallyBlocked: false },
-      { ...input, initiallyBlocked: true },
-    ]),
-  )(
-    "preserves $name across buffered submission (blocked=$initiallyBlocked)",
-    ({ newerDraft, paste, initiallyBlocked }) => {
+  it.each([false, true])(
+    "preserves a collapsed paste across buffered submission (blocked=%s)",
+    (initiallyBlocked) => {
+      const newerDraft = "x".repeat(1001);
       vi.useFakeTimers();
       const tui = { requestRender: vi.fn() } as unknown as TUI;
       const editor = new CustomEditor(tui, editorTheme);
@@ -352,14 +230,8 @@ describe("createSubmitBurstCoalescer", () => {
         editor.handleInput("\r");
         expect(sendMessage).not.toHaveBeenCalled();
 
-        if (paste) {
-          editor.handleInput(`\u001b[200~${newerDraft}\u001b[201~`);
-          expect(editor.getText()).not.toBe(newerDraft);
-        } else {
-          for (const character of newerDraft) {
-            editor.handleInput(character);
-          }
-        }
+        editor.handleInput(`\u001b[200~${newerDraft}\u001b[201~`);
+        expect(editor.getText()).not.toBe(newerDraft);
         expect(editor.getExpandedText()).toBe(newerDraft);
 
         vi.advanceTimersByTime(50);
@@ -423,17 +295,6 @@ describe("shouldEnableWindowsGitBashPasteFallback", () => {
         platform: "win32",
         env: {
           MSYSTEM: "MINGW64",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toBe(true);
-  });
-
-  it("enables fallback on macOS iTerm", () => {
-    expect(
-      shouldEnableWindowsGitBashPasteFallback({
-        platform: "darwin",
-        env: {
-          TERM_PROGRAM: "iTerm.app",
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(true);

@@ -21,6 +21,7 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  FISH_AUDIO_MODELS,
   type FishAudioFormat,
   type FishAudioLatency,
   type FishAudioModel,
@@ -31,7 +32,6 @@ import {
   normalizeFishAudioBaseUrl,
 } from "./tts.js";
 
-const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
 const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
@@ -146,29 +146,21 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
       }
     case "speed":
     case "fish_speed":
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey: "speed",
-        range: { min: 0.5, max: 2 },
-        warning: (value) => `invalid Fish Audio speed "${value}"`,
-      });
     case "temperature":
     case "fish_temperature":
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey: "temperature",
-        range: { min: 0, max: 1 },
-        warning: (value) => `invalid Fish Audio temperature "${value}"`,
-      });
     case "top_p":
     case "topp":
-    case "fish_top_p":
+    case "fish_top_p": {
+      const setting = ctx.key.replace(/^fish_/, "");
+      const overrideKey = setting === "top_p" || setting === "topp" ? "topP" : setting;
+      const label = overrideKey === "topP" ? "top_p" : overrideKey;
       return parseSpeechDirectiveNumberOverride({
         ctx,
-        overrideKey: "topP",
-        range: { min: 0, max: 1 },
-        warning: (value) => `invalid Fish Audio top_p "${value}"`,
+        overrideKey,
+        range: overrideKey === "speed" ? { min: 0.5, max: 2 } : { min: 0, max: 1 },
+        warning: (value) => `invalid Fish Audio ${label} "${value}"`,
       });
+    }
     case "latency":
     case "fish_latency":
       if (!ctx.policy.allowVoiceSettings) {

@@ -10,7 +10,7 @@ title: "Backups"
 
 <a id="backups" />
 
-OpenClaw keeps its authoritative state in SQLite: one global control-plane
+OpenClaw uses SQLite by default: one global control-plane
 database under the state directory (usually `~/.openclaw`), plus one database
 per configured agent at `<agentDir>/openclaw-agent.sqlite`. Agent directories
 default to locations under the state directory but can be configured outside
@@ -18,6 +18,12 @@ it. See [Database schemas](/reference/database-schemas) for the exact layout.
 This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.
+
+The experimental PostgreSQL Workboard store uses a local SQLite anchor plus
+PostgreSQL rows. Back it up with `openclaw backup create`, which includes the
+matched export and anchor. Stop the Gateway through its service owner first;
+PostgreSQL backups refuse while it is running and never stop it automatically.
+See [Database engines](/reference/database-engines#anchors-and-backups).
 
 When [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 is enabled, older transcript payloads also live in immutable compressed files.
@@ -27,6 +33,13 @@ Never copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a backup.
 The databases are written while the Gateway runs, and raw file copies of a
 live database can be torn or corrupt. Every supported path below captures
 committed state safely.
+
+SQLite snapshots, including Doctor's pre-migration backups and backup reuse on
+retry, preserve vector memory tables without loading the native `sqlite-vec`
+extension. Backup creation therefore works on older Intel CPUs without AVX.
+Vector search still needs a compatible extension; on those hosts, build
+`sqlite-vec` without AVX and set `memory.search.store.vector.extensionPath`
+to that build's loadable extension.
 
 <Warning>
   Backups contain auth profiles, channel and provider credentials, session
@@ -95,6 +108,11 @@ fresh persistent state tree. Restore stages files only; activation remains an
 explicit offline deployment step.
 
 ## Per-database snapshots
+
+`backup sqlite` is SQLite-only and refuses PostgreSQL anchors with guidance to
+use `backup create`. Generic local snapshots that select PostgreSQL require the
+Gateway stopped through its service owner, then save a matched format-2 export,
+anchor, and manifest. Existing format-1 SQLite snapshots remain supported.
 
 ```bash
 openclaw backup sqlite create --global --repository ~/Backups/openclaw-sqlite
@@ -230,7 +248,7 @@ outcome with `openclaw backup record`; see
 `openclaw status` shows the newest backup attempt and offsite result. The
 Control UI's Backups section on the Systems landing and Gateway host views shows each target's last success, size, destination,
 latest failure, and next scheduled run. Its storage location **Check** action
-probes access without writing a backup. `openclaw doctor` keeps the 14-day
+checks access without writing a backup. `openclaw doctor` keeps the 14-day
 freshness hint and also flags an offsite schedule after a failed attempt or
 when its last success is older than three schedule intervals. Diagnose that
 destination with `openclaw storage test <name>`.
@@ -325,7 +343,16 @@ snapshot repositories remain ordinary files that external backup tools can copy.
 
 ## Versioned backups to a Git repository
 
-Git-backed backups dump each selected database into deterministic `schema.sql`,
+`openclaw backup git create --all` includes the PostgreSQL Workboard store through
+its plugin backup-resource declaration. Explicit `--global` and `--agent` selections
+keep their existing scope. A PostgreSQL source requires the Gateway stopped
+through its service owner; Git backup capture or restore refuses while it is running. The backup contains a
+sanitized SQLite export, its original anchor, and a format-2 manifest without a
+DSN. Restore verifies the matched set and creates a fresh owned PostgreSQL
+namespace before publishing its anchor. Retain the displaced namespace until
+recovery is confirmed.
+
+For SQLite, Git-backed backups dump each selected database into deterministic `schema.sql`,
 `manifest.json`, and per-table JSONL files, then create one commit for the
 whole run. Unchanged database content produces no commit, so Git stores and
 pushes only content changes by construction. OpenClaw stages only the

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { CallBriefSchema } from "../call-brief.js";
 import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
@@ -26,28 +27,6 @@ import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 import { clearTranscriptWaiter, startMaxDurationTimer, waitForFinalTranscript } from "./timers.js";
 import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
-type InitiateContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "providerCallIdMap"
-  | "provider"
-  | "config"
-  | "coreSession"
-  | "storePath"
-  | "stateRuntime"
-  | "webhookUrl"
-  | "streamSessionIssuer"
-  | "mutationQueue"
-  | "pendingCallAdmissions"
-  | "isStopping"
->;
-
-type SpeakContext = EndCallContext &
-  Pick<CallManagerContext, "config" | "trackCallWork" | "isStopping">;
-
-type ConversationContext = SpeakContext &
-  Pick<CallManagerContext, "activeTurnCalls" | "initialMessageInFlight" | "notifyHangupTimers">;
-
 type EndCallContext = Pick<
   CallManagerContext,
   | "activeCalls"
@@ -57,42 +36,31 @@ type EndCallContext = Pick<
   | "stateRuntime"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "notifyHangupTimers"
   | "endCallOperations"
   | "mutationQueue"
+  | "beforeCallEnd"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
 
-type ConnectedCallLookup =
-  | { kind: "error"; error: string }
-  | { kind: "ended"; call: CallRecord }
-  | {
-      kind: "ok";
-      call: CallRecord;
-      providerCallId: string;
-      provider: NonNullable<ConnectedCallContext["provider"]>;
-    };
-
-function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallLookup {
+function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId) {
   const call = ctx.activeCalls.get(callId);
   if (!call) {
-    return { kind: "error", error: "Call not found" };
+    return { kind: "error" as const, error: "Call not found" };
   }
   if (!ctx.provider || !call.providerCallId) {
-    return { kind: "error", error: "Call not connected" };
+    return { kind: "error" as const, error: "Call not connected" };
   }
   if (TerminalStates.has(call.state)) {
-    return { kind: "ended", call };
+    return { kind: "ended" as const, call };
   }
-  return { kind: "ok", call, providerCallId: call.providerCallId, provider: ctx.provider };
+  return { kind: "ok" as const, call, providerCallId: call.providerCallId, provider: ctx.provider };
 }
 
-function requireConnectedCall(
-  ctx: ConnectedCallContext,
-  callId: CallId,
-): Exclude<ConnectedCallLookup, { kind: "ended" }> {
+function requireConnectedCall(ctx: CallManagerContext, callId: CallId) {
   const lookup = lookupConnectedCall(ctx, callId);
-  return lookup.kind === "ended" ? { kind: "error", error: "Call has ended" } : lookup;
+  return lookup.kind === "ended" ? { kind: "error" as const, error: "Call has ended" } : lookup;
 }
 
 function isCurrentCall(ctx: Pick<CallManagerContext, "activeCalls">, call: CallRecord): boolean {
@@ -106,7 +74,7 @@ function validateDtmfDigits(digits: string): string | null {
 }
 
 export async function initiateCall(
-  ctx: InitiateContext,
+  ctx: CallManagerContext,
   to: string,
   sessionKey?: string,
   opts: OutboundCallOptions = {},
@@ -116,6 +84,15 @@ export async function initiateCall(
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
   const agentId = normalizeAgentId(opts.agentId ?? ctx.config.agentId);
+  const parsedBrief = CallBriefSchema.optional().safeParse(opts.brief);
+  if (!parsedBrief.success) {
+    return {
+      callId: "",
+      success: false,
+      error: `Invalid call brief: ${parsedBrief.error.message}`,
+    };
+  }
+  const brief = parsedBrief.data;
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {
@@ -151,6 +128,11 @@ export async function initiateCall(
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
 
+  const pendingNotifyAmd =
+    mode === "notify" &&
+    Boolean(initialMessage) &&
+    ctx.provider.name === "twilio" &&
+    ctx.config.voicemail?.detection === "twilio";
   const callRecord: CallRecord = {
     callId,
     provider: ctx.provider.name,
@@ -172,7 +154,16 @@ export async function initiateCall(
     metadata: {
       ...(initialMessage && { initialMessage }),
       mode,
+      ...(pendingNotifyAmd ? { pendingNotifyAmd: true } : {}),
+      ...(ctx.config.voicemail?.detection === "twilio" &&
+      (ctx.provider.name === "twilio" || ctx.provider.name === "mock")
+        ? { voicemailManagedByHost: true }
+        : {}),
       ...(requesterSessionKey ? { requesterSessionKey } : {}),
+      ...(brief ? { brief } : {}),
+      ...(brief?.maxDurationSeconds
+        ? { maxDurationSeconds: Math.min(brief.maxDurationSeconds, ctx.config.maxDurationSeconds) }
+        : {}),
     },
   };
 
@@ -193,7 +184,9 @@ export async function initiateCall(
     }
     let inlineTwiml: string | undefined;
     let preConnectTwiml: string | undefined;
-    if (mode === "notify" && initialMessage) {
+    if (pendingNotifyAmd) {
+      inlineTwiml = '<Response><Pause length="60"/></Response>';
+    } else if (mode === "notify" && initialMessage) {
       const pollyVoice = mapVoiceToPolly(resolvePreferredTtsVoice(ctx.config));
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
@@ -222,6 +215,7 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(ctx.config.voicemail?.detection === "twilio" ? { voicemail: ctx.config.voicemail } : {}),
       ...(streamSession
         ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
         : {}),
@@ -266,7 +260,7 @@ export type SpeakOptions = {
 };
 
 export async function speak(
-  ctx: SpeakContext,
+  ctx: CallManagerContext,
   callId: CallId,
   text: string,
   options?: SpeakOptions,
@@ -354,7 +348,7 @@ export function hasConversationStreamConnect(
 }
 
 export async function sendDtmf(
-  ctx: SpeakContext,
+  ctx: CallManagerContext,
   callId: CallId,
   digits: string,
 ): Promise<{ success: boolean; error?: string }> {
@@ -383,7 +377,7 @@ export async function sendDtmf(
 }
 
 export async function speakInitialMessage(
-  ctx: ConversationContext,
+  ctx: CallManagerContext,
   providerCallId: string,
 ): Promise<void> {
   const call = getCallByProviderCallId({
@@ -396,6 +390,13 @@ export async function speakInitialMessage(
     return;
   }
 
+  if (
+    call.metadata?.pendingNotifyAmd ||
+    call.metadata?.notifyStatus ||
+    call.metadata?.voicemailStatus
+  ) {
+    return;
+  }
   const initialMessage = call.metadata?.initialMessage as string | undefined;
   const mode = (call.metadata?.mode as CallMode) ?? "conversation";
 
@@ -493,7 +494,7 @@ export async function speakInitialMessage(
 }
 
 export async function continueCall(
-  ctx: ConversationContext,
+  ctx: CallManagerContext,
   callId: CallId,
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
@@ -603,13 +604,19 @@ export function endCall(
         reason,
       });
 
-      await ctx.mutationQueue.enqueue("state", () =>
-        finalizeCall({
-          ctx,
-          call,
-          endReason: reason,
-        }),
-      );
+      try {
+        await ctx.beforeCallEnd?.(call);
+      } catch (error) {
+        console.warn(`[voice-call] Failed to drain call ${callId}: ${formatErrorMessage(error)}`);
+      }
+
+      await ctx.mutationQueue.enqueue("state", () => {
+        const preparedCall = copyCallRecord(call);
+        if (reason === "voicemail" && preparedCall.metadata?.voicemailStatus === "playing") {
+          preparedCall.metadata = { ...preparedCall.metadata, voicemailStatus: "left" };
+        }
+        return finalizeCall({ ctx, call, preparedCall, endReason: reason });
+      });
 
       return { success: true };
     } catch (err) {

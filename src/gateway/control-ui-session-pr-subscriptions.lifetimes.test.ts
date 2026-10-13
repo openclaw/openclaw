@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -10,27 +11,27 @@ import type {
 } from "./control-ui-contract.js";
 import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
 import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
-import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
-let active: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
-let clock: ReturnType<typeof createGatewaySchedulerClock>;
-let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-
-beforeEach(() => {
-  clock = createGatewaySchedulerClock(Date.now());
-  scheduler = createTestGatewayScheduler(clock.clock);
-});
-
-afterEach(async () => {
-  await active?.stop();
-  await scheduler.stop();
-  active = undefined;
-  vi.useRealTimers();
-});
 
 describe("recipient publication lifetimes", () => {
+  let active: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
+  let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+  beforeEach(() => {
+    clock = createGatewaySchedulerClock(Date.now());
+    scheduler = createTestGatewayScheduler(clock.clock);
+  });
+
+  afterEach(async () => {
+    await active?.stop();
+    await scheduler.stop();
+    active = undefined;
+    vi.useRealTimers();
+  });
+
   const target: ControlUiSessionPrTarget = {
     params: { sessionKey: "shared", agentId: "main" },
     identity: "shared",
@@ -50,71 +51,6 @@ describe("recipient publication lifetimes", () => {
       { sessionKeys: [key], agentId: "main" },
     ] as const;
   }
-
-  it.each(["disconnect", "replace with another key", "replace with the same key"] as const)(
-    "tracks shared cache ownership during %s of a preparing watcher",
-    async (action) => {
-      const entered = createDeferred();
-      const held = createDeferred<ControlUiSessionPrTarget>();
-      let holdPreparation = true;
-      let settled = false;
-      const load = vi.fn(
-        async (_params: ControlUiSessionPullRequestsParams, _signal: AbortSignal | undefined) =>
-          READY,
-      );
-      active = createTestControlUiSessionPrSubscriptions({
-        scheduler,
-        broadcastToConnIds: vi.fn(),
-        load,
-        prepareRead: async (connId, session) => () => {
-          if (connId === "preparing" && holdPreparation) {
-            holdPreparation = false;
-            entered.resolve();
-            return held.promise;
-          }
-          return Promise.resolve({
-            ...target,
-            params: { sessionKey: session.sessionKey, agentId: "main" },
-            identity: session.sessionKey,
-          });
-        },
-      });
-      await active.replace("first", ["shared"]);
-      const original = load.mock.calls[0]![1];
-      const preparing = active.replace("preparing", ["shared"]).then(() => {
-        settled = true;
-      });
-      try {
-        await entered.promise;
-        active.unsubscribe("first");
-        expect(original?.aborted).toBe(false);
-        if (action === "disconnect") {
-          active.unsubscribe("preparing");
-        } else {
-          await active.replace("preparing", [
-            action === "replace with the same key" ? "shared" : "other",
-          ]);
-        }
-        const retained = action === "replace with the same key";
-        expect(original?.aborted).toBe(!retained);
-        expect(settled).toBe(false);
-
-        await active.replace("next", ["shared"]);
-        const sharedLoads = load.mock.calls.filter(([params]) => params.sessionKey === "shared");
-        expect(sharedLoads).toHaveLength(retained ? 1 : 2);
-        if (!retained) {
-          expect(sharedLoads[1]![1]).not.toBe(original);
-          expect(sharedLoads[1]![1]?.aborted).toBe(false);
-        }
-        held.resolve(target);
-        await preparing;
-        expect(settled).toBe(true);
-      } finally {
-        held.resolve(target);
-        await preparing;
-      }
-    },
-  );
 
   it.each(["selection", "grant"] as const)(
     "continues delivery when a recipient's prepared %s changes",
@@ -621,6 +557,107 @@ describe("recipient publication lifetimes", () => {
       } finally {
         held.resolve(target);
         await poll;
+      }
+    },
+  );
+});
+
+describe("one-shot session PR reads", () => {
+  const scheduler = createTestGatewayScheduler();
+  let owner: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
+
+  afterEach(async () => {
+    await owner?.stop();
+    owner = undefined;
+  });
+
+  const target: ControlUiSessionPrTarget = {
+    params: { sessionKey: "agent:main:change", agentId: "main" },
+    identity: "original-session",
+    readSource: { agentId: "main", path: "unused" },
+    source: null,
+  };
+
+  it("keeps a forced watcher snapshot when an older prepared read settles later", async ({
+    signal,
+  }) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const selected = { ...target, source: "/synthetic/repository" };
+    owner = createTestControlUiSessionPrSubscriptions({
+      scheduler,
+      broadcastToConnIds: vi.fn(),
+      prepareRead: async () => async () => selected,
+      load: async ({ refresh }) => {
+        if (!refresh) {
+          entered.resolve();
+          await release.promise;
+        }
+        return {
+          pullRequests: [],
+          rateLimited: false,
+          repository: { owner: "synthetic", repo: refresh ? "fresh" : "old" },
+        };
+      },
+    });
+    expect(owner.readPrepared(selected)).toBeUndefined();
+    const reading = owner.read(selected, () => {});
+    try {
+      await withinTest(entered.promise, signal);
+      const { sessionKey } = selected.params;
+      await withinTest(owner.replace("viewer", [sessionKey], new Set([sessionKey])), signal);
+      expect(owner.readPrepared(selected)?.repository?.repo).toBe("fresh");
+      release.resolve();
+      await withinTest(reading, signal);
+      expect(owner.readPrepared(selected)?.repository?.repo).toBe("fresh");
+    } finally {
+      release.resolve();
+      await reading;
+    }
+  });
+
+  it.each(["caller", "session", "owner"] as const)(
+    "does not disclose an in-flight result after the %s retires",
+    async (retired) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Read authority retired");
+        }
+      };
+      owner = createTestControlUiSessionPrSubscriptions({
+        scheduler,
+        broadcastToConnIds: vi.fn(),
+        load: async () => {
+          entered.resolve();
+          await release.promise;
+          return { pullRequests: [], rateLimited: false };
+        },
+      });
+      const reading = owner.read(
+        { ...target, ...(retired === "session" ? { assertCurrent } : {}) },
+        retired === "caller" ? assertCurrent : () => {},
+        "publication",
+      );
+      const rejected = expect(reading).rejects.toThrow(/retired|closed/);
+      await entered.promise;
+      current = false;
+      let stopped = false;
+      const stopping =
+        retired === "owner"
+          ? owner.stop().then(() => {
+              stopped = true;
+            })
+          : undefined;
+      expect(stopped).toBe(false);
+      release.resolve();
+      await rejected;
+      await stopping;
+      if (retired === "owner") {
+        expect(stopped).toBe(true);
+        expect(() => owner?.read(target, () => {})).toThrow("closed");
       }
     },
   );

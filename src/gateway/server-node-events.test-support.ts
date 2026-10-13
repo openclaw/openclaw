@@ -7,7 +7,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
+import type { loadSessionEntryAsync as loadSessionEntryTypeAsync } from "./session-entry-load.test-support.js";
 
 export const buildSessionLookup = (
   sessionKey: string,
@@ -26,11 +26,11 @@ export const buildSessionLookup = (
     spawnedBy?: string;
     parentSessionKey?: string;
   } = {},
-): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+): Awaited<ReturnType<typeof loadSessionEntryTypeAsync>> => ({
+  cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
   storePath: "/tmp/sessions.json",
-  store: {} as ReturnType<typeof loadSessionEntryType>["store"],
+  store: {},
   entry: {
     agentHarnessId: entry.agentHarnessId,
     modelSelectionLocked: entry.modelSelectionLocked,
@@ -80,14 +80,13 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
-  loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  loadSessionEntry: vi.fn((sessionKey: string, _opts?: unknown) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
-  normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
@@ -168,9 +167,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   upsertSessionEntryCore: runtimeMocks.upsertSessionEntryCore,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateProcessDeviceIdentity: runtimeMocks.loadOrCreateProcessDeviceIdentity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: runtimeMocks.loadOrCreateProcessDeviceIdentity,
 }));
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
@@ -199,11 +198,6 @@ vi.mock("../media/store.js", async (importOriginal) => ({
   deleteMediaBuffer: runtimeMocks.deleteMediaBuffer,
 }));
 
-vi.mock("../routing/session-key.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../routing/session-key.js")>()),
-  normalizeMainKey: runtimeMocks.normalizeMainKey,
-}));
-
 vi.mock("./chat-attachment-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./chat-attachment-policy.js")>()),
   resolveChatAttachmentMaxBytes: runtimeMocks.resolveChatAttachmentMaxBytes,
@@ -218,9 +212,15 @@ vi.mock("./chat-attachments.js", async (importOriginal) => ({
 
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: runtimeMocks.loadSessionEntry,
   resolveGatewayModelSupportsImages: runtimeMocks.resolveGatewayModelSupportsImages,
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
+
+// mock-isolation: Node-event fixtures supply session rows without opening unrelated persistent stores.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(async (params: { key: string }) =>
+    runtimeMocks.loadSessionEntry(params.key),
+  ),
 }));
 
 vi.mock("./ws-log.js", async (importOriginal) => ({

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
 import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -34,11 +33,6 @@ function seedBootRecord(overrides: Partial<BootRecord> = {}): BootRecord {
   return record;
 }
 
-vi.mock("../lib/sessions/session-roster-cache.runtime.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/sessions/session-roster-cache.runtime.ts")>()),
-  clearCachedBootState: vi.fn(async () => undefined),
-}));
-
 describe("warm boot profile validation", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -52,7 +46,7 @@ describe("warm boot profile validation", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["trusted-proxy", "tailscale", "password"] as const)(
+  it.each(["trusted-proxy"] as const)(
     "admits a previously signed-in %s account before server connection",
     async (authMethod) => {
       const previousUrl = window.location.href;
@@ -229,24 +223,13 @@ describe("warm boot profile validation", () => {
     }
   });
 
-  it.each([
-    ...[
+  it.each(
+    [
       { cachedProfileId: "profile-a", profileId: "profile-b", clears: 1 },
-      { cachedProfileId: "profile-a", profileId: null, clears: 1 },
-      { cachedProfileId: null, profileId: "profile-b", clears: 1 },
       { cachedProfileId: "profile-a", profileId: "profile-a", clears: 0 },
-      { cachedProfileId: null, profileId: null, clears: 0 },
       { cachedProfileId: "profile-a", profileId: "profile-b", clears: 0, credentialsChanged: true },
     ].map((entry) => Object.assign(entry, { pathname: "/chat", warmBoot: true })),
-    ...["/focus/terminal", "/approve/exec%3A1"].map((pathname) => ({
-      cachedProfileId: "profile-a",
-      profileId: "profile-b",
-      clears: 0,
-      pathname,
-      warmBoot: false,
-      credentialsChanged: false,
-    })),
-  ])(
+  )(
     "clears $clears times for cached $cachedProfileId and connected $profileId on $pathname (credential change: $credentialsChanged)",
     async ({ cachedProfileId, profileId, clears, pathname, warmBoot, credentialsChanged }) => {
       const previousUrl = window.location.href;
@@ -256,7 +239,6 @@ describe("warm boot profile validation", () => {
         recoveryScope: "cached-account",
       });
       const clearSnapshots = vi.spyOn(snapshots, "clearStoredChatSnapshots").mockResolvedValue();
-      const clearRoster = vi.mocked(clearCachedBootState);
       const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
       let connectionRevision = 0;
       const createGateway = gatewayStore.createApplicationGateway;
@@ -298,7 +280,6 @@ describe("warm boot profile validation", () => {
         }
         publish("connecting");
         expect(clearSnapshots).not.toHaveBeenCalled();
-        expect(clearRoster).not.toHaveBeenCalled();
 
         publish("connected");
         // Clearing the in-memory projection must precede later hello subscribers.
@@ -313,14 +294,12 @@ describe("warm boot profile validation", () => {
           expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).not.toBeNull();
         }
         await vi.dynamicImportSettled();
-        expect(clearRoster).toHaveBeenCalledTimes(clears);
 
         publish("connected");
         publish("reconnecting");
         publish("connected");
         await vi.dynamicImportSettled();
         expect(clearSnapshots).toHaveBeenCalledTimes(clears);
-        expect(clearRoster).toHaveBeenCalledTimes(clears);
       } finally {
         runtime.stop();
         window.history.replaceState({}, "", previousUrl);

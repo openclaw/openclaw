@@ -57,42 +57,13 @@ describe("ClickClack native agent progress", () => {
         id: "item:tool_1",
         kind: "tool",
         tool_name: "search",
-        text: "🧩 Search: Done",
+        text: "Search: Done",
         status: "completed",
       },
     });
     expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({
       turn_id: "msg_1",
       op: "clear",
-    });
-  });
-
-  it("retains canonical item identity through completion", async () => {
-    const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-    const publisher = createPublisher(publishEphemeral);
-
-    publisher.start();
-    publisher.onItemEvent({
-      itemId: "tool:read-1",
-      kind: "tool",
-      name: "read",
-      progressText: "Reading",
-    });
-    publisher.onItemEvent({
-      itemId: "tool:read-1",
-      toolCallId: "read-1",
-      kind: "tool",
-      name: "read",
-      progressText: "Done",
-      phase: "end",
-      status: "completed",
-    });
-    await publisher.finalize();
-
-    expect(publishEphemeral).toHaveBeenCalledTimes(3);
-    expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      op: "finalize",
-      line: { id: "item:tool:read-1", text: "📖 Read: Done", status: "completed" },
     });
   });
 
@@ -114,7 +85,7 @@ describe("ClickClack native agent progress", () => {
 
     expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      line: { text: "🧩 Server.exec" },
+      line: { text: "Server.exec" },
     });
   });
 
@@ -162,31 +133,6 @@ describe("ClickClack native agent progress", () => {
       line: { id: "item:tool_1", text: expect.stringContaining("latest") },
     });
     expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({ op: "clear" });
-  });
-
-  it("publishes streamed line updates at a bounded cadence", async () => {
-    vi.useFakeTimers();
-    try {
-      const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createPublisher(publishEphemeral);
-
-      publisher.start();
-      await vi.advanceTimersByTimeAsync(0);
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "first" });
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "second" });
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "latest" });
-
-      expect(publishEphemeral).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(publishEphemeral).toHaveBeenCalledTimes(2);
-      expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-        op: "append",
-        line: { id: "item:tool_1", text: expect.stringContaining("latest") },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("retracts an existing commentary line without replacing it with a placeholder", async () => {

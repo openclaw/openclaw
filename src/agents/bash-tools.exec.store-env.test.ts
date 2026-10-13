@@ -121,7 +121,7 @@ type StoreEntry = {
   allowedHosts?: string[];
 };
 
-type StoreEnvHost = "gateway" | "sandbox" | "node";
+type StoreEnvHost = "gateway" | "sandbox";
 
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
@@ -179,9 +179,6 @@ async function captureStoreExecEnvironment(params: {
   await tool.execute(params.callId, { command: "echo ok", yieldMs: 120_000 });
   if (params.host === "gateway") {
     return mocks.spawnInputs.at(-1)?.env ?? {};
-  }
-  if (params.host === "node") {
-    return mocks.nodeHostParams.at(-1)?.env ?? {};
   }
   return sandboxEnv ?? {};
 }
@@ -383,7 +380,7 @@ describe("exec store environment", () => {
     });
   });
 
-  it.each(["gateway", "sandbox", "node"] as const)(
+  it.each(["gateway", "sandbox"] as const)(
     "applies enabled secret egress only to gateway exec (%s)",
     async (host) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "false");
@@ -409,8 +406,8 @@ describe("exec store environment", () => {
         expect(env).toMatchObject(EGRESS_ENV);
         const childEnv = mocks.spawnInputs.at(-1)?.env;
         expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
-        expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
-        expect(JSON.stringify(env)).not.toContain("enabled-secret");
+        expect(JSON.stringify(childEnv).includes("enabled-secret")).toBe(false);
+        expect(JSON.stringify(env).includes("enabled-secret")).toBe(false);
         expect(mocks.proxyBindings).toEqual([
           [
             expect.objectContaining({
@@ -425,7 +422,7 @@ describe("exec store environment", () => {
 
       expect(env).not.toHaveProperty("AWS_REGION");
       expect(env).not.toHaveProperty("SERVICE_API_KEY");
-      expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
+      expect(JSON.stringify(env).includes("oc-sent-v2.")).toBe(false);
       for (const [key, value] of Object.entries(EGRESS_ENV)) {
         expect(env[key]).not.toBe(value);
       }

@@ -1,4 +1,3 @@
-// Control UI static-response policy: MIME types, caching, and encoding.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +12,10 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -235,6 +238,7 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -242,5 +246,19 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    res.setHeader("Cache-Control", "no-store");
+    res.removeHeader("Content-Security-Policy");
+    res.removeHeader("X-OpenClaw-Session-Entry");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation or log in again.");
+    return;
+  }
+  res.end(encoded);
 }

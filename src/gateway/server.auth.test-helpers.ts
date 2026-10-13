@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { WebSocket } from "ws";
+import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
 import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
   connectReq,
@@ -409,6 +409,6 @@ export {
   withRuntimeVersionEnv,
 };
 export { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
-export { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
+export { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
 export { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

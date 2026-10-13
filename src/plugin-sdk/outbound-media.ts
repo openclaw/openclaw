@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";
+
+export { resolveOutboundMediaAccess } from "../media/load-options.js";
 
 /** Media loading policy used before plugin media is handed to channel delivery. */
 export type OutboundMediaLoadOptions = {
@@ -35,6 +38,41 @@ export async function loadOutboundMediaFromUrl(
   options: OutboundMediaLoadOptions = {},
 ) {
   return await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions(options));
+}
+
+/** Return false for unrelated requests, true after rejection, or the capability to authenticate. */
+export function resolveHostedOutboundMediaRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  tokenParamPrefix: string,
+): { url: URL; id: string; token: string; method: "GET" | "HEAD" } | boolean {
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    return false;
+  }
+  const prefix = `${tokenParamPrefix}_`;
+  const [candidate, ...extra] = [...url.searchParams.entries()]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([key, token]) => ({ id: key.slice(prefix.length), token }))
+    .filter(({ id }) => /^[a-f0-9]{24}$/.test(id));
+  if (!candidate) {
+    return false;
+  }
+  if (extra.length > 0) {
+    res.statusCode = 400;
+    res.end("Bad Request");
+    return true;
+  }
+  const method = req.method ?? "GET";
+  if (method !== "GET" && method !== "HEAD") {
+    res.statusCode = 405;
+    res.setHeader("Allow", "GET, HEAD");
+    res.end("Method Not Allowed");
+    return true;
+  }
+  return { url, ...candidate, method };
 }
 
 export type HostedOutboundMediaMetadata = {
@@ -335,8 +373,8 @@ export function createHostedOutboundMediaStore(
   async function pruneForCapacity(
     incomingChunkCount: number,
     incomingByteLength: number,
-    nowMs = Date.now(),
   ): Promise<void> {
+    const nowMs = Date.now();
     if (options.maxTotalBytes !== undefined && incomingByteLength > options.maxTotalBytes) {
       throw new Error(
         `hosted outbound media payload exceeds aggregate byte capacity (${incomingByteLength}/${options.maxTotalBytes} bytes)`,

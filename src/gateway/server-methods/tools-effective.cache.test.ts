@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, vi } from "vitest";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { toolsEffectiveInventoryMocks as inventoryMocks } from "./tools-effective.test-support.js";
 
 const { toolsEffectiveHandlers, testing } = await import("./tools-effective.js");
 
-vi.mock("../session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: vi.fn(),
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(),
 }));
 
 beforeEach(() => {
@@ -17,7 +17,7 @@ beforeEach(() => {
 
 it("invalidates fresh inventory when only the persisted session ceiling changes", async () => {
   const sessionKey = "agent:main:subagent:policy-refresh";
-  const loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly> = {
+  const loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> = {
     cfg: { agents: { entries: { main: {} } } },
     agentId: "main",
     storePath: "/tmp/tools-effective-policy-refresh/sessions.sqlite",
@@ -33,9 +33,9 @@ it("invalidates fresh inventory when only the persisted session ceiling changes"
       inheritedToolPolicyVersion: 1,
     },
   };
-  vi.mocked(loadGatewaySessionEntryReadOnly)
-    .mockReturnValueOnce(loaded)
-    .mockReturnValueOnce({
+  vi.mocked(loadGatewaySessionEntryReadOnlyInWorker)
+    .mockResolvedValueOnce(loaded)
+    .mockResolvedValueOnce({
       ...loaded,
       entry: { ...expectDefined(loaded.entry, "session fixture"), inheritedToolDeny: ["exec"] },
     });
@@ -58,7 +58,7 @@ it("invalidates fresh inventory when only the persisted session ceiling changes"
   };
 
   const first = await invoke();
-  inventoryMocks.resolveEffectiveToolInventory.mockReturnValueOnce({
+  inventoryMocks.resolveEffectiveToolInventory.mockResolvedValueOnce({
     agentId: "main",
     profile: "coding",
     groups: [],

@@ -1,5 +1,5 @@
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
 
 const credential = {
@@ -27,6 +27,7 @@ function byteStreamResponse(bytes: Buffer, status = 200): Response {
 }
 
 describe("xAI OAuth refresh response bytes", () => {
+  afterEach(() => vi.unstubAllGlobals());
   it.each([
     {
       status: 200,
@@ -49,7 +50,8 @@ describe("xAI OAuth refresh response bytes", () => {
           status,
         ),
       );
-      const refreshing = refreshXaiOAuthCredential(credential, { fetchImpl });
+      vi.stubGlobal("fetch", fetchImpl);
+      const refreshing = refreshXaiOAuthCredential(credential);
       await expect(refreshing).rejects.toThrow(error);
       if (status === 200) {
         await expect(refreshing).rejects.toBeInstanceOf(Error);
@@ -71,7 +73,8 @@ describe("xAI OAuth refresh response bytes", () => {
         ),
       ),
     );
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    vi.stubGlobal("fetch", fetchImpl);
+    const refreshed = await refreshXaiOAuthCredential(credential);
     expect(refreshed.access).toBe("access-café-🚀");
     expect(refreshed.refresh).toBe("refresh-日本語");
   });

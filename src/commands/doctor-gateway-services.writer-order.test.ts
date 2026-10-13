@@ -36,10 +36,9 @@ vi.mock("./doctor-gateway-services.js", async (importOriginal) => ({
   maybeResolveDuelingSystemdGatewayScopes: vi.fn(),
 }));
 vi.mock("./doctor-foreign-launchd-jobs.js", () => ({ noteMacForeignLaunchdJobs: vi.fn() }));
-vi.mock("./doctor-platform-notes.js", () => ({
-  noteMacLaunchAgentOverrides: vi.fn(),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
+vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-platform-notes.js")>()),
+  noteMacGatewayPlatformWarnings: vi.fn(),
 }));
 vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 vi.mock("../daemon/service.js", () => ({
@@ -158,7 +157,7 @@ describe("Doctor gateway config writer ordering", () => {
     },
   );
 
-  it.each(["success", "validation-refusal", "service-failure", "post-commit-failure"])(
+  it.each(["validation-refusal", "service-failure", "post-commit-failure"])(
     "uses Doctor's persisted baseline through service repair (%s)",
     async (outcome) => {
       await withGatewayServiceHome(

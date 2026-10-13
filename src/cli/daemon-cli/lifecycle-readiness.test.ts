@@ -1,22 +1,23 @@
 // Gateway lifecycle readiness tests distinguish healthy, still-starting, and failed outcomes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { defaultRuntime } from "../../runtime.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
 import { createDaemonActionContext } from "./response.js";
 import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
+import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "./restart-health.constants.js";
 
 const service = vi.hoisted(() => ({ readCommand: vi.fn(), restart: vi.fn() }));
 const runServiceStart = vi.hoisted(() => vi.fn());
 const runServiceRestart = vi.hoisted(() => vi.fn());
 const terminateStaleGatewayPids = vi.hoisted(() => vi.fn());
-const resolveGatewayStartupTiming = vi.hoisted(() => vi.fn(() => ({ deadlineMs: 45_000 })));
 const waitForGatewayHealthyRestart = vi.hoisted(() => vi.fn());
 const waitForGatewayHttpReadiness = vi.hoisted(() => vi.fn());
 const renderRestartDiagnostics = vi.hoisted(() => vi.fn(() => ["runtime diagnostics"]));
 const readServiceConfig = vi.hoisted(() => vi.fn());
 const readCliConfig = vi.hoisted(() => vi.fn(async () => ({})));
 
-vi.mock("../../commands/gateway-startup-timing.js", () => ({ resolveGatewayStartupTiming }));
 vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: readCliConfig,
   resolveGatewayPort: vi.fn(() => 18_789),
@@ -79,7 +80,6 @@ describe("Gateway service readiness", () => {
     terminateStaleGatewayPids.mockReset();
     readServiceConfig.mockReset().mockResolvedValue({});
     readCliConfig.mockReset().mockResolvedValue({});
-    resolveGatewayStartupTiming.mockClear();
     waitForGatewayHealthyRestart.mockReset().mockResolvedValue({ healthy: true });
     waitForGatewayHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
     renderRestartDiagnostics.mockClear();
@@ -88,6 +88,30 @@ describe("Gateway service readiness", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it("gives Windows start and restart the same cold-boot readiness allowance", async () => {
+    mockProcessPlatform("win32");
+    runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+      await postStartCheck({ warnings: [], fail: vi.fn() });
+    });
+
+    await runDaemonStart({ json: true });
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+    const { deadlineMs } = resolveGatewayStartupTiming("win32");
+    const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
+    for (const [options] of waitForGatewayHealthyRestart.mock.calls) {
+      expect(options).toMatchObject({
+        timeoutMs: deadlineMs,
+        attempts,
+        delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+      });
+    }
+    expect(waitForGatewayHttpReadiness).toHaveBeenCalledWith(
+      expect.objectContaining({ attempts, delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS }),
+    );
   });
 
   it.each([

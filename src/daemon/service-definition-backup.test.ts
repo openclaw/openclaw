@@ -253,7 +253,7 @@ describe("service definition backup receipts", () => {
   );
 
   it.each([
-    { platform: "win32", index: 1 },
+    { platform: "win32", index: 0 },
     { platform: "darwin", index: 0 },
     { platform: "linux", index: 0 },
   ] as const)(
@@ -459,6 +459,73 @@ describe("service definition backup receipts", () => {
       expect(started).toEqual(original);
     },
   );
+  it.each([false, true])(
+    "restores a released numeric service receipt without replacing a newer file (replaced=%s)",
+    async (replaced) => {
+      const platform = process.platform === "win32" ? "win32" : "linux";
+      const f = await fixture(platform, true);
+      const originalFiles = await Promise.all(
+        f.files.map(async (file) => ({
+          file,
+          contents: await fs.readFile(file),
+          mode: (await fs.stat(file)).mode & 0o777,
+        })),
+      );
+      await f.install();
+      // v2026.10.2 stored numeric dev/ino in every retained service file state.
+      const exactReceipt = await f.capture.finish();
+      const serialized = JSON.stringify(exactReceipt, (key, value: unknown) => {
+        if ((key === "dev" || key === "ino") && typeof value === "string") {
+          return Number(BigInt.asUintN(64, BigInt(value)));
+        }
+        return value;
+      });
+      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(JSON.parse(serialized));
+      expect(receipt.files[0]!.after!.ino).toBe(
+        Number(BigInt.asUintN(64, BigInt(exactReceipt.files[0]!.after!.ino))),
+      );
+      const candidate = await fs.readFile(f.sourcePath);
+      if (replaced) {
+        const replacement = `${f.sourcePath}.operator`;
+        await fs.writeFile(replacement, candidate, { mode: 0o600 });
+        await fs.rename(replacement, f.sourcePath);
+        const replacementIdentity = await fs.stat(f.sourcePath, { bigint: true });
+        await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+          "Service definition changed",
+        );
+        expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
+        expect(await fs.stat(f.sourcePath, { bigint: true })).toMatchObject({
+          dev: replacementIdentity.dev,
+          ino: replacementIdentity.ino,
+        });
+        return;
+      }
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      const upgraded = await readRetainedReceipt(f.capture.backupPaths);
+      for (const file of upgraded.files) {
+        if (file.after) {
+          const current = await fs.stat(file.sourcePath, { bigint: true });
+          expect(file.after).toMatchObject({
+            dev: current.dev.toString(),
+            ino: current.ino.toString(),
+          });
+        }
+      }
+      for (const original of originalFiles) {
+        expect(await fs.readFile(original.file)).toEqual(original.contents);
+        const mode = (await fs.stat(original.file)).mode & 0o777;
+        if (platform === "win32") {
+          // Windows chmod represents writability; service receipts do not retain DACLs.
+          expect(mode).toBe(original.mode);
+          expect(mode & 0o200).toBe(0o200);
+          await fs.access(original.file, fs.constants.R_OK | fs.constants.W_OK);
+        } else {
+          expect(mode).toBe(0o600);
+        }
+      }
+    },
+  );
+
   it.each([
     { platform: "linux", ancillary: false },
     { platform: "darwin", ancillary: false },

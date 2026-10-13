@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
@@ -21,7 +20,7 @@ type MemoryWikiImportedSourceStateEntry = {
   renderFingerprint: string;
 };
 
-type MemoryWikiImportedSourceState = {
+export type MemoryWikiImportedSourceState = {
   version: 1;
   entries: Record<string, MemoryWikiImportedSourceStateEntry>;
 };
@@ -211,36 +210,6 @@ export async function writeMemoryWikiSourceSyncState(
   await resolveSourceSyncStore(store).write(vaultRoot, state, plan);
   changes?.upsertKeys.clear();
   changes?.deleteKeys.clear();
-}
-
-export async function shouldSkipImportedSourceWrite(params: {
-  vaultRoot: string;
-  syncKey: string;
-  expectedPagePath: string;
-  expectedSourcePath: string;
-  sourceUpdatedAtMs: number;
-  sourceSize: number;
-  renderFingerprint: string;
-  state: MemoryWikiImportedSourceState;
-}): Promise<boolean> {
-  const entry = params.state.entries[params.syncKey];
-  if (!entry) {
-    return false;
-  }
-  if (
-    entry.pagePath !== params.expectedPagePath ||
-    entry.sourcePath !== params.expectedSourcePath ||
-    entry.sourceUpdatedAtMs !== params.sourceUpdatedAtMs ||
-    entry.sourceSize !== params.sourceSize ||
-    entry.renderFingerprint !== params.renderFingerprint
-  ) {
-    return false;
-  }
-  const pagePath = path.join(params.vaultRoot, params.expectedPagePath);
-  return await fs
-    .access(pagePath)
-    .then(() => true)
-    .catch(() => false);
 }
 
 function removeImportedSourceStateEntry(

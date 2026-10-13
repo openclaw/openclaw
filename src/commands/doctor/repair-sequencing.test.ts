@@ -958,7 +958,7 @@ describe("doctor repair sequencing", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
         expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-        expect(params.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+        expect(params.cfg.agents?.defaults).not.toHaveProperty("agentRuntime");
         return {
           changes: [],
           warnings: [],
@@ -991,7 +991,7 @@ describe("doctor repair sequencing", () => {
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.state.candidate.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.configChangeNotes).toStrictEqual([
       'Repaired Codex model routes:- agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.\nSet agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',

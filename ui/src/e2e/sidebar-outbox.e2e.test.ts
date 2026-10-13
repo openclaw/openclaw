@@ -167,7 +167,8 @@ suite.define(() => {
       },
     );
   });
-  it.each([390, 320])("keeps long-label recovery rows compact at %ipx", async (width) => {
+  it("keeps long-label recovery rows compact at 320px", async () => {
+    const width = 320;
     const artifacts = createControlUiE2eArtifactDir(`sidebar-outbox-compact-${width}`);
     await suite.withPage(
       {

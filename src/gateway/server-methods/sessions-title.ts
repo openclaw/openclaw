@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -31,7 +30,6 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         rawAgentId: request.agentId,
         respond,
         cfg,
-        normalize: normalizeOptionalString,
       });
       if (!agent) {
         return;

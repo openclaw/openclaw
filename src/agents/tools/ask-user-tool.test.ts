@@ -628,6 +628,7 @@ describe("ask_user execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
     await expect(pending).resolves.toMatchObject({ details: { status: "no_answer" } });
     expect(
@@ -930,6 +931,7 @@ describe("ask_user execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
@@ -1043,6 +1045,7 @@ describe("ask_user execution", () => {
 
     expect(steer).toHaveBeenCalledWith(
       "Follow-up message",
+      undefined,
       undefined,
       undefined,
       undefined,

@@ -9,6 +9,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 
 // Shutdown preparation must retain this importer's promise before installed chunks can change.
 export const loadSubagentSessionCleanupRuntime = createLazyRuntimeModule(
@@ -45,6 +46,7 @@ export async function deleteSubagentSessionForCleanup(params: {
   prepareCurrent?: () => Promise<boolean>;
   isCurrent?: () => boolean;
   childSessionKey: string;
+  childAgentId?: string;
   spawnMode?: SpawnSubagentMode;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
@@ -53,13 +55,14 @@ export async function deleteSubagentSessionForCleanup(params: {
   timeoutMs?: number;
   onError?: (error: unknown) => void;
 }): Promise<SubagentSessionCleanupOutcome> {
-  if (!params.expectedSessionId || !params.expectedLifecycleRevision) {
+  const childAgentId = resolveSubagentChildAgentId(params);
+  if (!childAgentId || !params.expectedSessionId || !params.expectedLifecycleRevision) {
     return "failed";
   }
-  const prepareCurrent = params.prepareCurrent;
-  const isCurrent = params.isCurrent;
+  const { prepareCurrent, isCurrent } = params;
   const cleanupParams: SessionsDeleteParams = {
     key: params.childSessionKey,
+    agentId: childAgentId,
     deleteTranscript: params.deleteTranscript ?? true,
     emitLifecycleHooks: params.emitLifecycleHooks ?? params.spawnMode === "session",
     expectedSessionId: params.expectedSessionId,

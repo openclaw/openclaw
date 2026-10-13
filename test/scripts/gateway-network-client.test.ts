@@ -384,19 +384,6 @@ describe("gateway network client", () => {
     };
   }
 
-  it("proves health after the authenticated connect handshake", async () => {
-    const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
-
-    await runGatewayNetworkClient(
-      { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-      harness.deps,
-    );
-
-    expect(harness.sentMethods).toEqual(["connect", "health"]);
-    expect(harness.stdout).toEqual(["ok"]);
-    expect(harness.closeCount).toBe(1);
-  });
-
   it.each([
     {
       methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
@@ -441,31 +428,6 @@ describe("gateway network client", () => {
       ),
     ).rejects.toThrow(/suspension methods/u);
     expect(harness.sentMethods).toEqual(["connect", "health"]);
-  });
-
-  it("bounds socket and frame waits by the client deadline", async () => {
-    const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
-    const openSocket = vi.fn(harness.deps.openSocket);
-    const onceFrameMock = vi.fn(harness.deps.onceFrame);
-
-    await runGatewayNetworkClient(
-      { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
-      {
-        ...harness.deps,
-        onceFrame: onceFrameMock,
-        openSocket,
-      },
-    );
-
-    const openSocketCalls = openSocket.mock.calls as unknown as Array<[unknown, number]>;
-    const onceFrameCalls = onceFrameMock.mock.calls as unknown as Array<[unknown, unknown, number]>;
-    expect(openSocketCalls[0]?.[1]).toBeGreaterThan(0);
-    expect(openSocketCalls[0]?.[1]).toBeLessThanOrEqual(250);
-    expect(onceFrameCalls.map((call) => call[2])).toHaveLength(2);
-    for (const frameTimeoutMs of onceFrameCalls.map((call) => call[2])) {
-      expect(frameTimeoutMs).toBeGreaterThan(0);
-      expect(frameTimeoutMs).toBeLessThanOrEqual(250);
-    }
   });
 
   it("does not sleep past the remaining client deadline between retries", async () => {

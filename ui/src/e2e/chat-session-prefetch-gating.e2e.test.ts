@@ -53,8 +53,8 @@ suite.define(() => {
     await page.clock.install({ time: CLOCK_START });
     const mainSession = createControlUiSessionRow(MAIN_SESSION_KEY, "Main", CLOCK_START - 1_000);
     const gateway = await installMockGateway(page, {
-      // The presented pane boots through chat.startup, so the first chat.history
-      // on the wire is the background warm-up of the other session.
+      // The presented pane boots through chat.startup; navigation intent below
+      // warms the other session through chat.history.
       deferredMethods: ["chat.history"],
       historyMessages: [],
       sessions: [
@@ -70,6 +70,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       await page.locator(".chat-bubble", { hasText: "Main transcript" }).first().waitFor();
+      await page
+        .locator(`openclaw-app-sidebar [data-session-key="${WARM_SESSION_KEY}"] a`)
+        .first()
+        .hover();
       await expect.poll(() => historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
       // A failed warm-up leaves the session eligible and arms the prefetcher's own
       // cooldown retry timer, which fires without any page update in between.

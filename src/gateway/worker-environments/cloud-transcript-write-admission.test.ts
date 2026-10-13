@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -24,9 +25,25 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
+import { reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore } from "./workspace-result-finalize.js";
 import * as resultStaging from "./workspace-result-staging.js";
+
+function reconcileWorkspaceAfterTurn(
+  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
+) {
+  return withWorkerTurnTranscriptDatabase(
+    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
+    {
+      assertCurrent() {},
+      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
+    },
+    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
+  );
+}
+
+afterAll(closeStateDatabaseForTest);
 
 // Pause only the physical admission boundary, without holding a native database lock.
 vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
@@ -49,7 +66,7 @@ describe("cloud transcript write admission", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(withSessionManagerWrite).mockReset();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
@@ -131,14 +148,21 @@ describe("cloud transcript write admission", () => {
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue(undefined);
-        } else if (change === "writer" || change === "lifecycle") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue({
-            ...entry,
-            ...(change === "writer"
-              ? { activeWriterRunId: "replacement-run" }
-              : { lifecycleRevision: "replacement-lifecycle" }),
+          await sessionAccess.deleteSessionEntryLifecycle({
+            ...sessionTarget,
+            archiveTranscript: false,
+            target: {
+              canonicalKey: sessionTarget.sessionKey,
+              storeKeys: [sessionTarget.sessionKey],
+            },
+            expectedSessionId: entry.sessionId,
           });
+        } else if (change === "writer" || change === "lifecycle") {
+          await sessionAccess.patchSessionEntryCore(sessionTarget, () =>
+            change === "writer"
+              ? { activeWriterRunId: "replacement-run" }
+              : { lifecycleRevision: "replacement-lifecycle" },
+          );
         }
         gate.release.resolve();
         const outcome = await operation;
@@ -255,12 +279,19 @@ describe("cloud transcript write admission", () => {
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue(undefined);
-        } else if (change === "writer") {
-          vi.spyOn(sessionAccess, "loadSessionEntry").mockReturnValue({
-            ...entry,
-            activeWriterRunId: "replacement-run",
+          await sessionAccess.deleteSessionEntryLifecycle({
+            ...sessionTarget,
+            archiveTranscript: false,
+            target: {
+              canonicalKey: sessionTarget.sessionKey,
+              storeKeys: [sessionTarget.sessionKey],
+            },
+            expectedSessionId: entry.sessionId,
           });
+        } else if (change === "writer") {
+          await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
+            activeWriterRunId: "replacement-run",
+          }));
         }
         gate.release.resolve();
         const outcome = await operation;

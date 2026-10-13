@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import * as status from "./status.js";
 import {
@@ -97,6 +98,7 @@ describe("plugin status reports", () => {
         manifestRegistry,
         plugins: manifestRegistry.plugins,
         byPluginId: new Map(),
+        diagnostics: [],
       };
     });
     mocks.autoEnable.mockImplementation((params: { config: unknown }) => ({
@@ -205,22 +207,10 @@ describe("plugin status reports", () => {
     expect(results.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
   });
 
-  it("normalizes bundled plugin versions to the core base release", async () => {
-    setReport({
-      plugins: [createPluginRecord({ id: "bundled", version: "2026.3.22", origin: "bundled" })],
-    });
-    await status.withPluginDiagnosticsReport(
-      { config: {}, env: { OPENCLAW_VERSION: "2026.3.23-1" } },
-      (report) => {
-        expect(report.plugins[0]?.version).toBe("2026.3.23");
-      },
-    );
-  });
-
   it("projects imported state before and after diagnostics evaluate native modules", async () => {
     setReport({
       plugins: [
-        createPluginRecord({ id: "runtime-loaded" }),
+        createPluginRecord({ id: "runtime-loaded", origin: "bundled", version: "2026.3.22" }),
         createPluginRecord({ id: "facade-loaded" }),
         createPluginRecord({ id: "broken-plugin", status: "error" }),
         createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
@@ -237,35 +227,55 @@ describe("plugin status reports", () => {
       ["bundle-loaded", false],
       ["cold-plugin", false],
     ]);
-    await status.withPluginDiagnosticsReport({ config: {} }, (report) => {
-      expect(report.plugins.map(({ id, imported }) => [id, imported])).toEqual([
-        ["runtime-loaded", true],
-        ["facade-loaded", true],
-        ["broken-plugin", true],
-        ["bundle-loaded", false],
-        ["cold-plugin", true],
-      ]);
-      expect(report.plugins.find((plugin) => plugin.id === "broken-plugin")?.status).toBe("error");
-    });
+    await status.withPluginDiagnosticsReport(
+      { config: {}, env: { OPENCLAW_VERSION: "2026.3.23-1" } },
+      (report) => {
+        expect(report.plugins[0]?.version).toBe("2026.3.23");
+        expect(report.plugins.map(({ id, imported }) => [id, imported])).toEqual([
+          ["runtime-loaded", true],
+          ["facade-loaded", true],
+          ["broken-plugin", true],
+          ["bundle-loaded", false],
+          ["cold-plugin", true],
+        ]);
+        expect(report.plugins.find((plugin) => plugin.id === "broken-plugin")?.status).toBe(
+          "error",
+        );
+      },
+    );
   });
 
-  it("exposes gateway discovery only after its service is registered", () => {
-    const cold = setReport({ plugins: [createPluginRecord({ id: "bonjour" })] });
-    expect(inspect("bonjour", cold)).toMatchObject({
-      shape: "non-capability",
-      capabilityCount: 0,
-      capabilities: [],
+  it.each(["single", "all"])("uses the inspected config for %s decision diagnostics", (scope) => {
+    mocks.config.mockReturnValue({ agents: { defaults: { decisionModel: "other/model" } } });
+    const plugin = createPluginRecord({ id: "inspect-decisions" });
+    const report = setReport({
+      plugins: [plugin, createPluginRecord({ id: "unrelated" })],
+      decisionProviders: [
+        {
+          pluginId: plugin.id,
+          host: new DecisionProviderHost(
+            {
+              id: "inspect-decisions",
+              contractVersion: 1,
+              async evaluate() {
+                throw new Error("Inspection must not evaluate decisions");
+              },
+            },
+            plugin,
+          ),
+        },
+      ],
     });
-    const registered = setReport({
-      plugins: [createPluginRecord({ id: "bonjour", gatewayDiscoveryServiceIds: ["bonjour"] })],
-    });
-    expect(inspect("bonjour", registered)).toMatchObject({
-      shape: "plain-capability",
-      capabilityMode: "plain",
-      capabilityCount: 1,
-      capabilities: [{ kind: "gateway-discovery", ids: ["bonjour"] }],
-    });
-    expect(mocks.load).not.toHaveBeenCalled();
+    const config = { agents: { defaults: { decisionModel: "inspect-decisions/model" } } };
+    const inspected =
+      scope === "single"
+        ? status.buildPluginInspectReport({ id: plugin.id, config, report })
+        : status
+            .buildAllPluginInspectReports({ config, report })
+            .find((entry) => entry.plugin.id === plugin.id);
+    expect(inspected?.decisions).toMatchObject([
+      { pluginId: "inspect-decisions", providerId: "inspect-decisions", configured: true },
+    ]);
   });
 
   it("orders compatibility notices by plugin without attributing unrelated load failures", () => {

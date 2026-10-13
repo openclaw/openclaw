@@ -38,8 +38,6 @@ export type SlashCommandDef = {
   argOptions?: string[];
   /** Whether a multi-word argument may execute from an inline prose position. */
   allowsInlineMultiWordArgs?: boolean;
-  /** Keyboard shortcut hint shown in the menu (display only). */
-  shortcut?: string;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
@@ -59,7 +57,7 @@ type CommandLike = {
   args?: Array<{
     name: string;
     required?: boolean;
-    choices?: LocalArgChoice[];
+    choices?: NonNullable<ChatCommandDefinition["args"]>[number]["choices"];
   }>;
   formatArgs?: (values: CommandArgValues) => string | undefined;
   category?: string;
@@ -196,13 +194,13 @@ function choiceToValue(command: CommandLike, argName: string, choice: LocalArgCh
 
 function getArgOptions(command: CommandLike): string[] | undefined {
   const firstArg = command.args?.[0];
-  if (!firstArg) {
+  if (!firstArg || !Array.isArray(firstArg.choices)) {
     return undefined;
   }
   const options = firstArg.choices
-    ?.map((choice) => choiceToValue(command, firstArg.name, choice))
+    .map((choice) => choiceToValue(command, firstArg.name, choice))
     .filter(Boolean);
-  return options?.length ? options : undefined;
+  return options.length ? options : undefined;
 }
 
 function mapTier(command: CommandLike): SlashCommandTier {
@@ -213,10 +211,7 @@ function mapTier(command: CommandLike): SlashCommandTier {
   return "standard";
 }
 
-function toSlashCommand(
-  command: CommandLike,
-  source: "local" | "remote" = "local",
-): SlashCommandDef | null {
+function toSlashCommand(command: CommandLike, source: "local" | "remote"): SlashCommandDef | null {
   const name = command.name.trim();
   if (!name) {
     return null;
@@ -319,27 +314,21 @@ function normalizeClientPresentation(
 
 export function buildFallbackSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
-    .map((command) => ({
-      key: command.key,
-      name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
-      aliases: command.textAliases,
-      description: command.description,
-      modelIndependent: command.modelIndependent,
-      args: command.args?.map((arg) => ({
-        name: arg.name,
-        required: arg.required,
-        choices: Array.isArray(arg.choices) ? arg.choices : undefined,
-      })),
-      formatArgs: command.formatArgs,
-      category: command.category,
-      tier: command.tier,
-    }))
-    .map((command) => toSlashCommand(command, "local"))
+    .map((command) =>
+      toSlashCommand(
+        {
+          ...command,
+          name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
+          aliases: command.textAliases,
+        },
+        "local",
+      ),
+    )
     .filter((command): command is SlashCommandDef => command !== null);
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(localCommands = buildFallbackSlashCommands()): Set<string> {
+function buildReservedLocalSlashNames(localCommands: SlashCommandDef[]): Set<string> {
   const reserved = new Set<string>();
   for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));

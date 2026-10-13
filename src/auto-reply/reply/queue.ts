@@ -1,6 +1,6 @@
 /** Public queue API for deferred auto-reply follow-up runs. */
 
-export { scheduleFollowupDrain } from "./queue/drain.js";
+export { kickFollowupDrainIfIdle, scheduleFollowupDrain } from "./queue/drain.js";
 export {
   claimNextQueuedFollowupRequestFrom,
   enqueueFollowupRun,

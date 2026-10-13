@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import { sql } from "kysely";
+import { sql, type Expression } from "kysely";
 import {
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -12,8 +12,8 @@ import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-age
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { readTranscriptContextStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -50,32 +50,32 @@ export async function streamSessionTranscriptHydration(
       // sqlite-allow-raw: This task's dedicated read-only handle keeps one snapshot across host ACKs.
       database.db.exec("BEGIN DEFERRED");
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...request.resolvedScope });
-      assertSessionTranscriptHot(database.db, request.resolvedScope.sessionId);
-      const version = readTranscriptContextVersionInTransaction(
+      const { version, coldArchive } = readTranscriptContextStateInTransaction(
         database,
         request.resolvedScope.sessionId,
       );
+      if (coldArchive) {
+        throw new SessionTranscriptColdError(request.resolvedScope.sessionId);
+      }
       const encoding = readTranscriptStorageEncoding(database.db);
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
-      });
+      }).$if(request.afterSeq !== undefined, (query) => query.where("seq", ">", request.afterSeq!));
+      const eventSlice = (offset: number | Expression<number>) =>
+        /* kysely-allow-raw: Slice database-encoded canonical bytes natively so identity TEXT never enters JS whole. */
+        sql<Uint8Array>`substr(CAST(${transcriptEventJsonSql(database.db)} AS BLOB), ${offset}, ${SLICE_BYTES})`.as(
+          "data",
+        );
       const readPart = prepareSqliteQueryTakeFirstSync<
         { seq: number; offset: number },
         { data: Uint8Array }
       >(database.db, (parameter) =>
-        source
-          .select(
-            /* kysely-allow-raw: Slice database-encoded canonical bytes natively so identity TEXT never enters JS whole. */
-            sql<Uint8Array>`substr(CAST(${transcriptEventJsonSql(database.db)} AS BLOB), ${parameter((value) => value.offset)}, ${SLICE_BYTES})`.as(
-              "data",
-            ),
-          )
-          .where(
-            "seq",
-            "=",
-            parameter((value) => value.seq),
-          ),
+        source.select(eventSlice(parameter((value) => value.offset))).where(
+          "seq",
+          "=",
+          parameter((value) => value.seq),
+        ),
       );
       let frames: SessionTranscriptHydrationChunk["frames"] = [];
       let bytes = 0;
@@ -96,19 +96,23 @@ export async function streamSessionTranscriptHydration(
       };
       for (const row of iterateSqliteQuerySync(
         database.db,
-        source.select("seq").orderBy("seq", "asc"),
+        source.select(["seq", eventSlice(1)]).orderBy("seq", "asc"),
       )) {
         for (let offset = 1; ; offset += SLICE_BYTES) {
           control.throwIfCancelled();
-          const { data } = expectDefined(
-            readPart({ seq: row.seq, offset }),
-            "transcript snapshot row",
-          );
+          const data =
+            offset === 1
+              ? row.data
+              : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row").data;
           if (bytes + data.byteLength > CHUNK_BYTES) {
             await flush();
           }
           const endOfEvent = data.byteLength < SLICE_BYTES;
-          frames.push({ data, endOfEvent });
+          frames.push({
+            data,
+            endOfEvent,
+            ...(request.includeEventJson && endOfEvent ? { seq: row.seq } : {}),
+          });
           bytes += data.byteLength;
           if (bytes >= CHUNK_BYTES || frames.length >= CHUNK_FRAMES) {
             await flush();

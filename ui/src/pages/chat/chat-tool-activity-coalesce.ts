@@ -266,11 +266,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       projections: [],
     };
     invocation.projections.push(projection);
-    if (projection.call) {
-      invocation.call = preferProjection(invocation.call, projection);
-    } else {
-      invocation.result = preferProjection(invocation.result, projection);
-    }
+    const kind = projection.call ? "call" : "result";
+    invocation[kind] = preferProjection(invocation[kind], projection);
     if (projection.source.message["__openclawToolStreamLive"] === true) {
       invocation.live = projection.source.message;
     }
@@ -366,7 +363,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
       for (const activity of activityItems) {
         const previous = prepared.get(activity.itemId);
-        if (previous?.phase !== "end" || activity.phase === "end") {
+        // Only an explicitly unpaired history call yields to live progress.
+        // A real terminal receipt stays terminal even when its outcome is unknown.
+        if (previous?.phase !== "end" || previous.unpairedCall || activity.phase === "end") {
           prepared.set(activity.itemId, activity);
         }
       }

@@ -51,6 +51,48 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
   };
 }
 
+it.each([false, true])(
+  "settles native results before later topology changes (placement reader: %s)",
+  async (withPlacement) => {
+    const { projection, query, lookup } = placementReadView();
+    const preparedState = projection.state;
+    let topologyChanged = false;
+    let consumed = 0;
+    Object.defineProperty(projection, "state", {
+      get() {
+        if (topologyChanged) {
+          throw new Error("Session row topology changed; prepare current facts before reading");
+        }
+        return preparedState;
+      },
+    });
+    const owner = createSessionRowPlacementProjection(
+      withPlacement ? { readProjection: async () => placementSnapshot([]) } : undefined,
+      () => undefined,
+    );
+    try {
+      const reading = owner.withPreparedRows(
+        projection,
+        () => true,
+        lookup,
+        () => [query("completed-native-read")],
+        () => undefined,
+        () => {
+          consumed++;
+          queueMicrotask(() => {
+            topologyChanged = true;
+          });
+          return "prepared";
+        },
+      );
+      await expect(reading).resolves.toEqual({ kind: "complete", value: "prepared" });
+      expect(consumed).toBe(1);
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+
 it.each(["facts", "rows"] as const)(
   "releases exact preparation after the requesting observation closes during %s readiness",
   async (phase) => {

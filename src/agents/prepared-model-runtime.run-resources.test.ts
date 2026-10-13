@@ -375,7 +375,6 @@ it("process close waits for admitted registration disposal and rejects new RUN a
         ]);
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
-        original().instance.reserveReplacement()();
         expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
       } finally {
         finishDisposal.resolve();
@@ -478,7 +477,6 @@ it.each(["hold", "reject"] as const)(
             }),
           ]);
           expect(readAnswer(original())).toBe(42);
-          original().instance.reserveReplacement()();
           expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           if (catalog === "hold") {
             abort.abort(new Error("fixture admission cancelled"));

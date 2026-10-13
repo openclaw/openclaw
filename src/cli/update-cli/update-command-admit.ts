@@ -3,7 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
-  listLegacyOAuthSidecarPaths,
+  listReferencedLegacyOAuthSidecarPaths,
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
 import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
@@ -13,6 +13,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { compareOpenClawVersions, normalizeOpenClawVersionBase } from "../../config/version.js";
 import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
+import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -24,6 +25,7 @@ import {
   assertNoRetiredStateFiles,
   RetiredStateFormatError,
 } from "../../infra/state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "../../infra/state-migrations.retired-runtime-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
@@ -118,6 +120,20 @@ async function inspectUpdateAdmission(
     delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     return await withOwnedManagedUpdateEnv(env, async () => {
       const timeoutMs = context.request.timeoutMs ?? 120_000;
+      const readConfigSnapshot = async (coreOnly = false) => {
+        // Pending facts belong to update admission after its storage compatibility check.
+        const deferredPluginMigrations = coreOnly
+          ? undefined
+          : await readDeferredPluginMigrationsAsync({ env });
+        return createConfigIO({
+          env: cloneEnvWithPlatformSemantics(env),
+          ...(coreOnly ? { pluginValidation: "core-only" as const } : {}),
+          deferredPluginMigrations,
+          observe: false,
+          shellEnvFallback: "defer",
+          suppressFutureVersionWarning: true,
+        }).readConfigFileSnapshotForWrite();
+      };
       const checks = new Map<
         string,
         Omit<UpdateAdmissionVerdict["facts"]["checks"][number], "name">
@@ -165,13 +181,7 @@ async function inspectUpdateAdmission(
       try {
         assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env });
         // Doctor's existing planner supplies a source-bound projection; it never applies it here.
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: cloneEnvWithPlatformSemantics(env),
-          pluginValidation: "core-only",
-          observe: false,
-          shellEnvFallback: "defer",
-          suppressFutureVersionWarning: true,
-        }).readConfigFileSnapshotForWrite();
+        const { snapshot, writeOptions } = await readConfigSnapshot(true);
         const retired = findRetiredConfigUpgradeRequirement(
           snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
         );
@@ -240,6 +250,7 @@ async function inspectUpdateAdmission(
             // The saved partition reads SQLite; admit its schema before inspecting live files
             // that published updaters omit from their later rehearsal snapshots.
             const stateDir = resolveStateDir(databaseContext.env);
+            assertNoRetiredRuntimeStateFiles(stateDir, databaseContext.env);
             assertNoRetiredStateFiles(
               "JSON delivery queues",
               listRetiredDeliveryQueueFiles(stateDir),
@@ -248,11 +259,11 @@ async function inspectUpdateAdmission(
               resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
             ]);
             assertNoRetiredStateFiles("OAuth credential sidecars", [
-              ...listLegacyOAuthSidecarPaths(
+              ...listReferencedLegacyOAuthSidecarPaths(
                 env,
                 snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
               ),
-              ...listLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
+              ...listReferencedLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
             ]);
             assertNoRetiredStateFiles(
               "Cron state",
@@ -295,12 +306,7 @@ async function inspectUpdateAdmission(
       }
       // Plugin metadata reads require compatible stores; never let them mask a schema refusal.
       if (databaseContext && schemasAccepted && !databaseContext.legacyConfigPlan) {
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: cloneEnvWithPlatformSemantics(env),
-          observe: false,
-          suppressFutureVersionWarning: true,
-          shellEnvFallback: "defer",
-        }).readConfigFileSnapshotForWrite();
+        const { snapshot, writeOptions } = await readConfigSnapshot();
         try {
           if (!snapshot.valid || snapshot.readError) {
             const legacyConfigPlan = !snapshot.readError

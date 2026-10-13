@@ -34,16 +34,7 @@ type DirFetchParams = {
   expectedBinding?: unknown;
 };
 
-type DirFetchErrCode =
-  | "INVALID_PATH"
-  | "NOT_FOUND"
-  | "IS_FILE"
-  | "TREE_TOO_LARGE"
-  | "SYMLINK_REDIRECT"
-  | "CANONICAL_PATH_CHANGED"
-  | "READ_ERROR";
-
-function classifyFsError(err: unknown): DirFetchErrCode {
+function classifyFsError(err: unknown) {
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
     return safeCode;
@@ -195,7 +186,7 @@ export async function handleDirFetch(params: DirFetchParams) {
     return {
       ok: false as const,
       code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
+      message: "resolved path differs from the authorized target",
       canonicalPath: canonical,
     };
   }

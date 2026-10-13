@@ -1,17 +1,22 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { setTimeout as delay } from "node:timers/promises";
+import path from "node:path";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 import { SpawnBrokerError } from "./protocol.js";
 
 let broker: SpawnBrokerHost | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await broker?.close();
   broker = undefined;
@@ -23,9 +28,14 @@ async function start() {
   return broker;
 }
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
-type BootstrapFixtureMode = "native" | "stale-ambient" | "send-throw" | "send-callback";
+type BootstrapFixtureMode =
+  | "native"
+  | "stale-ambient"
+  | "send-throw"
+  | "send-callback"
+  | "child-disconnect";
 
 async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown> {
   const script = `
@@ -83,17 +93,19 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
     });
     syncBuiltinESMExports();
     process.stderr.write('bootstrap fixture pid=' + process.pid + '\\n');
-    const watchdog = setTimeout(() => {
-      nativeChild?.kill('SIGKILL');
-      console.error(JSON.stringify({failure: 'broker bootstrap lifecycle did not settle', events}));
-      process.exit(97);
-    }, 10000);
+    let completed = false;
+    process.once('beforeExit', () => {
+      if (!completed) console.error(JSON.stringify({failure: 'native broker exited without completing retirement', events}));
+    });
     try {
       const {createSpawnBrokerHost} = await import(${JSON.stringify(new URL("./host.js", import.meta.url).href)});
       let host;
       assert.doesNotThrow(() => { host = createSpawnBrokerHost(mode === 'stale-ambient' ? {} : {nativeResources: true}); });
       assert.ok(nativeChild);
       assert.ok(nativeChild.pid > 0);
+      // The standalone fixture has no Gateway lifetime keeping an unreferenced broker alive.
+      nativeChild.ref();
+      nativeChild.channel?.ref();
       assert.equal(observed.mock.calls.length, 1);
       if (mode.startsWith('send-')) {
         await assert.rejects(host.ready(), error => {
@@ -103,6 +115,27 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
         assert.equal(refused, 1);
       } else {
         await host.ready();
+      }
+      if (mode === 'child-disconnect') {
+        const nativeClosures = new Set();
+        nativeChild.on('message', message => {
+          if (message?.type === 'closed') nativeClosures.add(message.id);
+        });
+        const command = host.spawn(process.execPath,
+          ['-e', "process.on('disconnect', () => {}); process.send('ready');"],
+          {stdio:['ignore','ignore','ignore','ipc'], serialization:'advanced'});
+        const ready = once(command, 'message');
+        await command.ready();
+        assert.equal((await ready)[0], 'ready');
+        command.disconnect();
+        await command.waitForClose();
+        const sibling = host.spawn(process.execPath, ['-e', 'process.exitCode=0'], {stdio:'ignore'});
+        const siblingClosed = once(sibling, 'close');
+        await sibling.ready();
+        await siblingClosed;
+        // IPC is ordered: native retirement precedes this later command's completion.
+        assert.equal(nativeClosures.has(command.requestId), true,
+          'broker native retirement receipt missing after parent IPC disconnect');
       }
       if (mode === 'stale-ambient') {
         const command = host.spawn(process.execPath, ['-e', 'process.exit(0)'], {stdio: 'ignore'});
@@ -114,9 +147,13 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
         ordinaryCommandClosed = true;
       }
       await host.close();
+      completed = true;
       if (mode !== 'stale-ambient') {
         assert.deepEqual(environmentKeys, []);
-        assert.deepEqual(events, ['spawn', 'exit', 'close']);
+        assert.equal(events[0], 'spawn');
+        assert.ok(events.includes('exit'));
+        assert.equal(nativeChild.exitCode, 0);
+        assert.equal(nativeChild.connected, false);
       } else {
         assert.ok(events.includes('exit'));
       }
@@ -124,7 +161,6 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
       console.log(JSON.stringify({mode, closed: true, refused,
         ...(mode === 'stale-ambient' ? {ordinaryReady: true, ordinaryCommandClosed} : {nativeClose: true})}));
     } finally {
-      clearTimeout(watchdog);
       if (nativeChild?.exitCode === null && nativeChild.signalCode === null) nativeChild.kill('SIGKILL');
       for (const hook of sendHooks) hook.mock.restore();
       observed.mock.restore();
@@ -151,7 +187,7 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
 }
 
 describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", () => {
-  it.each(["native", "stale-ambient", "send-throw", "send-callback"] as const)(
+  it.each(["native", "stale-ambient", "send-throw", "send-callback", "child-disconnect"] as const)(
     "settles private bootstrap and native child closure (%s)",
     async (mode) => {
       expect(await runBootstrapFixture(mode)).toEqual({
@@ -168,6 +204,89 @@ describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", 
 });
 
 describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
+  it("fences guarded launches and settles custody from native receipts", async () => {
+    const host = await start();
+    const marker = path.join(tempDirs.make("openclaw-broker-launch-"), "started");
+    let current = true;
+    const denied = host.spawn(
+      process.execPath,
+      ["-e", "require('node:fs').writeFileSync(process.argv[1], 'started')", marker],
+      { stdio: "ignore" },
+      (launch) => {
+        if (!current) {
+          throw new Error("launch authority revoked");
+        }
+        return launch();
+      },
+    );
+    current = false;
+    await expect(denied.ready()).rejects.toThrow("launch authority refused");
+    expect(denied.pid).toBeUndefined();
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const admitted = createDeferredCore();
+    const child = host.spawn(
+      process.execPath,
+      ["-e", "process.stdin.resume(); process.stdin.once('end', () => process.exit(0))"],
+      { stdio: ["pipe", "ignore", "ignore"] },
+      (launch, settlement) => {
+        if (!settlement) {
+          throw new Error("Missing native launch settlement");
+        }
+        void settlement.then(() => admitted.resolve(), admitted.reject);
+        return launch();
+      },
+    );
+    await admitted.promise;
+    expect(child.exitCode).toBeNull();
+    await child.ready();
+    const closed = once(child, "close");
+    child.stdin!.end();
+    expect(await closed).toEqual([0, null]);
+
+    const grantReached = createDeferredCore<{ settlement: Promise<unknown> }>();
+    let pausedPid: number | undefined;
+    const failed = host.spawn(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      { stdio: "ignore" },
+      (launch, settlement) => {
+        if (!settlement || !host.pid) {
+          throw new Error("Missing native launch settlement");
+        }
+        pausedPid = host.pid;
+        process.kill(pausedPid, "SIGSTOP");
+        try {
+          const dispatched = launch();
+          failed.fail(new Error("synthetic local proxy failure"));
+          grantReached.resolve({ settlement });
+          return dispatched;
+        } catch (error) {
+          process.kill(pausedPid, "SIGCONT");
+          pausedPid = undefined;
+          throw error;
+        }
+      },
+    );
+    const locallyFailed = expect(failed.ready()).rejects.toThrow("synthetic local proxy failure");
+    const { settlement } = await grantReached.promise;
+    let settled = false;
+    void settlement.then(() => {
+      settled = true;
+    });
+    try {
+      await locallyFailed;
+      // Drain host promise reactions while the exact native peer cannot publish a receipt.
+      await nextTurn();
+      expect(settled).toBe(false);
+    } finally {
+      if (pausedPid) {
+        process.kill(pausedPid, "SIGCONT");
+      }
+    }
+    await settlement;
+  });
+
   it.each(["coalesced", "later"])(
     "preserves native spawn waiters and single ordered events for %s exits",
     async (timing) => {
@@ -309,6 +428,45 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     expect(extra).toBe("private-pipe");
     expect(child.connected).toBe(false);
   });
+
+  for (const output of ["ignore", "pipe"] as const) {
+    it(
+      "settles a real child after parent-initiated IPC disconnect (" + output + ")",
+      async ({ signal }) => {
+        const host = await start();
+        const child = host.spawn(
+          process.execPath,
+          [
+            "-e",
+            "process.on('disconnect', () => { process.stdout.end('stdout-tail'); process.stderr.end('stderr-tail'); }); process.send('ready');",
+          ],
+          { stdio: ["ignore", output, output, "ipc"], serialization: "advanced" },
+        );
+        const ready = once(child, "message");
+        let stdout = "",
+          stderr = "";
+        await child.ready();
+        // Native streams arrive with the spawn receipt, before lifecycle messages are released.
+        child.stdout?.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        child.stderr?.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        expect((await ready)[0]).toBe("ready");
+        const exited = once(child, "exit");
+        child.disconnect();
+        expect(await withinTest(exited, signal)).toEqual([0, null]);
+        await withinTest(child.waitForClose(), signal);
+        expect(child.exitCode).toBe(0);
+        expect(child.signalCode).toBe(null);
+        expect(child.connected).toBe(false);
+        expect(stdout).toBe(output === "pipe" ? "stdout-tail" : "");
+        expect(stderr).toBe(output === "pipe" ? "stderr-tail" : "");
+      },
+      10_000,
+    );
+  }
 
   it.each(["SIGTERM", "SIGINT"] as const)(
     "keeps command completion and cleanup spawning available after a supervisor %s",

@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { captureMaintenanceConfigAsyncReader } from "../../config/sessions/store-maintenance-runtime.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -14,21 +13,23 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { updateAcpSessionStoreEntry } from "./session-meta-entry.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { upsertMemoryAcpSessionMeta } from "./session-meta-memory.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 import {
   prepareAcpSessionMutation,
   commitAcpSessionMutation,
 } from "./session-meta-worker-mutation.js";
-import { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
+import { upsertAcpSessionMetaForMaintenance } from "./session-meta-write.native.js";
+import type { AcpSessionMutationParams } from "./session-meta-write.types.js";
 
-type AcpSessionMutationParams = Parameters<typeof upsertAcpSessionMetaNative>[0];
-
-/** File-backed writes retain their read source through both canonical storage owners. */
+/** Entry changes follow the selected session owner; ACP metadata keeps its shared worker. */
 export async function upsertAcpSessionMeta(
   params: AcpSessionMutationParams,
 ): Promise<SessionEntry | null> {
-  return mutateAcpSessionMeta(params);
+  return isIncognitoSessionKey(params.sessionKey.trim())
+    ? upsertMemoryAcpSessionMeta(params)
+    : mutateAcpSessionMeta(params);
 }
 
 /** Private control updates cannot recreate metadata that disappeared after preparation. */
@@ -60,20 +61,6 @@ async function mutateAcpSessionMeta(
     assertCurrent: params.assertCommitAllowed,
   });
   const store = resolveSessionStorePathForAcp({ ...captured, sessionKey, agentId: params.agentId });
-  const mutateNative = (assertCommitAllowed = captured.assertCurrent) => {
-    if (control) {
-      throw new Error("ACP controlled metadata mutation requires its durable worker source");
-    }
-    return upsertAcpSessionMetaNative({
-      ...params,
-      ...captured,
-      expectedControlBinding,
-      assertCommitAllowed,
-    });
-  };
-  if (isIncognitoSessionKey(sessionKey)) {
-    return mutateNative();
-  }
   return withSessionEntryReadOnlyInWorker(
     {
       agentId: store.agentId,
@@ -88,9 +75,6 @@ async function mutateAcpSessionMeta(
       }
       const entry = read.value;
       const readerScope = readOwner.scope;
-      if (readOwner.kind === "native") {
-        return mutateNative();
-      }
       if (!readerScope?.storePath) {
         throw new Error("ACP mutation has no retained canonical source");
       }
@@ -100,7 +84,16 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       };
       if (!supportsOpenClawAgentDatabaseExecution(options)) {
-        return mutateNative(readOwner.assertCurrent);
+        // Memory readers return before this file-backed scope; only native maintenance remains.
+        if (control) {
+          throw new Error("ACP controlled metadata mutation requires its durable worker source");
+        }
+        return upsertAcpSessionMetaForMaintenance({
+          ...params,
+          ...captured,
+          expectedControlBinding,
+          assertCommitAllowed: readOwner.assertCurrent,
+        });
       }
       const identity = readDatabasePathIdentitySync(options.path);
       const context = captureOpenClawStateWorkerContext({
@@ -108,7 +101,7 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       });
       const prepareMaintenance = captureMaintenanceConfigAsyncReader(captured.assertCurrent);
-      const key = normalizeStoreSessionKey(store.storeSessionKey);
+      const key = store.storeSessionKey;
       const metadataRead = {
         keys: [buildAcpDatabaseSessionKey(key, store.agentId)],
       };

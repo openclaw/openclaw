@@ -1,11 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   isCronSessionDisplayKey,
+  isSubagentSessionRow,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
-import type { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import type { materializeSessionRow } from "./session-utils-row.js";
 
 export function readSessionListSelectionFacts(
@@ -16,6 +17,7 @@ export function readSessionListSelectionFacts(
     spawnedBy?: string;
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
+    createdSurface?: "plugin-dock";
   } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
 ) {
   const parsed = parseAgentSessionKey(key);
@@ -23,6 +25,7 @@ export function readSessionListSelectionFacts(
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
     isCron: isCronSessionDisplayKey(key),
+    isDock: entry?.createdSurface === "plugin-dock",
     isSystem: isSystemCreatedSessionRow({
       key,
       createdActor: entry?.createdActor,
@@ -32,15 +35,7 @@ export function readSessionListSelectionFacts(
       subject: entry?.subject,
       classification: entry?.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
     }),
-    isSubagent:
-      isSubagentSessionKey(key) ||
-      // Visible spawned conversations use dashboard keys even without a sidebar group.
-      // Lineage alone must not hide the session where the human follows the work.
-      Boolean(
-        entry?.spawnedBy &&
-        !parsed?.rest.toLowerCase().startsWith("dashboard:") &&
-        !normalizeOptionalString(entry.category),
-      ),
+    isSubagent: isSubagentSessionRow(key, entry),
     isPhantom:
       entry?.updatedAt == null &&
       !normalizeOptionalString(entry?.sessionId) &&
@@ -48,16 +43,19 @@ export function readSessionListSelectionFacts(
   };
 }
 
-/** Cold rows prepare only the model facts needed by search. */
 export type SessionListTargetLookup = (key: string) =>
   | {
       agentId: string;
+      entry: SessionEntry;
       selection: ReturnType<typeof readSessionListSelectionFacts>;
       storeKey?: string;
-      materialized?: Pick<ReturnType<typeof materializeSessionRow>, "source">;
-      getModelFacts?: () => Pick<
-        ReturnType<typeof readSessionRowModelFacts>,
-        "selectedModel" | "rowModelIdentity" | "thinkingProjection"
-      >;
     }
   | undefined;
+
+/** Cold rows prepare only the model facts needed by search. */
+export type SessionListModelFactsLookup = (
+  key: string,
+) => Pick<
+  ReturnType<typeof materializeSessionRow>["source"],
+  "selectedModel" | "rowModelIdentity" | "thinkingProjection"
+>;

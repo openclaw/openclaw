@@ -41,6 +41,42 @@ afterEach(() => {
 });
 
 describe("Gateway stop deadline independent of restart ownership", () => {
+  it.each([false, true])(
+    "skips only a validated external drain while retaining the native cleanup deadline (handoff=%s)",
+    (handoff) => {
+      const drain = resolveGatewayShutdownDrainBudget({
+        budget: { timeoutMs: 85_000, reserveMs: 10_000, nativeStopBudget: true },
+        action: "external-restart",
+        forceRestart: true,
+        interruptAfterDrain: handoff ? true : undefined,
+        restartWithoutSupervisor: false,
+        acceptedAtMs: performance.now(),
+        requestedRestartDrainTimeoutMs: 45_000,
+      });
+      if (handoff) {
+        expect(drain.drainTimeoutMs).toBe(0);
+        expect(drain.closeDrainTimeoutMs()).toBe(0);
+      } else {
+        expect(drain.drainTimeoutMs).toBeGreaterThan(44_000);
+        expect(drain.closeDrainTimeoutMs()).toBeGreaterThan(44_000);
+      }
+      expect(drain.forceExitMs).toBe(85_000);
+    },
+  );
+  it.each([15_000, 85_000, 325_000])(
+    "bounds ordinary stop grace while retaining the %i ms write cleanup deadline",
+    (timeoutMs) => {
+      const drain = resolveGatewayShutdownDrainBudget({
+        budget: { timeoutMs, reserveMs: 10_000, nativeStopBudget: true },
+        action: "stop",
+        forceRestart: false,
+        restartWithoutSupervisor: false,
+        acceptedAtMs: performance.now(),
+      });
+      expect(drain.drainTimeoutMs).toBe(Math.min(20_000, timeoutMs - 10_000));
+      expect(drain.forceExitMs).toBe(timeoutMs);
+    },
+  );
   it("clamps an external system unit running as a service user", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     process.env.INVOCATION_ID = "own";
@@ -231,10 +267,12 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       name: "confirmed running",
       result: printed("running", "\texit timeout = 20\n\tpid = 4242\n"),
       warnings: [],
+      timeoutMs: 325_000,
     },
     {
       name: "failed inspection",
       result: unavailable,
+      timeoutMs: 15_000,
       warnings: [
         expect.stringContaining("Unable to inspect the launchd job"),
         "Retaining the startup shutdown budget of 15000ms because the current supervisor stop timeout could not be confirmed.",
@@ -244,23 +282,27 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       name: "defaulted deadline",
       result: printed("SIGTERMed", "\tpid = 4242\n"),
       warnings: [expect.stringContaining("its exit timeout is missing or invalid")],
+      timeoutMs: 15_000,
     },
-  ])("retains the launchd startup budget only after $name", async ({ result, warnings }) => {
-    delete process.env.OPENCLAW_SUPERVISOR_MODE;
-    execLaunchctl.mockResolvedValue(result);
-    const warn = vi.fn();
-    const budget = await resolveGatewayShutdownBudget(
-      "launchd",
-      { info: vi.fn(), warn },
-      {
-        previous: { timeoutMs: 15_000, nativeStopBudget: true },
-        acceptedAtMs: Number.MAX_SAFE_INTEGER,
-      },
-    );
-    expect(budget.timeoutMs).toBe(15_000);
-    expect(budget.nativeStopBudget).toBe(true);
-    expect(warn.mock.calls).toEqual(warnings.map((message) => [message]));
-  });
+  ])(
+    "retains the launchd startup budget only after $name",
+    async ({ result, warnings, timeoutMs }) => {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      execLaunchctl.mockResolvedValue(result);
+      const warn = vi.fn();
+      const budget = await resolveGatewayShutdownBudget(
+        "launchd",
+        { info: vi.fn(), warn },
+        {
+          previous: { timeoutMs: 15_000, nativeStopBudget: true },
+          acceptedAtMs: Number.MAX_SAFE_INTEGER,
+        },
+      );
+      expect(budget.timeoutMs).toBe(timeoutMs);
+      expect(budget.nativeStopBudget).toBe(true);
+      expect(warn.mock.calls).toEqual(warnings.map((message) => [message]));
+    },
+  );
 
   it.each(["startup", "unmanaged stop"])(
     "does not inspect a launchd job during %s",

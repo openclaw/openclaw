@@ -1,23 +1,16 @@
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
-import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import {
-  buildAcpDatabaseSessionKey,
-  getAcpSessionKysely,
-  parseAcpDatabaseSessionKey,
-  resolveReadableAcpSessionRow,
-  upsertAcpSessionMetaRow,
-} from "./session-meta-keys.js";
-import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
+import { parseAcpDatabaseSessionKey, upsertAcpSessionMetaRow } from "./session-meta-keys.js";
+import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import { readSessionEntryFromStore, type AcpSessionStoreEntry } from "./session-meta-store.js";
 import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 
@@ -25,72 +18,6 @@ import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 export { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 
 export type { AcpSessionStoreEntry } from "./session-meta-store.js";
-
-/** @deprecated Use readAcpSessionMetaAsync for runtime reads. Native maintenance retains this reader. */
-export function readAcpSessionMeta(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
-  return readAcpSessionEntry({
-    ...params,
-    sessionKey: params.sessionKey.trim(),
-    clone: false,
-  })?.acp;
-}
-
-export function readAcpSessionMetaBatch(params: {
-  entries: ReadonlyArray<{
-    sessionKey: string;
-    agentId?: string;
-    entry: SessionEntry;
-  }>;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-  cfg?: OpenClawConfig;
-}): Map<SessionEntry, SessionAcpMeta | undefined> {
-  const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
-  const entriesByKey = new Map<string, SessionEntry[]>();
-  for (const item of params.entries) {
-    result.set(item.entry, undefined);
-    const sessionKey = normalizeStoreSessionKey(item.sessionKey);
-    const key = buildAcpDatabaseSessionKey(
-      sessionKey,
-      item.agentId ?? parseAgentSessionKey(sessionKey)?.agentId,
-    );
-    const entries = entriesByKey.get(key) ?? [];
-    entries.push(item.entry);
-    entriesByKey.set(key, entries);
-  }
-  if (entriesByKey.size === 0) {
-    return result;
-  }
-  withExistingOpenClawStateDatabaseReadOnly(
-    ({ db: database }) => {
-      const db = getAcpSessionKysely(database);
-      const keys = [...entriesByKey.keys()];
-      for (let index = 0; index < keys.length; index += 500) {
-        const rows = executeSqliteQuerySync(
-          database,
-          db
-            .selectFrom("acp_sessions")
-            .selectAll()
-            .where("session_key", "in", keys.slice(index, index + 500)),
-        ).rows;
-        for (const row of rows) {
-          for (const entry of entriesByKey.get(row.session_key) ?? []) {
-            const readable = resolveReadableAcpSessionRow({ row, entry });
-            result.set(entry, readable ? rowToAcpSessionMeta(readable) : undefined);
-          }
-        }
-      }
-    },
-    { env: params.env, path: params.databasePath },
-  );
-  return result;
-}
 
 export function writeAcpSessionMetaForMigration(params: {
   sessionKey: string;
@@ -137,14 +64,19 @@ export function readAcpSessionEntry(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): AcpSessionStoreEntry | null {
+  warnPluginSdkDeprecation({
+    family: "acp-session",
+    method: "readAcpSessionEntry",
+    replacement: "readAcpSessionEntryAsync",
+  });
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
   }
-  const storeEntry = readSessionEntryFromStore(params);
-  if (!storeEntry.storePath) {
-    return null;
+  if (isIncognitoSessionKey(sessionKey)) {
+    throw new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync");
   }
+  const storeEntry = readSessionEntryFromStore(params);
   const acp = readAcpSessionMetaForEntry({
     sessionKey: storeEntry.storeSessionKey,
     agentId: storeEntry.agentId,

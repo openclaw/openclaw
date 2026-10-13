@@ -1,4 +1,3 @@
-/** CLI entrypoint for channel message actions. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -17,7 +16,7 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -53,13 +52,12 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
-/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);

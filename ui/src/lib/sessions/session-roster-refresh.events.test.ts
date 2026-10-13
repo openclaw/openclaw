@@ -15,6 +15,42 @@ import {
 } from "./session-capability.test-support.ts";
 
 describe("session roster event traffic", () => {
+  it("keeps dock snapshots out of ordinary roster membership without repeated list reads", async () => {
+    vi.useFakeTimers();
+    const held = session("main", 1, { sessionId: "held" });
+    const dock = session("main", 2, {
+      key: "agent:main:board-agent",
+      sessionId: "board-agent",
+      isDock: true,
+    });
+    const request = vi.fn(async () => sessionsResult([held], 1));
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(harness.gateway);
+    try {
+      await sessions.refresh({ agentId: "main", excludeDock: true, force: true });
+      harness.publishEvent("sessions.changed", {
+        reason: "patch",
+        sessionKey: dock.key,
+        session: dock,
+        ancestorSessions: [],
+      });
+      harness.publishEvent("sessions.changed", {
+        reason: "patch",
+        sessionKey: held.key,
+        session: { ...held, updatedAt: 3, label: "Updated title" },
+        ancestorSessions: [],
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledOnce();
+      expect(sessions.state.result?.sessions).toEqual([
+        { ...held, updatedAt: 3, label: "Updated title" },
+      ]);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])(
     "recovers failed membership refreshes on the next keyed snapshot (managed: %s)",
     async (managed) => {
@@ -100,10 +136,12 @@ describe("session roster event traffic", () => {
     },
   );
 
-  it.each(["enter", "unpin", "archive", "owner-prefix"])(
-    "refills a limited window after %s changes its boundary",
+  it.each(["enter", "unpin", "archive", "owner-prefix", "create", "unknown-mutation"])(
+    "refreshes membership after %s changes its boundary",
     async (change) => {
       vi.useFakeTimers();
+      const limited = change !== "create" && change !== "unknown-mutation";
+      const entering = change === "enter" || !limited;
       const held = session("main", change === "unpin" || change === "owner-prefix" ? 10 : 40, {
         key: "agent:main:held",
         sessionId: "held",
@@ -112,28 +150,27 @@ describe("session roster event traffic", () => {
       const recent = session("main", 30, { key: "agent:main:recent", sessionId: "recent" });
       const boundary = session("main", 20, { key: "agent:main:boundary", sessionId: "boundary" });
       const incoming = session("main", 50, { key: "agent:main:incoming", sessionId: "incoming" });
-      const next =
-        change === "enter"
-          ? incoming
-          : {
-              ...held,
-              updatedAt: change === "owner-prefix" ? 50 : held.updatedAt,
-              ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
-              ...(change === "archive" ? { archived: true } : {}),
-            };
-      const initialRows = change === "owner-prefix" ? [held, recent, boundary] : [held, recent];
-      const finalRows =
-        change === "enter"
-          ? [next, held]
-          : change === "owner-prefix"
-            ? [next, recent]
-            : [recent, boundary];
+      const next = entering
+        ? incoming
+        : {
+            ...held,
+            updatedAt: change === "owner-prefix" ? 50 : held.updatedAt,
+            ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
+            ...(change === "archive" ? { archived: true } : {}),
+          };
+      const initialRows = !limited
+        ? [held]
+        : change === "owner-prefix"
+          ? [held, recent, boundary]
+          : [held, recent];
+      const finalRows = entering
+        ? [next, held]
+        : change === "owner-prefix"
+          ? [next, recent]
+          : [recent, boundary];
       const page = (rows: typeof initialRows) => ({
         ...sessionsResult(rows, 1),
-        totalCount: 4,
-        limitApplied: 2,
-        nextOffset: 2,
-        hasMore: true,
+        ...(limited ? { totalCount: 4, limitApplied: 2, nextOffset: 2, hasMore: true } : {}),
       });
       const request = vi
         .fn()
@@ -144,22 +181,29 @@ describe("session roster event traffic", () => {
       try {
         await sessions.refresh({
           agentId: "main",
-          limit: 2,
+          ...(limited ? { limit: 2 } : {}),
           ownerFirst: change === "owner-prefix",
           force: true,
         });
-        for (let index = 0; index < 10; index += 1) {
+        for (let index = 0; index < (limited ? 10 : 1); index += 1) {
           gatewayHarness.publishEvent("sessions.changed", {
-            reason: "patch",
+            reason: limited ? "patch" : change,
             sessionKey: next.key,
-            pinnedAt: null,
+            ...(limited ? { pinnedAt: null } : { ancestorSessions: [] }),
             session: next,
           });
         }
-        await vi.advanceTimersByTimeAsync(20_000);
+        if (!limited) {
+          expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual(initialRows);
+        }
+        await vi.advanceTimersByTimeAsync(limited ? 20_000 : 5_000);
         expect(request).toHaveBeenCalledTimes(2);
         expect(sessions.state.result?.sessions).toEqual(finalRows);
-        expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
+        if (limited) {
+          expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
+        } else {
+          expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual(finalRows);
+        }
       } finally {
         sessions.dispose();
         vi.useRealTimers();
@@ -170,12 +214,6 @@ describe("session roster event traffic", () => {
   it.each([
     "snapshot",
     "patch",
-    "subagent-status",
-    "title",
-    "involvement",
-    "swarm-note",
-    "update",
-    "updated",
     "active-message",
     "terminal-message",
     "invalidation",
@@ -356,37 +394,6 @@ describe("session roster event traffic", () => {
     },
   );
 
-  it.each(["create", "unknown-mutation"])(
-    "refreshes unheld membership for a %s snapshot",
-    async (reason) => {
-      vi.useFakeTimers();
-      const row = session("main", 1, { sessionId: "tracked" });
-      const added = session("main", 2, { key: "agent:main:new", sessionId: "added" });
-      const request = vi
-        .fn(async () => sessionsResult([added, row], 2))
-        .mockResolvedValueOnce(sessionsResult([row], 1));
-      const gatewayHarness = createGatewayHarness(createTestGatewayClient(request));
-      const { gateway } = gatewayHarness;
-      const sessions = createTestSessionCapability(gateway);
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        gatewayHarness.publishEvent("sessions.changed", {
-          reason,
-          sessionKey: added.key,
-          session: added,
-          ancestorSessions: [],
-        });
-        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([row]);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([added, row]);
-      } finally {
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it("keeps child windows on row events but refills when the Gateway retires an owner", async () => {
     vi.useFakeTimers();
     const parent = session("main", 1, {
@@ -463,6 +470,7 @@ describe("session roster event traffic", () => {
       limit: 1,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     };
     let running = 0;
     const summaryRequest = vi.fn();
@@ -540,6 +548,26 @@ describe("session roster event traffic", () => {
         { profileId: "ada", open: 8, running: 1 },
       ]);
       expect(sessions.state.result?.ownerSessionCounts).toBeUndefined();
+      // Descendant-only changes on a held conversation outside the facet page also change counts.
+      for (const [index, hasActiveSubagentRun] of [true, false].entries()) {
+        running = hasActiveSubagentRun ? 2 : 1;
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            sessionKey: other.key,
+            agentId: "main",
+            reason: "subagent",
+            ancestorSessions: [],
+            session: { ...other, updatedAt: 100 + index, hasActiveSubagentRun },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(summaryRequest).toHaveBeenCalledTimes(3 + index);
+        expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
+          { profileId: "ada", open: 8, running },
+        ]);
+      }
     } finally {
       observation.dispose();
       sessions.dispose();

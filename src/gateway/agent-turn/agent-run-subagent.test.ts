@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import {
   SessionFollowupCompletion,
   withFollowupRequest,
@@ -81,6 +82,8 @@ function followupRequest(): FollowupRequest {
 }
 
 describe("Gateway native subagent admission", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.adoptPausedSubagentRunForFollowUp.mockResolvedValue(false);
@@ -154,6 +157,7 @@ describe("Gateway native subagent admission", () => {
   });
 
   it("does not let inter-session delivery reactivate a completed child", async () => {
+    const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
     const result = await prepareGatewaySubagentRun(
       parameters({
         inputProvenance: {
@@ -169,6 +173,7 @@ describe("Gateway native subagent admission", () => {
       pluginSubagent: false,
       reactivateSubagent: true,
     });
+    expect(readMetadata).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(

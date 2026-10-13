@@ -4,7 +4,6 @@ import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-/** Structured snapshot node shape returned by chrome-devtools-mcp. */
 export type ChromeMcpSnapshotNode = {
   id?: string;
   role?: string;
@@ -65,7 +64,6 @@ export function flattenChromeMcpSnapshotToAriaResult(
   return truncated ? { nodes: out, truncated: true } : { nodes: out };
 }
 
-/** Build a compact text snapshot and ref map from a Chrome MCP snapshot tree. */
 export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   root: ChromeMcpSnapshotNode;
   options?: RoleSnapshotOptions;

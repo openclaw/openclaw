@@ -28,6 +28,9 @@ computation off the Gateway event loop, but it shares the Gateway process's
 operating-system privileges. Treat Node Code Mode as trusted host execution.
 </Warning>
 
+Bridge settlement and failure provenance are host-owned under both executors,
+keeping diagnostics trustworthy regardless of executor isolation.
+
 The intended guest API does not expose Node's filesystem, networking, process,
 environment, or module-loading APIs. Module guards and a small set of globals
 help keep cells focused on tool orchestration; they do not make `node:vm` safe
@@ -40,6 +43,12 @@ still call powerful tools if your tool policy grants them. Calls made through
 the Code Mode tool bridge retain OpenClaw's normal policy, approvals, hooks,
 and session ownership under either executor. These checks mediate tool calls;
 they cannot contain hostile code that escapes a Node VM context.
+
+Session sandboxing does not move Code Mode cells into the sandbox. Under the
+Node executor, a cell from a sandboxed session, including one created by a
+[role that requires sandboxing](/gateway/operator-scopes#named-operator-roles),
+still runs in the Gateway process. Use QuickJS on Gateways where untrusted
+people can start sessions on the built-in runtime.
 
 ## Set the executor
 

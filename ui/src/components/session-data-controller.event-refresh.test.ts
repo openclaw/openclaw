@@ -163,7 +163,7 @@ function createFilteredSessionController(
     sessionDataContext: context,
     addController: () => undefined,
     removeController: () => undefined,
-    requestUpdate: () => undefined,
+    requestUpdate: vi.fn(),
     updateComplete: Promise.resolve(true),
     dismissTransientMenus: () => false,
     expandedAgentId: () => selectedAgentId,
@@ -185,6 +185,15 @@ function createFilteredSessionController(
     },
     controller,
     list,
+    publishPresence: (instanceId: string) => {
+      for (const listener of eventListeners) {
+        listener({
+          type: "event",
+          event: "presence",
+          payload: { presence: [{ instanceId, ts: 1 }] },
+        });
+      }
+    },
     resultForKeys,
     reconnect: () => {
       for (const phase of ["reconnecting", "connected"] as const) {
@@ -236,6 +245,67 @@ function createFilteredSessionController(
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it.each(["active", "all"] as const)(
+    "coalesces %s session and presence publications while preserving immediate state",
+    async (statusFilter) => {
+      const { controller, host, publishPresence, disconnectHost } = createFilteredSessionController(
+        statusFilter,
+        300,
+        true,
+      );
+      const frames = new Map<number, FrameRequestCallback>();
+      let frameId = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const flushFrame = () => {
+        const pending = [...frames.values()];
+        frames.clear();
+        for (const callback of pending) {
+          callback(0);
+        }
+      };
+      try {
+        controller.hostConnected();
+        await controller.refreshSidebarSessions();
+        flushFrame();
+        host.requestUpdate.mockClear();
+
+        for (let index = 0; index < 30; index += 1) {
+          publishPresence(`profile-${index}`);
+          await Promise.resolve();
+        }
+        await controller.refreshSidebarSessions();
+
+        expect(controller.presencePayload?.presence?.[0]?.instanceId).toBe("profile-29");
+        expect(controller.sessionsResult?.sessions).toHaveLength(SIDEBAR_SESSION_ROSTER_LIMIT);
+        expect(host.requestUpdate).not.toHaveBeenCalled();
+        flushFrame();
+        expect(host.requestUpdate).toHaveBeenCalledOnce();
+
+        host.requestUpdate.mockClear();
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        publishPresence("hidden-profile");
+        expect(controller.presencePayload?.presence?.[0]?.instanceId).toBe("hidden-profile");
+        expect(host.requestUpdate).toHaveBeenCalledOnce();
+
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        host.requestUpdate.mockClear();
+        publishPresence("retired-profile");
+        disconnectHost();
+        flushFrame();
+        expect(host.requestUpdate).not.toHaveBeenCalled();
+      } finally {
+        controller.hostDisconnected();
+      }
+    },
+  );
+
   it("keeps shared group hydration when its first sidebar presenter disconnects", async () => {
     const { controller, context, host, disconnectHost } = createFilteredSessionController("active");
     const bootstrap = context.connectionBootstrap;
@@ -267,7 +337,11 @@ describe("filtered sidebar session event refresh", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(list).toHaveBeenCalledOnce();
         expect(list).toHaveBeenLastCalledWith(
-          expect.objectContaining({ agentId: "main", archivedFilter: statusFilter }),
+          expect.objectContaining({
+            agentId: "main",
+            archivedFilter: statusFilter,
+            excludeDock: true,
+          }),
         );
         expect(controller.sessionsResult?.sessions).toHaveLength(1);
         controller.hostDisconnected();
@@ -302,7 +376,9 @@ describe("filtered sidebar session event refresh", () => {
       try {
         await selectMembership({ ownerId: null, involvingMe: true });
         expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
-        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ involvingMe: true }));
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ involvingMe: true, excludeDock: true }),
+        );
         expect(controller.sessionsResult?.sessions.every((row) => row.updatedAt! % 2 === 1)).toBe(
           true,
         );

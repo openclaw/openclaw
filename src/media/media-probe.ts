@@ -251,9 +251,8 @@ export async function probeMediaFilesWithinBudget(
 export async function probePlaybackMediaFileDescriptor(
   fd: number,
   kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
 ): Promise<PlaybackMediaProbeResult | null> {
-  return await probeMediaSource({ stdinFileDescriptor: fd }, kind, options);
+  return await probeMediaSource({ stdinFileDescriptor: fd }, kind);
 }
 
 type VideoDimensions = {

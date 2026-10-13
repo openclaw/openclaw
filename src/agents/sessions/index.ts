@@ -6,7 +6,6 @@ export * from "./event-bus.js";
 export * from "./extensions/index.js";
 export type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "./extensions/types.js";
 export * from "./model-registry.js";
-export * from "./model-resolver.js";
 export * from "./resource-loader.js";
 export type { CreateAgentSessionOptions } from "./sdk.js";
 export * from "./session-manager.js";

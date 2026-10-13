@@ -47,7 +47,6 @@ function createInput(overrides: Record<string, unknown> = {}) {
   return {
     attempt,
     transcriptLifecycle,
-    sessionAgentId: "main",
     toolSearchCatalogRef: {},
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,

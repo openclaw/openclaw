@@ -3,28 +3,38 @@ import { registerPreparedModelRuntimePublicationListener } from "../agents/prepa
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { Inputs } from "./session-row-projection-record.js";
 
-function hasSameModelFacts(previous: Inputs["modelCatalog"], next: Inputs["modelCatalog"]) {
+function changedModelAgents(previous: Inputs["modelCatalog"], next: Inputs["modelCatalog"]) {
   // Missing policy owners can still resolve rows through active plugin metadata.
-  if (!(previous instanceof Map) || !(next instanceof Map) || previous.size === 0) {
-    return false;
+  if (
+    !(previous instanceof Map) ||
+    !(next instanceof Map) ||
+    previous.size === 0 ||
+    previous.size !== next.size
+  ) {
+    return undefined;
   }
-  return (
-    previous.size === next.size &&
-    [...previous].every(([agentId, catalog]) => {
-      const replacement = next.get(agentId);
-      const metadata = readPreparedGatewayModelCatalogMetadata(catalog);
-      return (
-        catalog !== undefined &&
-        replacement !== undefined &&
-        catalog.pluginRegistry !== undefined &&
-        metadata !== undefined &&
-        catalog.pluginRegistry === replacement.pluginRegistry &&
-        metadata === readPreparedGatewayModelCatalogMetadata(replacement) &&
-        isDeepStrictEqual(catalog.entries, replacement.entries) &&
-        isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants)
-      );
-    })
-  );
+  const changed = new Set<string>();
+  for (const [agentId, catalog] of previous) {
+    const replacement = next.get(agentId);
+    const metadata = readPreparedGatewayModelCatalogMetadata(catalog);
+    if (
+      catalog === undefined ||
+      replacement === undefined ||
+      catalog.pluginRegistry === undefined ||
+      metadata === undefined ||
+      catalog.pluginRegistry !== replacement.pluginRegistry ||
+      metadata !== readPreparedGatewayModelCatalogMetadata(replacement)
+    ) {
+      return undefined;
+    }
+    if (
+      !isDeepStrictEqual(catalog.entries, replacement.entries) ||
+      !isDeepStrictEqual(catalog.routeVariants, replacement.routeVariants)
+    ) {
+      changed.add(agentId);
+    }
+  }
+  return changed;
 }
 
 /** The projection's one catalog snapshot survives asynchronous renewal. */
@@ -32,24 +42,27 @@ export function createSessionRowProjectionCatalog(params: {
   modelCatalog?: Inputs["modelCatalog"];
   getModelCatalog?: () => Promise<Inputs["modelCatalog"]>;
   onInvalidated: () => void;
-  onRefreshed: (changed: boolean) => void;
+  onRefreshed: (changedAgents: ReadonlySet<string> | undefined) => void;
 }) {
   let modelCatalog = params.modelCatalog;
-  let catalogDirty = params.getModelCatalog ? Symbol("catalog") : undefined;
+  let catalogDirty = Boolean(params.getModelCatalog);
   let pending: Promise<void> | undefined;
   let replacement: Promise<void> | undefined;
   let disposed = false;
   const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "catalog-status") {
+      return;
+    }
     if (event.phase === "invalidated" && event.replacement) {
-      const replacing = (replacement = event.replacement);
+      replacement = event.replacement;
       const settled = () => {
-        if (!disposed && replacement === replacing) {
+        if (!disposed) {
           replacement = undefined;
           params.onInvalidated();
         }
       };
       // Scoped auth invalidations need not publish globally; only the owner gate can pause reads.
-      void replacing.then(settled, settled).catch(() => {});
+      void replacement.then(settled, settled).catch(() => {});
     }
     // An incomplete catalog read still needs the next publication to recover its rows.
     if (
@@ -70,11 +83,11 @@ export function createSessionRowProjectionCatalog(params: {
       return !disposed && pending !== undefined;
     },
     get needsInitialRead() {
-      return Boolean(catalogDirty) && modelCatalog === undefined;
+      return catalogDirty && modelCatalog === undefined;
     },
     invalidate() {
       if (params.getModelCatalog) {
-        catalogDirty = Symbol("catalog");
+        catalogDirty = true;
       }
     },
     refresh() {
@@ -84,28 +97,19 @@ export function createSessionRowProjectionCatalog(params: {
       if (pending) {
         return pending;
       }
-      const revision = catalogDirty;
       const work = (async () => {
-        try {
-          const next = await params.getModelCatalog?.();
-          pending = undefined;
-          if (disposed || catalogDirty !== revision) {
-            if (!disposed) {
-              params.onRefreshed(false);
-            }
-            return;
-          }
-          // Catalog visibility and row invalidation share one synchronous publication.
-          const changed = !hasSameModelFacts(modelCatalog, next);
-          modelCatalog = next;
-          catalogDirty = undefined;
-          params.onRefreshed(changed);
-        } catch (error) {
-          pending = undefined;
-          // Keep the revision dirty so the next publication or read can retry.
-          throw error;
+        const next = await params.getModelCatalog?.();
+        if (disposed) {
+          return;
         }
-      })();
+        // A concurrent catalog change is adopted by the next publication.
+        const changed = changedModelAgents(modelCatalog, next);
+        modelCatalog = next;
+        catalogDirty = false;
+        params.onRefreshed(changed);
+      })().finally(() => {
+        pending = undefined;
+      });
       pending = work;
       void work.catch(() => {});
       return work;

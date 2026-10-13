@@ -9,11 +9,7 @@ extension OpenClawWatchMessageJournal {
     }
 
     static func encode(_ value: some Encodable) throws -> String {
-        let data = try OpenClawWatchChatDeliveryCodec.canonicalData(value)
-        guard let result = String(bytes: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return result
+        try String(bytes: OpenClawWatchChatDeliveryCodec.canonicalData(value), encoding: .utf8)!
     }
 
     static func fingerprint(_ command: OpenClawWatchChatDeliveryCommand) throws -> Data {

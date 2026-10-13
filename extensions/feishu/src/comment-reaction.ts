@@ -195,17 +195,17 @@ export function createCommentTypingReactionLifecycle(params: {
   accountId?: string;
   runtime?: RuntimeEnv;
 }) {
-  const key = params.replyId?.trim()
+  const replyId = params.replyId?.trim();
+  const key = replyId
     ? buildCommentTypingReactionKey({
         ...params,
-        replyId: params.replyId.trim(),
+        replyId,
       })
     : undefined;
   const state = key ? ensureCommentTypingReactionState(key) : undefined;
 
   return {
     start: async (): Promise<void> => {
-      const replyId = params.replyId?.trim();
       if (!state || state.cleaned || state.active || !replyId) {
         return;
       }
@@ -216,7 +216,6 @@ export function createCommentTypingReactionLifecycle(params: {
       });
     },
     cleanup: async (): Promise<void> => {
-      const replyId = params.replyId?.trim();
       if (!key || !replyId) {
         return;
       }

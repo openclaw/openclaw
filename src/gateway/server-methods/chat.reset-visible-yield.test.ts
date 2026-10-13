@@ -12,14 +12,46 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import * as agentJob from "../agent-turn/agent-job.js";
-import * as githubPublication from "../github-publication-availability.js";
+import * as githubPublication from "../github-publication-discovery.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
+
+// Optional maintenance owns unrelated roots while this manual-RPC fixture stays open.
+vi.mock("../server-idle-task.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-idle-task.js")>()),
+  scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
+}));
+
+vi.mock(
+  "../../config/sessions/session-transcript-writer-claim-error.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../config/sessions/session-transcript-writer-claim-error.js")
+      >();
+    return {
+      ...actual,
+      SessionTranscriptWriterClaimReboundError: class
+        extends actual.SessionTranscriptWriterClaimReboundError
+      {
+        constructor(
+          ...args: ConstructorParameters<typeof actual.SessionTranscriptWriterClaimReboundError>
+        ) {
+          super(...args);
+          console.error("transcript writer claim diagnostic", this.stack, this.cause);
+        }
+      },
+    };
+  },
+);
 
 type ResponseInput = {
   type?: string;
@@ -145,9 +177,9 @@ describe("visible yielded session continuation", () => {
       const resumedCatalog = createDeferred<string[]>();
       const publicationCatalogs: string[][] = [];
       let childResponse: ServerResponse | undefined;
-      const publicationSpy = vi.spyOn(githubPublication, "prepareGitHubPublicationAvailability");
+      const publicationSpy = vi.spyOn(githubPublication, "readGitHubPublicationFact");
       if (outcome === "complete") {
-        publicationSpy.mockResolvedValue(true);
+        publicationSpy.mockReturnValue({ available: true });
       }
       const requesterWaitFinished = createDeferred<WaitResult>();
       const resetAcknowledged = createDeferred<{ state?: string }>();
@@ -664,6 +696,7 @@ describe("visible yielded session continuation", () => {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
         clearSessionStoreCacheForTest();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         closeOpenClawStateDatabaseForTest();
         envSnapshot.restore();

@@ -20,24 +20,29 @@ public actor GatewayChannelActor {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
-    private var activeConnectAttemptID: UUID?
     var pending: [String: PendingRequest] = [:]
     private var connected = false
+    private var connectDeviceId: String?
+
+    public func connectedDeviceId() -> String? {
+        self.connected ? self.connectDeviceId : nil
+    }
+
     private var connectAttemptTask: Task<Void, Never>?
     /// Socket ownership epoch. Every callback and send stays bound to the task
     /// that admitted it so a late failure cannot tear down a replacement socket.
     private var connectionGeneration: UInt64 = 0
     private var disconnectedConnectionGeneration: UInt64?
     private var disconnectError: Error?
-    private var automaticReconnectRequested = false
     var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
-    private var url: URL
-    private var token: String?
-    private var bootstrapToken: String?
-    private var password: String?
+    private let url: URL
+    private let token: String?
+    private let bootstrapToken: String?
+    private let password: String?
     private let authBindingKey: SymmetricKey?
     private let session: WebSocketSessioning
-    private var backoffMs: Double = 500
+    private var reconnectTask: Task<Void, Never>?
+    var connectFailureBackoffWaitTask: Task<Void, Error>?
     var connectFailureBackoff = GatewayConnectFailureBackoff()
     private var shouldReconnect = true
     private nonisolated let socketAdmission = Mutex(true)
@@ -53,17 +58,26 @@ public actor GatewayChannelActor {
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
     // Connect now requires this nonce before we send device-auth.
     var connectTimeoutSeconds: Double = 30
-    var testConnectAttemptFinishedHandler: (@Sendable (UUID) -> Void)?
     #if DEBUG
+    var testConnectAttemptFinishedHandler: (@Sendable () -> Void)?
     var testConnectRunFinishedHandler: (@Sendable () -> Void)?
     var testConnectFailureBackoffWaitHandler: (@Sendable () async throws -> Void)?
     var testRequestResumedHandler: (@Sendable () async -> Void)?
+    var testRecoverySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    var testNetworkPathObserved: (@Sendable (GatewayNetworkPath) -> Void)?
+    var testNetworkPathRecoveryFinished: (@Sendable () -> Void)?
     #endif
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
     private let keepaliveIntervalSeconds: Double = 15.0
-    private var watchdogTask: Task<Void, Never>?
+    private let networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?
+    private var networkPathTask: Task<Void, Never>?
+    private var networkPathSettleTask: Task<Void, Never>?
+    private var networkPathProbeGeneration: UInt64?
+    private var networkPathTracker = GatewayNetworkPathTracker()
+    var networkPathSettleDuration: Duration = .seconds(1)
+    var networkPathProbeTimeout: Duration = .seconds(5)
     private var tickTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
     private var pendingDeviceTokenRetry = false
@@ -79,6 +93,9 @@ public actor GatewayChannelActor {
     private let pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String, UInt64) async -> Void)?
+    /// Automatic reconnects have no caller to repair TLS trust. The owner may
+    /// repair and replace this channel, never retry on it.
+    private let reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)?
 
     public init(
         url: URL,
@@ -91,8 +108,41 @@ public actor GatewayChannelActor {
         pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
-        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil)
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil)
     {
+        self.init(
+            url: url,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            authBindingKey: authBindingKey,
+            session: session,
+            connectSnapshotAdmissionHandler: connectSnapshotAdmissionHandler,
+            pushHandler: pushHandler,
+            connectOptions: connectOptions,
+            disconnectHandler: disconnectHandler,
+            extraHeadersProvider: extraHeadersProvider,
+            reconnectTLSFailureHandler: reconnectTLSFailureHandler,
+            networkPathUpdates: GatewayNetworkPathMonitor.systemUpdates)
+    }
+
+    init(
+        url: URL,
+        token: String?,
+        bootstrapToken: String? = nil,
+        password: String? = nil,
+        authBindingKey: SymmetricKey? = nil,
+        session: WebSocketSessionBox? = nil,
+        connectSnapshotAdmissionHandler: (@Sendable (HelloOk, UInt64) async -> Void)? = nil,
+        pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
+        connectOptions: GatewayConnectOptions? = nil,
+        disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil,
+        networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?)
+    {
+        self.networkPathUpdates = networkPathUpdates
         self.url = url
         self.token = token
         self.bootstrapToken = bootstrapToken
@@ -104,8 +154,9 @@ public actor GatewayChannelActor {
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
+        self.reconnectTLSFailureHandler = reconnectTLSFailureHandler
         Task { [weak self] in
-            await self?.startWatchdog()
+            await self?.startNetworkPathObservation()
         }
     }
 
@@ -140,16 +191,20 @@ public actor GatewayChannelActor {
         self.connected = false
         self.liveTextProjection.reset()
         self.acceptedHTTPBearer = nil
-        self.activeConnectAttemptID = nil
-        self.automaticReconnectRequested = false
         self.connectAttemptTask?.cancel()
         self.connectAttemptTask = nil
         // Invalidate callbacks from the socket before cancellation can deliver
         // its receive completion on another task.
         self.connectionGeneration &+= 1
 
-        self.watchdogTask?.cancel()
-        self.watchdogTask = nil
+        self.networkPathTask?.cancel()
+        self.networkPathTask = nil
+        self.networkPathSettleTask?.cancel()
+        self.networkPathSettleTask = nil
+        self.reconnectTask?.cancel()
+        self.reconnectTask = nil
+        self.connectFailureBackoffWaitTask?.cancel()
+        self.connectFailureBackoffWaitTask = nil
 
         self.tickTask?.cancel()
         self.tickTask = nil
@@ -160,52 +215,83 @@ public actor GatewayChannelActor {
         self.task?.cancel(with: .goingAway, reason: nil)
         self.task = nil
 
-        self.failPending(NSError(
-            domain: "Gateway",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+        self.failPending(Self.failure(0, "gateway channel shutdown"))
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
         for waiter in waiters.values {
-            waiter.resume(throwing: NSError(
-                domain: "Gateway",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+            waiter.resume(throwing: Self.failure(0, "gateway channel shutdown"))
         }
     }
 
-    private func startWatchdog() {
-        self.watchdogTask?.cancel()
-        self.watchdogTask = Task { [weak self] in
-            guard let self else { return }
-            await self.watchdogLoop()
-        }
-    }
-
-    private func watchdogLoop() async {
-        // Keep nudging reconnect in case exponential backoff stalls.
-        while self.shouldReconnect {
-            guard await self.sleepUnlessCancelled(nanoseconds: 30 * 1_000_000_000) else { return } // 30s cadence
-            guard self.shouldReconnect else { return }
-            if self.reconnectPausedForAuthFailure { continue }
-            if self.connected { continue }
-            do {
-                try await self.connect()
-            } catch {
-                if self.shouldPauseReconnectAfterAuthFailure(error) {
-                    self.reconnectPausedForAuthFailure = true
-                    let failure = error.localizedDescription
-                    self.logger.error(
-                        """
-                        gateway watchdog reconnect paused for non-recoverable auth failure \
-                        \(failure, privacy: .public)
-                        """)
-                    continue
+    private func startNetworkPathObservation() {
+        guard self.shouldReconnect else { return }
+        if let networkPathUpdates {
+            self.networkPathTask = Task { [weak self] in
+                for await path in networkPathUpdates() {
+                    guard !Task.isCancelled else { return }
+                    await self?.observeNetworkPath(path)
                 }
-                let wrapped = self.wrap(error, context: "gateway watchdog reconnect")
-                self.logger.error("gateway watchdog reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    private func observeNetworkPath(_ path: GatewayNetworkPath) {
+        #if DEBUG
+        defer { self.testNetworkPathObserved?(path) }
+        #endif
+        guard self.shouldReconnect, self.networkPathTracker.observe(path) else { return }
+        self.networkPathSettleTask?.cancel()
+        guard self.networkPathTracker.needsSettle else { return }
+        self.networkPathSettleTask = Task { [weak self] in
+            await self?.settleNetworkPath(path)
+        }
+    }
+
+    private func settleNetworkPath(_ path: GatewayNetworkPath) async {
+        do {
+            #if DEBUG
+            try await self.testRecoverySleep(self.networkPathSettleDuration)
+            #else
+            try await Task.sleep(for: self.networkPathSettleDuration)
+            #endif
+            try Task.checkCancellation()
+        } catch { return }
+        guard self.shouldReconnect, self.networkPathTracker.settle(path) else { return }
+        await self.recoverAfterNetworkPathChange(path)
+    }
+
+    private func recoverAfterNetworkPathChange(_ path: GatewayNetworkPath) async {
+        #if DEBUG
+        defer { self.testNetworkPathRecoveryFinished?() }
+        #endif
+        guard path.isSatisfied, self.shouldReconnect, !self.reconnectPausedForAuthFailure else { return }
+        if self.connected, let task = self.task {
+            let generation = self.connectionGeneration
+            guard self.networkPathProbeGeneration != generation else { return }
+            self.networkPathProbeGeneration = generation
+            defer {
+                if self.networkPathProbeGeneration == generation { self.networkPathProbeGeneration = nil }
+            }
+            do {
+                // A path change is only a hint; keep a socket that still answers its probe.
+                try await task.sendPing(timeout: self.networkPathProbeTimeout)
+            } catch {
+                guard self.shouldReconnect, !self.reconnectPausedForAuthFailure,
+                      self.isConnected(connectionGeneration: generation)
+                else { return }
+                let failure = Self.failure(9, "gateway socket unresponsive after a network change")
+                self.logger.error("gateway socket unresponsive after a network change; reconnecting")
+                await self.transitionToDisconnected(
+                    reason: failure.localizedDescription,
+                    error: failure,
+                    connectionGeneration: generation,
+                    shouldReconnect: true)
+            }
+        } else if self.reconnectTask != nil {
+            self.connectFailureBackoff.reset()
+            // Wake the shared attempt; ordinary callers join the same connection.
+            self.connectFailureBackoffWaitTask?.cancel()
         }
     }
 
@@ -239,10 +325,7 @@ public actor GatewayChannelActor {
     public func connect() async throws {
         try Task.checkCancellation()
         guard self.shouldReconnect else {
-            throw NSError(
-                domain: "Gateway",
-                code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "gateway channel is shut down"])
+            throw Self.failure(6, "gateway channel is shut down")
         }
         if let disconnectError { throw disconnectError }
         if self.connected, self.task?.state == .running {
@@ -261,7 +344,13 @@ public actor GatewayChannelActor {
             try await self.performConnectAttempt()
             self.finishConnectAttempt(error: nil)
         } catch {
+            self.connectFailureBackoff.record(
+                error: error,
+                pendingDeviceTokenRetry: self.pendingDeviceTokenRetry,
+                supportedProtocols: self.supportedProtocols)
             self.finishConnectAttempt(error: error)
+            self.reconnectPausedForAuthFailure = self.shouldPauseReconnectAfterAuthFailure(error)
+            self.scheduleReconnect()
         }
         #if DEBUG
         self.testConnectRunFinishedHandler?()
@@ -313,10 +402,7 @@ public actor GatewayChannelActor {
         if self.connected {
             if self.task?.state == .running { return }
             let staleGeneration = self.connectionGeneration
-            let staleError = NSError(
-                domain: "Gateway",
-                code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "gateway socket stopped before reconnect"])
+            let staleError = Self.failure(7, "gateway socket stopped before reconnect")
             // URLSession may publish a terminal task state before its receive
             // failure callback reaches this actor. Retire that generation first
             // so pending requests and native input lifecycle cleanup cannot leak
@@ -331,22 +417,27 @@ public actor GatewayChannelActor {
 
         // External authorization can suspend. A canceled route must never create a socket
         // with a grant returned after its disconnect or replacement.
-        let request = try await self.makeUpgradeRequest()
+        let request: URLRequest
+        do {
+            request = try await self.makeUpgradeRequest()
+        } catch let error as GatewayExternalAuthorizationError {
+            // No physical socket exists yet; pause the watchdog at this admission boundary.
+            self.reconnectPausedForAuthFailure = true
+            throw error
+        }
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
         self.task?.cancel(with: .goingAway, reason: nil)
         // Native route retirement cannot await this actor. Order it against the whole
         // synchronous socket admission, including resume; keep transport cleanup outside.
-        let (connectTask, attemptID, connectionGeneration) = try self.socketAdmission.withLock { allowed in
+        let (connectTask, connectionGeneration) = try self.socketAdmission.withLock { allowed in
             guard allowed else { throw CancellationError() }
             self.connectionGeneration &+= 1
-            let attemptID = UUID()
             let connectTask = self.session.makeWebSocketTask(request: request)
-            self.activeConnectAttemptID = attemptID
             self.task = connectTask
             connectTask.resume()
-            return (connectTask, attemptID, self.connectionGeneration)
+            return (connectTask, self.connectionGeneration)
         }
         let connectHello: HelloOk
         do {
@@ -358,38 +449,33 @@ public actor GatewayChannelActor {
                 operation: {
                     try await self.sendConnect(
                         task: connectTask,
-                        attemptID: attemptID,
                         connectionGeneration: connectionGeneration)
                 })
-            try self.ensureCurrentConnectAttempt(attemptID, task: connectTask)
             try self.requireCurrentConnection(connectionGeneration)
         } catch {
+            if let response = connectTask.response as? HTTPURLResponse {
+                self.logger.error(
+                    "gateway connection failed; upgrade HTTP status=\(response.statusCode, privacy: .public)")
+            }
             let wrapped: Error = if let authError = error as? GatewayConnectAuthError {
                 authError
             } else {
                 self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
             }
-            self.connectFailureBackoff.record(
-                error: error,
-                pendingDeviceTokenRetry: self.pendingDeviceTokenRetry,
-                supportedProtocols: self.supportedProtocols)
             await self.transitionToDisconnected(
                 reason: "connect failed: \(wrapped.localizedDescription)",
                 error: wrapped,
                 connectionGeneration: connectionGeneration,
-                shouldReconnect: self.automaticReconnectRequested)
+                shouldReconnect: false)
             self.logger.error("gateway ws connect failed \(wrapped.localizedDescription, privacy: .public)")
             throw wrapped
         }
-        self.activeConnectAttemptID = nil
         guard self.connectionGeneration == connectionGeneration,
               self.disconnectedConnectionGeneration != connectionGeneration,
               self.shouldReconnect
         else { throw CancellationError() }
         self.connected = true
-        self.automaticReconnectRequested = false
         self.reconnectPausedForAuthFailure = false
-        self.backoffMs = 500
         self.connectFailureBackoff.reset()
         self.lastSeq = nil
         self.liveTextProjection.reset()
@@ -439,11 +525,11 @@ public actor GatewayChannelActor {
 
     private func sendConnect(
         task: WebSocketTaskBox,
-        attemptID: UUID,
         connectionGeneration: UInt64) async throws -> HelloOk
     {
-        defer { self.testConnectAttemptFinishedHandler?(attemptID) }
-        try self.ensureCurrentConnectAttempt(attemptID, task: task)
+        #if DEBUG
+        defer { self.testConnectAttemptFinishedHandler?() }
+        #endif
         try self.requireCurrentConnection(connectionGeneration)
         let platform = InstanceIdentity.platformString
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
@@ -462,6 +548,7 @@ public actor GatewayChannelActor {
         let identity = try Self.loadDeviceIdentityForConnect(
             includeDeviceIdentity: options.includeDeviceIdentity,
             profile: options.deviceIdentityProfile)
+        self.connectDeviceId = identity?.deviceId
         let selectedAuth = self.selectConnectAuth(options: options, deviceId: identity?.deviceId)
         let scopes = self.resolveConnectScopes(
             role: role,
@@ -490,10 +577,10 @@ public actor GatewayChannelActor {
             deviceId: identity?.deviceId,
             connectionGeneration: connectionGeneration,
             to: &params)
-        let connectChallenge = try await self.waitForConnectChallenge(task: task, attemptID: attemptID)
+        let connectChallenge = try await self.waitForConnectChallenge(
+            task: task, connectionGeneration: connectionGeneration)
         let signedAtMs = connectChallenge.issuedAtMs
         let connectNonce = connectChallenge.nonce
-        try self.ensureCurrentConnectAttempt(attemptID, task: task)
         try self.requireCurrentConnection(connectionGeneration)
         if let identity {
             let deviceAuthFields = GatewayDeviceAuthPayload.Fields(
@@ -522,14 +609,12 @@ public actor GatewayChannelActor {
             params: ProtoAnyCodable(params))
         let data = try self.encoder.encode(frame)
         try await task.send(.data(data))
-        try self.ensureCurrentConnectAttempt(attemptID, task: task)
         try self.requireCurrentConnection(connectionGeneration)
         do {
             let response = try await self.waitForConnectResponse(
                 reqId: reqId,
                 task: task,
-                attemptID: attemptID)
-            try self.ensureCurrentConnectAttempt(attemptID, task: task)
+                connectionGeneration: connectionGeneration)
             try self.requireCurrentConnection(connectionGeneration)
             let outcome = try await self.handleConnectResponse(
                 response,
@@ -547,7 +632,6 @@ public actor GatewayChannelActor {
             self.deviceTokenRetryBudgetUsed = false
             return outcome.hello
         } catch {
-            try self.ensureCurrentConnectAttempt(attemptID, task: task)
             try self.requireCurrentConnection(connectionGeneration)
             let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
                 error: error,
@@ -557,10 +641,9 @@ public actor GatewayChannelActor {
             if shouldRetryWithDeviceToken {
                 self.pendingDeviceTokenRetry = true
                 self.deviceTokenRetryBudgetUsed = true
-                self.backoffMs = min(self.backoffMs, 250)
             } else if selectedAuth.authDeviceToken != nil,
                       let identity,
-                      self.shouldClearStoredDeviceTokenAfterRetry(error)
+                      (error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch
             {
                 // Retry failed with an explicit device-token mismatch; clear stale local token.
                 DeviceAuthStore.clearToken(
@@ -576,6 +659,7 @@ public actor GatewayChannelActor {
 
 extension GatewayChannelActor {
     private func requireCurrentConnection(_ connectionGeneration: UInt64) throws {
+        try Task.checkCancellation()
         guard self.shouldReconnect,
               self.connectionGeneration == connectionGeneration,
               self.disconnectedConnectionGeneration != connectionGeneration
@@ -700,9 +784,6 @@ extension GatewayChannelActor {
         storedScopes: [String]) -> Bool
     {
         let requested = Set(requestedScopes.compactMap(\.trimmedNonEmpty))
-        if requested.isEmpty {
-            return true
-        }
         let allowedSet = Set(storedScopes.compactMap(\.trimmedNonEmpty))
         let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalizedRole != "operator" {
@@ -825,9 +906,9 @@ extension GatewayChannelActor {
             let details = gatewayErrorDetails(res.error)
             throw GatewayConnectAuthError(
                 message: res.error?.message ?? "gateway connect failed",
-                detailCodeRaw: details["code"]?.value as? String,
+                detailCode: details["code"]?.value as? String,
                 canRetryWithDeviceToken: details["canRetryWithDeviceToken"]?.value as? Bool ?? false,
-                recommendedNextStepRaw: details["recommendedNextStep"]?.value as? String,
+                recommendedNextStep: details["recommendedNextStep"]?.value as? String,
                 requestId: details["requestId"]?.value as? String,
                 detailsReason: details["reason"]?.value as? String,
                 ownerRaw: details["owner"]?.value as? String,
@@ -844,10 +925,7 @@ extension GatewayChannelActor {
                 minimumProbeProtocol: gatewayIntValue(details["minimumProbeProtocol"]?.value))
         }
         guard let payload = res.payload else {
-            throw NSError(
-                domain: "Gateway",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "connect failed (missing payload)"])
+            throw Self.failure(1, "connect failed (missing payload)")
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
@@ -984,10 +1062,6 @@ extension GatewayChannelActor {
         self.connected = false
         self.liveTextProjection.reset()
         self.acceptedHTTPBearer = nil
-        self.activeConnectAttemptID = nil
-        if shouldReconnect {
-            self.automaticReconnectRequested = true
-        }
         let disconnectedTask = self.task
         self.task = nil
         disconnectedTask?.cancel(with: .goingAway, reason: nil)
@@ -1000,13 +1074,15 @@ extension GatewayChannelActor {
         await self.disconnectHandler?(reason, connectionGeneration)
         self.disconnectError = nil
 
-        guard self.automaticReconnectRequested,
+        guard shouldReconnect,
               self.shouldReconnect,
               self.connectionGeneration == connectionGeneration
         else { return }
-        Task { [weak self] in
-            await self?.scheduleReconnect(after: connectionGeneration)
-        }
+        self.connectFailureBackoff.record(
+            error: error,
+            pendingDeviceTokenRetry: self.pendingDeviceTokenRetry,
+            supportedProtocols: self.supportedProtocols)
+        self.scheduleReconnect()
     }
 
     private func isConnected(connectionGeneration: UInt64) -> Bool {
@@ -1042,10 +1118,7 @@ extension GatewayChannelActor {
                     await self.pushHandler?(
                         .seqGap(expected: last + 1, received: seq),
                         connectionGeneration)
-                    let error = NSError(
-                        domain: "Gateway",
-                        code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "gateway event sequence gap"])
+                    let error = Self.failure(8, "gateway event sequence gap")
                     await self.transitionToDisconnected(
                         reason: error.localizedDescription,
                         error: error,
@@ -1057,10 +1130,7 @@ extension GatewayChannelActor {
             }
             if evt.event == "tick" { self.lastTick = Date() }
             guard let projected = self.liveTextProjection.project(evt) else {
-                let error = NSError(
-                    domain: "Gateway",
-                    code: 8,
-                    userInfo: [NSLocalizedDescriptionKey: "gateway live text baseline missing"])
+                let error = Self.failure(8, "gateway live text baseline missing")
                 await self.transitionToDisconnected(
                     reason: error.localizedDescription,
                     error: error,
@@ -1076,7 +1146,7 @@ extension GatewayChannelActor {
 
     private func waitForConnectChallenge(
         task: WebSocketTaskBox,
-        attemptID: UUID) async throws -> GatewayConnectChallenge
+        connectionGeneration: UInt64) async throws -> GatewayConnectChallenge
     {
         try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
@@ -1085,7 +1155,7 @@ extension GatewayChannelActor {
                 guard let self else { throw CancellationError() }
                 while true {
                     let msg = try await task.receive()
-                    try await self.ensureCurrentConnectAttempt(attemptID, task: task)
+                    try await self.requireCurrentConnection(connectionGeneration)
                     guard let data = self.decodeMessageData(msg) else { continue }
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge" {
@@ -1103,34 +1173,19 @@ extension GatewayChannelActor {
     private func waitForConnectResponse(
         reqId: String,
         task: WebSocketTaskBox,
-        attemptID: UUID) async throws -> ResponseFrame
+        connectionGeneration: UInt64) async throws -> ResponseFrame
     {
         while true {
             let msg = try await task.receive()
-            try self.ensureCurrentConnectAttempt(attemptID, task: task)
+            try self.requireCurrentConnection(connectionGeneration)
             guard let data = self.decodeMessageData(msg) else { continue }
             guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
-                throw NSError(
-                    domain: "Gateway",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "connect failed (invalid response)"])
+                throw Self.failure(1, "connect failed (invalid response)")
             }
             if case let .res(res) = frame, res.id == reqId {
                 return res
             }
         }
-    }
-
-    private func isCurrentConnectAttempt(_ attemptID: UUID, task candidate: WebSocketTaskBox) -> Bool {
-        guard self.activeConnectAttemptID == attemptID, let task = self.task else { return false }
-        return task.task === candidate.task
-    }
-
-    private func ensureCurrentConnectAttempt(_ attemptID: UUID, task candidate: WebSocketTaskBox) throws {
-        // A timed-out handshake can finish after a retry installs another socket.
-        // Every post-await step must still own its logical attempt and physical socket.
-        try Task.checkCancellation()
-        guard self.isCurrentConnectAttempt(attemptID, task: candidate) else { throw CancellationError() }
     }
 
     private nonisolated func decodeMessageData(_ msg: URLSessionWebSocketTask.Message) -> Data? {
@@ -1158,10 +1213,7 @@ extension GatewayChannelActor {
                 let delta = Date().timeIntervalSince(last) * 1000
                 if delta > tolerance {
                     self.logger.error("gateway tick missed; reconnecting")
-                    let error = NSError(
-                        domain: "Gateway",
-                        code: 4,
-                        userInfo: [NSLocalizedDescriptionKey: "gateway tick missed; reconnecting"])
+                    let error = Self.failure(4, "gateway tick missed; reconnecting")
                     await self.transitionToDisconnected(
                         reason: error.localizedDescription,
                         error: error,
@@ -1173,42 +1225,38 @@ extension GatewayChannelActor {
         }
     }
 
-    private func scheduleReconnect(after connectionGeneration: UInt64) async {
-        guard self.shouldReconnect else { return }
-        guard !self.reconnectPausedForAuthFailure else { return }
-        guard self.automaticReconnectRequested else { return }
-        guard self.connectionGeneration == connectionGeneration,
-              self.disconnectedConnectionGeneration == connectionGeneration
-        else { return }
-        let delay = self.backoffMs / 1000
-        self.backoffMs = min(self.backoffMs * 2, 30000)
-        guard await self.sleepUnlessCancelled(nanoseconds: UInt64(delay * 1_000_000_000)) else { return }
-        guard self.shouldReconnect else { return }
-        guard !self.reconnectPausedForAuthFailure else { return }
-        guard self.automaticReconnectRequested else { return }
-        guard self.connectionGeneration == connectionGeneration,
-              self.disconnectedConnectionGeneration == connectionGeneration
-        else { return }
-        do {
-            try await self.connect()
-        } catch {
-            if self.shouldPauseReconnectAfterAuthFailure(error) {
-                self.reconnectPausedForAuthFailure = true
-                let failure = error.localizedDescription
-                self.logger.error(
-                    "gateway reconnect paused for non-recoverable auth failure \(failure, privacy: .public)")
-                return
-            }
-            let wrapped = self.wrap(error, context: "gateway reconnect")
-            self.logger.error("gateway reconnect failed \(wrapped.localizedDescription, privacy: .public)")
-            // A pre-socket provider failure leaves this generation owning retries.
-            // Once a new socket exists, its disconnect transition owns the next attempt.
-            if self.connectionGeneration == connectionGeneration {
-                Task { [weak self] in
-                    await self?.scheduleReconnect(after: connectionGeneration)
-                }
+    private func scheduleReconnect() {
+        guard self.shouldReconnect, !self.reconnectPausedForAuthFailure, self.reconnectTask == nil else { return }
+        self.reconnectTask = Task { [weak self] in
+            await self?.reconnect()
+        }
+    }
+
+    private func reconnect() async {
+        defer { self.reconnectTask = nil }
+        while self.shouldReconnect, !self.connected, !self.reconnectPausedForAuthFailure, !Task.isCancelled {
+            do {
+                try await self.connect()
+            } catch {
+                if await self.recordAutomaticReconnectFailure(error, context: "gateway reconnect") { return }
             }
         }
+    }
+
+    private func recordAutomaticReconnectFailure(_ error: Error, context: String) async -> Bool {
+        if self.shouldPauseReconnectAfterAuthFailure(error) {
+            self.reconnectPausedForAuthFailure = true
+            let failure = error.localizedDescription
+            self.logger.error(
+                "\(context, privacy: .public) paused for non-recoverable auth failure \(failure, privacy: .public)")
+            return true
+        }
+        let wrapped = self.wrap(error, context: context)
+        self.logger.error("\(context, privacy: .public) failed \(wrapped.localizedDescription, privacy: .public)")
+        if let tlsError = wrapped as? GatewayTLSValidationError {
+            await self.reconnectTLSFailureHandler?(tlsError)
+        }
+        return false
     }
 
     private func shouldRetryWithStoredDeviceToken(
@@ -1217,41 +1265,23 @@ extension GatewayChannelActor {
         storedToken: String?,
         attemptedDeviceTokenRetry: Bool) -> Bool
     {
-        if self.deviceTokenRetryBudgetUsed || attemptedDeviceTokenRetry {
-            return false
-        }
-        guard explicitGatewayToken != nil, storedToken != nil else {
-            return false
-        }
-        guard self.isTrustedDeviceRetryEndpoint() else {
-            return false
-        }
-        guard let authError = error as? GatewayConnectAuthError else {
-            return false
-        }
+        guard !self.deviceTokenRetryBudgetUsed, !attemptedDeviceTokenRetry,
+              explicitGatewayToken != nil, storedToken != nil,
+              self.isTrustedDeviceRetryEndpoint(),
+              let authError = error as? GatewayConnectAuthError
+        else { return false }
         return authError.canRetryWithDeviceToken
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
-        if authError.isNonRecoverable {
-            return true
-        }
-        if authError.detail == .authTokenMismatch,
-           self.deviceTokenRetryBudgetUsed, !self.pendingDeviceTokenRetry
-        {
-            return true
-        }
-        return false
-    }
-
-    private func shouldClearStoredDeviceTokenAfterRetry(_ error: Error) -> Bool {
-        guard let authError = error as? GatewayConnectAuthError else {
-            return false
-        }
-        return authError.detail == .authDeviceTokenMismatch
+        return authError.isProtocolMismatch(supportedProtocols: self.supportedProtocols) ||
+            authError.isNonRecoverable ||
+            (authError.detail == .authTokenMismatch &&
+                self.deviceTokenRetryBudgetUsed && !self.pendingDeviceTokenRetry)
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {
@@ -1301,10 +1331,7 @@ extension GatewayChannelActor {
               let task = self.task,
               task.state == .running
         else {
-            throw NSError(
-                domain: "Gateway",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
+            throw Self.failure(5, "gateway socket unavailable")
         }
         return try await self.request(
             method: method,
@@ -1370,11 +1397,7 @@ extension GatewayChannelActor {
                             guard await self.sleepUnlessCancelled(
                                 nanoseconds: UInt64(effectiveTimeout * 1_000_000))
                             else { return }
-                            let error = NSError(
-                                domain: "Gateway",
-                                code: 5,
-                                userInfo: [NSLocalizedDescriptionKey:
-                                    "gateway request timed out after \(Int(effectiveTimeout))ms"])
+                            let error = Self.failure(5, "gateway request timed out after \(Int(effectiveTimeout))ms")
                             await self.finishRequest(id: payload.id, result: .failure(error))
                         }
                     }
@@ -1468,10 +1491,7 @@ extension GatewayChannelActor {
         try Task.checkCancellation()
         let payload = try self.encodeRequest(method: method, params: params, kind: "send")
         guard let task = self.task else {
-            throw NSError(
-                domain: "Gateway",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
+            throw Self.failure(5, "gateway socket unavailable")
         }
         do {
             try Task.checkCancellation()
@@ -1487,6 +1507,10 @@ extension GatewayChannelActor {
                 shouldReconnect: true)
             throw wrapped
         }
+    }
+
+    private nonisolated static func failure(_ code: Int, _ message: String) -> NSError {
+        NSError(domain: "Gateway", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.

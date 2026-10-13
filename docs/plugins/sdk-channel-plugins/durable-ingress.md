@@ -59,8 +59,9 @@ current event, retry-delayed pending rows, and locally released or ended claims.
 Channel buffers can match their own payloads to wait for already-admitted input;
 the core drain remains the owner of lane state. The SDK inbound debouncer's
 optional `shouldHoldFlush(items)` hook can defer a quiet-timer flush until its
-existing deadline. Appends supersede an in-flight check, and explicit flushes
-bypass it.
+existing deadline. Appends during a check join the same batch; a check may
+flush it without waiting for another quiet window. Explicit flushes bypass
+the check.
 
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
@@ -77,11 +78,12 @@ channel-local TTL cache.
 
 Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
 migration in the shared state worker. Competing records are compared again in the
-write transaction; clearing memory or forgetting a key fences older asynchronous
-cache fills. Await commits and deletions before acknowledging adoption or finishing
-cleanup. Error hooks retain their existing policy: a throwing hook rejects the
-operation, while a nonthrowing hook permits the guard's memory fallback. Worker
-failures never switch persistence to synchronous SQLite. Multi-key commits and
+write transaction. Forgetting a key clears its memory entry in the same queue as
+its durable deletion. Memory-only clears are best effort: an in-flight read may
+refill the cache afterward. Await commits and deletions before acknowledging
+adoption or finishing cleanup. Error hooks retain their existing policy: a throwing
+hook rejects the operation, while a nonthrowing hook permits the guard's memory
+fallback. Worker failures never switch persistence to synchronous SQLite. Multi-key commits and
 deletions settle every accepted write before returning an error, so rollback and
 shutdown cannot race a still-running sibling mutation.
 
@@ -118,7 +120,7 @@ or non-replay transport, and cover the retention contract with tests.
 Drain dispatch runs command side effects before the ingress row reaches its
 completion tombstone. A process crash between those steps replays the row and
 can execute the side effect again. This at-least-once crash window is the
-default contract. For non-idempotent work such as config writes, storage
+default contract. For work that is not safe to repeat such as config writes, storage
 clears, or visible acknowledgements outside the reply lane, use
 `createIngressEffectOnce(...)` from
 `openclaw/plugin-sdk/ingress-effect-once`. Give each call the stable ingress
@@ -210,7 +212,7 @@ For channels using the durable ingress drain, the account monitor's stop path
 must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial
 drain recovers undispatched durable rows. Do not add a second reload-specific
-replay pass; queue recovery is the canonical restart path.
+replay pass; queue recovery is the standard restart path.
 
 When replacing a known transport identity whose event IDs can overlap the previous
 identity, await the core-provided queue's `purge()` before resetting its transport

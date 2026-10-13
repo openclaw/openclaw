@@ -115,7 +115,7 @@ describe("public GPT-Live delegation", () => {
     }
   });
 
-  it.each(["stop", "detach", "abort", "drain-abort", "drain-detach"] as const)(
+  it.each(["abort", "drain-abort"] as const)(
     "revokes pending public notices on %s before transcript drain or timeout",
     async (boundary) => {
       vi.useFakeTimers();
@@ -123,14 +123,10 @@ describe("public GPT-Live delegation", () => {
         model: "gpt-live-1",
       });
       controller.handleEvent({ kind: "delegation", id: "pending" });
-      if (boundary === "stop") {
-        controller.stop(new Error("closed"));
-      } else if (boundary === "detach") {
-        controller.detach();
-      } else if (boundary === "abort") {
+      if (boundary === "abort") {
         sessionController.abort();
       } else {
-        controller.beginTranscriptDrain(boundary === "drain-abort" ? "abort" : "detach");
+        controller.beginTranscriptDrain("abort");
       }
       controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Late request." });
       await vi.advanceTimersByTimeAsync(15_000);
@@ -166,42 +162,6 @@ describe("public GPT-Live delegation", () => {
     controller.handleEvent({ kind: "delegation", id: "pending" });
     controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check the forecast." });
     expect(runAgentConsult).not.toHaveBeenCalled();
-  });
-
-  it("keeps recent corrections in long public transcripts and saves snapshots once before stopping", async () => {
-    const onTranscript = vi.fn();
-    const onWireEventType = vi.fn();
-    const original = "Earlier detail. ".repeat(1_000);
-    const correction = " Correction: Thursday instead of Friday.";
-    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-    const { controller, transcript, delegate } = createFrameHarness({
-      onTranscript,
-      onWireEventType,
-      runAgentConsult,
-    });
-    transcript("input", original, 0, 5_000);
-    transcript("input", correction, 5_000, 6_000);
-    delegate("item_corrected", 6_000);
-    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-    const prompt = runAgentConsult.mock.calls[0]?.[0].prompt ?? "";
-    expect(prompt).toContain("Correction: Thursday instead of Friday.");
-    expect(prompt.length).toBeLessThan(17_000);
-    const committed = onTranscript.mock.calls.filter((call) => call[2]);
-    expect(committed.map(([, text]) => text).join("")).toBe(original + correction);
-    transcript("output", "Thanks.", 6_000, 6_500);
-    controller.stop(new Error("closed"));
-    controller.stop(new Error("closed again"));
-    transcript("output", "Late.", 6_500, 7_000);
-    expect(onTranscript.mock.calls.filter((call) => call[2])).toHaveLength(committed.length + 1);
-    expect(onTranscript).toHaveBeenLastCalledWith("assistant", "Thanks.", true);
-    expect(
-      onTranscript.mock.calls
-        .filter((call) => call[2])
-        .map(([, text]) => text)
-        .join(""),
-    ).toBe(original + correction + "Thanks.");
-    expect(onWireEventType).not.toHaveBeenCalledWith("turn.done");
-    expect(onWireEventType).not.toHaveBeenCalledWith("response.done");
   });
 
   it("retains the pending user request while long assistant speech evicts transcript context", async () => {

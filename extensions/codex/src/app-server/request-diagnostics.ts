@@ -25,13 +25,6 @@ type RegisteredTransportIdentity = ReturnType<
 >;
 
 type ReadInitializeSnapshot = (beforeClientClose?: boolean) => InitializeSnapshot;
-function readInitializeSnapshot(read: ReadInitializeSnapshot | undefined, beforeClose = false) {
-  try {
-    return read?.(beforeClose);
-  } catch {
-    return undefined;
-  }
-}
 
 /** Counts awaited APIs, not native execution or proof that a request was written. */
 export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
@@ -43,33 +36,22 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
   function createAttempt(ordinal: number): {
     ordinal: number;
     phase: "prepare" | "acquire-client" | "callback" | "release-client";
-    clientInstanceId: string | undefined;
-    acquireLastObservedBoundary: CodexAppServerAcquireObservation["boundary"] | undefined;
-    acquireBoundaryBeforeCleanup: CodexAppServerAcquireObservation["boundary"] | undefined;
-    acquireStartup: CodexAppServerAcquireObservation["startup"];
-    lastStartedClientInstanceId: string | undefined;
-    lastStartedTransportIdentity: RegisteredTransportIdentity;
-    initializeSnapshot: ReadInitializeSnapshot | undefined;
-    initializeBeforeCleanup: InitializeSnapshot;
-    initializeBeforeCleanupSource: "at-cleanup" | "before-client-close" | undefined;
+    clientInstanceId?: string;
+    acquireLastObservedBoundary?: CodexAppServerAcquireObservation["boundary"];
+    acquireBoundaryBeforeCleanup?: CodexAppServerAcquireObservation["boundary"];
+    acquireStartup?: CodexAppServerAcquireObservation["startup"];
+    lastStartedClientInstanceId?: string;
+    lastStartedTransportIdentity?: RegisteredTransportIdentity;
+    initializeSnapshot?: ReadInitializeSnapshot;
+    initializeBeforeCleanup?: InitializeSnapshot;
+    initializeBeforeCleanupSource?: "at-cleanup" | "before-client-close";
     started: number;
-    pending: number;
     methods: Map<string, number>;
   } {
     return {
       ordinal,
       phase: "prepare",
-      clientInstanceId: undefined,
-      acquireLastObservedBoundary: undefined,
-      acquireBoundaryBeforeCleanup: undefined,
-      acquireStartup: undefined,
-      lastStartedClientInstanceId: undefined,
-      lastStartedTransportIdentity: undefined,
-      initializeSnapshot: undefined,
-      initializeBeforeCleanup: undefined,
-      initializeBeforeCleanupSource: undefined,
       started: 0,
-      pending: 0,
       methods: new Map<string, number>(),
     };
   }
@@ -87,9 +69,9 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           if (observation.boundary === "cleanup") {
             if (current.acquireLastObservedBoundary !== "cleanup") {
               current.acquireBoundaryBeforeCleanup = current.acquireLastObservedBoundary;
-              const snapshot = readInitializeSnapshot(current.initializeSnapshot);
+              const snapshot = current.initializeSnapshot?.();
               current.initializeBeforeCleanup = snapshot?.clientClosed
-                ? readInitializeSnapshot(current.initializeSnapshot, true)
+                ? current.initializeSnapshot?.(true)
                 : snapshot;
               current.initializeBeforeCleanupSource = current.initializeBeforeCleanup
                 ? snapshot?.clientClosed
@@ -112,45 +94,25 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
             return;
           }
           // Fallback can replace this client; this identity is an observation, not a lease.
-          current.lastStartedClientInstanceId = undefined;
-          current.lastStartedTransportIdentity = undefined;
-          current.initializeSnapshot = undefined;
           current.initializeBeforeCleanup = undefined;
           current.initializeBeforeCleanupSource = undefined;
-          try {
-            current.lastStartedClientInstanceId = client.getInstanceId();
-            current.initializeSnapshot = (beforeClose) =>
-              client.getInitializeDiagnostic(beforeClose);
-          } catch {
-            // A diagnostic identity cannot invalidate startup.
-          }
-          try {
-            const identity = client.getRegisteredTransportIdentity();
-            current.lastStartedTransportIdentity = identity
-              ? { pid: identity.pid, startedAt: identity.startedAt }
-              : undefined;
-          } catch {
-            // Optional transport evidence must not suppress initialize diagnostics.
-          }
+          current.lastStartedClientInstanceId = client.getInstanceId();
+          current.initializeSnapshot = (beforeClose) => client.getInitializeDiagnostic(beforeClose);
+          const identity = client.getRegisteredTransportIdentity();
+          current.lastStartedTransportIdentity = identity;
         },
       };
     },
     acquired(client: CodexAppServerClient) {
       attempt.phase = "callback";
-      try {
-        attempt.clientInstanceId = client.getInstanceId();
-      } catch {
-        // A missing diagnostic identity cannot invalidate the acquired lease.
-      }
+      attempt.clientInstanceId = client.getInstanceId();
     },
     request(method: string) {
       const current = attempt;
       const label = DIAGNOSTIC_METHODS.has(method) ? method : "other";
       current.started++;
-      current.pending++;
       current.methods.set(label, (current.methods.get(label) ?? 0) + 1);
       return () => {
-        current.pending--;
         const remaining = (current.methods.get(label) ?? 1) - 1;
         if (remaining === 0) {
           current.methods.delete(label);
@@ -168,10 +130,10 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           return;
         }
         const methods = [...attempt.methods].toSorted(([a], [b]) => a.localeCompare(b));
-        const initialize = readInitializeSnapshot(attempt.initializeSnapshot);
+        const pending = methods.reduce((count, [, active]) => count + active, 0);
+        const initialize = attempt.initializeSnapshot?.();
         embeddedAgentLog.warn("codex app-server scope timed out", {
-          phase:
-            attempt.phase === "callback" && attempt.pending > 0 ? "client-request" : attempt.phase,
+          phase: attempt.phase === "callback" && pending > 0 ? "client-request" : attempt.phase,
           timeoutMs,
           elapsedMs: Math.round(performance.now() - startedAt),
           scopeAttemptOrdinal: attempt.ordinal,
@@ -199,7 +161,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
               }
             : {}),
           requestStartedCount: attempt.started,
-          currentRequestCount: attempt.pending,
+          currentRequestCount: pending,
           // Scalar log attributes retain the bounded method/count tuples.
           currentMethods: JSON.stringify(methods.slice(0, MAX_METHODS)),
           omittedMethodCount: Math.max(0, methods.length - MAX_METHODS),

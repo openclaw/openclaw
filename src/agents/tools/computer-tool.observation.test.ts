@@ -182,10 +182,9 @@ describe("computer targeted action observations", () => {
       });
       const state: SessionState = { lastActivity: 0, state: "processing", queueDepth: 0 };
       const params = { action: "get_window_state", windowRef: "window-1" };
-      const config = { enabled: true };
       for (let index = 1; index <= 20; index++) {
         const id = `read-${index}`;
-        recordToolCall(state, "computer", params, id, config);
+        recordToolCall(state, "computer", params, id);
         const result = await fixture.tool.execute(id, params);
         expect(JSON.stringify(result.content)).toContain(`observation-${index}`);
         expect(JSON.stringify(result.content)).toContain(`element-${index}`);
@@ -196,7 +195,7 @@ describe("computer targeted action observations", () => {
           result,
         });
       }
-      expect(detectToolCallLoop(state, "computer", params, config)).toMatchObject({
+      expect(detectToolCallLoop(state, "computer", params)).toMatchObject({
         stuck: true,
         level: changing ? "warning" : "critical",
       });
@@ -239,11 +238,11 @@ describe("computer targeted action observations", () => {
     const requests = fixture.invoke.mock.calls.map(([request]) => request);
     const mutationRequest = expectDefined(requests[1], "first input request");
     const observationRequest = expectDefined(requests[2], "automatic observation request");
-    const mutationKey = `computer.act:v1:${createHash("sha256")
-      .update(JSON.stringify(["run-1", "click-1", "computer.act"]))
+    const mutationKey = `computer.act:v2:${createHash("sha256")
+      .update(JSON.stringify(["run-1", "", "click-1", "computer.act"]))
       .digest("hex")}`;
     expect(mutationRequest.idempotencyKey).toBe(mutationKey);
-    expect(observationRequest.idempotencyKey).toMatch(/^computer\.observation:v1:/);
+    expect(observationRequest.idempotencyKey).toMatch(/^computer\.observation:v2:/);
     expect(new Set(requests.map((request) => request.idempotencyKey)).size).toBe(5);
     expect(observationRequest.commandParams).toEqual({
       action: "get_window_state",

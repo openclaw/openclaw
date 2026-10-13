@@ -60,7 +60,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       allowRealIpFallback: currentConfig.gateway?.allowRealIpFallback === true,
     };
   };
-  const initialAccessConfig = resolveCurrentAccessConfig();
 
   api.registerTool(
     (ctx) => {
@@ -89,9 +88,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     handler: createDiffsHttpHandler({
       store,
       logger: api.logger,
-      allowRemoteViewer: initialAccessConfig.allowRemoteViewer,
-      trustedProxies: initialAccessConfig.trustedProxies,
-      allowRealIpFallback: initialAccessConfig.allowRealIpFallback,
       resolveAccessConfig: resolveCurrentAccessConfig,
     }),
   });

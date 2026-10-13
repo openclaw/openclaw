@@ -48,9 +48,11 @@ vi.mock("../../infra/update-status-schedule.js", () => ({
   refreshGatewayUpdateStatus: async () => {},
 }));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
   refreshLatestUpdateRestartSentinel: async () => null,
+  prepareLatestUpdateRestartSentinel: async () => null,
 }));
 
 type UpdateReadMethod = "update.status" | "update.runs.get" | "update.runs.list";

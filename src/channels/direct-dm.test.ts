@@ -12,14 +12,17 @@ vi.mock("./inbound-event/context.js", () => ({
   buildChannelInboundEventContext: vi.fn(() => ({ Body: "envelope:hello" })),
 }));
 
-vi.mock("./inbound-event/envelope.js", () => ({
-  resolveChannelInboundRouteEnvelope: vi.fn(() => ({
-    route: {
-      agentId: "agent-1",
-      accountId: "account-1",
-      sessionKey: "agent:agent-1:nostr:direct:peer-1",
-    },
-    buildEnvelope: vi.fn(() => "envelope:hello"),
+vi.mock("./inbound-event/envelope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound-event/envelope.js")>()),
+  createChannelInboundEnvelopeBuilderAsync: vi.fn(async () => () => "envelope:hello"),
+}));
+
+vi.mock("../routing/resolve-route.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routing/resolve-route.js")>()),
+  resolveAgentRoute: vi.fn(() => ({
+    agentId: "agent-1",
+    accountId: "account-1",
+    sessionKey: "agent:agent-1:nostr:direct:peer-1",
   })),
 }));
 
@@ -73,12 +76,13 @@ describe("dispatchInboundDirectDm", () => {
         replyOptions: { onModelSelected: mocks.onModelSelected },
       }),
     );
-    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress).toBe(
       channelIngress,
     );
   });
 
   it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
+    const assertAuthority = vi.fn();
     const turnAdoptionLifecycle = {
       admission: "exclusive" as const,
       onAdopted: vi.fn(async () => {}),
@@ -90,14 +94,17 @@ describe("dispatchInboundDirectDm", () => {
     await dispatchDm({
       channelIngress: "unsupported",
       turnAdoptionLifecycle,
+      assertAuthority,
     });
 
     expect(mocks.dispatchRoutedChannelTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        assertAuthority,
         replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
       }),
     );
-    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[1]?.[0].channelIngress).toBe(
+    expect(assertAuthority).not.toHaveBeenCalled();
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress).toBe(
       "unsupported",
     );
   });

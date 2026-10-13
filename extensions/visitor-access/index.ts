@@ -43,7 +43,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     ),
     api.logger,
     createVisitorAccessReader(api.runtime),
-    fetch,
+    api.runtime.gateway.resolveGitHubAccount,
     lifetime.signal,
   );
   const runtime: VisitorRuntime = {

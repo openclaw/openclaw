@@ -49,12 +49,24 @@ export function isRequesterSettleWakeForRun(params: {
 }): boolean {
   const { entry, requesterSessionKey, requesterAgentId } = params;
   const wake = entry.requesterSettleWake;
-  const pauseNotice = entry.pauseReason === "sessions_yield" && wake?.pauseNotice;
-  const batchRunIds = pauseNotice ? [entry.runId] : wake?.batchRunIds;
+  if (!wake) {
+    return false;
+  }
+  const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
+  // Dispatch selects the surviving members of its frozen generation. Retired
+  // rows no longer contribute to the admitted wake's identity.
+  const batchRunIds = pauseNotice
+    ? [entry.runId]
+    : wake.batchRunIds?.filter((id) => {
+        const member = params.runsById.get(id);
+        return (
+          member?.requesterSettleWake !== undefined &&
+          member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
+        );
+      });
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
-    !wake ||
     wake.attemptCount < 1 ||
     !isSameSubagentRun(params.runsById.get(entry.runId), entry) ||
     !batchRunIds?.includes(entry.runId)
@@ -111,6 +123,16 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
   };
 }
 
+export function sameRequesterSettleRunIdentity(
+  left: SubagentRunRecord,
+  right: SubagentRunRecord,
+): boolean {
+  return isDeepStrictEqual(
+    captureRequesterSettleRunIdentity(left),
+    captureRequesterSettleRunIdentity(right),
+  );
+}
+
 /** Wake decisions retain their observed progress; retirement/presentation metadata is carried forward. */
 export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
   const wake = entry.requesterSettleWake;
@@ -129,22 +151,6 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
       yieldedFinalDeliverable: wake.yieldedFinalDeliverable === true,
       pauseNotice: wake.pauseNotice,
     }
-  );
-}
-
-/** A retained delivery callback cannot adopt another requester claim or frozen reply policy. */
-function isRequesterSettleRunBindingCurrent(
-  current: SubagentRunRecord,
-  expected: SubagentRunRecord,
-): boolean {
-  return (
-    isSameSubagentRunOwner(current, expected) &&
-    isDeepStrictEqual(
-      captureRequesterSettleRunIdentity(current),
-      captureRequesterSettleRunIdentity(expected),
-    ) &&
-    (current.requesterSettleWake?.yieldedFinalDeliverable === true) ===
-      (expected.requesterSettleWake?.yieldedFinalDeliverable === true)
   );
 }
 
@@ -267,7 +273,9 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     if (
       !entry ||
       (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
-      !isRequesterSettleRunBindingCurrent(entry, observed) ||
+      !sameRequesterSettleRunIdentity(entry, observed) ||
+      (wake?.yieldedFinalDeliverable === true) !==
+        (observed.requesterSettleWake?.yieldedFinalDeliverable === true) ||
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||
       (params.pause

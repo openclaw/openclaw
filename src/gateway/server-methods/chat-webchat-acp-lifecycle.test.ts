@@ -6,7 +6,7 @@ import { createSubscriptionTestFixture } from "../server-runtime-subscriptions.t
 
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
-  persistLifecycle: vi.fn(async () => {}),
+  persistLifecycle: vi.fn(async (_params: unknown) => {}),
 }));
 vi.mock("../../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../audit/audit-config.js", () => ({
@@ -24,8 +24,10 @@ vi.mock("../../audit/audit-recorder.js", () => ({
 vi.mock("../server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
-vi.mock("../session-lifecycle-state.js", () => ({
-  persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+vi.mock("../session-lifecycle-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-state.js")>()),
+  prepareGatewaySessionLifecycleEvent: (params: unknown) => () =>
+    agentEventHandlerMocks.persistLifecycle(params),
 }));
 const { startGatewayEventSubscriptions } = await import("../server-runtime-subscriptions.js");
 const { createParams } = createSubscriptionTestFixture();

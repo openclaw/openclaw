@@ -165,7 +165,6 @@ export async function dispatchCommittedSkillChangeBestEffort(
         occurredAt: new Date().toISOString(),
         ...(params.before ? { before: params.before } : {}),
         ...(params.after ? { after: params.after } : {}),
-        ...(params.proposal ? { proposal: params.proposal } : {}),
       },
       { workspaceDir: params.workspaceDir },
     );

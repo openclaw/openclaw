@@ -28,13 +28,10 @@ type ReapprovalRequestParams = {
   baseDir?: string;
 };
 
-type DeferredResult = Deferred<RequestNodePairingResult | null>;
-
 type QueuedRequest = {
   fingerprint: string;
   params: ReapprovalRequestParams;
-  deferred: DeferredResult;
-  followers: DeferredResult[];
+  waiters: Deferred<RequestNodePairingResult | null>[];
 };
 
 type NodeRequestState = {
@@ -124,14 +121,13 @@ export function createNodeReapprovalCoordinator(
         return;
       }
       try {
-        queued.deferred.resolve(await executeRequest(queued.params));
-        for (const follower of queued.followers) {
-          follower.resolve(null);
+        const result = await executeRequest(queued.params);
+        for (const [index, waiter] of queued.waiters.entries()) {
+          waiter.resolve(index === 0 ? result : null);
         }
       } catch (error) {
-        queued.deferred.reject(error);
-        for (const follower of queued.followers) {
-          follower.reject(error);
+        for (const waiter of queued.waiters) {
+          waiter.reject(error);
         }
       } finally {
         if (requestStates.get(nodeId) === state && !state.queued) {
@@ -149,36 +145,28 @@ export function createNodeReapprovalCoordinator(
       }
       const nodeId = params.input.nodeId.trim();
       const fingerprint = buildRequestFingerprint(params.input);
-      const state = requestStates.get(nodeId);
-      if (!state) {
-        const deferred = createDeferredCore<RequestNodePairingResult | null>();
-        const nextState: NodeRequestState = {};
-        requestStates.set(nodeId, nextState);
-        enqueueRequest(nodeId, nextState, {
-          fingerprint,
-          params,
-          deferred,
-          followers: [],
-        });
-        return deferred.promise;
-      }
-      if (state.queued?.fingerprint === fingerprint) {
-        const follower = createDeferredCore<RequestNodePairingResult | null>();
-        state.queued.params = params;
-        state.queued.followers.push(follower);
-        return follower.promise;
-      }
-
+      let state = requestStates.get(nodeId);
       const deferred = createDeferredCore<RequestNodePairingResult | null>();
-      if (state.queued) {
-        state.queued.deferred.resolve(null);
-        for (const follower of state.queued.followers) {
-          follower.resolve(null);
-        }
-        state.queued = { fingerprint, params, deferred, followers: [] };
+      if (state?.queued?.fingerprint === fingerprint) {
+        state.queued.params = params;
+        state.queued.waiters.push(deferred);
       } else {
-        state.queued = { fingerprint, params, deferred, followers: [] };
-        enqueueRequest(nodeId, state);
+        const queued = { fingerprint, params, waiters: [deferred] };
+        if (!state) {
+          state = {};
+          requestStates.set(nodeId, state);
+          enqueueRequest(nodeId, state, queued);
+        } else {
+          const previous = state.queued;
+          state.queued = queued;
+          if (previous) {
+            for (const waiter of previous.waiters) {
+              waiter.resolve(null);
+            }
+          } else {
+            enqueueRequest(nodeId, state);
+          }
+        }
       }
       return deferred.promise;
     },
@@ -191,9 +179,8 @@ export function createNodeReapprovalCoordinator(
     dispose() {
       disposed = true;
       for (const state of requestStates.values()) {
-        state.queued?.deferred.resolve(null);
-        for (const follower of state.queued?.followers ?? []) {
-          follower.resolve(null);
+        for (const waiter of state.queued?.waiters ?? []) {
+          waiter.resolve(null);
         }
       }
       requestStates.clear();

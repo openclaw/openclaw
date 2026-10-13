@@ -1,87 +1,39 @@
 import type { DatabaseSync } from "node:sqlite";
-import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { readAgentProvenanceInDatabase } from "./agent-provenance.kernel.js";
-import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
-export { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 export type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 type AgentProvenanceOptions = OpenClawStateDatabaseOptions & { nowMs?: number };
 
-export function recordAgentProvenance(
+export async function recordAgentProvenance(
   agentId: string,
   provenance: { createdVia: AgentCreatedVia; creatorAgentId?: string },
   options: AgentProvenanceOptions = {},
-): void {
-  ensureAgentProvenanceSchema(options);
-  const id = normalizeAgentId(agentId);
-  const creatorAgentId = provenance.creatorAgentId
-    ? normalizeAgentId(provenance.creatorAgentId)
-    : null;
-  const createdAtMs = options.nowMs ?? Date.now();
-  runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      const db = getNodeSqliteKysely<AgentProvenanceDatabase>(sqlite);
-      executeSqliteQuerySync(
-        sqlite,
-        db
-          .insertInto("agent_provenance")
-          .values({
-            agent_id: id,
-            created_via: provenance.createdVia,
-            creator_agent_id: creatorAgentId,
-            created_at_ms: createdAtMs,
-          })
-          .onConflict((conflict) =>
-            conflict.column("agent_id").doUpdateSet({
-              created_via: provenance.createdVia,
-              creator_agent_id: creatorAgentId,
-              created_at_ms: createdAtMs,
-            }),
-          ),
-      );
-    },
-    options,
-    { operationLabel: "agent-provenance.record" },
-  );
-}
-
-export function readAgentProvenance(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): AgentProvenance | undefined {
-  return withExistingOpenClawStateDatabaseCurrentReadOnly(({ db }) => {
-    try {
-      return readAgentProvenanceInDatabase(db, agentId);
-    } catch (error) {
-      // Legacy state may omit this lazy additive table; only its writer installs it.
-      if (
-        error instanceof Error &&
-        hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
-        error.message === "no such table: agent_provenance"
-      ) {
-        return undefined;
-      }
-      throw error;
-    }
-  }, options);
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const input = {
+    agentId: normalizeAgentId(agentId),
+    createdVia: provenance.createdVia,
+    creatorAgentId: provenance.creatorAgentId ? normalizeAgentId(provenance.creatorAgentId) : null,
+    createdAtMs: options.nowMs ?? Date.now(),
+  };
+  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
+  await executeOpenClawStateWorker(context, { type: "agentProvenance.record", input });
 }
 
 type AgentProvenanceReadOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path">;
 const DISPLAY_PROVENANCE_BATCH_SIZE = 256;
 
-/** Presentation reads may wait; incarnation checks retain the synchronous reader above. */
+/** Read provenance for the selected presentation roster in bounded worker batches. */
 export async function readAgentProvenanceForDisplay(
   agentIds: readonly string[],
   options: AgentProvenanceReadOptions = {},

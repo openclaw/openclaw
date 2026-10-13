@@ -45,11 +45,13 @@ async function waitForPidsToExit(pids: number[], signal: AbortSignal): Promise<v
 }
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
-  it.each(["before", "after"] as const)(
-    "checks launch policy %s the PTY start message",
+  it.each(["before", "prepared", "after"] as const)(
+    "checks launch policy at the %s PTY boundary",
     async (timing) => {
       const directory = tempDirs.make("openclaw-pty-policy-");
       const marker = path.join(directory, "started");
+      const nativeAdmission = createDeferredCore();
+      let launchGrants = 0;
       let allowed = true;
       const starting = spawnNodeTerminalPty(
         {
@@ -65,15 +67,35 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
             throw new Error("PTY policy revoked");
           }
         },
+        (launch, settlement) => {
+          launchGrants++;
+          if (timing === "prepared") {
+            allowed = false;
+          }
+          if (!allowed) {
+            throw new Error("PTY policy revoked");
+          }
+          if (!settlement) {
+            throw new Error("PTY launch did not retain native admission");
+          }
+          void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
+          return launch();
+        },
       );
       if (timing === "before") {
         // The Node helper has started, but its boot acknowledgement has not arrived.
         allowed = false;
+      }
+      if (timing !== "after") {
         await expect(starting).rejects.toThrow("PTY policy revoked");
         expect(fs.existsSync(marker)).toBe(false);
+        expect(launchGrants).toBe(timing === "prepared" ? 1 : 0);
       } else {
         const handle = await starting;
         handles.push(handle);
+        await nativeAdmission.promise;
+        expect(launchGrants).toBe(1);
+        expect(isPidAlive(handle.pid)).toBe(true);
         allowed = false;
         const done = createDeferredCore<{ exitCode: number; signal?: number }>();
         let output = "";

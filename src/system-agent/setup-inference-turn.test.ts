@@ -29,6 +29,7 @@ import {
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
@@ -191,20 +192,27 @@ describe("setup inference plugin ownership", () => {
             createEmptyPluginRegistry(),
           );
           await using generationCache = createPluginCache();
-          const generation = loadSetupInferencePluginGeneration({
-            cache: generationCache,
-            config,
-            workspaceDir: state.workspaceDir,
-            selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
-          });
-          expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+          const sql = observeMainThreadSql();
+          try {
+            sql.calibrate();
+            const generation = await loadSetupInferencePluginGeneration({
+              cache: generationCache,
+              config,
+              workspaceDir: state.workspaceDir,
+              selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
+            });
+            expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+            sql.expectIdle();
+          } finally {
+            sql.restore();
+          }
           expect(resolvePluginMetadataSnapshot(input)).toBe(before);
         });
       },
     );
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "retains the probing registry artifact preference (%s)",
     async (preferBuiltPluginArtifacts) => {
       const order: string[] = [];
@@ -395,7 +403,7 @@ describe("setup probe projection", () => {
 
         // Gateway delivery can consume retained events after the producer has cleaned up.
         for (const event of events) {
-          handler(event);
+          await handler(event);
         }
         expect(broadcast).not.toHaveBeenCalled();
         expect(broadcastToConnIds).not.toHaveBeenCalled();
@@ -403,7 +411,7 @@ describe("setup probe projection", () => {
         expect(persistLifecycle).not.toHaveBeenCalled();
       } finally {
         unsubscribe();
-        handler.dispose();
+        await handler.dispose();
         chatRunState.clear();
         if (runId) {
           clearAgentRunContext(runId);

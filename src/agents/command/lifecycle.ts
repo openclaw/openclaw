@@ -38,23 +38,6 @@ function resolveTerminalLogLevel(
   return outcome.status === "timeout" ? "warn" : "error";
 }
 
-export function applyAgentRunAbortMetadata<T extends { meta: object }>(
-  result: T,
-  signal: AbortSignal | undefined,
-): T {
-  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
-  if (abortFields.aborted !== true) {
-    return result;
-  }
-  return {
-    ...result,
-    meta: {
-      ...result.meta,
-      ...abortFields,
-    },
-  };
-}
-
 export function createAgentCommandLifecycle(params: {
   runId: string;
   lifecycleGeneration: () => string;

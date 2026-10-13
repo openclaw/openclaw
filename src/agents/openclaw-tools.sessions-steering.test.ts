@@ -18,7 +18,9 @@ const { config, callGatewayMock } = vi.hoisted(() => ({
   } satisfies OpenClawConfig,
   callGatewayMock: vi.fn(),
 }));
+// mock-isolation: Steering stays in this receiver; unexpected RPCs must hit the spy, never a live Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
+// mock-isolation: Pin this routing fixture; live config publication is covered by Gateway admission tests.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => config,
   resolveGatewayPort: () => 18789,
@@ -27,6 +29,7 @@ vi.mock("../config/config.js", () => ({
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
@@ -126,14 +129,25 @@ it.each([
       // Dispatch can await transport initialization; synchronize on provider entry.
       await Promise.race([initialResponseStarted.promise, prompt]);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      const queueMessage = vi.fn((text: string, options?: EmbeddedAgentQueueMessageOptions) =>
-        steerActiveSessionWithOptionalDeliveryWait(session, text, options, runScopedCallerKey),
+      const queueMessage = vi.fn(
+        (text: string, options?: EmbeddedAgentQueueMessageOptions, assertCurrent?: () => void) =>
+          steerActiveSessionWithOptionalDeliveryWait(
+            session,
+            text,
+            options,
+            runScopedCallerKey,
+            () => {
+              assertCurrent?.();
+              return true;
+            },
+          ),
       );
       setActiveEmbeddedRun(
         "caller-active-session",
         {
           ...(hiddenRun ? { runId } : {}),
           queueMessage,
+          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
           isStreaming: () => true,
           isCompacting: () => false,
           supportsTranscriptCommitWait,
@@ -232,6 +246,7 @@ it.each([
       expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(
         false,
       );
+      await waitForSessionParticipantRecording(scope);
       expect(listSessionParticipantsReadOnly(scope).get(runScopedCallerKey)).toEqual([
         expect.objectContaining({
           identity: { type: "agent", id: "re-portal" },

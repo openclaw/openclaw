@@ -8,7 +8,7 @@ import {
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   resolveDefaultSecretProviderAlias,
@@ -91,8 +91,10 @@ function applyCopilotDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenCl
   };
 }
 
-function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undefined {
-  const authStore = ensureAuthProfileStore(agentDir, {
+async function resolveExistingCopilotTokenProfileId(
+  agentDir?: string,
+): Promise<string | undefined> {
+  const authStore = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
   });
   return listProfilesForProvider(authStore, PROVIDER_ID).find((profileId) => {
@@ -222,10 +224,9 @@ async function resolveCopilotNonInteractiveToken(
     required: false,
   });
   if (!resolved && referenceMode && flagValue) {
-    ctx.runtime.error(
+    throw new Error(
       "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN is set in env. Set COPILOT_GITHUB_TOKEN and omit --github-copilot-token, or use --secret-input-mode plaintext.",
     );
-    ctx.runtime.exit(1);
   }
   return resolved;
 }
@@ -242,26 +243,19 @@ async function runGitHubCopilotNonInteractiveAuth(
   if (resolved) {
     const useTokenRef = ctx.opts.secretInputMode === "ref" && resolved.source === "env";
     if (useTokenRef && !resolved.envVarName) {
-      ctx.runtime.error(
+      throw new Error(
         [
           '--secret-input-mode ref requires an explicit environment variable for provider "github-copilot".',
           "Set COPILOT_GITHUB_TOKEN in env and retry, or use --secret-input-mode plaintext.",
         ].join("\n"),
       );
-      ctx.runtime.exit(1);
-      return null;
     }
   } else {
-    if (flagValue && ctx.opts.secretInputMode === "ref") {
-      return null;
-    }
-    const existingProfileId = resolveExistingCopilotTokenProfileId(ctx.agentDir);
+    const existingProfileId = await resolveExistingCopilotTokenProfileId(ctx.agentDir);
     if (!existingProfileId) {
-      ctx.runtime.error(
+      throw new Error(
         "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN env var) for --auth-choice github-copilot.",
       );
-      ctx.runtime.exit(1);
-      return null;
     }
     profileId = existingProfileId;
     const existing = await resolveFirstGithubToken({

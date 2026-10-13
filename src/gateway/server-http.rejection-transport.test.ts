@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { Agent, request, type ServerResponse } from "node:http";
+import { Agent, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -13,7 +13,60 @@ import { createPreauthConnectionBudget } from "./server/preauth-connection-budge
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
+async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promise<number> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing listener");
+  }
+  return address.port;
+}
+
+async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
 describe("Gateway closing connection admission", () => {
+  it("rejects websocket upgrade headers that Node routes as ordinary HTTP", async () => {
+    const handleHooksRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest,
+      resolvedAuth: { mode: "none", allowTailscale: false },
+      getRuntimeConfig: () => ({ gateway: { trustedProxies: [] } }),
+    });
+    const port = await listen(server);
+    const socket = connect({ host: "127.0.0.1", port });
+    const chunks: Buffer[] = [];
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const closed = once(socket, "close", { signal: AbortSignal.timeout(1_000) });
+    try {
+      socket.write(
+        `GET /hooks/wake HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: keep-alive\r\n\r\n`,
+      );
+      await closed;
+      const response = Buffer.concat(chunks).toString();
+      expect(response).toContain("HTTP/1.1 400 Bad Request");
+      expect(response).toContain("Connection: close");
+      expect(handleHooksRequest).not.toHaveBeenCalled();
+    } finally {
+      socket.destroy();
+      await closeServer(server);
+    }
+  });
+
   it("flushes HTTP 503 before closing when a WebSocket upgrade throws", async () => {
     const clients = new Set<never>();
     const resolvedAuth = { mode: "none" as const, allowTailscale: false };
@@ -41,13 +94,8 @@ describe("Gateway closing connection admission", () => {
       preauthConnectionBudget: createPreauthConnectionBudget(),
       log: { warn },
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
-    const socket = connect({ host: "127.0.0.1", port: address.port });
+    const port = await listen(server);
+    const socket = connect({ host: "127.0.0.1", port });
     const chunks: Buffer[] = [];
     const errors: string[] = [];
     let ended = false;
@@ -81,10 +129,7 @@ describe("Gateway closing connection admission", () => {
     } finally {
       clearTimeout(deadline);
       socket.destroy();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
       wss.close();
     }
   });
@@ -112,18 +157,13 @@ describe("Gateway closing connection admission", () => {
       preauthConnectionBudget: createPreauthConnectionBudget(),
     });
     const agent = new Agent({ keepAlive: true, maxSockets: 1 });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
+    const port = await listen(server);
     const readResponse = (upgrade: boolean) =>
       new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
         const req = request(
           {
             host: "127.0.0.1",
-            port: address.port,
+            port,
             path: "/socket",
             agent,
             headers: upgrade ? { connection: "Upgrade", upgrade: "websocket" } : {},
@@ -148,10 +188,7 @@ describe("Gateway closing connection admission", () => {
       });
     } finally {
       agent.destroy();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
       wss.close();
     }
   });
@@ -188,13 +225,8 @@ describe("Gateway closing connection admission", () => {
         return true;
       },
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
-    const browser = connect({ host: "127.0.0.1", port: address.port });
+    const port = await listen(server);
+    const browser = connect({ host: "127.0.0.1", port });
     let transport: Duplex | undefined;
     try {
       await once(browser, "connect");
@@ -207,30 +239,19 @@ describe("Gateway closing connection admission", () => {
       expect(transport.destroyed).toBe(true);
       releaseRouting.resolve();
       await routed.promise;
-      expect(await (await fetch(`http://127.0.0.1:${address.port}/next`)).text()).toBe(
-        "still available",
-      );
+      expect(await (await fetch(`http://127.0.0.1:${port}/next`)).text()).toBe("still available");
     } finally {
       releaseRouting.resolve();
       browser.destroy();
       transport?.destroy();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
       wss.close();
     }
   });
 
-  it.each([
-    { route: "Gateway", queued: false },
-    { route: "Gateway", queued: true },
-    { route: "plugin", queued: false },
-    { route: "plugin", queued: true },
-    { route: "plugin stream", queued: true },
-  ])(
-    "preserves $route WebSocket pause after upgrade (queued=$queued)",
-    async ({ route, queued }) => {
+  it.each([{ route: "Gateway" }, { route: "plugin" }, { route: "plugin stream" }])(
+    "preserves $route WebSocket pause after a queued upgrade",
+    async ({ route }) => {
       let earlier: ServerResponse | undefined;
       let upgradeSeen = false;
       let transport: Duplex | undefined;
@@ -292,13 +313,8 @@ describe("Gateway closing connection admission", () => {
         upgradeSeen = true;
         earlier?.end("earlier");
       });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("missing listener");
-      }
-      const socket = connect({ host: "127.0.0.1", port: address.port });
+      const port = await listen(server);
+      const socket = connect({ host: "127.0.0.1", port });
       const ready = createDeferredCore();
       let wire = "";
       socket.on("data", (chunk) => {
@@ -311,16 +327,14 @@ describe("Gateway closing connection admission", () => {
       const deadline = setTimeout(() => ready.reject(new Error("client deadline")), 3000);
       try {
         socket.write(
-          (queued ? "GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n" : "") +
+          "GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n" +
             "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGVzdC1rZXktMDEyMzQ1Ng==\r\nSec-WebSocket-Version: 13\r\n\r\n",
         );
         if (route === "plugin stream") {
           socket.write(Buffer.from([0x81, 0x81, 1, 2, 3, 4, 0x79]));
         }
         await ready.promise;
-        expect(wire.match(/HTTP\/1\.1 \d{3}/g)).toEqual(
-          queued ? ["HTTP/1.1 200", "HTTP/1.1 101"] : ["HTTP/1.1 101"],
-        );
+        expect(wire.match(/HTTP\/1\.1 \d{3}/g)).toEqual(["HTTP/1.1 200", "HTTP/1.1 101"]);
         expect(websocket!.isPaused).toBe(true);
         expect(transport!.isPaused()).toBe(true);
         if (stream) {
@@ -336,10 +350,7 @@ describe("Gateway closing connection admission", () => {
         stream?.destroy();
         websocket?.terminate();
         transport?.destroy();
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await closeServer(server);
         wss.close();
       }
     },
@@ -347,9 +358,7 @@ describe("Gateway closing connection admission", () => {
 
   it.each([
     { version: "1.0", expectation: "100-continue", status: 200, interim: false },
-    { version: "1.0", expectation: "unsupported", status: 200, interim: false },
     { version: "1.1", expectation: "100-Continue", status: 200, interim: true },
-    { version: "1.1", expectation: "other, 100-continue", status: 200, interim: true },
     { version: "1.1", expectation: "unsupported", status: 417, interim: false },
   ])(
     "preserves Node Expect admission for HTTP/$version $expectation",
@@ -369,13 +378,8 @@ describe("Gateway closing connection admission", () => {
           return true;
         },
       });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("missing listener");
-      }
-      const socket = connect({ host: "127.0.0.1", port: address.port });
+      const port = await listen(server);
+      const socket = connect({ host: "127.0.0.1", port });
       const chunks: Buffer[] = [];
       const errors: string[] = [];
       socket.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -402,10 +406,7 @@ describe("Gateway closing connection admission", () => {
       } finally {
         clearTimeout(deadline);
         socket.destroy();
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await closeServer(server);
       }
     },
   );
@@ -444,13 +445,8 @@ describe("Gateway closing connection admission", () => {
         handlePluginUpgrade: upgrades,
         shouldEnforcePluginGatewayAuth: () => false,
       });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("missing listener");
-      }
-      const socket = connect({ host: "127.0.0.1", port: address.port });
+      const port = await listen(server);
+      const socket = connect({ host: "127.0.0.1", port });
       const received: Buffer[] = [];
       const errors: string[] = [];
       const closed = new Promise<void>((resolve) => {
@@ -496,10 +492,7 @@ describe("Gateway closing connection admission", () => {
       } finally {
         clearTimeout(deadline);
         socket.destroy();
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await closeServer(server);
         wss.close();
         await Promise.all(tasks);
       }

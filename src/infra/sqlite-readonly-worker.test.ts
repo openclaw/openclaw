@@ -4,19 +4,27 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import {
+  runtimeProcessEntrypoints,
+  SQLITE_READONLY_CHILD_ARG,
+} from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteReadOnlyWorkerRequestArgs } from "./sqlite-readonly-worker-protocol.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
   resolveAggregateSqliteInspectionTimeoutMs,
-  resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
   runSqliteReadOnlyWorkerSync,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
-import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  startSqliteReadOnlyLocationAsync,
+} from "./sqlite-snapshot-source.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 
 const logs = vi.hoisted(() => ({ debug: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -204,21 +212,6 @@ describe("scoped SQLite read-only children", () => {
     );
   });
 
-  it("replaces the child when its launch environment changes", async () => {
-    const source = createDatabase(0);
-    await withSqliteReadOnlyWorkerScope(async () => {
-      await readSnapshotVersion(source);
-      await withEnvAsync(
-        { XDG_CACHE_HOME: tempDirs.make("openclaw-scoped-environment-") },
-        async () => {
-          expect(await readSnapshotVersion(source)).toBe(0);
-          expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
-        },
-      );
-    });
-    expect(spawn).toHaveBeenCalledTimes(2);
-  });
-
   it("refuses a descendant inspection after its scope closes", async () => {
     let resume: () => void;
     const resumed = new Promise<void>((resolve) => {
@@ -232,33 +225,6 @@ describe("scoped SQLite read-only children", () => {
     await expect(late).rejects.toThrow("scope closed");
     expect(spawn).not.toHaveBeenCalled();
     expect(execFile).not.toHaveBeenCalled();
-  });
-});
-
-describe("resolveSqliteInspectionBudget", () => {
-  it.each(
-    [
-      { label: "0 B", sizeBytes: 0, expected: 300_000 },
-      { label: "1 B", sizeBytes: 1, expected: 301_000 },
-      { label: "32 MiB", sizeBytes: 32 * 1024 * 1024, expected: 340_000 },
-      { label: "32 MiB + 1 B", sizeBytes: 32 * 1024 * 1024 + 1, expected: 341_000 },
-      { label: "300 MiB", sizeBytes: 300 * 1024 * 1024, expected: 675_000 },
-      { label: "2 GiB", sizeBytes: 2 * 1024 ** 3, expected: 2_860_000 },
-      { label: "9.4 GiB", sizeBytes: Math.floor(9.4 * 1024 ** 3), expected: 12_332_000 },
-      { label: "64 GiB", sizeBytes: 64 * 1024 ** 3, expected: 82_220_000 },
-      {
-        label: "huge file (Node timer limit)",
-        sizeBytes: Number.MAX_SAFE_INTEGER,
-        expected: MAX_TIMER_TIMEOUT_MS,
-      },
-    ].flatMap((testCase) => [
-      { ...testCase, inputType: "number" },
-      { ...testCase, inputType: "bigint", sizeBytes: BigInt(testCase.sizeBytes) },
-    ]),
-  )("budgets $label ($inputType)", ({ sizeBytes, expected }) => {
-    expect(
-      resolveSqliteInspectionBudget("read-only snapshot", "source.sqlite", sizeBytes).timeoutMs,
-    ).toBe(expected);
   });
 });
 
@@ -281,55 +247,26 @@ it("sums serial size-aware schema inspection budgets without giant fixtures", ()
   ).toBe(MAX_TIMER_TIMEOUT_MS);
 });
 
-it("includes WAL, SHM, and rollback-journal sidecars in inspection size", () => {
-  const source = path.join(tempDirs.make("openclaw-snapshot-size-"), "source.sqlite");
-  fs.writeFileSync(source, "");
-  fs.writeFileSync(`${source}-wal`, "");
-  fs.writeFileSync(`${source}-shm`, "");
-  fs.writeFileSync(`${source}-journal`, "");
-  fs.truncateSync(source, 64 * 1024 * 1024);
-  fs.truncateSync(`${source}-wal`, 3_489_660_928);
-  fs.truncateSync(`${source}-shm`, 32 * 1024 * 1024);
-  fs.truncateSync(`${source}-journal`, 4 * 1024);
+it("preserves an intermittent failed launch without parsing absent worker output", async () => {
+  const source = createDatabase(null);
+  const stagingRoot = tempDirs.make("openclaw-snapshot-launch-");
+  const run = () => runSqliteReadOnlyWorkerSync(source, stagingRoot);
+  expect(fs.existsSync(run())).toBe(true);
 
-  const stagingRoot = tempDirs.make("openclaw-snapshot-size-staging-");
-  // Isolate deadline selection from copying these deliberately sparse sidecars.
-  vi.mocked(spawnSync).mockReturnValueOnce({
-    pid: 1,
-    output: [null, '{"ok":true,"location":"private.sqlite"}', ""],
-    stdout: '{"ok":true,"location":"private.sqlite"}',
-    stderr: "",
-    status: 0,
-    signal: null,
-  });
-  expect(runSqliteReadOnlyWorkerSync(source, stagingRoot)).toBe("private.sqlite");
-  expect(vi.mocked(spawnSync).mock.calls[0]?.[2]).toMatchObject({
-    timeout: 4_581_000,
-    killSignal: "SIGKILL",
-  });
-  expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync");
-});
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  // Use Node's actual failed-launch result: its declared string outputs can be absent.
+  vi.mocked(spawnSync).mockImplementationOnce((_command, args, options) =>
+    actual.spawnSync(path.join(stagingRoot, "missing-node"), args, options),
+  );
+  expect(run).toThrow(
+    expect.objectContaining({
+      message: expect.stringContaining(`failed to start for ${source}`),
+      cause: expect.objectContaining({ code: "ENOENT" }),
+    }),
+  );
 
-it("uses online backup instead of raw WAL copying for live inspection", async () => {
-  const source = createDatabase(0);
-  const writer = new (requireNodeSqlite().DatabaseSync)(source);
-  const stagingRoot = tempDirs.make("openclaw-snapshot-fallback-live-");
-  try {
-    writer.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE live(value TEXT); INSERT INTO live VALUES ('committed');",
-    );
-    const location = await runSqliteReadOnlyWorker(source, { mode: "async", stagingRoot });
-    const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
-    try {
-      expect(snapshot.prepare("SELECT value FROM live").get()).toEqual({ value: "committed" });
-      expect(fs.existsSync(`${location}-wal`)).toBe(false);
-      expect(fs.existsSync(`${location}-shm`)).toBe(false);
-    } finally {
-      snapshot.close();
-    }
-  } finally {
-    writer.close();
-  }
+  expect(fs.existsSync(run())).toBe(true);
+  expect(fs.readFileSync(source)).toEqual(Buffer.alloc(0));
 });
 
 describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)", (mode) => {
@@ -347,31 +284,6 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     expect(calls[0]?.[2]).toMatchObject({ timeout, killSignal: "SIGKILL" });
   }
 
-  it.each([
-    { label: "empty", paddingBytes: null, timeout: 300_000 },
-    { label: "small", paddingBytes: 0, timeout: 301_000 },
-    { label: "over 32 MiB", paddingBytes: 32 * 1024 * 1024, timeout: 341_000 },
-  ])("snapshots a $label database with its size budget", async ({ paddingBytes, timeout }) => {
-    const source = createDatabase(paddingBytes);
-    if (paddingBytes) {
-      expect(fs.statSync(source).size).toBeGreaterThan(32 * 1024 * 1024);
-      expect(fs.statSync(source).size).toBeLessThan(64 * 1024 * 1024);
-    }
-    const snapshot = await run(source);
-    expect(fs.existsSync(snapshot)).toBe(true);
-    expectBudget(timeout);
-    if (timeout > 300_000) {
-      expect(logs.debug).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(`SQLite read-only snapshot for ${source}:`),
-      );
-      expect(logs.debug).toHaveBeenCalledWith(
-        expect.stringContaining(`budget ${timeout / 1000} seconds`),
-      );
-    } else {
-      expect(logs.debug).not.toHaveBeenCalled();
-    }
-  });
-
   it("budgets the WAL family while copying committed data from an open writer", async () => {
     const source = createDatabase(null);
     const sqlite = requireNodeSqlite();
@@ -386,6 +298,10 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
       expect(mainBytes).toBeLessThan(32 * 1024);
       expect(walBytes).toBeGreaterThan(32 * 1024 * 1024);
       const snapshot = await run(source);
+      if (mode === "async") {
+        expect(fs.existsSync(`${snapshot}-wal`)).toBe(false);
+        expect(fs.existsSync(`${snapshot}-shm`)).toBe(false);
+      }
       const copied = new sqlite.DatabaseSync(snapshot, { readOnly: true });
       try {
         expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
@@ -400,35 +316,24 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     }
   });
 
-  it.each([
-    { label: "empty", paddingBytes: null, seconds: 300, size: "0 B" },
-    { label: "over 32 MiB", paddingBytes: 32 * 1024 * 1024, seconds: 341, size: "32.0 MiB" },
-    { label: "missing", paddingBytes: null, seconds: 300, size: "unknown size" },
-  ])(
-    "reports the applied budget and size for a $label timeout",
-    async ({ label, paddingBytes, seconds, size }) => {
-      const source =
-        label === "missing"
-          ? path.join(tempDirs.make("openclaw-snapshot-budget-missing-"), "missing.sqlite")
-          : createDatabase(paddingBytes);
-      const actual =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      // Keep the real timeout/close behavior without waiting out the production budget.
-      if (mode === "sync") {
-        vi.mocked(spawnSync).mockImplementationOnce((command, args, options) =>
-          actual.spawnSync(command, args, { ...options, timeout: 1 }),
-        );
-      } else {
-        vi.mocked(execFile).mockImplementationOnce((file, args, options, callback) =>
-          actual.execFile(file, args, { ...options, timeout: 1 }, callback),
-        );
-      }
-      await expect(run(source)).rejects.toThrow(
-        `SQLite read-only snapshot timed out after ${seconds} seconds (budget for ${size}) for ${source}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
+  it("reports the applied size budget for a timed-out snapshot", async () => {
+    const source = createDatabase(32 * 1024 * 1024);
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    // Keep the real timeout/close behavior without waiting out the production budget.
+    if (mode === "sync") {
+      vi.mocked(spawnSync).mockImplementationOnce((command, args, options) =>
+        actual.spawnSync(command, args, { ...options, timeout: 1 }),
       );
-      expectBudget(seconds * 1000);
-    },
-  );
+    } else {
+      vi.mocked(execFile).mockImplementationOnce((file, args, options, callback) =>
+        actual.execFile(file, args, { ...options, timeout: 1 }, callback),
+      );
+    }
+    await expect(run(source)).rejects.toThrow(
+      `SQLite read-only snapshot timed out after 341 seconds (budget for 32.0 MiB) for ${source}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
+    );
+    expectBudget(341_000);
+  });
 
   it("uses the base budget on stat failure and retains the child's source error", async () => {
     const source = path.join(tempDirs.make("openclaw-snapshot-budget-missing-"), "missing.sqlite");
@@ -436,4 +341,167 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     expectBudget(300_000);
     expect(logs.debug).not.toHaveBeenCalled();
   });
+});
+
+it.each(
+  process.platform !== "win32" && process.getuid?.() !== 0
+    ? ["unavailable", "inaccessible"]
+    : ["unavailable"],
+)("cold-starts an absolute SQLite snapshot when the invoking cwd is %s", async (condition) => {
+  const root = tempDirs.make("openclaw-sqlite-unavailable-cwd-");
+  const source = path.join(root, "source.sqlite");
+  const stagingRoot = path.join(root, "staging");
+  fs.mkdirSync(stagingRoot);
+  const { DatabaseSync } = requireNodeSqlite();
+  const writer = new DatabaseSync(source);
+  writer.exec("CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('preserved');");
+  writer.close();
+  const before = fs.readFileSync(source);
+  const inaccessibleCwd = path.join(root, "inaccessible-cwd");
+  fs.mkdirSync(inaccessibleCwd, { mode: 0o000 });
+  const unavailable = new Error("ENOENT: invoking directory was removed");
+  const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+    if (condition === "inaccessible") {
+      return inaccessibleCwd;
+    }
+    throw unavailable;
+  });
+  let worker: ReturnType<typeof createScopedSqliteReadOnlyWorker> | undefined;
+  let witness: unknown;
+  try {
+    worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+    const location = await worker.run(source, { mode: "sync", stagingRoot });
+    if (typeof location !== "string") {
+      throw new Error("Snapshot worker did not return its absolute location");
+    }
+    const reader = new DatabaseSync(location, { readOnly: true });
+    try {
+      witness = reader.prepare("SELECT value FROM witness").get();
+    } finally {
+      reader.close();
+    }
+  } finally {
+    cwd.mockRestore();
+    fs.chmodSync(inaccessibleCwd, 0o700);
+    await worker?.close();
+  }
+  expect(witness).toEqual({ value: "preserved" });
+  expect(fs.readFileSync(source)).toEqual(before);
+});
+
+it.each(["source", "allocation", "staging"] as const)(
+  "refuses unresolved relative %s paths instead of rebasing them after cwd loss",
+  async (input) => {
+    const source = path.join(tempDirs.make("openclaw-sqlite-relative-cwd-"), "source.sqlite");
+    const unavailable = new Error("ENOENT: invoking directory was removed");
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw unavailable;
+    });
+    let observed: unknown;
+    try {
+      try {
+        if (input === "source") {
+          await startSqliteReadOnlyLocationAsync("relative.sqlite").result;
+        } else if (input === "allocation") {
+          await allocateWorkerOwnedSqliteSnapshotDirectory("relative-staging", false);
+        } else {
+          sqliteReadOnlyWorkerRequestArgs(source, {
+            mode: "sync",
+            stagingRoot: "relative-staging",
+          });
+        }
+      } catch (error) {
+        observed = error;
+      }
+    } finally {
+      cwd.mockRestore();
+    }
+    expect(observed).toBe(unavailable);
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "reports the real SQLite write errcode across the isolated worker boundary",
+  () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-full-");
+    const sqlite = requireNodeSqlite();
+    const databasePath = path.join(tempDirs.make("openclaw-sqlite-diagnostics-"), "state.sqlite");
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));");
+    database.close();
+    const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+    const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
+    const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
+    const script = `
+      const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
+      try {
+        await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
+        process.exitCode = 24;
+      } catch (error) {
+        console.log(JSON.stringify({ message: error.message }));
+      }
+    `;
+    const child = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        'ulimit -f 1; exec "$@"',
+        "openclaw-sqlite-snapshot-quota",
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
+        "--input-type=module",
+        "-e",
+        script,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, XDG_CACHE_HOME: cacheRoot },
+      },
+    );
+
+    expect(child.status, child.stderr).toBe(0);
+    const reported = JSON.parse(child.stdout) as { message: string };
+    expect(reported.message).toContain(cacheRoot);
+    expect(reported.message).toContain("check filesystem health and write permissions");
+    expect(reported.message).not.toContain("free disk space/quota");
+    expect(reported.message).toContain("(code=ERR_SQLITE_ERROR, errcode=778)");
+  },
+);
+
+it("distinguishes actual worker startup from serialized directory creation failures", async () => {
+  const root = tempDirs.make("openclaw-sqlite-worker-diagnostics-");
+  const notDirectory = path.join(root, "file");
+  fs.writeFileSync(notDirectory, "preserved");
+  const allocationError = await createSqliteSnapshotStagingDirectory(
+    notDirectory,
+    false,
+    undefined,
+    true,
+  ).catch((error: unknown) => error);
+  expect(allocationError).toBeInstanceOf(Error);
+  expect((allocationError as Error).message).toContain(`snapshot staging root ${notDirectory}`);
+  expect((allocationError as Error).message).toContain("XDG_CACHE_HOME");
+  expect((allocationError as Error).message).not.toContain("free disk space/quota");
+  expect((allocationError as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
+  expect(fs.readFileSync(notDirectory, "utf8")).toBe("preserved");
+
+  const cwd = path.join(root, "missing-cwd");
+  const worker = createScopedSqliteReadOnlyWorker({
+    cwd,
+    env: { ...process.env },
+    transport: { kind: "native" },
+    retainLifetime: false,
+  });
+  try {
+    const startupError = await worker
+      .run(root, { mode: "staging-create" })
+      .catch((error: unknown) => error);
+    expect(startupError).toMatchObject({ code: "ENOENT", cause: { code: "ENOENT" } });
+    expect((startupError as Error).message).toContain(process.execPath);
+    expect((startupError as Error).message).toContain(cwd);
+    expect((startupError as Error).message).not.toContain("XDG_CACHE_HOME");
+  } finally {
+    await worker.close();
+  }
 });

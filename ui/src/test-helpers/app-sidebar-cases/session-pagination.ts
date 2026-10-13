@@ -11,7 +11,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar gateway session pagination", () => {
   it("refreshes the archived sidebar once when another client changes sessions", async () => {

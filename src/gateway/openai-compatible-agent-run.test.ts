@@ -6,15 +6,18 @@ import {
   prepareAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
 } from "./openai-compatible-agent-run.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -412,4 +415,35 @@ describe("OpenAI-compatible agent run terminal metadata", () => {
       });
     },
   );
+});
+
+describe("OpenAI-compatible agent error envelopes", () => {
+  it.each([
+    {
+      name: "a Gateway-cancelled run",
+      error: () => AbortSignal.abort().reason,
+      status: 500,
+      message: "agent run was cancelled",
+    },
+    {
+      name: "a provider transport timeout",
+      error: () => new FailoverError("This operation was aborted", { reason: "timeout" }),
+      status: 504,
+      message: "upstream provider timeout",
+    },
+    {
+      name: "an abort caused by a timeout",
+      error: () =>
+        createAbortError("This operation was aborted", {
+          cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        }),
+      status: 504,
+      message: "upstream provider timeout",
+    },
+  ])("reports $name as $status", ({ error, status, message }) => {
+    expect(resolveOpenAiCompatibleAgentError(error())).toEqual({
+      status,
+      error: { message, type: "api_error" },
+    });
+  });
 });

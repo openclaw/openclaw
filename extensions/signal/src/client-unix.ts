@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
@@ -128,6 +129,7 @@ export async function signalUnixRpcRequest<T>(
   params: Record<string, unknown> | undefined,
   options: SignalRpcOptions,
 ): Promise<T> {
+  const effect = captureEffectAuthority();
   const connection = await openSocket(options);
   const id = randomUUID();
   const maxBytes =
@@ -138,8 +140,10 @@ export async function signalUnixRpcRequest<T>(
       : MAX_FRAME_BYTES;
   try {
     const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
-    options.assertDirectAdapterHandoff?.();
-    connection.socket.write(frame);
+    await effect.initiate(() => {
+      options.assertDirectAdapterHandoff?.();
+      connection.socket.write(frame);
+    });
     for await (const message of messages(connection.socket, maxBytes)) {
       if (message.id === id) {
         // SAFETY: The generic caller owns the method's result type after JSON-RPC envelope validation.

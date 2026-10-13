@@ -1,6 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,7 +27,7 @@ export function normalizeDiscordHandleKey(raw: string): string | null {
   if (!handle || /\s/.test(handle)) {
     return null;
   }
-  return normalizeLowercaseStringOrEmpty(handle);
+  return handle.toLowerCase();
 }
 
 function ensureAccountCache(accountId?: string | null): Map<string, string> {

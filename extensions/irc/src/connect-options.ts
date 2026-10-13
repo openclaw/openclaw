@@ -1,4 +1,3 @@
-// Irc plugin module implements connect options behavior.
 import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import type { IrcClientOptions } from "./client.js";

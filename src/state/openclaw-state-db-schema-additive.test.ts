@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { ensureMemoryEntryOriginsSchema } from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
+import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
+import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
+import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
@@ -14,6 +25,7 @@ import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const trailingSchema = vi.hoisted(() => ({
   tableName: "future_lazy_state",
@@ -28,7 +40,11 @@ vi.mock("./openclaw-state-schema.js", async (importOriginal) => {
   };
 });
 
-import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
+import {
+  assertAgentDeletionJournalAvailable,
+  ensureAgentDatabaseLeaseSchema,
+  ensureSecretStoreSchema,
+} from "./openclaw-state-db-schema-additive.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -36,6 +52,51 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+const { openDatabase } = useSqliteSchemaTestFixture();
+
+it.each([
+  {
+    name: "audit lifecycle binding",
+    schema: OPENCLAW_STATE_SCHEMA_SQL,
+    ensure: ensureExecutionOwnerLifecycleBindingSchema,
+  },
+  {
+    name: "goal receipt",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureSessionGoalOperationsSchema,
+  },
+  {
+    name: "board",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureOpenClawAgentBoardSchemaInTransaction,
+  },
+  {
+    name: "memory origin",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureMemoryEntryOriginsSchema,
+  },
+  {
+    name: "memory provenance",
+    schema: OPENCLAW_AGENT_SCHEMA_SQL,
+    ensure: ensureMemoryChunkProvenance,
+  },
+])("never issues persistent DDL on first or repeated warm $name use", ({ schema, ensure }) => {
+  const database = openDatabase(schema);
+  const observation = observeHostDataSql();
+  try {
+    for (let call = 0; call < 2; call += 1) {
+      database.exec("BEGIN IMMEDIATE");
+      ensure(database);
+      database.exec("COMMIT");
+    }
+    expect(
+      observation.queries.filter((sql) => classifySqliteMutation(sql, "batch").mainSchemaChange),
+    ).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+});
 
 it("keeps secret-store first use from installing later additive schema", () => {
   const database = new DatabaseSync(":memory:");
@@ -81,6 +142,39 @@ it("lazily adds allowed_hosts to a v6 secret store without changing user_version
         )
         .get("secret_store_entries", "allowed_hosts"),
     ).toEqual({ name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null });
+  } finally {
+    database.close();
+  }
+});
+
+it("adds lease provenance without certifying legacy owners or changing their identifiers", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(`
+      PRAGMA user_version = 6;
+      CREATE TABLE agent_database_leases (
+        lease_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        owner_pid INTEGER NOT NULL,
+        owner_start_time INTEGER,
+        opened_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO agent_database_leases VALUES ('abc-123', 'main', '/agent.sqlite', 123, 456, 789);
+    `);
+    const before = database.prepare("SELECT * FROM agent_database_leases").get();
+
+    database.exec("BEGIN");
+    ensureAgentDatabaseLeaseSchema(database);
+    database.exec("ROLLBACK");
+    expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual(before);
+
+    ensureAgentDatabaseLeaseSchema(database);
+    expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual({
+      ...before,
+      provenance: null,
+    });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
   } finally {
     database.close();
   }
@@ -164,4 +258,43 @@ it("adds the caption retry index to populated same-version state without changin
   ensureMeetingTranscriptsSchema({ ...options, database: reopened });
   expect(readIndex(reopened.db)).toEqual({ unique: 0, partial: 1 });
   expect(readState(reopened.db)).toEqual(before);
+});
+
+it("reuses admitted journal columns while observing managed DDL and rollback", () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-journal-columns-") },
+  });
+  const check = () =>
+    runSqliteReadOperationSync(database.db, () => assertAgentDeletionJournalAvailable(database.db));
+  check();
+  const observation = observeHostDataSql();
+  try {
+    check();
+    check();
+    expect(
+      observation.queries.filter((sql) =>
+        /pragma\s+table_info\(agent_deletion_journal\)/i.test(sql),
+      ),
+    ).toEqual([]);
+  } finally {
+    observation.restore();
+  }
+  const foreign = openNodeSqliteDatabase(database.path);
+  try {
+    foreign.exec("ALTER TABLE agent_deletion_journal RENAME COLUMN agent_id TO retired_agent_id");
+    expect(check).toThrow("Agent deletion journal missing");
+    foreign.exec("ALTER TABLE agent_deletion_journal RENAME COLUMN retired_agent_id TO agent_id");
+    expect(check).not.toThrow();
+    database.db.exec(
+      "BEGIN; ALTER TABLE agent_deletion_journal RENAME COLUMN agent_id TO retired_agent_id",
+    );
+    expect(check).toThrow("Agent deletion journal missing");
+    database.db.exec("ROLLBACK");
+    expect(check).not.toThrow();
+  } finally {
+    if (database.db.isTransaction) {
+      database.db.exec("ROLLBACK");
+    }
+    foreign.close();
+  }
 });

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { expressionBuilder, type SelectQueryBuilder } from "kysely";
+import { expressionBuilder, type Compilable, type SelectQueryBuilder } from "kysely";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -9,14 +10,10 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
-import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
-import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import type {
@@ -25,10 +22,7 @@ import type {
   UserProfileAvatarReadCommand,
   UserProfileAvatarRepresentation,
 } from "./user-profiles-avatar.types.js";
-import {
-  hasEnsuredUserProfileRoleSchema,
-  UserProfileNotFoundError,
-} from "./user-profiles-schema.js";
+import { UserProfileNotFoundError } from "./user-profiles-schema.js";
 import type {
   PreparedUserProfileIdentity,
   ProfileDisplayRow,
@@ -180,13 +174,32 @@ export function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
     .selectFrom("user_profiles")
     .select([
       ...userProfileDisplaySelection,
-      ...(hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")
-        ? (["role"] as const)
-        : []),
-    ]);
+      ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
+    ])
+    .select((eb) =>
+      tableExists(db, "user_profile_identities")
+        ? eb
+            .selectFrom("user_profile_identities")
+            .select("user_profiles.created_at")
+            .where("provider", "=", "gateway.local")
+            .where("subject", "=", "owner")
+            .whereRef("profile_id", "=", "user_profiles.id")
+            .where("user_profiles.id", "=", GATEWAY_OWNER_PROFILE_ID)
+            .$asScalar()
+            .as("gateway_owner_created_at")
+        : eb.val<number | null>(null).as("gateway_owner_created_at"),
+    );
   const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
   // Worker transfer removes SQLite rows' null prototype; compare plain descriptors on both sides.
-  return rows.map((row): [string, typeof row] => [row.id, { ...row }]);
+  return rows.map(({ gateway_owner_created_at, ...row }): [string, ProfileDisplayRow] => [
+    row.id,
+    {
+      ...row,
+      ...(gateway_owner_created_at == null
+        ? {}
+        : { gatewayOwnerCreatedAt: gateway_owner_created_at }),
+    },
+  ]);
 }
 
 function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
@@ -196,10 +209,15 @@ function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatar
 export function selectResolvedUserProfile<T extends Pick<UserProfileRow, "merged_into">>(
   db: DatabaseSync,
   profileId: string,
-  query: SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>,
+  query:
+    | SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>
+    | ((profileId: string) => Compilable<T>),
 ): T | undefined {
   return readResolvedUserProfile(profileId, (id) =>
-    executeSqliteQueryTakeFirstSync(db, query.where("id", "=", id)),
+    executeSqliteQueryTakeFirstSync(
+      db,
+      typeof query === "function" ? query(id) : query.where("id", "=", id),
+    ),
   );
 }
 
@@ -263,7 +281,7 @@ export function selectResolvedUserProfileMetadataById(
   db: DatabaseSync,
   profileId: string,
 ): UserProfileMetadataRow | undefined {
-  if (!hasEnsuredUserProfileRoleSchema(db)) {
+  if (!tableHasColumn(db, "user_profiles", "role")) {
     return selectResolvedUserProfileById(db, profileId);
   }
   return readResolvedUserProfile(profileId, metadataReader(db));
@@ -295,21 +313,13 @@ export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAva
   return `"${sha256}-${mime.slice("image/".length)}"`;
 }
 
-const avatarRoleColumns = new WeakMap<SqliteSchemaFacts, boolean>();
-
 function selectProfileAvatarMetadata(db: DatabaseSync, profileId: string) {
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Profile avatar reads require admitted schema facts");
   }
-  const sql = schema.tableSql.get("user_profiles");
-  if (!sql) {
+  if (!schema.tableSql.get("user_profiles")) {
     return undefined;
-  }
-  let hasRole = avatarRoleColumns.get(schema);
-  if (hasRole === undefined) {
-    hasRole = parseSqliteTableDefinition(sql, "user_profiles").columns.has("role");
-    avatarRoleColumns.set(schema, hasRole);
   }
   return selectResolvedUserProfile(
     db,
@@ -318,7 +328,9 @@ function selectProfileAvatarMetadata(db: DatabaseSync, profileId: string) {
       .selectFrom("user_profiles")
       .select([...userProfileDisplaySelection, "created_at"])
       .select((eb) => [
-        hasRole ? "role" : eb.val<string | null>(null).as("role"),
+        tableHasColumn(db, "user_profiles", "role")
+          ? "role"
+          : eb.val<string | null>(null).as("role"),
         eb.fn<number | null>("length", ["avatar"]).as("avatar_byte_length"),
       ]),
   );

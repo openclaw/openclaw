@@ -4,8 +4,6 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   type GatewayPostReadySidecarHandle,
@@ -56,15 +54,4 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
       await Promise.all(pending);
     },
   };
-}
-
-export async function refreshLatestUpdateRestartSentinelIfPresent(
-  env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
-): Promise<Awaited<ReturnType<typeof refreshLatestUpdateRestartSentinel>> | null> {
-  if (!(await hasRestartSentinel(env))) {
-    return null;
-  }
-  return await (
-    await import("./server-restart-sentinel.js")
-  ).refreshLatestUpdateRestartSentinel(env);
 }

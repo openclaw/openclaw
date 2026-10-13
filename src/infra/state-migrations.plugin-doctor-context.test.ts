@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
@@ -21,11 +25,16 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import {
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("plugin doctor ingress authority", () => {
   it("rolls back a queued claim when the repair owner expires before native commit", async () => {
@@ -54,17 +63,12 @@ describe("plugin doctor ingress authority", () => {
           throw new Error("Missing Doctor repair queue");
         }
         await queue.enqueue("pending", { text: "retained" });
-        const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
-        const observer = vi
-          .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "commit") {
-                active = false;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const observer = probe.admission(mutationAdmission, (request, grant, admit) => {
+          if (request.stage === "commit") {
+            active = false;
+          }
+          admit(request, grant);
+        });
         try {
           const outcome = await queue.claim("pending").then(
             () => undefined,
@@ -89,6 +93,8 @@ describe("plugin doctor session identity evidence", () => {
     await withOpenClawTestState(
       { label: "plugin-doctor-shared-id", applyEnv: false },
       async ({ env }) => {
+        const config: OpenClawConfig = {};
+        setRuntimeConfigSnapshot(config);
         for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
           await replaceSessionEntry(
             { agentId: "main", env, sessionKey },
@@ -98,7 +104,7 @@ describe("plugin doctor session identity evidence", () => {
         const context = createPluginDoctorStateMigrationContext({
           pluginId: "codex",
           env,
-          config: {},
+          config,
         });
 
         await expect(

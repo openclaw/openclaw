@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 
 type ConfigState = { hash: string; path: string; config: Record<string, unknown> };
 type RpcResult = { ok: boolean; error?: { message?: string } };
@@ -17,9 +19,14 @@ export function registerAgentConfigMutationTests({
   getConfigHash: () => Promise<string>;
   rpc: (method: string, params: unknown) => Promise<RpcResult>;
   workspacePath: (name: string) => string;
-  reloadBarrier: { wait: Promise<void> | undefined };
+  reloadBarrier: { hold: (() => Promise<void>) | undefined };
 }) {
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+    await writeSkill({
+      dir: path.join(workspacePath("revision-workspace"), "skills", "revision-guide"),
+      name: "revision-guide",
+      description: "Ready when the new agent is acknowledged",
+    });
     const operations = [
       {
         method: "agents.create",
@@ -30,14 +37,43 @@ export function registerAgentConfigMutationTests({
     ];
     for (const operation of operations) {
       const before = await getConfigHash();
+      const entered = createDeferredCore();
       const gate = createDeferredCore();
-      reloadBarrier.wait = gate.promise;
+      reloadBarrier.hold = () => {
+        entered.resolve();
+        return gate.promise;
+      };
       try {
-        const changed = await rpc(operation.method, operation.params);
-        expect(changed.ok, `${operation.method}: ${changed.error?.message}`).toBe(true);
-
+        // Agent RPCs acknowledge only after runtime application, so a concurrent
+        // reader observes the persisted revision while publication is held.
+        const changed = rpc(operation.method, operation.params);
+        await Promise.race([
+          entered.promise,
+          changed.then((result) => {
+            throw new Error(
+              `${operation.method} settled before publication: ${result.error?.message}`,
+            );
+          }),
+        ]);
         const current = await getCurrentConfigObject();
         gate.resolve();
+        const result = await changed;
+        expect(result.ok, `${operation.method}: ${result.error?.message}`).toBe(true);
+        if (operation.method === "agents.create") {
+          const status = await rpc("skills.status", { agentId: "revision-worker" });
+          expect(status).toMatchObject({
+            ok: true,
+            payload: {
+              skills: expect.arrayContaining([
+                expect.objectContaining({
+                  name: "revision-guide",
+                  description: "Ready when the new agent is acknowledged",
+                }),
+              ]),
+            },
+          });
+        }
+
         const patched = await rpc("config.patch", {
           baseHash: current.hash,
           raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
@@ -46,7 +82,7 @@ export function registerAgentConfigMutationTests({
         expect(current.hash).not.toBe(before);
       } finally {
         gate.resolve();
-        reloadBarrier.wait = undefined;
+        reloadBarrier.hold = undefined;
       }
     }
   });
@@ -55,8 +91,9 @@ export function registerAgentConfigMutationTests({
     "agents.delete preserves newer writes across a large shrink (authority revoked: %s)",
     async (revoke) => {
       const configFactory = await import("../config/io.factory.js");
-      const { readAgentDeletionJournal, removeAgentDeletionJournal } =
-        await import("../state/agent-deletion-journal.js");
+      const { readAgentDeletionJournal } = await import("../state/agent-deletion-journal.js");
+      const { removeAgentDeletionJournal } =
+        await import("../test-utils/agent-deletion-journal.js");
       const original = await getCurrentConfigObject();
       const seed = await rpc("config.patch", {
         raw: JSON.stringify({ logging: { level: "warn" } }),
@@ -107,8 +144,6 @@ export function registerAgentConfigMutationTests({
             },
           };
         });
-      const gate = createDeferredCore();
-      reloadBarrier.wait = gate.promise;
       try {
         const result = await rpc("agents.delete", {
           agentId: "doomed",
@@ -146,8 +181,6 @@ export function registerAgentConfigMutationTests({
           expect(await fs.readFile(original.path, "utf8")).toBe(raw);
         }
       } finally {
-        gate.resolve();
-        reloadBarrier.wait = undefined;
         observation.mockRestore();
       }
     },

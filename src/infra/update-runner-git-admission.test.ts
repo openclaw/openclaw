@@ -1,19 +1,16 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runPackageUpdateDoctor } from "../cli/update-cli/update-command-package.js";
+import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as diskSpace from "./disk-space.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
-import { resolveCandidateNodeRuntimeForTest } from "./update-runner-git-candidate.test-support.js";
+import { createGitAdmissionFixture } from "./update-runner-git-admission.test-support.js";
 import { withGitTargetInspectionRoot } from "./update-runner-git-target.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type {
@@ -21,173 +18,6 @@ import type {
   UpdateRunnerOptions,
   UpdateStepProgress,
 } from "./update-runner-types.js";
-
-const temporary = useAutoCleanupTempDirTracker(afterEach);
-
-function fixture(
-  relativeRemote = false,
-  partialClone = false,
-  shallow = false,
-  objectFormat: "sha1" | "sha256" = "sha1",
-) {
-  const root = temporary.make("openclaw-git-admission-test-");
-  const source = path.join(root, "remote with spaces");
-  const install = path.join(root, "installed");
-  const globalConfig = path.join(root, "empty-config");
-  fs.writeFileSync(globalConfig, "");
-  const env = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: globalConfig,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_SSH: undefined,
-    GIT_SSH_COMMAND: undefined,
-    GIT_SSH_VARIANT: undefined,
-  };
-  const git = (cwd: string, ...args: string[]) => {
-    const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", env });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
-  fs.mkdirSync(source);
-  git(source, "init", "-b", "main", `--object-format=${objectFormat}`);
-  git(source, "config", "user.name", "Update fixture");
-  git(source, "config", "user.email", "fixture@example.invalid");
-  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n");
-  fs.writeFileSync(path.join(source, "openclaw.mjs"), "export {};\n");
-  const targets = new Map<string, Parameters<UpdateRunnerOptions["inspectGitTarget"]>[0]>();
-  const commit = (version: string, agentSchema: number) => {
-    fs.writeFileSync(
-      path.join(source, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version,
-        packageManager: "pnpm@12.1.0",
-        openclaw: { schemaVersions: { state: 5, agent: agentSchema } },
-      }),
-    );
-    git(source, "add", ".");
-    git(source, "commit", "-m", "isolated fixture");
-    git(source, "tag", `v${version}`);
-    const sha = git(source, "rev-parse", "HEAD");
-    targets.set(sha, { sha, version, schemaVersions: { state: 5, agent: agentSchema } });
-    return sha;
-  };
-  commit("2026.7.1", 13);
-  if (shallow) {
-    commit("2026.7.1-beta.1", 13);
-    commit("2026.7.1-beta.2", 13);
-  }
-  if (partialClone) {
-    git(source, "config", "uploadpack.allowFilter", "true");
-    git(
-      root,
-      "clone",
-      "--filter=blob:none",
-      ...(shallow ? ["--depth=2"] : []),
-      pathToFileURL(source).href,
-      install,
-    );
-  } else {
-    git(root, "clone", source, install);
-  }
-  git(install, "remote", "rename", "origin", "upstream.with.dots");
-  if (relativeRemote) {
-    git(install, "remote", "set-url", "upstream.with.dots", path.relative(install, source));
-  }
-  if (partialClone) {
-    // A successful checkout only hydrates current files, not this history blob.
-    commit("2026.7.2-beta.1", 14);
-  }
-  const target = commit("2026.7.2", 14);
-  const calls: string[][] = [];
-  const runCommand: CommandRunner = async (argv, options) => {
-    if (argv[0] === "pnpm") {
-      if (argv.includes("build")) {
-        const dist = path.join(options.cwd!, "dist");
-        fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
-        fs.writeFileSync(
-          path.join(dist, "entry.js"),
-          "console.log(JSON.stringify(require('../package.json')));\n",
-        );
-        fs.writeFileSync(path.join(dist, "control-ui", "index.html"), "ready\n");
-      }
-      return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
-    }
-    expect(argv[0]).toBe("git");
-    calls.push(argv);
-    const result = spawnSync("git", argv.slice(1), {
-      cwd: options.cwd,
-      env: { ...env, ...options.env },
-      encoding: "utf8",
-      input: options.input,
-      stdio: [options.stdinFileDescriptor ?? "pipe", "pipe", "pipe"],
-      timeout: 15_000,
-    });
-    return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
-  };
-  const run = (
-    options: Partial<Omit<UpdateRunnerOptions, "prepareGitExposure">> = {},
-    command: CommandRunner = runCommand,
-  ) => {
-    const inspected = new Set<string>();
-    let mutationAdmitted = false;
-    return updateGitCheckout({
-      gitRoot: install,
-      runCommand: command,
-      defaultCommandEnv: env,
-      timeoutMs: 15_000,
-      startedAt: Date.now(),
-      opts: {
-        channel: "stable",
-        ...options,
-        inspectGitTarget: async (candidate) => {
-          assert(candidate.sha);
-          expect(candidate).toEqual(targets.get(candidate.sha));
-          inspected.add(candidate.sha);
-          await options.inspectGitTarget?.(candidate);
-        },
-        validateCandidate: async (candidateRoot) => {
-          expect(mutationAdmitted).toBe(false);
-          const candidateSha = git(candidateRoot, "rev-parse", "HEAD");
-          expect(inspected.has(candidateSha)).toBe(true);
-          expect(fs.statSync(path.join(candidateRoot, "dist", "entry.js")).isFile()).toBe(true);
-          await options.validateCandidate?.(candidateRoot);
-        },
-        beforeGitMutation: async (candidate) => {
-          assert(candidate.sha);
-          expect(inspected.has(candidate.sha)).toBe(true);
-          expect(candidate).toEqual(targets.get(candidate.sha));
-          await options.beforeGitMutation?.(candidate);
-          mutationAdmitted = true;
-        },
-        runGitDoctor:
-          options.runGitDoctor ??
-          (async (installedRoot) => {
-            expect(mutationAdmitted).toBe(true);
-            const installedSha = git(installedRoot, "rev-parse", "HEAD");
-            expect(inspected.has(installedSha)).toBe(true);
-            const doctor = await runPackageUpdateDoctor({
-              root: installedRoot,
-              timeoutMs: 15_000,
-              progress: {},
-              managedServiceEnv: {
-                OPENCLAW_STATE_DIR: path.join(root, "state"),
-                OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
-              },
-              nodeRunner: (await resolveCandidateNodeRuntimeForTest()).path,
-            });
-            expect(doctor?.exitCode, doctor?.stderrTail ?? undefined).toBe(0);
-            expect(JSON.parse(doctor?.stdoutTail ?? "")).toMatchObject({
-              version: targets.get(installedSha)?.version,
-              openclaw: { schemaVersions: targets.get(installedSha)?.schemaVersions },
-            });
-            return doctor;
-          }),
-      },
-    });
-  };
-  return { root, source, install, globalConfig, git, commit, target, calls, runCommand, run };
-}
 
 function snapshotTree(root: string): string[] {
   return fs
@@ -207,10 +37,75 @@ function snapshotTree(root: string): string[] {
 }
 
 describe("Git database admission", () => {
+  it.each(
+    (["sha1", "sha256"] as const).flatMap((objectFormat) =>
+      [false, true].map((cached) => ({ objectFormat, cached })),
+    ),
+  )(
+    "fetches a detached commit only when missing ($objectFormat, cached=$cached)",
+    async ({ objectFormat, cached }) => {
+      const state = createGitAdmissionFixture(false, false, false, objectFormat);
+      if (cached) {
+        state.git(state.install, "fetch", "upstream.with.dots");
+      }
+      state.commit("2026.7.3", 15);
+      const result = await state.run({
+        channel: "dev",
+        devTarget: { mode: "detached", ref: state.target },
+      });
+
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(state.target);
+      expect(state.calls.some((argv) => argv.includes("fetch"))).toBe(!cached);
+    },
+  );
+
+  it.each(["unsupported", "timeout-zero", "signal-zero"] as const)(
+    "settles a cached-target probe before remote discovery (%s)",
+    async (failure) => {
+      const state = createGitAdmissionFixture();
+      state.git(state.install, "fetch", "upstream.with.dots");
+      let fetched = false;
+      const command: CommandRunner = (argv, options) => {
+        fetched ||= argv.includes("fetch");
+        if (
+          argv.includes("--batch-check=%(objectname) %(objecttype)") &&
+          options.input === `${state.target}\n`
+        ) {
+          return Promise.resolve({
+            code: failure === "unsupported" ? 129 : 0,
+            stdout: `${state.target} commit\n`,
+            stderr: "cache probe incomplete",
+            ...(failure === "unsupported"
+              ? {}
+              : {
+                  killed: true,
+                  signal: "SIGTERM" as const,
+                  termination:
+                    failure === "signal-zero" ? ("signal" as const) : ("timeout" as const),
+                }),
+          });
+        }
+        return state.runCommand(argv, options);
+      };
+      const result = await state.run(
+        { channel: "dev", devTarget: { mode: "detached", ref: state.target } },
+        command,
+      );
+      expect(result.status).toBe(failure === "signal-zero" ? "error" : "ok");
+      expect(fetched).toBe(failure !== "signal-zero");
+      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(
+        failure === "signal-zero"
+          ? state.git(state.source, "rev-parse", "v2026.7.1")
+          : state.target,
+      );
+    },
+  );
+
   it.each(["sha1", "sha256"] as const)(
     "snapshots linked-worktree refs and validates their objects without source writes (%s)",
     async (objectFormat) => {
-      const state = fixture(false, false, false, objectFormat);
+      const state = createGitAdmissionFixture(false, false, false, objectFormat);
       const linked = path.join(state.root, "linked");
       state.git(state.install, "worktree", "add", "-b", "inspection-source", linked);
       state.git(
@@ -285,7 +180,7 @@ describe("Git database admission", () => {
   ] as const)(
     "activates a partial clone without upstream access after admission ($channel, publish=$publish, downgrade=$downgrade, shallow=$shallow)",
     async ({ channel, publish, downgrade, shallow }) => {
-      const state = fixture(false, true, shallow);
+      const state = createGitAdmissionFixture(false, true, shallow);
       const published = path.join(state.root, "published");
       const target = downgrade
         ? state.git(state.source, "rev-parse", "v2026.7.2-beta.1")
@@ -293,6 +188,19 @@ describe("Git database admission", () => {
       if (downgrade) {
         state.git(state.install, "fetch", "upstream.with.dots");
         state.git(state.install, "checkout", "--detach", state.target);
+        const availability = await state.runCommand(
+          [
+            "git",
+            "-C",
+            state.install,
+            "--no-lazy-fetch",
+            "cat-file",
+            "-e",
+            `${target}:package.json`,
+          ],
+          { cwd: state.install, timeoutMs: 15_000 },
+        );
+        expect(availability.code).not.toBe(0);
       }
       const admission = vi.fn(async () => {
         // Activation must consume staged objects, even if upstream goes offline.
@@ -325,6 +233,9 @@ describe("Git database admission", () => {
           : {}),
       });
       expect(result.status, JSON.stringify(result)).toBe("ok");
+      if (downgrade) {
+        expect(state.calls.some((argv) => argv.includes("fetch"))).toBe(false);
+      }
       expect(admission).toHaveBeenCalledOnce();
       if (stagedRoot) {
         expect(fs.existsSync(stagedRoot)).toBe(false);
@@ -342,7 +253,7 @@ describe("Git database admission", () => {
   it.each([false, true])(
     "retains imported packs through repack and publication, respecting keep ownership (foreign=%s)",
     async (foreignKeep) => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       const published = path.join(state.root, "published");
       let repacked = false;
       let descriptor: number | undefined;
@@ -396,7 +307,7 @@ describe("Git database admission", () => {
   it.runIf(process.platform !== "win32")(
     "refuses exhausted clone artifact storage before stopping the Gateway",
     async () => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       const before = state.git(state.install, "rev-parse", "HEAD");
       const artifacts = path.join(state.root, ".artifacts");
       const prepareMutation = vi.fn();
@@ -432,7 +343,7 @@ describe("Git database admission", () => {
   it.each(["insufficient", "reporting-rejected", "unknown"] as const)(
     "handles object-volume capacity before stopping the Gateway (%s)",
     async (outcomeKind) => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       const before = state.git(state.install, "rev-parse", "HEAD");
       const prepareMutation = vi.fn();
       const reportingError = new Error("Git pack capacity receipt rejected");
@@ -518,7 +429,7 @@ describe("Git database admission", () => {
   );
 
   it("stages divergent history blobs and delta bases before taking upstream offline", async () => {
-    const state = fixture(false, true);
+    const state = createGitAdmissionFixture(false, true);
     const historical = Array.from({ length: 2000 }, (_, index) =>
       createHash("sha256").update(`history-${index}`).digest("hex"),
     ).join("\n");
@@ -559,7 +470,7 @@ describe("Git database admission", () => {
   ])(
     "preserves the retained runtime on $phase failure (validRuntime=$validRuntime, sourceChanged=$sourceChanged)",
     async ({ phase, validRuntime, sourceChanged }) => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       const beforeSha = state.git(state.install, "rev-parse", "HEAD");
       const dist = path.join(state.install, "dist");
       fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
@@ -610,7 +521,7 @@ describe("Git database admission", () => {
   );
 
   it("finishes with a recorded warning when inspection clone cleanup fails", async () => {
-    const state = fixture();
+    const state = createGitAdmissionFixture();
     const remove = fsPromises.rm.bind(fsPromises);
     let retained: string | undefined;
     const denial = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
@@ -655,7 +566,7 @@ describe("Git database admission", () => {
     }
   });
   it("preserves dev upstream setup from a cold tracking inventory", async () => {
-    const state = fixture();
+    const state = createGitAdmissionFixture();
     state.git(state.install, "checkout", "-b", "maintenance");
     state.git(state.install, "branch", "-D", "main");
     state.git(state.install, "update-ref", "-d", "refs/remotes/upstream.with.dots/main");
@@ -678,7 +589,7 @@ describe("Git database admission", () => {
   it.each(["stable", "dev"] as const)(
     "rechecks admission after transport and keeps the target pinned (%s)",
     async (channel) => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       let checkoutObserved = false;
       let admissionFinished = false;
       let admissionFresh = false;
@@ -737,7 +648,7 @@ describe("Git database admission", () => {
   ] as const)(
     "uses captured transport configuration ($configuration, configured=$configured)",
     async ({ configuration, configured }) => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       const unresolved = pathToFileURL(path.join(state.root, "absent-remote")).href;
       const key = `url.${pathToFileURL(state.source).href}.insteadOf`;
       state.git(state.install, "remote", "set-url", "upstream.with.dots", unresolved);
@@ -798,7 +709,7 @@ describe("Git database admission", () => {
   it.each([false, true])(
     "checks development admission before target scripts, refuseFirst=%s",
     async (refuseFirst) => {
-      const state = fixture();
+      const state = createGitAdmissionFixture();
       const newest = state.commit("2026.7.3", 15);
       const before = snapshotTree(state.install);
       const refused = new Error("fallback database refusal");
@@ -853,7 +764,7 @@ describe("Git database admission", () => {
   );
 
   it("fetches through a repository-local SSH command with an explicit dialect", async () => {
-    const state = fixture();
+    const state = createGitAdmissionFixture();
     const wrapper = path.join(state.root, "ssh-wrapper.mjs");
     const transportLog = path.join(state.root, "ssh-calls.jsonl");
     fs.writeFileSync(
@@ -903,7 +814,7 @@ process.exit(result.status ?? 93);
   });
 
   it.each([false, true])("publishes only an admitted checkout (refuse=%s)", async (refuse) => {
-    const state = fixture();
+    const state = createGitAdmissionFixture();
     const published = path.join(state.root, "published");
     const complete = new Error("refuse publication");
     const publish = vi.fn(async () => {
@@ -946,7 +857,7 @@ process.exit(result.status ?? 93);
   ])(
     "refuses before installed Git writes (relative remote=$relative, shallow=$shallow)",
     async ({ relative, shallow }) => {
-      const state = fixture(relative, shallow, shallow);
+      const state = createGitAdmissionFixture(relative, shallow, shallow);
       if (shallow) {
         expect(
           state.git(state.install, "rev-list", "--objects", "--missing=print", "--all"),

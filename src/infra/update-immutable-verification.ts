@@ -1,3 +1,6 @@
+import { Type } from "typebox";
+import { Value } from "typebox/value";
+import { SessionRowSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
@@ -16,6 +19,10 @@ import {
 import { resolveUpdatedGatewayRestartPort } from "../cli/update-cli/update-command-service-plan.js";
 import type { GatewayService } from "../daemon/service-types.js";
 import { readSystemdServiceRuntime } from "../daemon/systemd-runtime.js";
+import { resolveReadOnlyLocalGatewayAuth } from "../gateway/call-device-auth.js";
+import { callGateway } from "../gateway/call.js";
+import { createConfiguredGatewayLocalProbe } from "../gateway/local-http-probe.js";
+import { READ_SCOPE } from "../gateway/method-scopes.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { readPackageVersion } from "./package-json.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
@@ -29,24 +36,28 @@ import {
   type ImmutableServiceObservation,
 } from "./update-immutable-service.js";
 
+const sessionProbeResultSchema = Type.Object({
+  ts: Type.Number(),
+  path: Type.String(),
+  count: Type.Integer({ minimum: 0, maximum: 1 }),
+  defaults: Type.Object({
+    modelProvider: Type.Union([Type.String(), Type.Null()]),
+    model: Type.Union([Type.String(), Type.Null()]),
+    contextTokens: Type.Union([Type.Number(), Type.Null()]),
+  }),
+  sessions: Type.Array(SessionRowSchema, { maxItems: 1 }),
+});
+
 export type ImmutableGatewayVerification = {
   pid: number;
   bootId: string;
-  port: number;
   version: string;
   buildId: string;
   generationSha: string;
-  buildDigest: string;
-  healthz: 200;
-  readyz: 200;
-  channelsReady: true;
-  pluginsReady: true;
 };
 
 export type ImmutableGatewayObservation = {
   outcome: "verified" | "still-starting" | "unverified" | "failed";
-  phase: string;
-  elapsedMs: number;
   service?: ImmutableServiceObservation;
   verification?: ImmutableGatewayVerification;
 };
@@ -54,7 +65,7 @@ export type ImmutableGatewayObservation = {
 /** Read-only settlement: the caller owns publication, rollback, and the durable receipt. */
 export async function waitForImmutableGateway(params: {
   descriptor: ImmutableInstallDescriptor;
-  generation: Pick<ImmutablePreparedGeneration, "path" | "sha" | "buildDigest">;
+  generation: Pick<ImmutablePreparedGeneration, "path" | "sha">;
   timeoutMs: number;
   assertCurrent: () => void;
   onReceipt?: (line: string) => void;
@@ -71,8 +82,6 @@ export async function waitForImmutableGateway(params: {
     params.onReceipt?.(`readiness-${outcome}`);
     return {
       outcome,
-      phase: waited?.startupPhase ?? deadline.expiredPhase ?? deadline.phase,
-      elapsedMs: Math.round(deadline.elapsedMs()),
       ...(observed ? { service: observed } : {}),
     };
   };
@@ -168,12 +177,60 @@ export async function waitForImmutableGateway(params: {
           config: context.config,
           port,
           attempts: 1,
-          deadlineAt: Date.now() + deadline.remainingMs(),
+          deadlineAt: deadline.deadlineMs,
           probeTimeoutMs: deadline.remainingMs(),
           delayMs: 0,
           signal: deadline.signal,
         }),
       );
+      const target = await deadline.read("readiness:sessions-target", () =>
+        createConfiguredGatewayLocalProbe(context.config).resolveWebSocketTarget(
+          port,
+          deadline.signal,
+        ),
+      );
+      const auth = await deadline.read("readiness:sessions-auth", () =>
+        resolveReadOnlyLocalGatewayAuth({
+          auth: context.auth,
+          authNone: context.config.gateway?.auth?.mode === "none",
+          env,
+        }),
+      );
+      assertCurrent();
+      if (!target || !waited.gatewayBootId) {
+        return result("unverified");
+      }
+      let sameBoot = false;
+      const assertSessionBoot = () => {
+        assertCurrent();
+        if (!sameBoot) {
+          throw new Error("Gateway boot changed before session verification");
+        }
+      };
+      const sessions = await deadline.read("readiness:sessions", () =>
+        callGateway<unknown>({
+          config: context.config,
+          localPortOverride: port,
+          ...auth,
+          tlsFingerprint: target.tlsFingerprint,
+          method: "sessions.list",
+          params: { limit: 1, rowMode: "compact" },
+          scopes: [READ_SCOPE],
+          timeoutMs: deadline.remainingMs(),
+          signal: deadline.signal,
+          onHelloOk: (hello) => {
+            sameBoot = hello.server.bootId === waited?.gatewayBootId;
+          },
+          assertDispatchCurrent: assertSessionBoot,
+        }),
+      );
+      assertSessionBoot();
+      if (
+        !Value.Check(sessionProbeResultSchema, sessions) ||
+        sessions.count !== sessions.sessions.length
+      ) {
+        return result("unverified");
+      }
       const after = await inspectGatewayRestart({ ...probe, phase: "readiness:reconcile" });
       assertCurrent();
       const current = await deadline.read("readiness:service-reconcile", inspectService);
@@ -206,15 +263,9 @@ export async function waitForImmutableGateway(params: {
         verification: {
           pid: current.pid,
           bootId: after.gatewayBootId,
-          port,
           version,
           buildId,
           generationSha: params.generation.sha,
-          buildDigest: params.generation.buildDigest,
-          healthz: 200,
-          readyz: 200,
-          channelsReady: true,
-          pluginsReady: true,
         },
       };
     });

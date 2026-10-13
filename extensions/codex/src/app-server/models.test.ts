@@ -50,8 +50,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal)
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let listAllCodexAppServerModels: typeof import("./models.js").listAllCodexAppServerModels;
-let readModelListResult: typeof import("./models.js").readModelListResult;
-let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
+let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.test-support.js").resetSharedCodexAppServerClientForTests;
 
 const validModelListEntry = {
   id: "gpt-test",
@@ -86,9 +85,8 @@ function paginatedModel(id: string, inputModalities: string[]) {
 
 describe("listCodexAppServerModels", () => {
   beforeAll(async () => {
-    ({ listCodexAppServerModels, listAllCodexAppServerModels, readModelListResult } =
-      await import("./models.js"));
-    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.js"));
+    ({ listCodexAppServerModels, listAllCodexAppServerModels } = await import("./models.js"));
+    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.test-support.js"));
   });
 
   afterEach(() => {
@@ -107,51 +105,6 @@ describe("listCodexAppServerModels", () => {
     mocks.managedBinary.nativeCommand.mockClear();
     mocks.managedBinary.nativeCommand.mockReturnValue(undefined);
     mocks.providerAuth.agentDir.mockClear();
-  });
-
-  it("rejects a whitespace model name", () => {
-    expect(() => readModelListResult({ data: [{ ...validModelListEntry, model: "\t " }] })).toThrow(
-      /Invalid Codex app-server model\/list response/,
-    );
-  });
-
-  it("preserves generated model defaults and a valid pagination cursor", () => {
-    expect(readModelListResult({ data: [validModelListEntry], nextCursor: "page-2" })).toEqual({
-      models: [
-        {
-          id: "gpt-test",
-          model: "gpt-test",
-          displayName: "GPT Test",
-          description: "test model",
-          hidden: false,
-          isDefault: false,
-          inputModalities: ["text", "image"],
-          supportedReasoningEfforts: [],
-          serviceTiers: [],
-          defaultReasoningEffort: "medium",
-          multiAgentVersion: "v2",
-        },
-      ],
-      nextCursor: "page-2",
-    });
-  });
-
-  it("preserves explicit null while omitting an absent multi-agent version", () => {
-    expect(
-      readModelListResult({
-        data: [{ ...validModelListEntry, multiAgentVersion: null }],
-      }).models[0],
-    ).toHaveProperty("multiAgentVersion", null);
-    expect(
-      readModelListResult({
-        data: [
-          {
-            ...validModelListEntry,
-            multiAgentVersion: undefined,
-          },
-        ],
-      }).models[0],
-    ).not.toHaveProperty("multiAgentVersion");
   });
 
   it.each([
@@ -251,56 +204,6 @@ describe("listCodexAppServerModels", () => {
     harness.client.close();
     startSpy.mockRestore();
   });
-
-  it.each(["success", "failure"] as const)(
-    "joins isolated model-list transport shutdown before returning %s",
-    async (outcome) => {
-      const harness = createClientHarness({
-        autoEmitExit: false,
-        onWrite(line, send) {
-          const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "initialize") {
-            send({ id: request.id, result: { userAgent: "openclaw/0.149.0 (macOS; test)" } });
-          } else if (request.method === "model/list") {
-            send({
-              id: request.id,
-              ...(outcome === "success"
-                ? { result: { data: [], nextCursor: null } }
-                : { error: { code: -32603, message: "catalog unavailable" } }),
-            });
-          }
-        },
-      });
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-      let settled = false;
-      const list = listCodexAppServerModels({ sharedClient: false, timeoutMs: 1_000 })
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(() => {
-          settled = true;
-        });
-      try {
-        await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(settled).toBe(false);
-        harness.emitExit();
-        const result = await list;
-        if (outcome === "success") {
-          expect(result).toEqual({ value: { models: [] } });
-        } else {
-          expect(result).toMatchObject({ error: { message: "catalog unavailable" } });
-        }
-      } finally {
-        harness.emitExit();
-        await list;
-        await harness.client.closeAndWait();
-      }
-    },
-  );
 
   it("lists all app-server model pages through one client", async () => {
     const harness = createClientHarness();

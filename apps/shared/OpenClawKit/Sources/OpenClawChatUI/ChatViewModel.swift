@@ -18,7 +18,7 @@ public final class OpenClawChatViewModel {
     }
 
     let sourcePreviewState = ChatSourcePreviewState()
-    let reactionState = ChatMessageReactionState()
+    var reactionState = ChatMessageReactionState()
 
     public var input: String = "" {
         didSet {
@@ -150,6 +150,11 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var streamingAssistantText: String?
+    /// What the Gateway says the selected run is doing before its first output.
+    var runStartup: ChatRunStartup?
+    var runStartupStatus: String? {
+        self.runStartup?.runID == self.liveUsageRunID ? self.runStartup?.status : nil
+    }
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
@@ -240,7 +245,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var canonicalOutboxMessageKeys: [String] = []
     @ObservationIgnored
-    var isFlushingOutbox = false
+    var outboxFlushTask: Task<Void, Never>?
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
     @ObservationIgnored
@@ -364,7 +369,6 @@ public final class OpenClawChatViewModel {
     private var settingsPatchWaitersByTarget: [ModelPatchTarget: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
-    var nextThinkingSelectionRequestID: UInt64 = 0
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
     var confirmedThinkingPreference: PreferenceState
     var emittedThinkingPreference: PreferenceState
@@ -379,7 +383,6 @@ public final class OpenClawChatViewModel {
     var lastSuccessfulFastOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     var lastSuccessfulVerboseOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     var acceptedSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
-    var acceptedThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedPreferredThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedExplicitThinkingPreferencesByTarget: [ModelPatchTarget: Bool] = [:]
     var acceptedThinkingOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
@@ -642,7 +645,8 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    public func resumeFromForeground() {
+    @discardableResult
+    public func resumeFromForeground() -> Task<Void, Never> {
         Task { await self.refreshRunStateAfterForeground() }
     }
 
@@ -777,6 +781,7 @@ extension OpenClawChatViewModel {
     }
 
     func clearStreamingActivity() {
+        self.runStartup = nil
         self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
     }
@@ -1369,9 +1374,9 @@ extension OpenClawChatViewModel {
         do {
             guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
             let patchResult = try await routeLease.patchSessionSettings(
-                sessionKey: request.target.canonicalSessionKey,
-                agentID: request.target.agentID,
-                patch: OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
+                request.target.canonicalSessionKey,
+                request.target.agentID,
+                OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
             self.lastSuccessfulSettingsPatchRequestIDsByTarget[request.target] = request.id
             guard request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else {
                 // Keep older successful patches as rollback state, but do not replay
@@ -1461,7 +1466,6 @@ extension OpenClawChatViewModel {
             // Rollback baselines belong to one contiguous settings lane. Once
             // drained, the next authoritative session snapshot owns state.
             self.acceptedSettingsPatchResultsByTarget.removeValue(forKey: target)
-            self.acceptedThinkingLevelsByTarget.removeValue(forKey: target)
             self.acceptedPreferredThinkingLevelsByTarget.removeValue(forKey: target)
             self.acceptedExplicitThinkingPreferencesByTarget.removeValue(forKey: target)
             self.acceptedThinkingOverrideClearedByTarget.removeValue(forKey: target)
@@ -1592,9 +1596,7 @@ extension OpenClawChatViewModel {
             sessionKey: modelStateKey,
             agentID: capturedAgentID,
             syncSelection: syncSelection)
-        if let thinkingLevels = patchResult?.thinkingLevels {
-            updateCurrentSessionThinkingLevels(thinkingLevels, sessionKey: modelStateKey)
-        }
+        updateCurrentSessionThinkingLevels(patchResult?.thinkingLevels, sessionKey: modelStateKey)
         if syncSelection,
            !self.prefersExplicitThinkingLevel,
            Self.normalizedThinkingLevel(self.preferredThinkingLevel) != "ultra",
@@ -1618,10 +1620,9 @@ extension OpenClawChatViewModel {
         self.lastSuccessfulModelSelectionIDsByTarget[target] = selectionID
         self.lastSuccessfulSettingsPatchResultsByTarget[target] = patchResult
         if let thinkingLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) {
-            self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
             if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
                 self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
-                self.recordAuthoritativeInheritedThinkingPreference(thinkingLevel)
+                self.confirmedThinkingPreference = PreferenceState(level: thinkingLevel, isExplicit: false)
             }
         }
         if let patchResult {
@@ -1630,7 +1631,7 @@ extension OpenClawChatViewModel {
                 key: patchResult.key ?? previous?.key,
                 modelProvider: patchResult.modelProvider ?? previous?.modelProvider,
                 model: patchResult.model ?? previous?.model,
-                thinkingLevel: patchResult.thinkingLevel ?? previous?.thinkingLevel,
+                thinkingLevel: Self.normalizedThinkingLevel(patchResult.thinkingLevel) ?? previous?.thinkingLevel,
                 thinkingLevels: patchResult.thinkingLevels ?? previous?.thinkingLevels,
                 fastMode: patchResult.fastMode ?? previous?.fastMode,
                 effectiveFastMode: patchResult.effectiveFastMode ?? previous?.effectiveFastMode,

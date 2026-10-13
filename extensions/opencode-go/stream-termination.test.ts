@@ -93,8 +93,6 @@ type StreamHarnessOptions = {
   source?: StreamLike | Promise<StreamLike>;
   model?: ProviderModel;
   callOptions?: ProviderCallOptions;
-  idleTimeoutMs?: number;
-  firstEventTimeoutMs?: number;
 };
 
 async function createStreamHarness(options: StreamHarnessOptions = {}) {
@@ -112,13 +110,7 @@ async function createStreamHarness(options: StreamHarnessOptions = {}) {
     }
     return options.source ?? base.stream;
   });
-  const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
-    provider: "opencode-go",
-    idleTimeoutMs: options.idleTimeoutMs ?? 5_000,
-    ...(options.firstEventTimeoutMs === undefined
-      ? {}
-      : { firstEventTimeoutMs: options.firstEventTimeoutMs }),
-  });
+  const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn);
   const downstream = await Promise.resolve(
     wrapper(
       options.model ??
@@ -178,7 +170,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       }),
     );
 
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(120_001);
 
     expect(capturedSignals).toHaveLength(1);
     expect(wasAborted()).toBe(true);
@@ -197,9 +189,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
   });
 
   it("keeps the first-event window after synthetic block-start events until a provider delta", async () => {
-    const { controller, consumer, received, wasAborted } = await createStreamHarness({
-      firstEventTimeoutMs: 10_000,
-    });
+    const { controller, consumer, received, wasAborted } = await createStreamHarness();
     const partial = {
       role: "assistant",
       content: [{ type: "text", text: "" }],
@@ -208,7 +198,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     controller.emit(asProviderEvent({ type: "start", partial }));
     controller.emit(asProviderEvent({ type: "text_start", contentIndex: 0, partial }));
 
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(120_001);
     expect(wasAborted()).toBe(false);
 
     const message = {
@@ -232,12 +222,10 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
   it("honors explicit opencode-go provider request timeout above the wrapper idle default", async () => {
     const { controller, consumer, wasAborted } = await createStreamHarness({
-      idleTimeoutMs: 5_000,
-      firstEventTimeoutMs: 5_000,
       model: asProviderModel({
         provider: "opencode-go",
         id: "deepseek-v4-flash",
-        requestTimeoutMs: 10_000,
+        requestTimeoutMs: 600_000,
       }),
     });
     const partial = {
@@ -247,18 +235,16 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     };
     controller.emit(asProviderEvent({ type: "start", partial }));
 
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(300_001);
     expect(wasAborted()).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(wasAborted()).toBe(true);
     await consumer;
   });
 
   it("preserves the provider-owned first-event timeout when core passes a shorter generic value", async () => {
     const { controller, consumer, underlying } = await createStreamHarness({
-      idleTimeoutMs: 120_000,
-      firstEventTimeoutMs: 300_000,
       callOptions: { firstEventTimeoutMs: 30_000 } as ProviderCallOptions,
     });
     expect(underlying).toHaveBeenCalledTimes(1);
@@ -272,8 +258,6 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
   it("honors explicit opencode-go provider request timeout below wrapper defaults", async () => {
     const { consumer, wasAborted } = await createStreamHarness({
-      idleTimeoutMs: 5_000,
-      firstEventTimeoutMs: 10_000,
       model: asProviderModel({
         provider: "opencode-go",
         id: "deepseek-v4-flash",
@@ -288,16 +272,15 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
   it("aborts and releases the underlying stream when no first event arrives", async () => {
     const { consumer, received, getReturnCalls, capturedSignals, wasAborted } =
       await createStreamHarness({
-        firstEventTimeoutMs: 10_000,
         model: asProviderModel({
           api: "openai-responses",
           provider: "opencode-go",
           id: "gpt-5.6-luna",
         }),
       });
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(120_001);
     expect(wasAborted()).toBe(false);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(180_000);
 
     expect(capturedSignals).toHaveLength(1);
     expect(wasAborted()).toBe(true);
@@ -335,7 +318,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     const { consumer, received, wasAborted } = await createStreamHarness({
       source: new Promise<StreamLike>(() => {}),
     });
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(300_001);
 
     expect(wasAborted()).toBe(true);
     expect(received.some((event) => event.type === "error" && event.reason === "error")).toBe(true);
@@ -360,7 +343,6 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
   it("keeps block-boundary streams alive and clears the timer after completion", async () => {
     // Regression #96518: block boundaries, not only token deltas, prove provider liveness.
     const { controller, consumer, received, wasAborted } = await createStreamHarness({
-      idleTimeoutMs: 5_000,
       model: { provider: "opencode-go", id: "glm-4.6" } as ProviderModel,
     });
     const partial = { role: "assistant", content: [{ type: "text", text: "x" }] };
@@ -374,7 +356,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     } as AnyEvent);
     await vi.advanceTimersByTimeAsync(0);
 
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(70_000);
     controller.emit(
       asProviderEvent({
         type: "toolcall_end",
@@ -383,14 +365,14 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
         partial,
       }),
     );
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(70_000);
     controller.emit({
       type: "toolcall_start",
       contentIndex: 1,
       partial,
     } as AnyEvent);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(20_000);
 
     controller.emit({
       type: "done",
@@ -402,7 +384,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       },
     } as AnyEvent);
     controller.end();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     await consumer;
 
     const hasDone = received.some((e) => e.type === "done");

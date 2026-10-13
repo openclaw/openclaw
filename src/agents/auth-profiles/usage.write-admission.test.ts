@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -17,7 +18,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -28,6 +28,7 @@ import {
   resolveSharedAuthStoreOwnership,
 } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { authProfileRuntimeMode } from "./runtime-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -39,17 +40,19 @@ import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
-  runAuthProfileWriteTransactionAsync,
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
-import { saveAuthProfileStore } from "./store-runtime.js";
-import type { AuthProfileStore } from "./types.js";
+import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { withAuthProfileUsage } from "./usage-write.js";
 import { markAuthProfileFailure } from "./usage.js";
 
 const profileId = "fixture-provider:admission";
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 
-function createStore(): AuthProfileStore {
+function createStore(): AuthProfileStore & {
+  profiles: Record<typeof profileId, AuthProfileCredential>;
+} {
   return {
     version: 1,
     profiles: {
@@ -83,7 +86,7 @@ it.each(["current", "relocated", "closed"] as const)(
         setRuntimeAuthProfileStoreSnapshot(store, agentDir);
         const pathname = openOpenClawAgentDatabase(options).path;
         closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
-        clearOpenClawAgentIntegrityVerification(pathname, state.env);
+        revokeSqliteDatabaseAdmissionsForPath(pathname);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
@@ -123,6 +126,13 @@ it.each(["current", "relocated", "closed"] as const)(
             settled: false,
             usage: undefined,
           });
+          let writerEntered = false;
+          const writer = runOpenClawAgentWriteAdmission(options, () => {
+            writerEntered = true;
+          });
+          await nextTurn();
+          expect(writerEntered).toBe(true);
+          await writer;
           if (owner === "relocated") {
             writeConfigMachineState(
               SHARED_AUTH_STORE_STATE_KEY,
@@ -184,15 +194,31 @@ it.each(["local", "legacy-shared"] as const)(
         );
         await entered.promise;
         let settled = false;
-        const update = markAuthProfileFailure({
+        const ready = createDeferredCore();
+        const update = withAuthProfileUsage(
           store,
           profileId,
-          reason: "auth",
-          agentDir: state.agentDir("voice"),
-        }).then(() => {
+          state.agentDir("voice"),
+          ({ record }) => {
+            const writing = record({
+              kind: "failure",
+              expectedProfile: store.profiles[profileId],
+              reason: "auth",
+              whamResult: null,
+              probeEligible: false,
+            });
+            ready.resolve();
+            return writing;
+          },
+        ).then(() => {
           settled = true;
         });
         void update.catch(() => {});
+        await awaitGateBeforeSettlement(
+          ready.promise,
+          update,
+          "Auth health did not reach recording",
+        );
         const nextWriter = runOpenClawAgentWriteAdmission(
           { agentId, path: database.path },
           () =>
@@ -481,7 +507,6 @@ it.each(["raw", "precloned"] as const)(
         const fallbackHome = state.statePath("fallback-home");
         const fallbackRoot = path.join(fallbackHome, ".openclaw");
         const replacementRoot = state.statePath("replacement-state");
-        const ignoredRoot = state.statePath("ignored-state");
         const replacementAgentDir = path.join(replacementRoot, "agents", "main", "agent");
         const hostPlatform = process.platform;
         const cloneEnvironment = configEnvVars.cloneEnvWithPlatformSemantics;
@@ -503,7 +528,7 @@ it.each(["raw", "precloned"] as const)(
             const inputEnv =
               input === "precloned" ? configEnvVars.cloneEnvWithPlatformSemantics(rawEnv) : rawEnv;
             const originalEntries = Object.entries(inputEnv);
-            const options = { env: inputEnv, stateDir: ignoredRoot };
+            const scope = { kind: "agent-dir" as const, agentDir, env: inputEnv };
             const entered = createDeferredCore();
             const release = createDeferredCore();
             const reservation = runOpenClawAgentWorkerWrite(
@@ -514,7 +539,7 @@ it.each(["raw", "precloned"] as const)(
               },
             );
             void reservation.catch(() => {});
-            let writing: Promise<void> | undefined;
+            let writing: Promise<AuthProfileStore | null> | undefined;
             let enteredWriter = false;
             let settled = false;
             const updated: AuthProfileStore = {
@@ -534,30 +559,39 @@ it.each(["raw", "precloned"] as const)(
                   throw new Error("Auth writer reservation settled before it was held");
                 }),
               ]);
-              writing = runAuthProfileWriteTransactionAsync(
-                agentDir,
-                (transaction, owner) => {
-                  enteredWriter = true;
-                  expect(process.platform).toBe(hostPlatform);
-                  expect({
-                    databasePath: transaction.path,
-                    stateDir: owner.env.OPENCLAW_STATE_DIR,
-                    sharedDatabasePath: owner.sharedDatabasePath,
-                    sharedAgentDir: owner.env.OPENCLAW_AGENT_DIR,
-                    location: owner.location,
-                  }).toEqual({
-                    databasePath: database.path,
-                    stateDir: state.stateDir,
-                    sharedDatabasePath: resolveAuthProfileDatabasePath(sharedAgentDir),
-                    sharedAgentDir,
-                    location: "legacy-main",
-                  });
-                  writePersistedAuthProfileStoreRaw(updated, agentDir, transaction);
-                },
-                options,
-              ).finally(() => {
-                settled = true;
-              });
+              writing = authProfileRuntimeMode
+                .run(scope, () =>
+                  updateAuthProfileStoreWithLock({
+                    agentDir,
+                    saveOptions,
+                    updater(current, owner) {
+                      enteredWriter = true;
+                      expect(process.platform).toBe(hostPlatform);
+                      expect(current).toMatchObject(store);
+                      if (!owner) {
+                        throw new Error("Auth updater lost its captured owner");
+                      }
+                      expect({
+                        databasePath: owner.databasePath,
+                        stateDir: owner.env.OPENCLAW_STATE_DIR,
+                        sharedDatabasePath: owner.sharedDatabasePath,
+                        sharedAgentDir: owner.env.OPENCLAW_AGENT_DIR,
+                        location: owner.location,
+                      }).toEqual({
+                        databasePath: database.path,
+                        stateDir: state.stateDir,
+                        sharedDatabasePath: resolveAuthProfileDatabasePath(sharedAgentDir),
+                        sharedAgentDir,
+                        location: "legacy-main",
+                      });
+                      current.profiles = updated.profiles;
+                      return true;
+                    },
+                  }),
+                )
+                .finally(() => {
+                  settled = true;
+                });
               void writing.catch(() => {});
               await nextTurn();
               if (settled) {
@@ -568,7 +602,7 @@ it.each(["raw", "precloned"] as const)(
               expect(Object.entries(inputEnv)).toEqual(originalEntries);
               inputEnv.OpenClaw_State_Dir = replacementRoot;
               inputEnv.OpenClaw_Agent_Dir = replacementAgentDir;
-              options.env = {
+              scope.env = {
                 OPENCLAW_STATE_DIR: replacementRoot,
                 OPENCLAW_AGENT_DIR: replacementAgentDir,
               };
@@ -576,7 +610,7 @@ it.each(["raw", "precloned"] as const)(
               await writing;
               expect(loadPersistedAuthProfileStore(agentDir)).toEqual(updated);
               expect(loadPersistedAuthProfileStore(sharedAgentDir)).toEqual(store);
-              for (const root of [fallbackRoot, replacementRoot, ignoredRoot]) {
+              for (const root of [fallbackRoot, replacementRoot]) {
                 expect(fs.existsSync(root)).toBe(false);
               }
             } finally {
@@ -587,7 +621,7 @@ it.each(["raw", "precloned"] as const)(
           });
         } finally {
           // Counterfactual broken captures can open one of these fixture-owned roots.
-          for (const stateDir of [fallbackRoot, replacementRoot, ignoredRoot]) {
+          for (const stateDir of [fallbackRoot, replacementRoot]) {
             closeAuthProfileReadPool({ kind: "root", rootPath: stateDir });
             await cleanupSessionStateForTest({ stateDir });
           }

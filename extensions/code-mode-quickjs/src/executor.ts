@@ -68,6 +68,7 @@ function getCodeModePool(): QuickJsWorkerPool {
       url: workerUrl.href,
       pool: new WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>({
         workerUrl,
+        workerClass: "compute",
         sharedCompute: true,
       }),
     };
@@ -116,6 +117,7 @@ async function runQuickJsWorker(
   { timeoutMs, signal, inlineHost }: CodeModeExecutorRunOptions,
 ): Promise<CodeModeWorkerResult> {
   const startedAt = performance.now();
+  let workerId: string | undefined;
   let admittedTimeoutMs: number | undefined;
   try {
     const message = await getCodeModePool().run(
@@ -134,7 +136,25 @@ async function runQuickJsWorker(
       },
       {
         timeoutMs,
+        hostTimeout: "owner",
         signal,
+        onNotification: inlineHost
+          ? (value) => {
+              if (!isRecord(value)) {
+                return;
+              }
+              if (value.status === "worker" && typeof value.workerId === "string") {
+                workerId = value.workerId;
+                inlineHost?.onWorkerAssigned?.(workerId);
+              } else if (value.status === "failure") {
+                inlineHost?.onFailure?.(
+                  value.error,
+                  value.failurePhase === "bridge" ? "bridge" : "guest",
+                  workerId,
+                );
+              }
+            }
+          : undefined,
         inputBytes:
           workerData.kind === "resume"
             ? workerData.continuation.memory.byteLength
@@ -190,6 +210,7 @@ async function runQuickJsWorker(
       ? { ...result, continuation: retainSnapshot(result.continuation) }
       : result;
   } catch (error) {
+    inlineHost?.onFailure?.(error, "host", workerId);
     if (signal?.aborted) {
       return failedResult(
         signal.reason instanceof CodeModeHeadlessTimeoutError

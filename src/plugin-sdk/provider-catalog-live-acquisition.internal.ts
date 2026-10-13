@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -6,7 +7,6 @@ import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-h
 import {
   isUpstreamProviderCatalogModel,
   readLiveModelCatalogId,
-  readLiveModelCatalogRecord,
   readLiveModelCatalogStringField,
   type UpstreamProviderCatalog,
   type UpstreamProviderCatalogModel,
@@ -104,7 +104,9 @@ function selectLiveModelCatalogRequestApiKey(
   );
 }
 
-function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext): HeadersInit {
+export function buildDefaultLiveModelCatalogHeaders(
+  ctx: LiveModelCatalogHeaderContext,
+): Record<string, string> {
   const requestApiKey = selectLiveModelCatalogRequestApiKey(ctx);
   return {
     Accept: "application/json",
@@ -171,7 +173,7 @@ export async function getCachedUpstreamProviderCatalog(
           await cancelUnreadResponseBody(response);
           throw new LiveModelCatalogHttpError("upstream-provider-catalog", response.status);
         }
-        const catalog = readLiveModelCatalogRecord(
+        const catalog = asOptionalRecord(
           await readLiveModelCatalogJson(response, {
             label: "upstream-provider-catalog",
             timeoutMs,
@@ -188,8 +190,8 @@ export async function getCachedUpstreamProviderCatalog(
     },
   });
 
-  const provider = readLiveModelCatalogRecord(body[params.providerId]);
-  const models = readLiveModelCatalogRecord(provider?.models);
+  const provider = asOptionalRecord(body[params.providerId]);
+  const models = asOptionalRecord(provider?.models);
   if (
     !provider ||
     !models ||
@@ -222,10 +224,10 @@ function resolveLiveModelCatalogNextPage(
   currentUrl: string,
   body: unknown,
 ): LiveModelCatalogNextPageResolution {
-  const record = readLiveModelCatalogRecord(body);
+  const record = asOptionalRecord(body);
   const rawNextUrl =
     readLiveModelCatalogString(record?.next) ??
-    readLiveModelCatalogString(readLiveModelCatalogRecord(record?.links)?.next);
+    readLiveModelCatalogString(asOptionalRecord(record?.links)?.next);
   const currentParsed = URL.parse(currentUrl);
   if (rawNextUrl) {
     const nextUrl = URL.parse(rawNextUrl, currentUrl);

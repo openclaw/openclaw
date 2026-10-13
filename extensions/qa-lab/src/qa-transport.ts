@@ -93,7 +93,7 @@ export async function waitForQaTransportAccountReady(
     [
       `timed out after ${timeoutMs}ms waiting for ${params.channel} ready`,
       `last status: ${lastAccountStatus}`,
-      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
+      ...(lastProbeError ? [`last check error: ${lastProbeError}`] : []),
     ].join("; "),
   );
 }
@@ -237,22 +237,14 @@ function describeQaTransportTimeout(params: {
 export type QaTransportAdapter = Omit<
   QaTransportAdapterDefinition,
   "assertTransportHealthy" | "resetTransport"
-> & {
-  state: QaTransportState;
-  reset: () => Promise<void>;
-  waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
-  waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
-  waitForCompletedReply?: (input: {
-    inbound: QaBusMessage;
-    gateway: Parameters<QaTransportAdapterDefinition["waitReady"]>[0]["gateway"];
-    timeoutMs?: number;
-  }) => Promise<QaBusMessage>;
-  waitForCondition: <T>(
-    check: () => T | Promise<T | null | undefined> | null | undefined,
-    timeoutMs?: number,
-    intervalMs?: number,
-  ) => Promise<T>;
-};
+> &
+  ReturnType<typeof createQaTransportStateMethods> & {
+    waitForCompletedReply?: (input: {
+      inbound: QaBusMessage;
+      gateway: Parameters<QaTransportAdapterDefinition["waitReady"]>[0]["gateway"];
+      timeoutMs?: number;
+    }) => Promise<QaBusMessage>;
+  };
 
 export async function sendQaTransportNativeCommand(
   transport: Pick<QaTransportAdapter, "sendInbound">,

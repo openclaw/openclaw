@@ -13,7 +13,6 @@ import {
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
-import { mergeSkillRecords, type SkillCollision } from "./skill-precedence.js";
 import {
   canonicalSkillDirForSource,
   discoverPluginSkills,
@@ -59,7 +58,7 @@ function loadContainedSkillRecord(
   if (!loaded) {
     return null;
   }
-  // Discovery selected one terminal SKILL.md; keep its parsed facts, not its content, in the cache.
+  // Discovery selected one terminal SKILL.md; retain its parsed facts.
   const record: LoadedSkillRecord = { skill: loaded.skill, frontmatter: loaded.frontmatter };
   if (!params.canonicalSkillDir) {
     return record;
@@ -129,11 +128,12 @@ export function loadSkillRootRecords(params: {
         resolveSkillTelemetrySourceValue(params.source) === "bundled" ? "bundled" : "workspace",
       rootDir: params.dir,
     });
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(params.config);
   const discovered = discoverSkillCandidates({
     dir: params.dir,
     source: params.source,
     limits,
-    allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
+    allowedSymlinkTargetRealPaths,
     onDiagnostic: params.onDiagnostic,
   });
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
@@ -215,7 +215,6 @@ function loadGeneratedPluginSkillRecords(params: {
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
   config?: OpenClawConfig,
-  collisions?: SkillCollision[],
 ): WorkspaceSkillSources["entries"] {
   const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
   for (const root of plan.roots) {
@@ -250,25 +249,16 @@ export function loadWorkspaceSkillSourceEntries(
         left.skill.name.localeCompare(right.skill.name, "en") ||
         left.skill.source.localeCompare(right.skill.source, "en"),
     );
-  return mergeSkillRecords(
-    ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
-      (tier) => grouped.get(tier) ?? [],
-    ),
-    JSON.stringify(["sources", plan.workspaceDir]),
-    collisions,
-  ).map(createSkillEntry);
+  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"]
+    .flatMap((tier) => grouped.get(tier) ?? [])
+    .map(createSkillEntry);
 }
 
 export function loadExecutionSkillEntries(
   executionWorkspaceDir: string,
   config?: OpenClawConfig,
-  collisions?: SkillCollision[],
 ): SkillEntry[] {
-  return mergeSkillRecords(
-    resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) =>
-      loadSkillRootRecords({ ...root, config }),
-    ),
-    JSON.stringify(["execution", executionWorkspaceDir]),
-    collisions,
-  ).map(createSkillEntry);
+  return resolveWorkspaceSkillDirectories(executionWorkspaceDir)
+    .flatMap((root) => loadSkillRootRecords({ ...root, config }))
+    .map(createSkillEntry);
 }

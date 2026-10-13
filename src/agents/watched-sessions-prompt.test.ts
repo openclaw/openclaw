@@ -1,5 +1,9 @@
 import fs from "node:fs";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as sessionReader from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,7 +15,10 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../test-utils/session-state-cleanup.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt as prepareWatchedSessionsPromptSync,
@@ -35,14 +42,20 @@ async function watchGroup(sessionKey: string) {
   expect(await registerMainSessionGroupWatch({ sessionKey, agentId: "main" })).toBe(true);
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await drainSessionStateForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
 describe("prepareWatchedSessionsPrompt", () => {
-  it("returns key-sorted watched sessions with store-derived titles", async () => {
+  beforeEach(() => {
     stubStateDir();
+    setRuntimeConfigSnapshot({});
+  });
+
+  it("returns key-sorted watched sessions with store-derived titles", async () => {
     await watchGroup("agent:main:telegram:group:beta");
     await watchGroup("agent:main:telegram:group:alpha:topic:7");
     await upsertSessionEntryCore(
@@ -68,7 +81,6 @@ describe("prepareWatchedSessionsPrompt", () => {
   });
 
   it("caps rendered rows and reports the overflow count", async () => {
-    stubStateDir();
     for (let index = 0; index < 23; index += 1) {
       await watchGroup(`agent:main:telegram:group:room-${String(index).padStart(2, "0")}`);
     }
@@ -103,22 +115,7 @@ describe("prepareWatchedSessionsPrompt", () => {
     expect(prepared?.listToolAvailable).toBe(false);
   });
 
-  it("accepts capability-provided read tools regardless of casing", async () => {
-    stubStateDir();
-    await watchGroup("agent:main:telegram:group:beta");
-
-    const prepared = await prepareWatchedSessionsPrompt({
-      enabled: true,
-      sessionKey: mainSessionKey,
-      toolNames: [],
-      capabilityToolNames: [" Sessions_Search "],
-    });
-
-    expect(prepared?.readToolNames).toEqual(["sessions_search"]);
-  });
-
   it("keeps the section for sandboxed sessions only when the clamp allows non-spawned reads", async () => {
-    stubStateDir();
     await watchGroup("agent:main:telegram:group:beta");
     const base = {
       enabled: true,
@@ -139,7 +136,6 @@ describe("prepareWatchedSessionsPrompt", () => {
   });
 
   it("returns undefined when disabled, keyless, non-main, toolless, or unwatched", async () => {
-    stubStateDir();
     await watchGroup("agent:main:telegram:group:beta");
     const base = { enabled: true, sessionKey: mainSessionKey, toolNames: sessionReadTools };
 
@@ -162,7 +158,6 @@ describe("prepareWatchedSessionsPrompt", () => {
   it.each(["authority", "watch", "watch-final", "sandbox", "sandbox-cleanup", "store"] as const)(
     "revalidates %s while worker facts are loading",
     async (change) => {
-      stubStateDir();
       await watchGroup("agent:main:telegram:group:beta");
       const sandbox: { sessionToolsVisibility: "all" | "spawned" } = {
         sessionToolsVisibility: "all",
@@ -187,13 +182,13 @@ describe("prepareWatchedSessionsPrompt", () => {
           if (args[1].type === "sessionState.ambientTargets") {
             reads += 1;
             if (change === "watch-final" && reads === 2) {
-              handleSessionStateSessionReset(mainSessionKey);
+              await handleSessionStateSessionReset(mainSessionKey);
             }
             if (change === "authority") {
               active = false;
             }
             if (change === "watch") {
-              handleSessionStateSessionReset(mainSessionKey);
+              await handleSessionStateSessionReset(mainSessionKey);
             }
             if (change === "sandbox") {
               sandbox.sessionToolsVisibility = "spawned";
@@ -229,7 +224,6 @@ describe("prepareWatchedSessionsPrompt", () => {
   );
 
   it("rejects replacing the title database at its captured path during a worker read", async () => {
-    stubStateDir();
     const key = "agent:main:telegram:group:beta";
     await watchGroup(key);
     await upsertSessionEntryCore(
@@ -266,7 +260,6 @@ describe("prepareWatchedSessionsPrompt", () => {
   });
 
   it("renders the harness context block plugin-owned runtimes inject per turn", async () => {
-    stubStateDir();
     await watchGroup("agent:main:telegram:group:beta");
 
     const block = buildWatchedSessionsHarnessContext({

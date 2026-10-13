@@ -34,17 +34,9 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/gateway-runtime"),
 );
 
-type CallGatewayFromCli = typeof import("openclaw/plugin-sdk/gateway-runtime").callGatewayFromCli;
 type GoogleMeetGatewayErrorCode = NonNullable<
   Parameters<GatewayRequestHandlerOptions["respond"]>[2]
 >["code"];
-
-type LoadGoogleMeetNodeInvokePolicy = (
-  config: GoogleMeetConfig,
-) => Promise<OpenClawPluginNodeInvokePolicy>;
-
-const loadGoogleMeetNodeInvokePolicy: LoadGoogleMeetNodeInvokePolicy = async (config) =>
-  (await loadGoogleMeetNodeInvokePolicyModule()).createGoogleMeetChromeNodeInvokePolicy(config);
 
 export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
   return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
@@ -69,29 +61,14 @@ export function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
   return raw.join !== false && raw.join !== "false";
 }
 
-const googleMeetToolDeps: {
-  callGatewayFromCli?: CallGatewayFromCli;
-  platform: () => NodeJS.Platform;
-} = {
-  platform: () => process.platform,
-};
-
-type GoogleMeetGatewayToolAction =
-  | "join"
-  | "create"
-  | "status"
-  | "transcript"
-  | "participation_context"
-  | "participate"
-  | "recover_current_tab"
-  | "setup_status"
-  | "leave"
-  | "end_active_conference"
-  | "speak"
-  | "test_speech"
-  | "test_listen";
-
-const googleMeetGatewayMethods: Partial<Record<GoogleMeetGatewayToolAction, string>> = {
+const googleMeetGatewayMethods = {
+  join: "googlemeet.join",
+  create: "googlemeet.create",
+  status: "googlemeet.status",
+  transcript: "googlemeet.transcript",
+  participate: "googlemeet.participate",
+  leave: "googlemeet.leave",
+  speak: "googlemeet.speak",
   participation_context: "googlemeet.participationContext",
   recover_current_tab: "googlemeet.recoverCurrentTab",
   setup_status: "googlemeet.setup",
@@ -144,7 +121,7 @@ export function assertGoogleMeetAgentToolActionSupported(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
 }): void {
-  const platform = googleMeetToolDeps.platform();
+  const platform = process.platform;
   if (platform === "darwin" || platform === "linux") {
     return;
   }
@@ -171,11 +148,11 @@ export function assertGoogleMeetAgentToolActionSupported(params: {
 
 export async function callGoogleMeetGatewayFromTool(params: {
   config: GoogleMeetConfig;
-  action: GoogleMeetGatewayToolAction;
+  action: keyof typeof googleMeetGatewayMethods;
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
-  const method = googleMeetGatewayMethods[params.action] ?? `googlemeet.${params.action}`;
+  const method = googleMeetGatewayMethods[params.action];
   try {
     if (params.runtime) {
       return await params.runtime.gateway.request(method, params.raw, {
@@ -185,9 +162,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
     }
     // Standalone agent workers connect as this bundled plugin, not as the
     // model session; its Gateway methods remain the only exposed actions.
-    const callGatewayFromCli =
-      googleMeetToolDeps.callGatewayFromCli ??
-      (await loadGoogleMeetGatewayRuntimeModule()).callGatewayFromCli;
+    const { callGatewayFromCli } = await loadGoogleMeetGatewayRuntimeModule();
     return await callGatewayFromCli(
       method,
       {
@@ -259,7 +234,6 @@ export function createGoogleMeetRuntimeAccessor(params: {
 
 export function createLazyGoogleMeetNodeInvokePolicy(
   config: GoogleMeetConfig,
-  loadPolicy: LoadGoogleMeetNodeInvokePolicy = loadGoogleMeetNodeInvokePolicy,
 ): OpenClawPluginNodeInvokePolicy {
   let policyPromise: Promise<OpenClawPluginNodeInvokePolicy> | undefined;
   return {
@@ -268,7 +242,9 @@ export function createLazyGoogleMeetNodeInvokePolicy(
     async handle(ctx) {
       let policy: OpenClawPluginNodeInvokePolicy;
       try {
-        policyPromise ??= loadPolicy(config);
+        policyPromise ??= loadGoogleMeetNodeInvokePolicyModule().then((module) =>
+          module.createGoogleMeetChromeNodeInvokePolicy(config),
+        );
         policy = await policyPromise;
       } catch (error) {
         return {
@@ -301,12 +277,3 @@ export function sendGoogleMeetGatewayError(
     details: payload,
   });
 }
-
-export const testing = {
-  setCallGatewayFromCliForTests(next?: CallGatewayFromCli): void {
-    googleMeetToolDeps.callGatewayFromCli = next;
-  },
-  setPlatformForTests(next?: () => NodeJS.Platform): void {
-    googleMeetToolDeps.platform = next ?? (() => process.platform);
-  },
-};

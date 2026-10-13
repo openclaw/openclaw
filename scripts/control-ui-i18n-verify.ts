@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as ts from "typescript/unstable/ast";
 import {
   loadControlUiTranslationMemory,
@@ -20,6 +21,7 @@ import {
   compareStringArrays,
   extractTranslationPlaceholders,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { loadControlUiPluginCatalogs } from "./lib/control-ui-plugin-i18n-catalog.ts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
@@ -289,6 +291,63 @@ async function verifyControlUiSourceCatalogShape() {
   );
 }
 
+export async function verifyControlUiPluginCatalogs(repoRoot = ROOT) {
+  const summaries = [];
+  const supportedLocales = new Set<string>(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
+  for (const plugin of await loadControlUiPluginCatalogs(repoRoot)) {
+    const sourceFlat = flattenControlUiCatalog(plugin.source, `${plugin.id}:en`);
+    const localeFlats = new Map<string, Map<string, string>>();
+    let unusedTranslations = 0;
+    for (const [locale, translations] of Object.entries(plugin.translations)) {
+      if (!supportedLocales.has(locale)) {
+        throw new Error(`${plugin.id}: unsupported locale ${locale}`);
+      }
+      const flat = flattenControlUiCatalog(translations, `${plugin.id}:${locale}`);
+      // An object at an English leaf suppresses the runtime's English fallback.
+      // Historical child keys may remain only when they cannot mask current copy.
+      for (const key of sourceFlat.keys()) {
+        let value: unknown = translations;
+        for (const part of key.split(".")) {
+          value = isRecord(value) ? value[part] : undefined;
+        }
+        if (isRecord(value)) {
+          throw new Error(`${plugin.id}:${locale}:${key} must be a string at an English leaf`);
+        }
+      }
+      unusedTranslations += [...flat.keys()].filter((key) => !sourceFlat.has(key)).length;
+      // Plugin catalogs are authored inputs, not generated core catalogs. Validate
+      // current keys in source order without deleting retained historical translations.
+      localeFlats.set(
+        locale,
+        new Map(
+          [...sourceFlat.keys()].filter((key) => flat.has(key)).map((key) => [key, flat.get(key)!]),
+        ),
+      );
+    }
+    const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);
+    if (analysis.errors.length > 0) {
+      throw new Error(`${plugin.id}: ${analysis.errors.join("\n")}`);
+    }
+    const sourceFiles = (
+      await collectSourceFileContents({
+        ignoredDirNames: new Set(["test-helpers"]),
+        repoRoot,
+        scanExtensions: new Set([".ts", ".tsx"]),
+        scanRoots: [plugin.browserRoot],
+      })
+    ).filter(({ relativeFile }) => !CONTROL_UI_TEST_FILE_PATTERN.test(relativeFile));
+    const referenced = verifyControlUiReferencedKeys(sourceFlat, sourceFiles);
+    summaries.push({
+      id: plugin.id,
+      keys: sourceFlat.size,
+      locales: localeFlats.size,
+      unusedTranslations,
+      ...referenced,
+    });
+  }
+  return summaries;
+}
+
 export async function syncControlUiCatalogFallbackBaseline(options: {
   allowCatalogDrift?: boolean;
   checkOnly: boolean;
@@ -339,21 +398,11 @@ export async function verifyRuntimeLocaleConfig() {
   }
 }
 
-export async function verifyControlUiGeneratedCatalogs(options: {
-  checkOnly: boolean;
-  write: boolean;
-}) {
+export async function verifyControlUiGeneratedCatalogs() {
   await verifyRuntimeLocaleConfig();
-  await syncControlUiRawCopyBaseline(options);
-  await syncControlUiCatalogFallbackBaseline(options);
-}
-
-async function verifyControlUiContributorCatalogs(options: { checkOnly: boolean; write: boolean }) {
-  await verifyRuntimeLocaleConfig();
-  await syncControlUiRawCopyBaseline(options);
-  // Foreign catalogs may be stale after an English rename, deletion, or
-  // placeholder change. The post-merge locale workflow owns that repair.
-  await verifyControlUiSourceCatalogShape();
+  await verifyControlUiPluginCatalogs();
+  await syncControlUiRawCopyBaseline({ checkOnly: true, write: false });
+  await syncControlUiCatalogFallbackBaseline({ checkOnly: true, write: false });
 }
 
 function usage(): never {
@@ -366,18 +415,21 @@ async function main() {
   if ((command !== "verify" && command !== "baseline") || rest.length > 0) {
     usage();
   }
-  await verifyControlUiContributorCatalogs({
+  await verifyRuntimeLocaleConfig();
+  await syncControlUiRawCopyBaseline({
     checkOnly: command === "verify",
     write: command === "baseline",
   });
+  // Foreign catalogs are repaired by the post-merge locale workflow.
+  await verifyControlUiSourceCatalogShape();
+  for (const summary of await verifyControlUiPluginCatalogs()) {
+    process.stdout.write(
+      `control-ui-i18n: plugin=${summary.id} keys=${summary.keys} locales=${summary.locales} unused_translations=${summary.unusedTranslations}\n`,
+    );
+  }
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

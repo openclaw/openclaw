@@ -27,27 +27,6 @@ export type GoogleMeetSpace = {
   config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
-export type GoogleMeetPreflightReport = {
-  input: string;
-  resolvedSpaceName: string;
-  meetingCode?: string;
-  meetingUri?: string;
-  hasActiveConference: boolean;
-  previewAcknowledged: boolean;
-  tokenSource: "cached-access-token" | "refresh-token";
-  blockers: string[];
-};
-
-type GoogleMeetCreateSpaceResult = {
-  space: GoogleMeetSpace;
-  meetingUri: string;
-};
-
-type GoogleMeetEndActiveConferenceResult = {
-  space: string;
-  ended: true;
-};
-
 type GoogleMeetTimedResource = {
   name: string;
   startTime?: string;
@@ -119,11 +98,9 @@ export type GoogleMeetArtifactsResult = GoogleMeetConferenceQueryResult & {
   artifacts: GoogleMeetArtifactsEntry[];
 };
 
-export type GoogleMeetLatestConferenceRecordResult = {
-  input: string;
-  space: GoogleMeetSpace;
-  conferenceRecord?: GoogleMeetConferenceRecord;
-};
+export type GoogleMeetLatestConferenceRecordResult = Awaited<
+  ReturnType<typeof fetchLatestGoogleMeetConferenceRecord>
+>;
 
 export type GoogleMeetAttendanceRow = {
   conferenceRecord: string;
@@ -305,7 +282,7 @@ export async function fetchGoogleMeetSpace(params: {
 export async function createGoogleMeetSpace(params: {
   accessToken: string;
   config?: GoogleMeetSpaceConfig;
-}): Promise<GoogleMeetCreateSpaceResult> {
+}) {
   const hasConfig = params.config && Object.keys(params.config).length > 0;
   const payload = await fetchGoogleMeetJson<GoogleMeetSpace>({
     accessToken: params.accessToken,
@@ -330,7 +307,7 @@ export async function createGoogleMeetSpace(params: {
 export async function endGoogleMeetActiveConference(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetEndActiveConferenceResult> {
+}) {
   const resolved = await fetchGoogleMeetSpace(params);
   const space = resolved.name;
   await requestGoogleMeetApi(
@@ -344,7 +321,7 @@ export async function endGoogleMeetActiveConference(params: {
     },
     async () => undefined,
   );
-  return { space, ended: true };
+  return { space, ended: true as const };
 }
 
 async function fetchGoogleMeetConferenceRecord(params: {
@@ -388,7 +365,7 @@ async function listGoogleMeetConferenceRecords(params: {
 export async function fetchLatestGoogleMeetConferenceRecord(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetLatestConferenceRecordResult> {
+}) {
   const space = await fetchGoogleMeetSpace(params);
   const [conferenceRecord] = await listGoogleMeetConferenceRecords({
     accessToken: params.accessToken,

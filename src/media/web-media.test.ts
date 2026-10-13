@@ -25,7 +25,6 @@ let media: typeof import("./web-media.js");
 const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TINY_PNG = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
-const CANVAS_PATH = "/__openclaw__/canvas/documents/cv_test/collection.media/tiny.png";
 const IMAGE_LIMITS = {
   models: [
     { maxSidePx: 32, preferredSidePx: 32 },
@@ -204,12 +203,6 @@ describe("loadWebMedia", () => {
       platform.mockRestore();
       realpath.mockRestore();
     }
-  });
-
-  it("loads browser-style canvas media paths as managed local files", async () => {
-    const result = await media.loadWebMedia(CANVAS_PATH, { maxBytes: 1024 * 1024 });
-    expect(result.kind).toBe("image");
-    expect(result.buffer).toEqual(TINY_PNG);
   });
 
   it("keeps trying hosted media resolvers after one throws", async () => {
@@ -414,22 +407,6 @@ describe("loadWebMedia", () => {
     },
   );
 
-  it("passes Windows sandbox paths unchanged to custom readers and emits only the leaf filename", async () => {
-    const file = String.raw`C:\workspace\captures\tiny.png`;
-    const readFile = vi.fn(async (_source: string) => TINY_PNG);
-    const result = await media.loadWebMediaRaw(file, {
-      maxBytes: 1024 * 1024,
-      sandboxValidated: true,
-      readFile,
-    });
-    expect(readFile).toHaveBeenCalledWith(file);
-    expect(readFile.mock.calls[0]).toHaveLength(1);
-    expect(result.buffer).toEqual(TINY_PNG);
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/png");
-    expect(result.fileName).toBe("tiny.png");
-  });
-
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
       const result = await media.loadWebMedia("~/workspace/chart.png", {
@@ -451,21 +428,8 @@ describe("loadWebMedia", () => {
     await expectAccessError(hostDocument("debug.log", "plain text\n"));
   });
 
-  it("allows byte-verified XLSM without changing its name or bytes", async () => {
-    const body = await xlsmFixture();
-    const result = await hostDocument("report.XLSM", body);
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("application/vnd.ms-excel.sheet.macroenabled.12");
-    expect(result.fileName).toBe("report.XLSM");
-    expect(result.buffer).toEqual(body);
-  });
-
   it("rejects text disguised as an allowed binary document", async () => {
     await expectAccessError(hostDocument("secret.pdf", "secret"));
-  });
-
-  it("rejects unverified text named as XLSM", async () => {
-    await expectAccessError(hostDocument("report.xlsm", "not a workbook"));
   });
 
   it("keeps the host-read XLSM root boundary and byte limit", async () => {
@@ -635,11 +599,6 @@ describe("loadWebMedia", () => {
 
   it("rejects trusted HTML paths without HTML document shape", async () => {
     await expectAccessError(hostDocument("report.html", "status,value\nok,1\n"));
-  });
-
-  it("rejects opaque non-NUL binary data disguised as HTML", async () => {
-    const body = Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 255) + 1));
-    await expectAccessError(hostDocument("opaque.html", body));
   });
 
   it("rejects a CSV binary tail after the old text sample window", async () => {

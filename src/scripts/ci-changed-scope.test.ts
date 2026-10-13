@@ -14,9 +14,31 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunIosScreenshots,
+  writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["pull_request", "push", "schedule", "workflow_dispatch"])(
+  "keeps Android capture scope outside ordinary PRs (%s)",
+  (workflowEventName) => {
+    const changedPaths = ["apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt"];
+    const output = path.join(tempDirs.make("openclaw-ci-capture-scope-"), "scope.out");
+    writeGitHubOutput(
+      detectChangedScope(changedPaths),
+      output,
+      undefined,
+      undefined,
+      true,
+      changedPaths,
+      workflowEventName,
+    );
+    const scope = parseGitHubOutput(fs.readFileSync(output, "utf8"));
+    expect(scope.run_android).toBe("true");
+    expect(scope.run_native_i18n).toBe("true");
+    expect(scope.run_android_screenshots).toBe(String(workflowEventName !== "pull_request"));
+  },
+);
 
 function parseGitHubOutput(output: string): Record<string, string> {
   const parsed: Record<string, string> = {};
@@ -66,14 +88,6 @@ function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase:
 }
 
 describe("parseArgs", () => {
-  it("parses CI diff refs", () => {
-    expect(parseArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual({
-      base: "origin/main",
-      head: "HEAD",
-      mergeHeadFirstParent: false,
-    });
-  });
-
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
@@ -150,6 +164,7 @@ describe("detectChangedScope", () => {
       { runNode: true, runSkillsPython: true },
     ],
     [[".github/workflows/ci.yml"], { runNode: true, runWindows: true, runUiTests: true }],
+    [["scripts/lib/ci-test-runtime.mts"], { runNode: true, runUiTests: true }],
     [["scripts/ci-xcodebuild.py"], { runNode: true, runIosBuild: true }],
     [["scripts/ci-xcodebuild.py.bak"], { runNode: true }],
     [["scripts/install.ps1"], { runNode: true, runWindows: true, runChangedSmoke: true }],
@@ -350,7 +365,7 @@ describe("detectChangedScope", () => {
         [scriptPath, ...(cliArgs ?? ["--base", base, "--head", "HEAD"])],
         {
           cwd: repoDir,
-          env: { ...process.env, GITHUB_OUTPUT: outputPath },
+          env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_OUTPUT: outputPath },
         },
       );
 

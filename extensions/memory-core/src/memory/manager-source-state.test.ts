@@ -78,7 +78,7 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.symlink(vaultDir, path.join(workspaceDir, ".openclaw-repair", "root-memory"), "dir");
 
       const inspection = await inspectMemorySourceState({
-        db,
+        readIndexedRows: async () => loadMemorySourceFileState({ db, source: "memory" }),
         workspaceDir,
         settings: {
           extraPaths: [
@@ -97,7 +97,7 @@ describe("memory source inspection extra-path diagnostics", () => {
         ...(canonicalMemory ? [] : ["no eligible memory files found"]),
         expect.stringContaining('extra path "' + linkedRoot + '" is a symlink root'),
       ]);
-      expect(inspection.issues.at(-1)).toContain("configure its canonical absolute directory");
+      expect(inspection.issues.at(-1)).toContain("configure its resolved absolute directory");
     },
   );
 
@@ -114,7 +114,7 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.symlink(nestedTarget, path.join(vaultDir, "nested"), "dir");
 
       const inspection = await inspectMemorySourceState({
-        db,
+        readIndexedRows: async () => loadMemorySourceFileState({ db, source: "memory" }),
         workspaceDir,
         settings: {
           extraPaths: [{ path: vaultDir }],

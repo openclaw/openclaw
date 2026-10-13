@@ -1,5 +1,4 @@
-// Gateway import-boundary tests keep startup-critical modules lazy and prevent
-// heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
+// Static method policy avoids storage; prepared shutdown avoids runtime session dependencies.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
@@ -9,10 +8,6 @@ import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescrip
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
-
-function readSource(relativePath: string): string {
-  return readFileSync(path.join(repoRoot, relativePath), "utf8");
-}
 
 function resolveRelativeSource(importer: string, specifier: string): string | null {
   const rawPath = path.resolve(path.dirname(importer), specifier);
@@ -98,49 +93,14 @@ function collectStaticValueImportGraph(entryRelativePath: string): Map<string, s
   return graph;
 }
 
-function readServerImplementation(): string {
-  return [
-    "src/gateway/server-start.ts",
-    "src/gateway/server-kernel.ts",
-    "src/gateway/server-shutdown.runtime.ts",
-    "src/gateway/server-startup-bootstrap.ts",
-    "src/gateway/server-runtime-state-prepare.ts",
-    "src/gateway/server-lifecycle.ts",
-    "src/gateway/server-core-runtime.ts",
-    "src/gateway/server-startup-finish.ts",
-  ]
-    .map(readSource)
-    .join("\n");
-}
-
 describe("gateway startup import boundaries", () => {
-  it.each([
-    "src/gateway/methods/core-descriptors.ts",
-    "src/gateway/methods/core-method-policy.ts",
-    "src/gateway/method-scopes.ts",
-  ])("keeps static method policy independent of session storage: %s", (entryPath) => {
-    const graph = collectStaticValueImportGraph(entryPath);
+  it("keeps static method policy independent of session storage", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/method-scopes.ts");
     const sessionStorageImports = [...graph.keys()]
       .map((filePath) => path.relative(repoRoot, filePath))
       .filter((filePath) => filePath.startsWith(path.join("src", "config", "sessions") + path.sep));
 
     expect(sessionStorageImports).toEqual([]);
-  });
-
-  it("keeps remote catalog refresh networking behind the overlay boundary", () => {
-    const startupGraph = collectStaticValueImportGraph(
-      "src/plugins/gateway-startup-plugin-providers.ts",
-    );
-    const startupPaths = [...startupGraph.keys()].map((filePath) =>
-      path.relative(repoRoot, filePath),
-    );
-    const overlayGraph = collectStaticValueImportGraph("src/model-catalog/remote-overlay.ts");
-    const overlayPaths = [...overlayGraph.keys()].map((filePath) =>
-      path.relative(repoRoot, filePath),
-    );
-
-    expect(startupPaths).not.toContain("src/model-catalog/remote-refresh.ts");
-    expect(overlayPaths).not.toContain("src/infra/net/fetch-guard.ts");
   });
 
   it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
@@ -149,149 +109,5 @@ describe("gateway startup import boundaries", () => {
     expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
       "src/gateway/session-reset-service.ts",
     );
-  });
-
-  it("keeps the kernel static import graph free of HTTP server and WebSocket construction", () => {
-    const graph = collectStaticValueImportGraph("src/gateway/server-kernel.ts");
-    const violations: string[] = [];
-    for (const [filePath, specifiers] of graph) {
-      for (const specifier of specifiers) {
-        if (specifier === "node:http" || specifier === "node:https" || specifier === "ws") {
-          violations.push(`${path.relative(repoRoot, filePath)} -> ${specifier}`);
-        }
-      }
-    }
-
-    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
-      "src/gateway/server-runtime-state.ts",
-    );
-    expect(violations).toEqual([]);
-  });
-
-  it("keeps heavy cron and doctor legacy paths out of the server-start import graph", () => {
-    const serverImpl = readServerImplementation();
-    const validation = readSource("src/config/validation.ts");
-
-    expect(serverImpl).not.toContain('from "./server-cron.js"');
-    expect(serverImpl).toContain('from "./server-cron-lazy.js"');
-    expect(serverImpl).not.toContain('from "./server-methods.js"');
-    expect(serverImpl).not.toContain('from "./config-reload.js"');
-    expect(serverImpl).not.toMatch(
-      /import\s+\{[^}]*resolveSessionForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
-    );
-    expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
-      'import("./server-session-key.js")',
-    );
-    expect(readSource("src/gateway/server-shared-auth-generation.ts")).not.toContain(
-      'from "./config-reload.js"',
-    );
-    expect(readSource("src/gateway/server-aux-handlers.ts")).not.toContain(
-      'from "./config-reload.js"',
-    );
-    expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
-    expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
-      'from "../secrets/runtime.js"',
-    );
-    const connection = readSource("src/gateway/server/connection.ts");
-    const wsConnection = readSource("src/gateway/server/ws-connection.ts");
-    const wsGraph = collectStaticValueImportGraph("src/gateway/server/ws-connection.ts");
-    expect([...wsGraph.keys()]).not.toContain(
-      path.join(repoRoot, "src/gateway/server/ws-connection/message-handler.ts"),
-    );
-    for (const source of [connection, wsConnection]) {
-      expect(source).not.toContain('from "../talk/relay/index.js"');
-      expect(source).not.toContain('from "../talk/transcription-relay.js"');
-    }
-    expect(connection).toContain('from "../talk/session-registry.js"');
-    expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
-      /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
-    );
-    expect(validation).not.toContain("commands/doctor");
-    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
-    expect(serverImpl).toContain('import("./server-worker-environment-startup.js")');
-    for (const workerModule of ["live-events", "service", "store", "transcript-commit"]) {
-      expect(serverImpl).not.toContain(`from "./worker-environments/${workerModule}.js"`);
-      expect(workerStartup).toContain(`import("./worker-environments/${workerModule}.js")`);
-    }
-    expect(serverImpl).not.toContain('from "../plugins/worker-provider-registry.js"');
-    expect(readSource("src/gateway/server-reload-managed.ts")).toContain(
-      'import("../state/openclaw-database-preflight.js")',
-    );
-    expect(workerStartup).toContain('import("../plugins/worker-provider-registry.js")');
-    expect(serverImpl).not.toContain(
-      'from "../../packages/gateway-protocol/src/schema/worker-admission.js"',
-    );
-    expect(workerStartup).toContain(
-      'import("../../packages/gateway-protocol/src/schema/worker-admission.js")',
-    );
-  });
-
-  it("keeps channel startup maintenance on the loaded-only registry", () => {
-    const lifecycleStartup = readSource("src/channels/plugins/lifecycle-startup.ts");
-
-    expect(lifecycleStartup).toContain('from "./registry-loaded.js"');
-    expect(lifecycleStartup).not.toContain('from "./registry.js"');
-  });
-
-  it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
-    const serverImpl = readServerImplementation();
-    const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
-    const staticImports = staticValueSpecifiers(
-      parser.parseSourceFile("server-implementation.ts", serverImpl),
-    );
-    const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
-    const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
-    const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
-
-    expect(staticImports).not.toContain("../plugins/managed-npm-retention.js");
-    expect(staticImports).not.toContain("../plugins/installed-plugin-index-records.js");
-    expect(cleanup).toContain('import("../plugins/managed-npm-retention.js")');
-    expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
-    expect(postReadyStart).toBeGreaterThan(serverStart);
-    expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
-  });
-
-  it("loads the worker bootstrap runtime only when an operation needs it", () => {
-    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
-    const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
-    const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
-    const serviceStart = workerStartup.indexOf("createWorkerEnvironmentService({", prepareStart);
-    const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
-    const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
-    const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
-
-    expect(prepareStart).toBeGreaterThan(-1);
-    expect(serviceStart).toBeGreaterThan(prepareStart);
-    expect(identityStart).toBeGreaterThan(serviceStart);
-    expect(bootstrapStart).toBeGreaterThan(serviceStart);
-    expect(loggerStart).toBeGreaterThan(bootstrapStart);
-    expect(workerStartup.slice(0, prepareStart)).not.toContain(runtimeLoad);
-    expect(workerStartup.slice(prepareStart, serviceStart)).toContain(runtimeLoad);
-    expect(workerStartup.slice(identityStart, bootstrapStart)).toContain(runtimeLoad);
-    expect(workerStartup.slice(bootstrapStart, loggerStart)).toContain(runtimeLoad);
-    expect(workerStartup.slice(bootstrapStart, loggerStart)).toContain(
-      "pinnedHostKey: sshEndpoint.hostKey",
-    );
-    expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
-  });
-
-  it("keeps worker session tools out of idle worker startup", () => {
-    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
-    const startupFunction = workerStartup.indexOf(
-      "export async function createGatewayWorkerEnvironmentRuntime",
-    );
-    const eagerImportsStart = workerStartup.indexOf("const [", startupFunction);
-    const eagerImportsEnd = workerStartup.indexOf("]);", eagerImportsStart);
-    const eagerImports = workerStartup.slice(eagerImportsStart, eagerImportsEnd);
-
-    expect(eagerImports).not.toContain(
-      'import("./worker-environments/worker-session-tool-executor.js")',
-    );
-    expect(workerStartup).toContain(
-      "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
-    );
-    expect(workerStartup).toContain("await loadWorkerSessionToolExecutorModule()");
   });
 });

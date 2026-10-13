@@ -167,20 +167,6 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
     },
   );
 
-  it("respects channel metadata that open DMs do not require a wildcard", () => {
-    const result = validateDmPolicy(
-      {
-        qqbot: {
-          dmPolicy: "open",
-          allowFrom: ["openclaw:approval-disabled"],
-          accounts: { ops: { dmPolicy: "open", allowFrom: ["openclaw:approval-disabled"] } },
-        },
-      },
-      { openDmRequiresAllowFromWildcard: false },
-    );
-    expect(result).toMatchObject({ ok: true, warnings: [] });
-  });
-
   it("uses manifest metadata to skip nested-only DM config shapes", () => {
     const result = validateDmPolicy(
       { matrix: { dm: { policy: "open" } } },

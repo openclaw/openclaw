@@ -1,4 +1,3 @@
-/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -15,12 +14,12 @@ import {
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type LspSession = {
@@ -48,7 +47,6 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
-/** Materialized LSP tools plus session capabilities and cleanup handle. */
 type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
@@ -481,7 +479,14 @@ function createLspPositionTool(params: {
         },
         signal,
       );
-      return formatLspResult(params.session.serverName, params.method, result);
+      const text =
+        result !== null && result !== undefined
+          ? JSON.stringify(result, null, 2)
+          : `No ${params.method} result from ${params.session.serverName}`;
+      return {
+        content: [{ type: "text", text }],
+        details: { lspServer: params.session.serverName, lspMethod: params.method },
+      };
     },
   };
 }
@@ -510,21 +515,6 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
     .map((definition) => createLspPositionTool({ session, ...definition }));
 }
 
-function formatLspResult(
-  serverName: string,
-  method: string,
-  result: unknown,
-): AgentToolResult<unknown> {
-  const text =
-    result !== null && result !== undefined
-      ? JSON.stringify(result, null, 2)
-      : `No ${method} result from ${serverName}`;
-  return {
-    content: [{ type: "text", text }],
-    details: { lspServer: serverName, lspMethod: method },
-  };
-}
-
 export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -545,11 +535,7 @@ export async function createBundleLspToolRuntime(params: {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
-  );
+  const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
 

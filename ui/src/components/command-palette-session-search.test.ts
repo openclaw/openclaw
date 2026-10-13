@@ -107,6 +107,7 @@ describe("CommandPalette session search", () => {
         excludeSubagents: true,
         excludeCron: true,
         excludeSystem: true,
+        excludeDock: true,
       },
     });
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");

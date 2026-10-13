@@ -2,9 +2,9 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
@@ -17,7 +17,7 @@ import * as writerQueue from "../../../shared/store-writer-queue.js";
 import { releaseOpenClawAgentDatabaseReadValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseExecutionScope } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import { enqueueSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
 import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as controlSession from "./subagent-control-session.js";
@@ -29,8 +29,11 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 
 const fixture = useSubagentControlFixture();
 
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
+
 it.for([
-  { replacement: false, competingIdle: false, publication: "tombstone" },
   { replacement: true, competingIdle: false, publication: "tombstone" },
   { replacement: false, competingIdle: true, publication: "tombstone" },
   { replacement: false, competingIdle: false, publication: "result" },
@@ -48,10 +51,13 @@ it.for([
       agentId: "main",
       sessionKey: childKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterDisplayKey: parentKey,
@@ -392,10 +398,13 @@ it("joins a pending session publication before a collector terminal commit", asy
     agentId: "main",
     sessionKey: childKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,

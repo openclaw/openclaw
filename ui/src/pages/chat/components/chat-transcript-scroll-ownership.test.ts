@@ -5,7 +5,12 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import { handleChatScroll, handleChatScrollTakeover, lockChatScroll } from "../scroll.ts";
+import {
+  handleChatScroll,
+  handleChatScrollTakeover,
+  lockChatScroll,
+  scheduleCommittedChatScroll,
+} from "../scroll.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
@@ -26,103 +31,70 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
+function createPolicyTranscript(paneId: string) {
+  const policy = makeChatHost({ chatHasAutoScrolled: true });
+  const transcript = new ChatTranscriptController(
+    {
+      addController: vi.fn(),
+      removeController: vi.fn(),
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    },
+    () => paneId,
+    {
+      canFollowEnd: () => !policy.chatFollowLocked,
+      onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+    },
+  );
+  return { policy, transcript };
+}
+
 describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not follow a captured end anchor while end anchoring is suspended", () => {
+  it.each([
+    { name: "suspended following", suspended: true, steps: [[1200, 600, true]] },
+    { name: "same-range native movement", steps: [[1000, 592]] },
+    { name: "native movement after growth", steps: [[1100, 592, false]] },
+    { name: "cancelled reader anchor", cancelled: true, steps: [[1200, 600]] },
+    {
+      name: "native end clamp",
+      steps: [
+        [1000, 400],
+        [750, 350, false],
+        [950, 350],
+      ],
+    },
+  ] satisfies {
+    name: string;
+    suspended?: boolean;
+    cancelled?: boolean;
+    steps: [height: number, offset: number, resizeAnchor?: boolean][];
+  }[])("does not reacquire following after $name", ({ suspended, cancelled, steps }) => {
     const element = document.createElement("div");
+    let scrollHeight = 1000;
     Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { value: 400 },
+      scrollHeight: { get: () => scrollHeight },
     });
     element.scrollTop = 600;
     const anchor = new TranscriptEndAnchor();
     anchor.capture(element);
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1200 });
-    expect(anchor.isResizeAnchor(element)).toBe(true);
+    if (cancelled) {
+      anchor.clear();
+    }
     const follow = vi.fn();
-
-    anchor.reconcile(element, true, true, follow);
-
-    expect(follow).not.toHaveBeenCalled();
-  });
-
-  it("does not override native movement with an unchanged scroll range", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    element.scrollTop -= 8;
-    const follow = vi.fn();
-
-    anchor.reconcile(element, true, false, follow);
-
-    expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(592);
-  });
-
-  it("preserves native movement after row growth changes the scroll range", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1100 });
-    element.scrollTop -= 8;
-    const movedPosition = element.scrollTop;
-    const follow = vi.fn();
-
-    expect(anchor.isResizeAnchor(element)).toBe(false);
-    anchor.reconcile(element, true, false, follow);
-
-    expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(movedPosition);
-  });
-
-  it("does not reacquire following from a cancelled reader anchor", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    // Wheel/keyboard input can precede its native offset change and the Lit update.
-    anchor.clear();
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1200 });
-    const follow = vi.fn();
-    anchor.reconcile(element, true, false, follow);
-    expect(follow).not.toHaveBeenCalled();
-    expect(element.scrollTop).toBe(600);
-  });
-
-  it("does not treat a native end clamp as an observed follower", () => {
-    const element = document.createElement("div");
-    Object.defineProperties(element, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1000 },
-    });
-    element.scrollTop = 600;
-    const anchor = new TranscriptEndAnchor();
-    anchor.capture(element);
-    element.scrollTop = 400;
-    anchor.reconcile(element, true, false, vi.fn());
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 750 });
-    element.scrollTop = 350;
-    expect(anchor.isResizeAnchor(element)).toBe(false);
-    Object.defineProperty(element, "scrollHeight", { configurable: true, value: 950 });
-    const follow = vi.fn();
-    anchor.reconcile(element, true, false, follow);
-    expect(follow).not.toHaveBeenCalled();
+    for (const [height, offset, resizeAnchor] of steps) {
+      scrollHeight = height;
+      element.scrollTop = offset;
+      if (resizeAnchor !== undefined) {
+        expect(anchor.isResizeAnchor(element)).toBe(resizeAnchor);
+      }
+      anchor.reconcile(element, true, suspended ?? false, follow);
+      expect(follow).not.toHaveBeenCalled();
+      expect(element.scrollTop).toBe(offset);
+    }
   });
 
   it.each(["resize clamp", "native return"] as const)(
@@ -236,20 +208,7 @@ describe("chat transcript scroll ownership", () => {
     "preserves $intent ownership through composer $nativeResize and row growth",
     async ({ intent, nativeResize }) => {
       const flushFrames = stubAnimationFrames();
-      const policy = makeChatHost({ chatHasAutoScrolled: true });
-      const transcript = new ChatTranscriptController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
-        },
-        () => `footer-${intent}`,
-        {
-          canFollowEnd: () => !policy.chatFollowLocked,
-          onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-        },
-      );
+      const { policy, transcript } = createPolicyTranscript(`footer-${intent}`);
       const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
         kind: "content",
         key: `row:${index}`,
@@ -340,7 +299,74 @@ describe("chat transcript scroll ownership", () => {
       }
     },
   );
-  it("cancels the active native target when a remote input locks following", async () => {
+  it("preserves following through an upward end retarget and no-op until real reader input takes over", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { policy, transcript } = createPolicyTranscript("upward-end-retarget");
+    const { container } = await mountTestTranscript(
+      "upward-end-retarget",
+      Array.from({ length: 20 }, (_, index): TestContentRow => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      })),
+      transcript,
+    );
+    let scrollHeight = 2000;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = Math.min(options.top ?? container.scrollTop, scrollHeight - 600);
+      }
+    };
+    policy.chatScrollElement = () => container;
+    policy.chatScrollToEnd = (options) => transcript.scrollToEnd(options);
+    policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
+    policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
+    const onScroll = (event: Event) => handleChatScroll(policy, event);
+    container.addEventListener("scroll", onScroll);
+    try {
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+      }
+      transcript.scrollToEnd({ source: "auto" });
+      container.dispatchEvent(new Event("scroll"));
+      flushFrames();
+      expect(container.scrollTop).toBe(1400);
+
+      // Provisional rows retire before the next reply's measured range grows.
+      // Deliver the native offset only after both changes, as browsers can do.
+      scrollHeight = 1800;
+      transcript.scrollToEnd({ source: "auto" });
+      expect(container.scrollTop).toBe(1200);
+      transcript.scrollToEnd({ source: "auto" });
+      // Retiring the completed command does not represent reader input.
+      transcript.cancelScroll();
+      scrollHeight = 1920;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatFollowLocked).toBe(false);
+      scheduleCommittedChatScroll(policy);
+      flushFrames();
+      expect(container.scrollTop).toBe(1320);
+      container.dispatchEvent(new Event("scroll"));
+
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+      container.scrollTop -= 80;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatFollowLocked).toBe(true);
+      scrollHeight = 2040;
+      scheduleCommittedChatScroll(policy);
+      flushFrames();
+      expect(container.scrollTop).toBe(1240);
+    } finally {
+      container.removeEventListener("scroll", onScroll);
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("cancels the active native target when the reader locks following", async () => {
     const flushFrames = stubAnimationFrames();
     const policy = makeChatHost({ chatHasAutoScrolled: true });
     const transcript = new ChatTranscriptController(
@@ -355,7 +381,6 @@ describe("chat transcript scroll ownership", () => {
     );
     Object.assign(policy, {
       chatCancelScroll: () => transcript.cancelScroll(),
-      chatIsManualScroll: () => transcript.isManualScroll,
     });
     const content: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
       kind: "content",
@@ -393,7 +418,7 @@ describe("chat transcript scroll ownership", () => {
     try {
       transcript.scrollToEnd({ source: "auto", behavior: "auto" });
       container.dispatchEvent(new Event("scroll"));
-      lockChatScroll(policy, "remote-input");
+      lockChatScroll(policy);
       expect(policy.chatFollowLocked).toBe(true);
       const before = container.scrollTop;
       transcriptDomState.measuredRowHeight = 120;
@@ -482,7 +507,7 @@ describe("chat transcript scroll ownership", () => {
       expect(policy.chatFollowLocked).toBe(true);
       // A partial sizer commit lets TanStack retry the clamped adjustment as an absolute write.
       maxScrollTop += 16;
-      transcript.hostUpdated();
+      renderRows(rows);
       expect(container.scrollTop).toBe(maxScrollTop);
       // The dock can keep shrinking the scroll range before the native read-back arrives.
       maxScrollTop -= 8;

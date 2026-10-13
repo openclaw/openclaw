@@ -73,8 +73,18 @@ Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, an
 
 Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 `NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
-directory otherwise. Child processes reuse the same build namespace. Source
-checkouts keep their existing cache-disable policy.
+directory otherwise. Gateway workers and child processes reuse the same build
+namespace, including when running a built source checkout. The Gateway main
+thread stays uncached: Node's synchronous cache flush can stall its event loop
+at startup or shutdown. Workers retain their existing flush boundaries on their
+own threads. An inherited active cache requires a startup respawn; on platforms
+with `execve`, the serving process keeps its PID. Node permission mode retains
+an already-active caller cache because it can forbid process replacement.
+
+Short-lived CLI commands keep their existing policy: caching is opt-in through
+`NODE_COMPILE_CACHE`, and source CLI entrypoints remain uncached. Explicit release
+prewarming still populates the cache. `NODE_DISABLE_COMPILE_CACHE` disables caching
+for both the Gateway and its workers.
 
 Release builds use a stable 16-character hash of the build ID. On Windows,
 OpenClaw skips cache paths longer than 200 characters with a warning and disables
@@ -262,12 +272,12 @@ before login startup files run. Bash reads `/etc/profile` and the first availabl
 profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`). Many login profiles also source
 `~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
 failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
-The probe runs in its own session, detached from your terminal, so startup files get no job
+The check runs in its own session, detached from your terminal, so startup files get no job
 control and cannot take over the terminal that runs OpenClaw.
 This interactive Bash mode is limited to explicit shell env imports. Automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
 
-Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
+Successful checks are cached. If a check fails, the next shell environment or PATH lookup tries again.
 
 ## Exec shell snapshots
 
@@ -278,7 +288,7 @@ snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
 
-Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+Gateway port-listener diagnostics and lock-owner identity checks run native utilities with
 a limited environment containing executable paths, OS bootstrap and account directories,
 temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
 application tokens, proxies, runtime injection variables, or arbitrary application settings.

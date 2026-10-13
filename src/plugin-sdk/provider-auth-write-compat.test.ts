@@ -48,6 +48,16 @@ describe("provider auth write compatibility", () => {
     expectTypeOf<
       keyof Parameters<typeof upsertAuthProfileWithLockOrThrow>[0]
     >().toEqualTypeOf<ShippedFields>();
+    type ShippedUpdateFields =
+      | "agentDir"
+      | "profileId"
+      | "sharedStoreWrite"
+      | "stateDir"
+      | "saveOptions"
+      | "updater";
+    expectTypeOf<
+      keyof Parameters<typeof updateAuthProfileStoreWithLock>[0]
+    >().toEqualTypeOf<ShippedUpdateFields>();
     expectTypeOf<
       Parameters<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>
     >().toEqualTypeOf<[AuthProfileStore]>();
@@ -87,7 +97,12 @@ describe("provider auth write compatibility", () => {
       });
       return true;
     });
-    const updated = await updateAuthProfileStoreWithLock({ agentDir, updater });
+    const assertCurrent = vi.fn(() => {
+      throw new Error("Internal callback must not control plugin writes");
+    });
+    const params = { agentDir, updater, assertCurrent };
+    const updated = await updateAuthProfileStoreWithLock(params);
+    expect(assertCurrent).not.toHaveBeenCalled();
     expect(updater).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ version: 1, profiles: expect.any(Object) }),
     );

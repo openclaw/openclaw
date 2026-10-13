@@ -3,12 +3,79 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { encodeMemoryEmbedding } from "./embedding-vector.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("memory index schema", () => {
+  it.each(["fresh", "existing"])(
+    "uses the compound chunk index after opening a %s database and readmitting it",
+    (kind) => {
+      const databasePath = path.join(tempDirs.make("memory-schema-index-"), "memory.sqlite");
+      if (kind === "existing") {
+        using seed = openNodeSqliteDatabase(databasePath);
+        ensureMemoryIndexSchema({ db: seed, cacheEnabled: false, ftsEnabled: false });
+        seed.exec(`
+          CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path ON memory_index_chunks(path);
+          INSERT INTO memory_index_chunks
+            (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+          VALUES
+            ('a', 'shared.md', 'memory', 1, 1, 'a', 'model', 'alpha', X'', 1),
+            ('b', 'shared.md', 'sessions', 1, 1, 'b', 'model', 'beta', X'', 1),
+            ('c', 'other.md', 'memory', 1, 1, 'c', 'model', 'gamma', X'', 1);
+        `);
+      }
+      using db = new DatabaseSync(databasePath);
+      const pathQuery = "SELECT id FROM memory_index_chunks WHERE path = ? ORDER BY id";
+      const sourceQuery =
+        "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ? ORDER BY id";
+      const expectedPath = kind === "existing" ? [{ id: "a" }, { id: "b" }] : [];
+      const expectedSource = kind === "existing" ? [{ id: "a" }] : [];
+      if (kind === "existing") {
+        expect(db.prepare(pathQuery).all("shared.md")).toEqual(expectedPath);
+        expect(db.prepare(sourceQuery).all("shared.md", "memory")).toEqual(expectedSource);
+      }
+
+      for (let admission = 0; admission < 2; admission++) {
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+        expect(
+          db
+            .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_memory_index_chunks_path'")
+            .get(),
+        ).toBeUndefined();
+        expect(db.prepare(pathQuery).all("shared.md")).toEqual(expectedPath);
+        expect(db.prepare(sourceQuery).all("shared.md", "memory")).toEqual(expectedSource);
+        expect(db.prepare(`EXPLAIN QUERY PLAN ${pathQuery}`).all("shared.md")).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              detail: expect.stringContaining("INDEX idx_memory_index_chunks_path_source (path=?)"),
+            }),
+          ]),
+        );
+        expect(
+          db
+            .prepare(
+              "EXPLAIN QUERY PLAN DELETE FROM memory_index_chunks WHERE path = ? AND source = ?",
+            )
+            .all("shared.md", "memory"),
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              detail: expect.stringContaining(
+                "INDEX idx_memory_index_chunks_path_source (path=? AND source=?)",
+              ),
+            }),
+          ]),
+        );
+      }
+    },
+  );
+
   it("migrates unreleased inline recall metadata without changing chunk rows", () => {
     const db = new DatabaseSync(":memory:");
     try {

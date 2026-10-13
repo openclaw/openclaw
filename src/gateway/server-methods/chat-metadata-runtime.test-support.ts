@@ -153,8 +153,6 @@ export function createChatMetadataOwner(
 export function createChatMetadataHarness(
   initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } },
   runtimeOptions: {
-    beforeRefresh?: () => Promise<void>;
-    refreshOnRead?: boolean;
     useDefaultProjection?: boolean;
     onChanged?: () => void;
   } = {},

@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -353,17 +354,20 @@ test("a server cleanup error does not skip session directory or environment clea
   const homeBefore = process.env.HOME;
   const failure = new Error("injected server cleanup failure");
   let restoreClose: (() => void) | undefined;
-  const databases: ReturnType<typeof openOpenClawAgentDatabase>[] = [];
+  let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+  let memoryOwner: ReturnType<typeof memorySessionActorOwners.get> | undefined;
   try {
     await setup(fixture);
     const home = process.env.HOME!;
     const { dir } = await fixtureApi.createSessionStoreDir();
-    for (const databasePath of [
-      path.join(dir, "openclaw-agent.sqlite"),
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    ]) {
-      databases.push(openOpenClawAgentDatabase({ agentId: "main", path: databasePath }));
-    }
+    database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(dir, "openclaw-agent.sqlite"),
+    });
+    memoryOwner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
     const server = fixtureApi.getHarness();
     const closeServer = server.close;
     const close = vi.spyOn(server, "close").mockImplementation(async () => {
@@ -372,14 +376,19 @@ test("a server cleanup error does not skip session directory or environment clea
     });
     restoreClose = () => close.mockRestore();
     await expect(cleanup(fixture)).rejects.toBe(failure);
-    expect(databases.map(({ db }) => db.isOpen)).toEqual([false, false]);
+    expect(database.db.isOpen).toBe(false);
+    expect(memorySessionActorOwners.read(memoryOwner)).toBeUndefined();
+    expect(memoryOwner.assertCurrent).toThrow("closed");
     expect(fsSync.existsSync(dir)).toBe(false);
     expect(fsSync.existsSync(home)).toBe(false);
     expect(process.env.HOME).toBe(homeBefore);
   } finally {
     restoreClose?.();
-    for (const database of databases) {
+    if (database) {
       closeOpenClawAgentDatabaseByPath(database.path);
+    }
+    if (memoryOwner) {
+      memorySessionActorOwners.closeDatabase(memoryOwner);
     }
     await emergencyCleanup(fixture);
   }

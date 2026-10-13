@@ -9,10 +9,8 @@ import {
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
-import {
-  prepareReplyToolAuthority,
-  resolveFollowupRunToolAuthorityFingerprint,
-} from "../../auto-reply/reply/reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { resolveFollowupRunToolAuthorityFingerprintAsync } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -196,13 +194,13 @@ describe("host-prepared embedded tool authority", () => {
           clientCaps: ["ui-commands"],
           gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
         };
-        let pending: ReturnType<typeof beginReplyMessageInjectionTarget> | undefined;
+        let pending: Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>> | undefined;
         try {
           const restricted = { ...handle, supportsCrossProfileSteering: false };
           setActiveEmbeddedRun(sessionId, restricted, sessionKey, attempt.sessionFile);
           const restrictedTarget =
             replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
-          pending = beginReplyMessageInjectionTarget(restrictedTarget, "Change my view", {
+          pending = await beginReplyMessageInjectionTarget(restrictedTarget, "Change my view", {
             isInboundUserMessage: true,
             toolAuthorityOverlay: incoming,
           });
@@ -221,7 +219,7 @@ describe("host-prepared embedded tool authority", () => {
           if (!target) {
             throw new Error("Expected the direct admitted owner to be injectable");
           }
-          pending = beginReplyMessageInjectionTarget(target, "Change my view", {
+          pending = await beginReplyMessageInjectionTarget(target, "Change my view", {
             isInboundUserMessage: true,
             toolAuthorityOverlay: incoming,
           });
@@ -300,17 +298,16 @@ describe("host-prepared embedded tool authority", () => {
       if (!target) {
         throw new Error("Expected the direct admitted owner to be injectable");
       }
-      await expect(
-        beginReplyMessageInjectionTarget(target, "Apply the correction", {
-          isInboundUserMessage: true,
-          inboundAudio: change === "audio",
-          toolAuthorityOverlay: {
-            ...own,
-            traceAuthorized: true,
-            disableTools: change === "permissions",
-          },
-        }).outcome,
-      ).resolves.toMatchObject(outcome);
+      const injection = await beginReplyMessageInjectionTarget(target, "Apply the correction", {
+        isInboundUserMessage: true,
+        inboundAudio: change === "audio",
+        toolAuthorityOverlay: {
+          ...own,
+          traceAuthorized: true,
+          disableTools: change === "permissions",
+        },
+      });
+      await expect(injection.outcome).resolves.toMatchObject(outcome);
       expect(queue).toHaveBeenCalledTimes(change === "trace-only" ? 1 : 0);
     });
   });
@@ -337,7 +334,7 @@ describe("host-prepared embedded tool authority", () => {
         if (!target) {
           throw new Error("Expected the direct admitted owner to be injectable");
         }
-        const pending = beginReplyMessageInjectionTarget(target, "Apply the correction", {
+        const pending = await beginReplyMessageInjectionTarget(target, "Apply the correction", {
           isInboundUserMessage: true,
           toolAuthorityOverlay: own,
           assertCurrent: () => {},
@@ -670,14 +667,16 @@ describe("host-prepared embedded tool authority", () => {
       await published(
         async ({ handle, queue }) => {
           if (handleChange === "hash") {
-            handle.toolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint({
-              toolsAllow: [],
-              run: {
-                ...attempt,
-                model: attempt.modelId,
-                runtimePolicySessionKey: attempt.sandboxSessionKey,
+            handle.toolAuthorityFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(
+              {
+                toolsAllow: [],
+                run: {
+                  ...attempt,
+                  model: attempt.modelId,
+                  runtimePolicySessionKey: attempt.sandboxSessionKey,
+                },
               },
-            });
+            );
           } else if (handleChange === "unbound") {
             withoutGatewayToolCallerIdentity(() =>
               setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey),
@@ -704,7 +703,7 @@ describe("host-prepared embedded tool authority", () => {
         sandboxSessionKey: "agent:main:voice",
         config: { agents: { defaults: { sandbox: { mode: "non-main" as const } } } },
       };
-      const expected = resolveFollowupRunToolAuthorityFingerprint({
+      const expected = await resolveFollowupRunToolAuthorityFingerprintAsync({
         run: {
           ...attempt,
           config: direct.config,
@@ -719,7 +718,7 @@ describe("host-prepared embedded tool authority", () => {
         async (prepared) => {
           expect(prepared.toolAuthorityFingerprint).toBe(expected);
           expect(prepared.toolAuthorityFingerprint).not.toBe(
-            resolveFollowupRunToolAuthorityFingerprint({
+            await resolveFollowupRunToolAuthorityFingerprintAsync({
               run: {
                 ...attempt,
                 config: direct.config,
@@ -881,7 +880,7 @@ describe("host-prepared embedded tool authority", () => {
       const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
       const parent = createQueueTestRun({ prompt: "parent reply" });
       parent.run.traceAuthorized = true;
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(parent));
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(parent));
       try {
         await withPreparedEmbeddedRunToolAuthority(
           { admittedRunContext, replyOperation: operation },
@@ -918,13 +917,19 @@ describe("host-prepared embedded tool authority", () => {
         const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
         const snapshot = prepareReplyToolAuthority(original);
         let failProjection = false;
-        operation.bindToolAuthoritySnapshot({
+        await operation.bindToolAuthoritySnapshotAsync({
           ...snapshot,
           project: (overlay, selectedRoute) => {
             if (failProjection) {
               throw new Error("projection failed");
             }
             return snapshot.project(overlay, selectedRoute);
+          },
+          projectAsync: async (overlay, selectedRoute) => {
+            if (failProjection) {
+              throw new Error("projection failed");
+            }
+            return snapshot.projectAsync(overlay, selectedRoute);
           },
         });
         const initialRoute =

@@ -1,9 +1,9 @@
 ---
-summary: "Routine local test order, the core test commands, and the local PR gate"
+summary: "Focused local proof, core test commands, and optional full local runs"
 title: "Run tests locally"
 read_when:
   - You are running or fixing tests on your own machine
-  - You need the local land and gate command list
+  - You need focused local proof or an explicitly needed full local run
 ---
 
 ## Routine local order
@@ -107,6 +107,11 @@ actual Vitest process and workers while retaining Node for orchestration and
 compiler preparation. Source-runner CLI fixtures also use the selected runtime
 after Node completes build preparation. This does not use Bun's native test runner.
 `bun run` alone does not select Bun for tests. Node remains the local default.
+On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
+Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
+For an x64 Bun under Rosetta, build the pinned library with
+`scripts/build-mac-sqlite.sh universal <dir>` and set
+`OPENCLAW_SQLITE_LIBRARY=<dir>/lib/libsqlite3.dylib`.
 
 For the CI Control UI comparison, run the full selection on Node followed by Bun:
 
@@ -250,11 +255,6 @@ session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
 
-Native Bash output-lifecycle fixtures also prepare the real tool and executor
-roots in this generation. Each scenario still uses a fresh process and real
-shell, pipe, and spill file; its unchanged child deadline covers prepared
-JavaScript startup and output handling instead of repeated TypeScript compilation.
-
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
 Known core database-worker consumers prepare the invocation's compiled generation
@@ -349,9 +349,15 @@ Tests that discover real bundled provider runtimes declare that prerequisite in
 `scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
 selection. Local runners and CI prepare those artifacts before admitting workers.
 
-## Local PR gate
+<a id="local-pr-gate" />
 
-For local PR land/gate checks, run:
+## Full local run (only when explicitly needed)
+
+PR CI is the broad gate. Before opening a ready PR, run focused tests for touched
+code and targeted typecheck, lint, and format checks. Do not run the full local
+suite to diagnose a failed PR CI run; use `pnpm test:ci-failed <pr>` instead.
+
+The full local commands remain available for an explicitly needed investigation:
 
 - `pnpm check:changed`
 - `pnpm check`
@@ -366,7 +372,14 @@ their candidate's fork from the captured main snapshot, so inherited main
 changes retain their allowance even when the shared `origin/main` ref is stale.
 Other check stages still run normally.
 
-If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
+If an explicitly requested full local run fails, isolate the failed tests with
+`pnpm test <path/to/test>` and investigate the owner; a passing replay does not
+prove a repair. For a PR CI failure, read its published classification, fix new
+failures, run `pnpm test:ci-failed <pr> --run` until those pass locally, then push
+once. Pre-existing failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
+Never rerun CI just to chase green. For memory-constrained hosts explicitly
+running the full local suite:
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`

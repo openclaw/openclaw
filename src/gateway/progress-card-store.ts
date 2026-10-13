@@ -1,4 +1,7 @@
-import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
+import {
+  getSessionActorStorageBinding,
+  withSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
@@ -10,17 +13,15 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
+import type { ProgressCardStore } from "../session-cards/progress-card-store.types.js";
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
-} from "../state/openclaw-agent-db.js";
+import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import {
@@ -33,32 +34,44 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { captureGatewaySessionStoreScope } from "./board-store.js";
 
-export type ProgressCardStore = {
-  get(sessionKey: string, agentId?: string): Promise<ProgressCard | null>;
-  put(
-    sessionKey: string,
-    input: {
-      markdown?: string;
-      steps?: ProgressCardStep[];
-      expectedRevision?: number;
-      // The storage owner checks authority inside its write transaction.
-      assertCurrent?: () => void;
-    },
-    agentId?: string,
-  ): Promise<{ card: ProgressCard | null }>;
-};
+function captureProgressCardTarget(
+  sessionKey: string,
+  agentId?: string,
+  assertCallerCurrent?: () => void,
+) {
+  const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+  };
+  return { scope, assertCurrent };
+}
 
 export const progressCardStore: ProgressCardStore = {
-  async get(sessionKey, agentId) {
+  async get(
+    sessionKey: string,
+    agentId?: string,
+  ): Promise<ReturnType<typeof readSessionProgressCard>> {
+    const selected = getSessionActorStorageBinding({});
+    if (
+      selected?.actor.target.sessionKey === sessionKey &&
+      (!agentId || agentId === selected.agentId)
+    ) {
+      return createSessionActorProgressCardStore(() => selected).get(sessionKey, agentId);
+    }
     const env = captureSessionTranscriptStorageEnvironment(process.env);
-    const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
-    const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath);
-    if (isIncognitoOpenClawAgentSqlitePath(unsuffixed.path, { agentId: scope.agentId, env })) {
-      const result = withOpenClawAgentDatabaseReadOnly(
-        (database) => readSessionProgressCard(database.db, scope.sessionKey),
-        { agentId: scope.agentId, path: unsuffixed.path, env },
+    const { scope, assertCurrent } = captureProgressCardTarget(sessionKey, agentId);
+    if (isIncognitoSessionKey(scope.sessionKey)) {
+      return (
+        (await withSessionActorStorage(
+          { ...scope, env },
+          {
+            lifetime: { assertCurrent, assertReadable: assertCurrent },
+            authority: { assertCurrent, authorize: assertCurrent },
+          },
+          (binding) =>
+            createSessionActorProgressCardStore(() => binding).get(scope.sessionKey, scope.agentId),
+        )) ?? null
       );
-      return result.found ? result.value : null;
     }
     const target = await prepareSqliteTargetFromSessionStorePath(scope.storePath, {
       agentId: scope.agentId,
@@ -69,50 +82,53 @@ export const progressCardStore: ProgressCardStore = {
       (owner) => owner.readProgressCard({ sessionKey: scope.sessionKey, env }),
     );
   },
-  async put(sessionKey, input, agentId) {
-    const resolved = captureGatewaySessionStoreScope(sessionKey, agentId);
-    const env = captureSessionTranscriptStorageEnvironment(process.env);
+  async put(
+    sessionKey: string,
+    input: Parameters<typeof writeSessionProgressCard>[2] & {
+      // The storage owner checks authority inside its write transaction.
+      assertCurrent?: () => void;
+    },
+    agentId?: string,
+  ): Promise<{ card: ReturnType<typeof readSessionProgressCard> }> {
+    const selected = getSessionActorStorageBinding({});
+    if (
+      selected?.actor.target.sessionKey === sessionKey &&
+      (!agentId || agentId === selected.agentId)
+    ) {
+      return createSessionActorProgressCardStore(() => selected).put(sessionKey, input, agentId);
+    }
     const capturedInput = structuredClone({
       markdown: input.markdown,
       steps: input.steps,
       expectedRevision: input.expectedRevision,
     });
-    const assertCurrent = () => {
-      input.assertCurrent?.();
-      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
-      if (
-        current.agentId !== resolved.agentId ||
-        current.storePath !== resolved.storePath ||
-        current.sessionKey !== resolved.sessionKey
-      ) {
-        throw new Error("progress-card session changed; retry");
+    const { scope: resolved, assertCurrent } = captureProgressCardTarget(
+      sessionKey,
+      agentId,
+      input.assertCurrent,
+    );
+    const env = captureSessionTranscriptStorageEnvironment(process.env);
+    if (isIncognitoSessionKey(resolved.sessionKey)) {
+      const result = await withSessionActorStorage(
+        { ...resolved, env },
+        {
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          authority: { assertCurrent, authorize: assertCurrent },
+        },
+        (binding) =>
+          createSessionActorProgressCardStore(() => binding).put(
+            resolved.sessionKey,
+            { ...capturedInput, assertCurrent },
+            resolved.agentId,
+          ),
+      );
+      if (!result) {
+        throw new IncognitoSessionMissingError();
       }
-    };
+      return result;
+    }
     assertCurrent();
     const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(resolved.storePath);
-    if (isIncognitoOpenClawAgentSqlitePath(unsuffixed.path, { agentId: resolved.agentId, env })) {
-      // Process-held incognito storage cannot be reopened by the durable writer.
-      const databaseOptions = { agentId: resolved.agentId, path: unsuffixed.path, env };
-      const result = await runOpenClawAgentWriteAdmission(
-        databaseOptions,
-        () =>
-          withOpenClawAgentDatabaseAsync(
-            databaseOptions,
-            () =>
-              runOpenClawAgentWriteTransaction(
-                (database) => {
-                  assertCurrent();
-                  return writeSessionProgressCard(database.db, resolved.sessionKey, capturedInput);
-                },
-                databaseOptions,
-                { operationLabel: "progress-card.put" },
-              ),
-            assertCurrent,
-          ),
-        true,
-      );
-      return "card" in result ? result : { card: null };
-    }
     const candidates = captureSessionStoreReadCandidates(resolved.storePath);
     const identities = new Map(
       candidates

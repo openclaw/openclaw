@@ -28,6 +28,33 @@ function admittedTools(skills: InstalledSkill[]) {
   return { search: expectDefined(tools[0], "search"), read: expectDefined(tools[1], "read") };
 }
 
+it.each([
+  "/skills/guide/SKILL.md",
+  "workspace-skill://workspace/guide/SKILL.md",
+  "C:\\skills\\guide\\SKILL.md",
+  "\\\\server\\skills\\guide\\SKILL.md",
+])("preserves the visible resource location on an exact-name read: %s", async (location) => {
+  const body = "# Guide\n\nRead references/workflow.md before continuing.\n";
+  const { read } = admittedTools([
+    skill({
+      location,
+      source: { filePath: "/private/gateway/guide/SKILL.md", readContent: body },
+    }),
+  ]);
+  const result = await read.execute("known-name", { name: "guide" });
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text:
+        `Skill location: ${location}\n` +
+        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+        body,
+    },
+  ]);
+  expect(result.details).toMatchObject({ name: "guide", location, content: body });
+  expect(JSON.stringify(result)).not.toContain("/private/gateway");
+});
+
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
   await withTempDir("installed-skill-authority-", async (dir) => {
     const filePath = path.join(dir, "SKILL.md");
@@ -149,13 +176,19 @@ it.each(["inline", "reader", "partial"] as const)(
         expect(reader).toHaveBeenCalledTimes(1);
       } else {
         await expect(read.execute("invalid", { name: "/etc/passwd" })).rejects.toThrow(
-          "Unknown installed skill",
+          "is not available to this agent",
         );
         expect(createInstalledSkillTools([])).toEqual([]);
       }
     }
     expect((await read.execute("load", { name: entry.name })).content).toEqual([
-      { type: "text", text: content },
+      {
+        type: "text",
+        text:
+          `Skill location: ${entry.location}\n` +
+          "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+          content,
+      },
     ]);
   },
 );

@@ -1,12 +1,7 @@
-export type TerminalSessionSummary = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  title?: string;
-  cwd: string;
-  attached: boolean;
+import type { TerminalSessionInfo } from "../../../packages/gateway-protocol/src/schema/terminal.js";
+
+export type TerminalSessionSummary = Omit<TerminalSessionInfo, "confined" | "owner"> & {
   owner: "conn" | `agent:${string}`;
-  createdAtMs: number;
 };
 
 export type TerminalAttachSummary = Omit<TerminalSessionSummary, "attached" | "createdAtMs"> & {

@@ -1,27 +1,27 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway.ts";
+import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { changedServerUiPrefs, selectThemeSettings } from "./server-prefs-intent.ts";
-import { extractServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
+import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import {
+  applyServerUiPrefs,
+  refreshProfileAppearancePrefs,
+  resolveServerUiPrefState,
+  extractServerUiPrefs,
+} from "./server-prefs-reconcile.ts";
+import type { SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
-import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  pushServerUiPrefs,
-  refreshProfileAppearancePrefs,
-  resetServerUiPref,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const profileId = "profile-ada";
@@ -53,6 +53,31 @@ afterEach(() => {
 });
 
 describe("profile-bound appearance preferences", () => {
+  it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
+    patchSettings({ sidebarEntries: ["route:usage"] });
+    let published = loadSettings();
+    const onApplied = vi.fn(() => {
+      published = loadSettings();
+    });
+    const request = vi.fn(async (_method: string) => ({
+      status: "ok",
+      entries: {
+        "ui.sidebarEntries": [
+          "route:usage",
+          "route:cron",
+          "plugin:workboard/workboard",
+          "session:agent:main:legacy",
+        ],
+      },
+    }));
+    await refreshProfileAppearancePrefs(
+      readOptions(createWriter(request), {}, profileId, onApplied),
+    );
+    expect(onApplied).toHaveBeenCalledOnce();
+    expect(published.sidebarEntries).toEqual([]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
+  });
+
   it("preserves imported definitions and only resets design overrides when activation changes", () => {
     const customTheme = createImportedCustomThemeFixture();
     patchSettings({
@@ -80,25 +105,6 @@ describe("profile-bound appearance preferences", () => {
     });
   });
 
-  it("keeps a profile-bound custom theme selection in this browser only", async () => {
-    const request = vi.fn(async () => ({ status: "ok" as const }));
-    const writer = createWriter(request, false);
-    const afterCommit = vi.fn();
-
-    pushServerUiPrefs(
-      writer,
-      { theme: "custom", accent: "#123456" },
-      { profileId, canWrite: true, afterCommit },
-    );
-
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.set", {
-        entries: { "ui.accent": "#123456" },
-      }),
-    );
-    expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: false, retainedLocal: true });
-  });
-
   it("normalizes profile overrides above config while rejecting malformed stored values", async () => {
     const config = configWithPrefs({
       theme: "claw",
@@ -115,6 +121,7 @@ describe("profile-bound appearance preferences", () => {
         "ui.accent": "#AbC123",
         "ui.fontUi": "geist",
         "ui.fontChat": { family: "lora" },
+        "ui.tabIcon": { mode: "agent" },
       },
     }));
     const writer = createWriter(request);
@@ -123,15 +130,17 @@ describe("profile-bound appearance preferences", () => {
     await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: ["ui.theme", "ui.themeMode", "ui.accent", "ui.fontUi", "ui.fontChat"],
+      keys: [...Object.values(UI_APPEARANCE_PREFERENCE_KEYS), "ui.railShortcuts"],
     });
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
       themeMode: "dark",
       accent: "#abc123",
       fontUi: "geist",
+      sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     });
     expect(loadSettings().fontChat).toBeUndefined();
+    expect(loadSettings().tabIcon).toBeUndefined();
     expect(extractServerUiPrefs(config)).toEqual({
       theme: "claw",
       themeMode: "dark",
@@ -153,42 +162,33 @@ describe("profile-bound appearance preferences", () => {
     expect(profileState(config, "themeMode", loadSettings()).provenance).toBe("synced");
   });
 
-  it.each(["empty", "unavailable"] as const)(
-    "retains the boot mirror while the profile is unresolved, then handles %s",
-    async (outcome) => {
-      const config = configWithPrefs({
-        theme: "absolutely",
-        themeMode: "light",
-        chatShowThinking: false,
-      });
-      const mirror = { theme: "rose" as const, themeMode: "dark" as const, accent: "#123456" };
-      patchSettings(mirror);
-      const lastSeenKey = `openclaw.control.serverPrefs.v1:${scope}:profile:${profileId}`;
-      localStorage.setItem(lastSeenKey, JSON.stringify(mirror));
-      const { promise, resolve } = createDeferred<unknown>();
-      const request = vi.fn(() => promise);
-      const writer = createWriter(request);
-      const options = readOptions(writer, config);
+  it("retains the boot mirror while the profile is unresolved and unavailable", async () => {
+    const config = configWithPrefs({
+      theme: "absolutely",
+      themeMode: "light",
+      chatShowThinking: false,
+    });
+    const mirror = { theme: "rose" as const, themeMode: "dark" as const, accent: "#123456" };
+    patchSettings(mirror);
+    const lastSeenKey = `openclaw.control.serverPrefs.v1:${scope}:profile:${profileId}`;
+    localStorage.setItem(lastSeenKey, JSON.stringify(mirror));
+    const { promise, resolve } = createDeferred<unknown>();
+    const request = vi.fn(() => promise);
+    const writer = createWriter(request);
+    const options = readOptions(writer, config);
 
-      applyServerUiPrefs(config, options);
-      const refresh = refreshProfileAppearancePrefs(options);
+    applyServerUiPrefs(config, options);
+    const refresh = refreshProfileAppearancePrefs(options);
 
-      expect(loadSettings()).toMatchObject({ ...mirror, chatShowThinking: false });
-      expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toEqual({
-        ...mirror,
-        chatShowThinking: false,
-      });
-      resolve(
-        outcome === "unavailable" ? { status: "unavailable" } : { status: "ok", entries: {} },
-      );
-      await refresh;
-      expect(loadSettings()).toMatchObject(
-        outcome === "empty"
-          ? { theme: "absolutely", themeMode: "light", accent: undefined, chatShowThinking: false }
-          : { ...mirror, chatShowThinking: false },
-      );
-    },
-  );
+    expect(loadSettings()).toMatchObject({ ...mirror, chatShowThinking: false });
+    expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toEqual({
+      ...mirror,
+      chatShowThinking: false,
+    });
+    resolve({ status: "unavailable" });
+    await refresh;
+    expect(loadSettings()).toMatchObject({ ...mirror, chatShowThinking: false });
+  });
 
   it.each([
     ["theme", "rose", "absolutely"],
@@ -389,46 +389,39 @@ describe("profile-bound appearance preferences", () => {
     ).toMatchObject({ provenance: "device-local", value: "knot" });
   });
 
-  it("targets reset at the gateway value so an explicit product-default choice persists", async () => {
-    const config = configWithPrefs({ theme: "dash" });
-    const request = vi.fn(async (method: string) =>
-      method === "users.prefs.get"
-        ? { status: "ok" as const, entries: {} }
-        : { status: "ok" as const },
-    );
-    const writer = createWriter(request, false);
-    await refreshProfileAppearancePrefs(readOptions(writer, config));
-
-    const state = profileState(config, "theme", loadSettings());
-    expect(state).toMatchObject({ provenance: "synced", resetValue: "dash", value: "dash" });
-
-    patchSettings({ theme: "claw" });
-    pushServerUiPrefs(writer, { theme: "claw" }, { profileId, canWrite: true });
-    await waitForFast(() =>
-      expect(request).toHaveBeenLastCalledWith("themes.set", {
-        id: "claw",
-      }),
-    );
-
-    const reset = resetServerUiPref("theme", state, scope, profileId);
-    expect(reset.theme).toBe("dash");
-  });
-
-  it("restores profile appearance after reloading during a pending identity switch", async () => {
-    const config = configWithPrefs({});
+  it("restores profile appearance across identity switches and a reload during a pending switch", async () => {
+    const tabIcon = "agent";
+    const config = configWithPrefs({ tabIcon: "default" });
     let activeProfile = "profile-b";
     const request = vi.fn(async () => ({
       status: "ok",
       entries:
         activeProfile === "profile-b"
           ? { "ui.theme": "knot" }
-          : { "ui.theme": "rose", "ui.accent": "#123456", "ui.fontUi": "geist" },
+          : {
+              "ui.theme": "rose",
+              "ui.accent": "#123456",
+              "ui.fontUi": "geist",
+              "ui.tabIcon": tabIcon,
+            },
     }));
     const writer = createWriter(request);
     const options = (selectedProfileId: string) => readOptions(writer, config, selectedProfileId);
     await refreshProfileAppearancePrefs(options(activeProfile));
-    activeProfile = "profile-a";
-    await refreshProfileAppearancePrefs(options(activeProfile));
+    for (activeProfile of ["profile-a", "profile-b", "profile-a"]) {
+      await refreshProfileAppearancePrefs(options(activeProfile));
+      const expectedIcon = activeProfile === "profile-a" ? tabIcon : undefined;
+      expect(loadSettings().tabIcon).toBe(expectedIcon);
+      expect(
+        resolveServerUiPrefState(config, "tabIcon", scope, loadSettings(), {
+          profileId: activeProfile,
+        }),
+      ).toMatchObject({
+        provenance: expectedIcon ? "profile" : "default",
+        value: expectedIcon,
+        resetValue: undefined,
+      });
+    }
     expect(loadSettings().theme).toBe("rose");
     activeProfile = "profile-b";
     applyServerUiPrefs(config, options(activeProfile));
@@ -437,6 +430,78 @@ describe("profile-bound appearance preferences", () => {
 
     await refreshProfileAppearancePrefs(options(activeProfile));
 
-    expect(loadSettings()).toMatchObject({ theme: "knot", accent: undefined, fontUi: undefined });
+    expect(loadSettings()).toMatchObject({
+      theme: "knot",
+      accent: undefined,
+      fontUi: undefined,
+      tabIcon: undefined,
+    });
   });
 });
+
+it.each([false, true])(
+  "keeps mixed profile appearance edits in one mutation (rejected=%s)",
+  async (rejected) => {
+    const entries = {
+      "ui.theme": "knot",
+      "ui.accent": "#123456",
+      "ui.fontUi": "geist",
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "users.prefs.get") {
+        return { status: "ok", entries };
+      }
+      if (rejected) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Theme is no longer available.",
+        });
+      }
+      return { application: "saved" };
+    });
+    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+    const config = configWithPrefs({ theme: "claw" });
+    const profileRead = {
+      client: writer.state.client!,
+      profileId,
+      configObject: config,
+      scope,
+      onApplied: vi.fn(),
+    };
+    await refreshProfileAppearancePrefs(profileRead);
+    request.mockClear();
+
+    const local = {
+      theme: "space-pack/xenovessel",
+      themeMode: "dark",
+      accent: "#654321",
+      fontUi: undefined,
+      fontChat: "lora",
+    } as const;
+    patchSettings(local);
+    const afterCommit = vi.fn();
+    pushServerUiPrefs(
+      writer,
+      { ...local, fontUi: null },
+      { profileId, canWrite: true, afterCommit },
+    );
+    await waitForFast(() => expect(afterCommit).toHaveBeenCalledOnce());
+
+    expect(request).toHaveBeenCalledExactlyOnceWith("themes.set", {
+      id: "space-pack/xenovessel",
+      mode: "dark",
+      appearance: { accent: "#654321", fontUi: null, fontChat: "lora" },
+    });
+    expect(afterCommit).toHaveBeenCalledWith(
+      rejected ? { needsRefresh: false, retainedLocal: true } : { needsRefresh: false },
+    );
+    expect(loadSettings()).toMatchObject(local);
+    if (rejected) {
+      await refreshProfileAppearancePrefs(profileRead);
+      expect(loadSettings()).toMatchObject(local);
+    }
+    expect(
+      resolveServerUiPrefState(config, "theme", scope, loadSettings(), { profileId }),
+    ).toMatchObject({ provenance: rejected ? "device-local" : "profile", value: local.theme });
+  },
+);

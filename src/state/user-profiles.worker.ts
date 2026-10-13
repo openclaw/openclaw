@@ -11,19 +11,20 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
+import { personalCredentialPublication } from "./user-model-account-authority.js";
 import {
   connectUserModelAccount,
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
-  readUserModelAccountSummary,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
+  selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync, readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -65,19 +66,25 @@ function accountWrite<Input extends { profileId: string }, Output>(
   ) => {
     const database = open();
     const facts = { kind: "model-account-links", profileId: input.profileId };
-    return write(input, { ...stateOptions(), database }, (stage) => {
-      const roles = (input.authorityProfileIds ?? []).map((profileId) => {
-        const profile = selectResolvedUserProfileById(database.db, profileId);
-        if (!profile || profile.id !== profileId || profile.merged_into) {
-          throw new ModelAccountConnectAuthorityError();
+    return personalCredentialPublication.capture(database.db, () =>
+      write(input, { ...stateOptions(), database }, (stage) => {
+        const roles = (input.authorityProfileIds ?? []).map((profileId) => {
+          const profile = selectResolvedUserProfileById(database.db, profileId);
+          if (!profile || profile.id !== profileId || profile.merged_into) {
+            throw new ModelAccountConnectAuthorityError();
+          }
+          return { profileId, role: profile.role ?? null };
+        });
+        requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
+        if (stage === "commit") {
+          deferSqliteWorkerCommitReceipt(database.db, {
+            ...facts,
+            personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+              .receipt,
+          });
         }
-        return { profileId, role: profile.role ?? null };
-      });
-      requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
-      if (stage === "commit") {
-        deferSqliteWorkerCommitReceipt(database.db, facts);
-      }
-    });
+      }),
+    ).result;
   };
 }
 
@@ -149,6 +156,8 @@ export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWrit
 
 export const userProfileOperations = {
   ...userProfileWriteOperations,
+  "userProfiles.roleAuthority.resolve": ({ profileId }: { profileId: string }, { open }) =>
+    selectUserProfileRoleAuthority(open().db, profileId),
   "userProfiles.modelAccount.connect": accountWrite(
     (
       input: Omit<
@@ -181,10 +190,6 @@ export const userProfileOperations = {
     input: Parameters<typeof listUserModelAccounts>[0],
     { stateOptions },
   ) => listUserModelAccounts(input, stateOptions()),
-  "userProfiles.modelAccount.summary": (
-    input: Parameters<typeof readUserModelAccountSummary>[0],
-    { stateOptions },
-  ) => readUserModelAccountSummary(input, stateOptions()),
   "userProfiles.modelAccount.selected": (
     input: { profileId: string; provider: string },
     { stateOptions },
@@ -194,9 +199,7 @@ export const userProfileOperations = {
     { open, stateOptions },
   ) => {
     const options = { ...stateOptions(), database: open() };
-    return input?.githubAccountIds === undefined
-      ? { profiles: listUserProfilesSync(options) }
-      : readUserProfileSnapshotSync(options, input.githubAccountIds);
+    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
   },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
@@ -268,6 +271,7 @@ export const userProfileOperations = {
             .where("id", "=", profile.id),
         );
         const committed = selectProfileAccessEntries(db, [profile.id])[0]![1];
+        deferSqliteWorkerCommitReceipt(db, committed);
         return {
           profile: toUserProfile({ ...profile, avatar_mime: input.mime, updated_at: input.now }),
           committed,

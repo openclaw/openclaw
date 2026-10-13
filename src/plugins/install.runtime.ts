@@ -17,7 +17,6 @@ export {
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
 export { readJson as readJsonFile } from "../infra/json-files.js";
-export { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 export { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 export { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 export {

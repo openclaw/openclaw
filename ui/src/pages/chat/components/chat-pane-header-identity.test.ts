@@ -62,6 +62,23 @@ describe("chat pane header identity links", () => {
     expect(navigate).toHaveBeenCalledWith("ada", "Ada King");
   });
 
+  it("retains the rename control and focus while header facts and callbacks update", () => {
+    const previousRename = vi.fn();
+    const currentRename = vi.fn();
+    const { container, update } = mountHeader({ onBeginRename: previousRename });
+    const button = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")!;
+    const title = button.querySelector(".chat-pane__session-title-text");
+    button.focus();
+    update({ title: "Current session", onBeginRename: currentRename, ownerViewing: true });
+    expect(container.querySelector(".chat-pane__session-title-button")).toBe(button);
+    expect(button.querySelector(".chat-pane__session-title-text")).toBe(title);
+    expect(button.textContent).toBe("Current session");
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(currentRename).toHaveBeenCalledOnce();
+    expect(previousRename).not.toHaveBeenCalled();
+  });
+
   it("leaves identities unlinked when the header has no activity routing", () => {
     const { container } = mountHeader({
       showOwnerChip: true,

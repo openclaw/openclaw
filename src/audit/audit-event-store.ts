@@ -8,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -44,20 +45,18 @@ import {
   recordConfirmedTerminalMessageExecutionBinding,
 } from "./message-execution-binding.js";
 
-type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
-type AuditEventRow = Selectable<AuditEventsTable>;
+type AuditEventRow = Selectable<AuditDatabase["audit_events"]>;
 
 export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
-// The single audit writer owns one DB handle. Invalidate on out-of-band
-// maintenance or rollback so the hot path avoids a 100k-row scan per message.
-const auditEventRowCounts = new WeakMap<DatabaseSync, number>();
-
-function getAuditKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<AuditDatabase>(db);
-}
+// The single audit writer owns one DB handle. Maintenance and rollback drop
+// these facts; ordinary inserts need neither a row scan nor an empty expiry DELETE.
+const auditEventRetention = new WeakMap<
+  DatabaseSync,
+  { rowCount: number; nextExpiryAt: number; nextSequence: number }
+>();
 
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
@@ -107,10 +106,7 @@ function optionalInteger(
   field: string,
   minimum: number,
 ): number | undefined {
-  if (value === null) {
-    return undefined;
-  }
-  return requiredInteger(row, value, field, minimum);
+  return value === null ? undefined : requiredInteger(row, value, field, minimum);
 }
 
 function requiredText(row: AuditEventRow, value: unknown, field: string): string {
@@ -549,18 +545,26 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput) {
   } satisfies AuditEventInsert;
 }
 
-function countAuditEvents(db: DatabaseSync): number {
+function readAuditEventRetention(db: DatabaseSync) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
-    getAuditKysely(db)
+    getNodeSqliteKysely<AuditDatabase>(db)
       .selectFrom("audit_events")
-      .select((expression) => expression.fn.countAll<number>().as("count")),
+      .select((expression) => [
+        expression.fn.countAll<number>().as("count"),
+        expression.fn.min<number>("occurred_at").as("oldest"),
+      ]),
   );
-  return normalizeSqliteNumber(row?.count ?? null) ?? 0;
+  return {
+    rowCount: normalizeSqliteNumber(row?.count ?? null) ?? 0,
+    nextExpiryAt:
+      (normalizeSqliteNumber(row?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
+      AUDIT_EVENT_RETENTION_MS,
+  };
 }
 
 function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
-  const kysely = getAuditKysely(db);
+  const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const expiredSequences = kysely
     .selectFrom("audit_events")
     .select("sequence")
@@ -574,37 +578,54 @@ function deleteExpiredAuditEvents(db: DatabaseSync, now: number) {
   );
 }
 
-function pruneAuditEventsAfterInsert(db: DatabaseSync, now: number): void {
-  const kysely = getAuditKysely(db);
-  const expired = deleteExpiredAuditEvents(db, now);
-  const cachedCount = auditEventRowCounts.get(db);
-  let rowCount =
-    cachedCount === undefined
-      ? countAuditEvents(db)
-      : Math.max(0, cachedCount + 1 - Number(expired.numAffectedRows ?? 0n));
-  if (rowCount <= AUDIT_EVENT_MAX_ROWS) {
-    auditEventRowCounts.set(db, rowCount);
-    return;
+function pruneAfterInsert(db: DatabaseSync, now: number, at: number, sequence: number): void {
+  const kysely = getNodeSqliteKysely<AuditDatabase>(db);
+  const cached = auditEventRetention.get(db);
+  const retention = cached
+    ? {
+        rowCount: cached.rowCount + 1,
+        nextExpiryAt: Math.min(cached.nextExpiryAt, at + AUDIT_EVENT_RETENTION_MS),
+      }
+    : readAuditEventRetention(db);
+  let pruned = false;
+  if (retention.nextExpiryAt < now) {
+    const expired = deleteExpiredAuditEvents(db, now);
+    retention.rowCount = Math.max(0, retention.rowCount - Number(expired.numAffectedRows ?? 0n));
+    pruned = true;
   }
-  const retainedRows = Math.max(0, AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS);
-  const overflowRow = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("audit_events")
-      .select("sequence")
-      .orderBy("sequence", "desc")
-      .offset(retainedRows)
-      .limit(1),
-  );
-  const sequenceCutoff = overflowRow ? normalizeSqliteNumber(overflowRow.sequence) : undefined;
-  if (sequenceCutoff !== undefined) {
-    const pruned = executeSqliteQuerySync(
+  if (retention.rowCount > AUDIT_EVENT_MAX_ROWS) {
+    const retainedRows = Math.max(0, AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS);
+    const overflowRow = executeSqliteQueryTakeFirstSync(
       db,
-      kysely.deleteFrom("audit_events").where("sequence", "<=", sequenceCutoff),
+      kysely
+        .selectFrom("audit_events")
+        .select("sequence")
+        .orderBy("sequence", "desc")
+        .offset(retainedRows)
+        .limit(1),
     );
-    rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
+    const sequenceCutoff = overflowRow ? normalizeSqliteNumber(overflowRow.sequence) : undefined;
+    if (sequenceCutoff !== undefined) {
+      const overflow = executeSqliteQuerySync(
+        db,
+        kysely.deleteFrom("audit_events").where("sequence", "<=", sequenceCutoff),
+      );
+      retention.rowCount = Math.max(0, retention.rowCount - Number(overflow.numAffectedRows ?? 0n));
+      pruned = true;
+    }
   }
-  auditEventRowCounts.set(db, rowCount);
+  if (pruned) {
+    const oldest = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("audit_events")
+        .select((expression) => expression.fn.min("occurred_at").as("oldest")),
+    );
+    retention.nextExpiryAt =
+      (normalizeSqliteNumber(oldest?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
+      AUDIT_EVENT_RETENTION_MS;
+  }
+  auditEventRetention.set(db, { ...retention, nextSequence: sequence + 1 });
 }
 
 /** Persist one projected event idempotently and prune fixed retention bounds. */
@@ -622,34 +643,70 @@ export function recordAuditEventInDatabase(
   if (executionToken) {
     ensureTerminalMessageExecutionBindingSchema(options);
   }
-  let countCacheDatabase: DatabaseSync | undefined;
+  const { db } = options.database;
+  const nested = db.isTransaction;
   try {
-    return runOpenClawStateWriteTransaction(({ db }) => {
-      countCacheDatabase = db;
+    const retention = auditEventRetention.get(db);
+    const currentTime = Date.now();
+    const expiry = input.occurredAt + AUDIT_EVENT_RETENTION_MS;
+    if (
+      input.kind !== "message" &&
+      !nested &&
+      !isPostgresSqlConnection(db) &&
+      retention &&
+      retention.rowCount < AUDIT_EVENT_MAX_ROWS &&
+      retention.nextExpiryAt >= currentTime &&
+      expiry >= currentTime &&
+      Number.isSafeInteger(retention.nextSequence)
+    ) {
+      const values = bindAuditEvent(db, input);
+      // This is the only runtime inserter. Validate the complete result before
+      // autocommit; even a duplicate source consumes an AUTOINCREMENT sequence.
+      const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
+      const queries = getAuditEventQueries(db);
+      const inserted = runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
+        singleStatement: true,
+      });
+      retention.nextSequence += 1;
+      if (inserted) {
+        retention.rowCount += 1;
+        retention.nextExpiryAt = Math.min(retention.nextExpiryAt, expiry);
+      }
+      return inserted ? record : undefined;
+    }
+    return runOpenClawStateWriteTransaction(() => {
       // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
       const values = bindAuditEvent(db, input);
       const queries = getAuditEventQueries(db);
       const insert = queries.insert(values);
       if (insert === undefined) {
+        auditEventRetention.delete(db);
         return undefined;
       }
       const insertedSequence = Number(insert.sequence);
       if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
         throw new Error("audit event sequence is outside the supported integer range");
       }
-      pruneAuditEventsAfterInsert(db, Date.now());
-      const row = queries.read(insertedSequence);
+      const now = Date.now();
+      pruneAfterInsert(db, now, values.occurred_at, insertedSequence);
+      // Current events cannot be removed by retention: sequence allocation puts
+      // them after every existing row. An expired replay may be pruned immediately.
+      const row =
+        values.occurred_at < now - AUDIT_EVENT_RETENTION_MS
+          ? queries.read(insertedSequence)
+          : { ...values, sequence: insertedSequence };
       recordConfirmedTerminalMessageExecutionBinding(db, {
         eventId: row?.event_id,
         token: executionToken,
       });
+      if (nested) {
+        auditEventRetention.delete(db);
+      }
       return row ? rowToAuditEvent(row) : undefined;
     }, options);
   } catch (error) {
-    if (countCacheDatabase) {
-      auditEventRowCounts.delete(countCacheDatabase);
-      clearAuditIdentityKeyCacheForDatabase(countCacheDatabase);
-    }
+    auditEventRetention.delete(db);
+    clearAuditIdentityKeyCacheForDatabase(db);
     throw error;
   }
 }
@@ -679,7 +736,7 @@ export function pruneExpiredAuditEventsInDatabase(params: {
 }): number {
   return runOpenClawStateWriteTransaction(({ db }) => {
     const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
-    auditEventRowCounts.delete(db);
+    auditEventRetention.delete(db);
     return Number(deleted.numAffectedRows ?? 0n);
   }, params.database);
 }

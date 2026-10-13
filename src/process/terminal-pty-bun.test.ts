@@ -418,7 +418,7 @@ it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowCont
       });
     } else {
       expect(native).not.toHaveBeenCalled();
-      expect(helper).toHaveBeenCalledWith(params, expect.any(Function));
+      expect(helper).toHaveBeenCalledWith(params, expect.any(Function), undefined);
       expect(helper.mock.calls[0]?.[0]).toBe(params);
       helper.mock.calls[0]?.[1]?.();
       expect(assertCurrent).toHaveBeenCalledTimes(2);

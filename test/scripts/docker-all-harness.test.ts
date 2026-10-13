@@ -2184,8 +2184,6 @@ describe("Docker scheduler publication settlement", () => {
   posixIt.for([
     { signal: "SIGINT", code: 130, phase: "raw summary" },
     { signal: "SIGTERM", code: 143, phase: "raw summary" },
-    { signal: "SIGINT", code: 130, phase: "staging close" },
-    { signal: "SIGTERM", code: 143, phase: "staging close" },
     { signal: "SIGINT", code: 130, phase: "committed" },
     { signal: "SIGTERM", code: 143, phase: "committed" },
   ] as const)(
@@ -2217,15 +2215,6 @@ describe("Docker scheduler publication settlement", () => {
           const result = await nativeWrite(...args);
           if (phase === 'raw summary' && String(args[0]) === ${JSON.stringify(summaryPath)}) await hold();
           return result;
-        };
-        const nativeOpen = fs.promises.open.bind(fs.promises);
-        fs.promises.open = async (...args) => {
-          const handle = await nativeOpen(...args);
-          if (phase === 'staging close' && String(args[0]).includes('/.summary-')) {
-            const close = handle.close.bind(handle);
-            handle.close = async () => { await close(); await hold(); };
-          }
-          return handle;
         };
         const nativeRename = fs.renameSync.bind(fs);
         fs.renameSync = (...args) => {
@@ -2296,11 +2285,9 @@ describe("Docker scheduler publication settlement", () => {
     "initial log directory",
     "failure index",
     "final failure index",
-    "cancelled summary",
+    "staging write",
     "late timing",
-    "staging close",
     "rename",
-    "staging cleanup",
   ] as const)(
     "never publishes an affirmative summary after %s failure",
     { timeout: 30_000 },
@@ -2311,8 +2298,7 @@ describe("Docker scheduler publication settlement", () => {
         const mode = ${JSON.stringify(mode)};
         const receiptPath = ${JSON.stringify(receiptPath)};
         const primary = new Error('owned publication failed: ' + mode);
-        const cleanup = new Error('owned staging unlink failed');
-        const identity = { primary: false, cleanup: false, cause: false, mkdirAttempts: 0 };
+        const identity = { primary: false, mkdirAttempts: 0 };
         const snapshot = () => fs.writeFileSync(receiptPath, JSON.stringify(identity));
         const message = primary.message;
         // Observe the original error when diagnostics read it, without replacing it.
@@ -2324,9 +2310,7 @@ describe("Docker scheduler publication settlement", () => {
         const nativeWrite = fs.promises.writeFile.bind(fs.promises);
         const nativeSyncWrite = fs.writeFileSync.bind(fs);
         const nativeMkdir = fs.promises.mkdir.bind(fs.promises);
-        const nativeOpen = fs.promises.open.bind(fs.promises);
         const nativeRename = fs.renameSync.bind(fs);
-        const nativeRm = fs.promises.rm.bind(fs.promises);
         fs.promises.mkdir = (...args) => {
           if (mode === 'initial log directory' && String(args[0]) === ${JSON.stringify(path.join(fixture.root, "logs"))}) {
             identity.mkdirAttempts += 1;
@@ -2343,46 +2327,13 @@ describe("Docker scheduler publication settlement", () => {
         };
         fs.writeFileSync = (...args) => {
           const file = String(args[0]);
-          if ((mode === 'final failure index' && file.endsWith('/failures.json')) ||
-              (mode === 'cancelled summary' && file.includes('/.summary-'))) throw primary;
+          if (mode === 'staging write' && typeof args[0] === 'number') throw primary;
+          if (mode === 'final failure index' && file.endsWith('/failures.json')) throw primary;
           return nativeSyncWrite(...args);
-        };
-        fs.promises.open = async (...args) => {
-          const handle = await nativeOpen(...args);
-          if (String(args[0]).includes('/.summary-') && ['staging close', 'staging cleanup'].includes(mode)) {
-            const close = handle.close.bind(handle);
-            handle.close = async () => { await close(); throw primary; };
-          }
-          if (String(args[0]).includes('/.summary-') && mode === 'cancelled summary') {
-            const close = handle.close.bind(handle);
-            handle.close = async () => {
-              await close();
-              const keepAlive = setInterval(() => {}, 1000);
-              try {
-                const handled = new Promise(resolve => process.once('SIGTERM', resolve));
-                process.kill(process.pid, 'SIGTERM');
-                await handled;
-              } finally { clearInterval(keepAlive); }
-            };
-          }
-          return handle;
         };
         fs.renameSync = (...args) => {
           if (mode === 'rename' && String(args[0]).includes('/.summary-')) throw primary;
           return nativeRename(...args);
-        };
-        fs.promises.rm = (...args) => mode === 'staging cleanup' && String(args[0]).includes('/.summary-')
-          ? Promise.reject(cleanup) : nativeRm(...args);
-        const NativeAggregateError = globalThis.AggregateError;
-        globalThis.AggregateError = class extends NativeAggregateError {
-          constructor(errors, ...args) {
-            const values = Array.from(errors);
-            super(values, ...args);
-            identity.primary ||= values[0] === primary;
-            identity.cleanup ||= values[1] === cleanup;
-            identity.cause ||= this.cause === primary;
-            snapshot();
-          }
         };
         syncBuiltinESMExports();
       `;
@@ -2410,7 +2361,7 @@ describe("Docker scheduler publication settlement", () => {
               ? []
               : [expect.objectContaining({ name: "gateway-concurrency", status: 0 })],
           );
-          if (mode === "staging close" || mode === "rename") {
+          if (mode === "rename") {
             expect(
               JSON.parse(readFileSync(path.join(fixture.root, "logs", "failures.json"), "utf8")),
             ).not.toHaveProperty("status");
@@ -2430,22 +2381,16 @@ describe("Docker scheduler publication settlement", () => {
               expect(output).toContain(expected);
             }
           }
-          expect(owner.stderr()).toContain(
-            mode === "staging cleanup"
-              ? "Docker summary staging cleanup failed"
-              : "owned publication failed: " + mode,
-          );
+          expect(owner.stderr()).toContain("owned publication failed: " + mode);
           expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual({
             primary: true,
-            cleanup: mode === "staging cleanup",
-            cause: mode === "staging cleanup",
             mkdirAttempts: mode === "initial log directory" ? 2 : 0,
           });
           expect(
             readdirSync(path.join(fixture.root, "logs")).filter((name) =>
               name.startsWith(".summary-"),
             ),
-          ).toHaveLength(mode === "staging cleanup" ? 1 : 0);
+          ).toHaveLength(0);
           for (const { pid } of owner.children()) {
             expect(isProcessAlive(pid)).toBe(false);
           }

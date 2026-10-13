@@ -106,7 +106,7 @@ before finalizing video.
 The chat-loading performance real-Gateway suite records browser timestamps in
 `loading-evidence.json` for the history request, data publication, committed row
 model, and visual quiescence. A pane update can still display the old row model
-while scrolling, so the probe verifies that a retained row's index advances
+while scrolling, so the check verifies that a retained row's index advances
 before checking for 50 ms without transcript mutations, resizing, or scrolling.
 It records the start and confirmation of that quiet interval separately; the
 confirmation delay is not application latency. A nonzero `lateChanges` count
@@ -143,7 +143,7 @@ returns so the caller can rethrow the original failure. A late browser response
 cannot publish a screenshot after that budget expires; test action deadlines and
 caller-owned browser cleanup remain unchanged.
 
-Pages from the shared suite's `withPage` also arm a renderer stall probe before the
+Pages from the shared suite's `withPage` also arm a renderer stall check before the
 test runs. When the renderer misses that read deadline, the public summary's
 `rendererStall` records main-thread busy time by kind and the paused JavaScript
 stack, then resumes the page, within a further three-second budget. A stall that

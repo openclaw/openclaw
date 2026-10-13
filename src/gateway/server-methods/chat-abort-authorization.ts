@@ -3,13 +3,16 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { buildAbortedAgentPayload } from "../agent-turn/agent-dedupe.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
   isChatAbortTerminalPersistenceSettled,
   isCurrentChatAbortExecution,
 } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
-import { listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
+import { listQueuedChatTurnsForSession, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
@@ -18,6 +21,7 @@ import {
   PENDING_CHAT_SEND_DEDUPE_PREFIX,
   type DedupeEntry,
 } from "../server-shared.js";
+import type { ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -35,6 +39,50 @@ export type ChatAbortRequester = {
   };
 };
 
+export type ChatAbortTarget = Pick<
+  ChatAbortControllerEntry | QueuedChatTurnEntry,
+  "sessionKey" | "sessionId" | "agentId" | "ownerConnId" | "ownerDeviceId"
+>;
+
+export function captureAbortTargetIdentity<T extends ChatAbortTarget>(
+  entries: ReadonlyMap<string, T>,
+  runId: string,
+  entry: T,
+) {
+  const { sessionKey, sessionId, agentId } = entry;
+  return () =>
+    entries.get(runId) === entry &&
+    entry.sessionKey === sessionKey &&
+    entry.sessionId === sessionId &&
+    entry.agentId === agentId;
+}
+
+export function captureSessionAbortRequestOrigin(
+  params: {
+    session?: ChatAbortSessionSnapshot;
+    requiredSessionId?: string;
+    sessionId?: string;
+  },
+  acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"],
+): SubagentRequestSessionOrigin | undefined {
+  const session = params.session?.ok ? params.session.value : undefined;
+  return session?.entry &&
+    (params.requiredSessionId === undefined ||
+      session.entry.sessionId === params.requiredSessionId) &&
+    (params.sessionId === undefined || session.entry.sessionId === params.sessionId)
+    ? {
+        target: {
+          agentId: session.agentId,
+          storePath: session.storePath,
+          sessionKey: session.canonicalKey,
+          sessionId: session.entry.sessionId,
+          lifecycleRevision: session.entry.lifecycleRevision ?? null,
+        },
+        acceptsRequest,
+      }
+    : undefined;
+}
+
 type PreRegisteredAgentDedupePayload = {
   goalFingerprint?: unknown;
   agentId?: unknown;
@@ -44,6 +92,7 @@ type PreRegisteredAgentDedupePayload = {
   expiresAtMs?: unknown;
   ownerConnId?: unknown;
   ownerDeviceId?: unknown;
+  reservationId?: unknown;
   runId?: unknown;
   sessionKey?: unknown;
   sessionId?: unknown;
@@ -82,10 +131,7 @@ export function resolveChatAbortRequester(
   const sessionTarget = authorization?.admittedTarget;
   const assertCurrent =
     assertCallerCurrent && authorization && sessionTarget
-      ? () => {
-          assertCallerCurrent();
-          authorization.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([assertCallerCurrent, authorization.assertCurrent])
       : undefined;
   assertCurrent?.();
   return {
@@ -249,6 +295,15 @@ export function writePreRegisteredAgentAbort(params: {
   }
   const endedAt = params.endedAt ?? Date.now();
   const payloadAgentId = normalizeOptionalString(params.payload.agentId);
+  // Acceptance removes the reservation; an absent controller alone cannot prove no dispatch occurred.
+  const aborted = normalizeOptionalString(params.payload.reservationId)
+    ? buildAbortedAgentPayload(params.runId, params.stopReason)
+    : {
+        runId: params.runId,
+        status: "timeout" as const,
+        summary: "aborted",
+        stopReason: params.stopReason,
+      };
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
     if (params.context.dedupe.get(key)?.payload !== params.expectedPayload) {
       continue;
@@ -260,13 +315,10 @@ export function writePreRegisteredAgentAbort(params: {
         ts: endedAt,
         ok: true,
         payload: {
-          runId: params.runId,
+          ...aborted,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
           ...(params.payload.controlUiVisible === false ? { controlUiVisible: false } : {}),
-          status: "timeout" as const,
-          summary: "aborted",
-          stopReason: params.stopReason,
           endedAt,
         },
       },

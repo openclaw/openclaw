@@ -2,23 +2,26 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { seedNodeDevice } from "../infra/device-pairing-node.test-support.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { runGatewayStartupMaintenance } from "./server-startup-plugins.js";
+import { runGatewayPostReadyStartupMaintenance } from "./server-startup-plugins.js";
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
   runChannelPluginStartupMaintenance: async () => {},
 }));
+// mock-isolation: Pairing-file admission must not repair the separate agent session stores.
 vi.mock("./server-startup-session-migration.js", () => ({
-  runStartupSessionMigration: async () => {},
+  runGatewaySessionStartupMaintenance: async () => {},
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -91,19 +94,19 @@ describe("legacy pairing repair ownership", () => {
         );
       }
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-      await runGatewayStartupMaintenance({
-        cfgAtStart: cfg,
-        startupRuntimeConfig: cfg,
-        minimalTestGateway: false,
+      const retired = await migrateLegacyDesktopStreamOptOuts(cfg, stateDir);
+      await runGatewayPostReadyStartupMaintenance({
+        getConfig: () => cfg,
+        getPluginRegistry: createEmptyPluginRegistry,
+        databases: [],
+        signal: new AbortController().signal,
         log,
       });
       if (desktop) {
         expect((await getPairedDevice("desktop-node", stateDir))?.nodeSurface?.commands).toEqual([
           "system.run",
         ]);
-        expect(log.warn).toHaveBeenCalledWith(
-          expect.stringContaining("approve their updated desktop capability"),
-        );
+        expect(retired).toBe(1);
       } else {
         for (const [relative, bytes] of sources) {
           expect(await fs.readFile(path.join(stateDir, relative), "utf8")).toBe(bytes);
@@ -125,10 +128,11 @@ describe("legacy pairing repair ownership", () => {
     );
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     await expect(
-      runGatewayStartupMaintenance({
-        cfgAtStart: cfg,
-        startupRuntimeConfig: cfg,
-        minimalTestGateway: false,
+      runGatewayPostReadyStartupMaintenance({
+        getConfig: () => cfg,
+        getPluginRegistry: createEmptyPluginRegistry,
+        databases: [],
+        signal: new AbortController().signal,
         log,
       }),
     ).resolves.toBeUndefined();

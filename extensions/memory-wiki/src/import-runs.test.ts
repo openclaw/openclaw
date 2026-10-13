@@ -1,7 +1,7 @@
 // Memory Wiki tests cover import run listing behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { writeMemoryWikiImportRunRecord } from "./import-runs-state.js";
+import { getMemoryWikiImportRunStateStore } from "./import-runs-state.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -11,7 +11,7 @@ describe("memory-wiki import runs", () => {
   it("lists import runs from plugin state", async () => {
     const vaultRoot = await createTempDir("memory-wiki-import-runs-");
     const config = resolveMemoryWikiConfig({ vault: { path: vaultRoot } });
-    await writeMemoryWikiImportRunRecord(vaultRoot, {
+    await getMemoryWikiImportRunStateStore().write(vaultRoot, {
       version: 1,
       runId: "chatgpt-old",
       importType: "chatgpt",
@@ -26,7 +26,7 @@ describe("memory-wiki import runs", () => {
       updatedPaths: [],
       rolledBackAt: "2026-04-09T11:00:00.000Z",
     });
-    await writeMemoryWikiImportRunRecord(vaultRoot, {
+    await getMemoryWikiImportRunStateStore().write(vaultRoot, {
       version: 1,
       runId: "chatgpt-new",
       importType: "chatgpt",
@@ -40,7 +40,7 @@ describe("memory-wiki import runs", () => {
       createdPaths: [{ path: "sources/new.md" }],
       updatedPaths: [{ path: "sources/current.md", snapshotPath: "snapshots/current.md" }],
     });
-    await writeMemoryWikiImportRunRecord(vaultRoot, {
+    await getMemoryWikiImportRunStateStore().write(vaultRoot, {
       version: 1,
       runId: "chatgpt-rolling",
       importType: "chatgpt",

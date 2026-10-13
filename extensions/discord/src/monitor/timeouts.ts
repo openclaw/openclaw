@@ -1,4 +1,5 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 // Compatibility constants for existing imports. Discord no longer enforces
 // channel-owned listener or inbound run timeouts.
@@ -55,7 +56,6 @@ export async function runDiscordTaskWithTimeout(params: {
   const mergedAbortSignal =
     abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
   let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const runPromise = params.run(mergedAbortSignal).catch((error: unknown) => {
     if (!timedOut) {
       throw error;
@@ -67,31 +67,23 @@ export async function runDiscordTaskWithTimeout(params: {
     params.onErrorAfterTimeout?.(error);
   });
 
-  try {
-    if (!timeoutMs) {
-      await runPromise;
-      return false;
-    }
-    const timeoutPromise = new Promise<"timeout">((resolve) => {
-      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-      timeoutHandle.unref?.();
-    });
-    const result = await Promise.race([
-      runPromise.then(() => "completed" as const),
-      timeoutPromise,
-    ]);
-    if (result === "timeout") {
-      timedOut = true;
-      timeoutAbortController?.abort();
-      await params.onTimeout(timeoutMs);
-      return true;
-    }
+  if (!timeoutMs) {
+    await runPromise;
     return false;
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
   }
+  const result = await raceWithTimeout(
+    runPromise.then(() => "completed" as const),
+    timeoutMs,
+    () => "timeout" as const,
+    { ref: false },
+  );
+  if (result === "timeout") {
+    timedOut = true;
+    timeoutAbortController?.abort();
+    await params.onTimeout(timeoutMs);
+    return true;
+  }
+  return false;
 }
 
 export async function withAbortTimeout<T>(params: {

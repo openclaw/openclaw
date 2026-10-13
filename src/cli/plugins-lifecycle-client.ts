@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -12,7 +13,6 @@ import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { sleep } from "../utils/sleep.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
 /** Capture the local client before a Claw batch takes any package or plugin lease. */
@@ -77,22 +77,20 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
             mode: GATEWAY_CLIENT_MODES.CLI,
           });
         } catch (error) {
-          // Lifecycle admission rejects before writes so a config reload can drain
-          // the request. Honor that response outside the Gateway's admission scope.
+          // Release the rejected RPC so reload can drain it; never replay an uncertain effect.
           if (
             !isGatewayClientRequestError(error) ||
             error.gatewayCode !== "UNAVAILABLE" ||
             !error.retryable ||
+            !isRecord(error.details) ||
+            error.details.mutationAccepted !== false ||
             error.retryAfterMs === undefined ||
+            error.retryAfterMs <= 0 ||
             error.retryAfterMs >= deadline - Date.now()
           ) {
             throw error;
           }
-          if (controller) {
-            await sleepWithAbort(error.retryAfterMs, controller.signal);
-          } else {
-            await sleep(error.retryAfterMs);
-          }
+          await sleepWithAbort(error.retryAfterMs, controller?.signal);
           if (Date.now() >= deadline) {
             throw error;
           }

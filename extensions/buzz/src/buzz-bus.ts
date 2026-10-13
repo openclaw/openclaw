@@ -1,4 +1,5 @@
 import { finalizeEvent, verifyEvent, type Event } from "nostr-tools";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -89,6 +90,7 @@ export async function sendBuzzTextOneShot(params: {
   threadId?: string;
   replyToId?: string;
 }): Promise<string> {
+  const effect = captureEffectAuthority();
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
   const mentionSyntax = inspectBuzzMentionSyntax(params.text);
   const needsDirectory = mentionSyntax.hasAtMention || mentionSyntax.hasExplicitIdentity;
@@ -134,7 +136,10 @@ export async function sendBuzzTextOneShot(params: {
       });
     }
     const event = buildBuzzTextEvent({ ...params, secretKey, mentionedPubkeys });
-    await relay.publish(event);
+    await effect.initiate(() => {
+      signal?.throwIfAborted();
+      return relay.publish(event);
+    });
     return event.id;
   } finally {
     relay.close();
@@ -279,6 +284,7 @@ export async function startBuzzBus(options: {
       return root?.channelId === channelId && root.isBotOwned;
     },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
+      const effect = captureEffectAuthority();
       signal.throwIfAborted();
       const mentionSyntax = inspectBuzzMentionSyntax(text);
       const mentionedPubkeys =
@@ -297,7 +303,10 @@ export async function startBuzzBus(options: {
         replyToId,
         mentionedPubkeys,
       });
-      await relay.publish(event);
+      await effect.initiate(() => {
+        signal.throwIfAborted();
+        return relay.publish(event);
+      });
       rememberThreadRoot(event);
       return event.id;
     },
@@ -314,7 +323,10 @@ export async function startBuzzBus(options: {
         },
         secretKey,
       );
-      await relay.send(JSON.stringify(["EVENT", event]));
+      await captureEffectAuthority().initiate(() => {
+        signal.throwIfAborted();
+        return relay.send(JSON.stringify(["EVENT", event]));
+      });
     },
     close: async () => {
       lifecycleAbort.abort(new Error("Buzz bus closed"));
@@ -490,9 +502,9 @@ export async function startBuzzBus(options: {
         onFatalError: reportFatalError,
         signal,
       })
-        .then((result) => {
-          if (!signal.aborted && result.status === "published") {
-            options.onProfilePublished?.(result.eventId);
+        .then((eventId) => {
+          if (!signal.aborted && eventId !== undefined) {
+            options.onProfilePublished?.(eventId);
           }
         })
         .catch((error: unknown) => {

@@ -116,30 +116,22 @@ function resolveFeishuDeliveryOrigin(params: {
 } {
   const deliveryTo = params.deliveryTo?.trim();
   const deliveryThreadId = params.deliveryThreadId?.trim();
-  if (deliveryTo) {
-    return {
-      channel: "feishu",
-      accountId: params.accountId,
-      to: deliveryTo,
-      ...(deliveryThreadId ? { threadId: deliveryThreadId } : {}),
-    };
-  }
-  const parsed = parseFeishuConversationId({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (parsed?.topicId) {
-    return {
-      channel: "feishu",
-      accountId: params.accountId,
-      to: `chat:${params.parentConversationId?.trim() || parsed.chatId}`,
-      threadId: parsed.topicId,
-    };
-  }
+  const parsed = deliveryTo
+    ? null
+    : parseFeishuConversationId({
+        conversationId: params.conversationId,
+        parentConversationId: params.parentConversationId,
+      });
+  const threadId = deliveryTo ? deliveryThreadId : parsed?.topicId;
   return {
     channel: "feishu",
     accountId: params.accountId,
-    to: `user:${params.conversationId}`,
+    to:
+      deliveryTo ||
+      (parsed?.topicId
+        ? `chat:${params.parentConversationId?.trim() || parsed.chatId}`
+        : `user:${params.conversationId}`),
+    ...(threadId ? { threadId } : {}),
   };
 }
 

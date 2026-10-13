@@ -3,9 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -125,7 +129,7 @@ describe("zalouser doctor state migration", () => {
       ...legacy,
       createdAt,
     });
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it("archives legacy credentials without restoring an explicitly cleared profile", async () => {
@@ -141,11 +145,15 @@ describe("zalouser doctor state migration", () => {
       }),
     );
     const runtime = createPluginRuntimeMock();
-    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("zalouser", {
-        ...options,
-        env: options.env ?? env,
-      });
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
+      createPluginStateKeyedStoreV2ForTests<T>(
+        "zalouser",
+        { ...options, env: options.env ?? env },
+        authority ?? { assertCurrent() {} },
+      );
     setZalouserRuntime(runtime);
     await clearStoredZaloCredentials(profile, env);
     const context = createDoctorContext(env);
@@ -165,7 +173,7 @@ describe("zalouser doctor state migration", () => {
       "Archived revoked Zalo Personal credential legacy source for profile work",
       expect.stringContaining("Archived Zalo Personal credentials legacy source"),
     ]);
-    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${filePath}.migrated`);
   });
 
   it("does not inspect agent session stores when zalouser has never been configured", async () => {

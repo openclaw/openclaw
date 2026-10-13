@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { shouldSuppressLocalExecApprovalPromptAsync } from "../../channels/plugins/exec-approval-local.js";
 import { formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -35,9 +35,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     params,
     sendPayloadAsync,
     sessionKey,
-    shouldEmitVerboseProgress,
+    shouldEmitVerboseProgressAsync,
     shouldRouteToOriginating,
-    shouldSendToolSummaries,
+    shouldSendToolSummariesAsync,
     shouldSuppressProgressDelivery,
     turnLedger,
   } = state;
@@ -54,7 +54,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const sendPlanUpdate = async (
     payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0],
   ): Promise<void> => {
-    if (shouldSuppressProgressDelivery() || !shouldSendToolSummaries() || didSendPlanStatusNotice) {
+    if (
+      (await shouldSuppressProgressDelivery()) ||
+      !(await shouldSendToolSummariesAsync()) ||
+      didSendPlanStatusNotice ||
+      isDispatchOperationAborted()
+    ) {
       return;
     }
     didSendPlanStatusNotice = true;
@@ -73,8 +78,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             : explanation || "Planning next steps.",
       isStatusNotice: true,
     };
+    state.assertProgressCurrent();
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(replyPayload, undefined, false);
+      await sendPayloadAsync(replyPayload);
       return;
     }
     markInboundDedupeReplayUnsafe();
@@ -102,9 +108,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     ? createTtsDirectiveTextStreamCleaner()
     : undefined;
 
-  const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
+  const resolveToolDeliveryPayload = async (
+    payload: ReplyPayload,
+  ): Promise<ReplyPayload | null> => {
     if (
-      shouldSuppressLocalExecApprovalPrompt({
+      await shouldSuppressLocalExecApprovalPromptAsync({
         channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
         cfg,
         accountId: ctx.AccountId,
@@ -114,7 +122,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return null;
     }
     if (
-      shouldSendToolSummaries() ||
+      (await shouldSendToolSummariesAsync()) ||
       hasExecApprovalPayload(payload) ||
       hasExecApprovalUnavailablePayload(payload) ||
       hasAskUserPayload(payload)
@@ -146,14 +154,20 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       { waitForIdle: () => progressState.pendingDirectBlockReplyDelivery },
       abortSignal,
     );
-  const shouldForwardProgressCallback = (options?: {
+  const shouldForwardProgressCallback = async (options?: {
     allowWhenToolSummariesHidden?: boolean;
     forwardWhenSourceDeliverySuppressed?: boolean;
     requiresToolSummaryVisibility?: boolean;
   }) => {
     if (
+      params.replyOptions?.progressRequiresReply === true &&
+      state.replyOperationRunState.replyCompletion?.expectation !== "required"
+    ) {
+      return false;
+    }
+    if (
       options?.requiresToolSummaryVisibility === true &&
-      !shouldSendToolSummaries() &&
+      !(await shouldSendToolSummariesAsync()) &&
       params.replyOptions?.suppressDefaultToolProgressMessages !== true &&
       options.allowWhenToolSummariesHidden !== true
     ) {
@@ -204,19 +218,22 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             return undefined;
           }
         }
-        if (shouldForwardProgressCallback(options)) {
-          if (preserveProgressCallbackStartOrder && options?.onForward) {
-            await options.onForward(...args);
-          } else if (!preserveProgressCallbackStartOrder) {
-            // Preserve the historical microtask boundary for unflagged channels.
+        if ((await shouldForwardProgressCallback(options)) && !isDispatchOperationAborted()) {
+          // Preserve the historical microtask boundary for unflagged channels.
+          if (!preserveProgressCallbackStartOrder || options?.onForward) {
             await options?.onForward?.(...args);
           }
+          if (isDispatchOperationAborted()) {
+            return undefined;
+          }
+          state.assertProgressCurrent();
           const callbackResult = callback(...args);
           start?.resolve();
           const result = await callbackResult;
           if (result === false) {
             return result;
           }
+          state.assertProgressCurrent();
           await options?.onVisible?.(...args);
         }
         return undefined;
@@ -248,17 +265,28 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
-  const standaloneCommentaryProgressVisible = shouldEmitVerboseProgress();
+  const standaloneCommentaryProgressVisible = await shouldEmitVerboseProgressAsync();
+  state.assertProgressCurrent();
+  // GetReplyOptions still publishes a synchronous visibility callback to released plugins.
   const resolveVerboseProgressVisibility = () =>
     standaloneCommentaryProgressVisible &&
-    shouldSendToolSummaries() &&
-    !shouldSuppressProgressDelivery();
+    state.shouldSendToolSummaries() &&
+    !state.shouldSuppressProgressDeliverySync();
   const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
-    resolveTurnCommentaryProgressOwner({
+    await resolveTurnCommentaryProgressOwner({
       commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
       options: params.replyOptions,
       resolveVerboseProgressVisibility,
+      resolveVerboseProgressVisibilityAsync: async () => {
+        const visible =
+          standaloneCommentaryProgressVisible &&
+          (await state.shouldSendToolSummariesAsync()) &&
+          !(await state.shouldSuppressProgressDelivery());
+        state.assertProgressCurrent();
+        return visible;
+      },
     });
+  state.assertProgressCurrent();
   const deliverStandaloneCommentaryProgress =
     standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
   const canForwardItemEvents = Boolean(params.replyOptions?.onItemEvent);
@@ -314,7 +342,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       : runtimeReplyConfig,
   );
   state.recordAgentDispatchStarted();
-  const nextState = Object.assign(state, {
+  return Object.assign(state, {
     sendPlanUpdate,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
@@ -336,9 +364,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     replyConfig,
     progressState,
   });
-  return { status: "ready" as const, state: nextState };
 }
 
 export type PrepareDispatchExecutionReadyState = Awaited<
   ReturnType<typeof prepareDispatchExecution>
->["state"];
+>;

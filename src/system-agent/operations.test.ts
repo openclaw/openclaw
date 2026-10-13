@@ -481,26 +481,6 @@ describe("system agent operations", () => {
     const readStored = (name: string) => readSecretStoreValue({ scope: { kind: "team" }, name });
     const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
 
-    it("stores the key and points config at it without repeating it", async () => {
-      const runConfigSet = vi.fn(async () => {});
-
-      const result = await executeSystemAgentOperation(operation, runtime, {
-        approved: true,
-        deps: { runConfigSet },
-      });
-
-      expect(result.applied).toBe(true);
-      const [name] = await storedEntries();
-      expect(name).toEqual(mintedName);
-      expect(runConfigSet).toHaveBeenCalledWith({
-        path: operation.path,
-        cliOptions: { refProvider: "default", refSource: "store", refId: name },
-      });
-      expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
-      expect(lines.join("\n")).not.toContain(operation.secret);
-      expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
-    });
-
     it("writes nothing when the owner's authority is gone before the store write", async () => {
       const runConfigSet = vi.fn(async () => {});
 
@@ -531,7 +511,7 @@ describe("system agent operations", () => {
       });
       const runConfigSet = vi.fn(async () => {});
 
-      await executeSystemAgentOperation(operation, runtime, {
+      const result = await executeSystemAgentOperation(operation, runtime, {
         approved: true,
         deps: { runConfigSet },
       });
@@ -542,6 +522,16 @@ describe("system agent operations", () => {
         }),
       );
       expect(readLastAuditEntry()).toMatchObject({ details: { provider: "team" } });
+      expect(result.applied).toBe(true);
+      const [name] = await storedEntries();
+      expect(name).toEqual(mintedName);
+      expect(runConfigSet).toHaveBeenCalledWith({
+        path: operation.path,
+        cliOptions: { refProvider: "team", refSource: "store", refId: name },
+      });
+      expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
+      expect(lines.join("\n")).not.toContain(operation.secret);
+      expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
     });
   });
 

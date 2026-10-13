@@ -1168,26 +1168,24 @@ function withPluginNpmManifestOverlay<T>(
     profile: params.profile,
   });
 
-  const originalManifest =
-    resolvedManifest.changed && resolvedManifest.manifest
-      ? fs.readFileSync(resolvedManifest.manifestPath, "utf8")
-      : undefined;
-  const originalPackageJson =
-    resolvedPackageJson.changed && resolvedPackageJson.packageJson
-      ? fs.readFileSync(resolvedPackageJson.packageJsonPath, "utf8")
-      : undefined;
+  const overlays = [
+    {
+      file: resolvedManifest.manifestPath,
+      value: resolvedManifest.changed && resolvedManifest.manifest,
+      message: `[plugin-npm-publish] overlaying plugin manifest metadata for ${resolvedManifest.pluginId}`,
+    },
+    {
+      file: resolvedPackageJson.packageJsonPath,
+      value: resolvedPackageJson.changed && resolvedPackageJson.packageJson,
+      message: `[plugin-npm-publish] overlaying package-local runtime metadata for ${resolvedPackageJson.pluginDir}`,
+    },
+  ]
+    .filter(({ value }) => value)
+    .map((overlay) => Object.assign(overlay, { original: fs.readFileSync(overlay.file, "utf8") }));
   try {
-    if (resolvedManifest.changed && resolvedManifest.manifest) {
-      console.error(
-        `[plugin-npm-publish] overlaying plugin manifest metadata for ${resolvedManifest.pluginId}`,
-      );
-      writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
-    }
-    if (resolvedPackageJson.changed && resolvedPackageJson.packageJson) {
-      console.error(
-        `[plugin-npm-publish] overlaying package-local runtime metadata for ${resolvedPackageJson.pluginDir}`,
-      );
-      writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
+    for (const overlay of overlays) {
+      console.error(overlay.message);
+      writeJsonFile(overlay.file, overlay.value);
     }
     if (bundleDependencies && resolvedPackageJson.packageJson) {
       installPackageLocalBundledDependencies({
@@ -1205,11 +1203,8 @@ function withPluginNpmManifestOverlay<T>(
       packageJsonApplied: resolvedPackageJson.changed && Boolean(resolvedPackageJson.packageJson),
     });
   } finally {
-    if (originalManifest !== undefined) {
-      fs.writeFileSync(resolvedManifest.manifestPath, originalManifest, "utf8");
-    }
-    if (originalPackageJson !== undefined) {
-      fs.writeFileSync(resolvedPackageJson.packageJsonPath, originalPackageJson, "utf8");
+    for (const overlay of overlays) {
+      fs.writeFileSync(overlay.file, overlay.original, "utf8");
     }
   }
 }

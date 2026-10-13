@@ -1,7 +1,4 @@
-import {
-  resolvePositiveTimerTimeoutMs,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
@@ -52,14 +49,6 @@ function parseCronRunWaitDuration(raw: unknown): number {
     throw error;
   }
   return resolveTimerTimeoutMs(durationMs, 0, 0);
-}
-
-function parseCronRunPollInterval(raw: unknown): number {
-  const durationMs = parseCronRunWaitDuration(raw);
-  if (durationMs <= 0) {
-    throw new CronCliError("invalid --poll-interval");
-  }
-  return resolvePositiveTimerTimeoutMs(durationMs, 2_000);
 }
 
 async function waitForCronRunCompletion(params: {
@@ -250,7 +239,10 @@ export function registerCronSimpleCommands(cron: Command) {
           let pollIntervalMs = 0;
           if (opts.wait) {
             waitTimeoutMs = parseCronRunWaitDuration(opts.waitTimeout);
-            pollIntervalMs = parseCronRunPollInterval(opts.pollInterval);
+            pollIntervalMs = parseCronRunWaitDuration(opts.pollInterval);
+            if (pollIntervalMs <= 0) {
+              throw new CronCliError("invalid --poll-interval");
+            }
           }
           if (command.getOptionValueSource("timeout") === "default") {
             opts.timeout = "600000";

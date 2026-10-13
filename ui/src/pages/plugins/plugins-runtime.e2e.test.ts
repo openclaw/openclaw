@@ -130,7 +130,7 @@ describeControlUiE2e("Control UI plugin runtime actions", () => {
           },
         },
       });
-      const failure = row.locator('.plugins-row-message[role="alert"]');
+      const failure = page.locator('.plugins-row-message[role="alert"]');
       await failure.getByText(`${loadError}\nRuntime phase: prepare.`, { exact: true }).waitFor();
       await captureScreenshot(page, "runtime-05-error-mobile.png");
       expect(

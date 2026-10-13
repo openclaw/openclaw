@@ -91,7 +91,7 @@ beforeAll(async () => {
   vi.spyOn(githubCleanup, "cleanupRetiredManagedGitHubProfiles").mockImplementation(() =>
     rejectDeferredWork("managed GitHub profile cleanup"),
   );
-  vi.spyOn(plugins, "runGatewayStartupMaintenance").mockImplementation(() =>
+  vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance").mockImplementation(() =>
     rejectDeferredWork("channel and session maintenance"),
   );
   vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState").mockImplementation(() =>

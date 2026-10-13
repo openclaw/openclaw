@@ -10,6 +10,8 @@ import {
 import {
   calculateContextTokens,
   compact,
+  compactWithoutSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,
@@ -75,9 +77,9 @@ function createProjectedEntry(
 }
 
 describe("shouldCompact", () => {
-  it.each([0, Number.NaN])("skips an invalid context window of %s", (contextWindow) => {
+  it("skips an invalid context window of zero", () => {
     expect(
-      shouldCompact(1, contextWindow, {
+      shouldCompact(1, 0, {
         enabled: true,
         reserveTokens: 16_384,
         keepRecentTokens: 20_000,
@@ -103,22 +105,6 @@ describe("calculateContextTokens", () => {
         contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
       }),
     ).toBe(163_978);
-  });
-
-  it("preserves the numeric compatibility fallback when the snapshot is unavailable", () => {
-    expect(calculateContextTokens(aggregateUsage)).toBe(927_907);
-  });
-
-  it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
-    const estimate = estimateContextTokens([
-      { role: "user", content: "hello", timestamp: 0 },
-      createAssistant("done", aggregateUsage, 1),
-    ]);
-
-    expect(estimate.tokens).toBeLessThan(927_907);
-    expect(estimate.tokens).toBeGreaterThan(0);
-    expect(estimate.usageTokens).toBe(0);
-    expect(estimate.lastUsageIndex).toBeNull();
   });
 
   it("uses the previous exact snapshot and estimates only the unavailable tail", () => {
@@ -222,17 +208,6 @@ describe("session-entry compaction budgeting", () => {
       createMessage: (excludeFromContext: boolean) =>
         createBashMessage("x".repeat(80_000), 2, excludeFromContext),
     },
-    {
-      kind: "custom",
-      createMessage: (excludeFromContext: boolean): AgentMessage => ({
-        role: "custom",
-        customType: "openclaw.operator-activity",
-        content: "x".repeat(80_004),
-        display: excludeFromContext,
-        excludeFromContext,
-        timestamp: 2,
-      }),
-    },
   ])(
     "counts visible $kind activity while ignoring excluded activity after provider usage",
     ({ createMessage }) => {
@@ -254,22 +229,6 @@ describe("session-entry compaction budgeting", () => {
       );
     },
   );
-
-  it("never rewinds a retained visible turn onto an excluded shell-history row", () => {
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("earlier", createUsage(10), 2), 1),
-      createMessageEntry(createBashMessage("x".repeat(80_000), 3, true), 2),
-      createMessageEntry({ role: "user", content: "recent turn", timestamp: 4 }, 3),
-      createMessageEntry(createAssistant("ok", createUsage(10), 5), 4),
-    ];
-
-    expect(findCutPoint(entries, 0, entries.length, 2)).toEqual({
-      firstKeptEntryIndex: 3,
-      turnStartIndex: -1,
-      isSplitTurn: false,
-    });
-  });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
     const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
@@ -353,40 +312,6 @@ describe("session-entry compaction budgeting", () => {
       });
     },
   );
-
-  it.each(["custom_message", "branch_summary"] as const)(
-    "does not rewind across adjacent %s entries",
-    (entryType) => {
-      const entries: SessionTreeEntry[] = [
-        createMessageEntry({ role: "user", content: "hi", timestamp: 1 }, 0),
-        createMessageEntry(createAssistant("hello", createUsage(2), 2), 1),
-        createProjectedEntry(entryType, 2, "x".repeat(4_000)),
-        createProjectedEntry(entryType, 3, "y".repeat(4_000)),
-        createMessageEntry(createAssistant("ok", createUsage(2), 5), 4),
-      ];
-
-      expect(findCutPoint(entries, 0, entries.length, 2)).toEqual({
-        firstKeptEntryIndex: 3,
-        turnStartIndex: -1,
-        isSplitTurn: false,
-      });
-    },
-  );
-
-  it("skips compaction when no history or turn prefix would be summarized", () => {
-    const entries = [
-      createMessageEntry({ role: "user", content: "hello", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("done", createUsage(2), 2), 1),
-    ];
-
-    expect(
-      prepareCompaction(entries, {
-        enabled: true,
-        reserveTokens: 0,
-        keepRecentTokens: 10_000,
-      }),
-    ).toEqual({ ok: true, value: undefined });
-  });
 
   it("plans provider-triggered cuts in provider token units", () => {
     const entries = [
@@ -618,47 +543,39 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
     expect(nextResult.ok ? nextResult.value : undefined).toBeUndefined();
   });
 
-  it.each([
-    { name: "non-record", details: "invalid" },
-    { name: "missing fields", details: { readFiles: ["src/read.ts"] } },
-    { name: "wrong field types", details: { readFiles: "src/read.ts", modifiedFiles: [] } },
-    {
-      name: "mixed element types",
-      details: { readFiles: ["src/read.ts", 1], modifiedFiles: ["src/write.ts"] },
-    },
-  ] satisfies Array<{ name: string; details: unknown }>)(
-    "ignores $name persisted compaction details",
-    ({ details }) => {
-      const largeContent = "x".repeat(200_000);
-      const entries: SessionTreeEntry[] = [
-        createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
-        {
-          type: "compaction",
-          id: "entry-1",
-          parentId: "entry-0",
-          timestamp: new Date(2).toISOString(),
-          summary: "earlier summary",
-          firstKeptEntryId: "entry-0",
-          tokensBefore: 200_000,
-          details,
-        },
-        createMessageEntry({ role: "user", content: largeContent, timestamp: 3 }, 2),
-        createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
-        createMessageEntry({ role: "user", content: "recent tail", timestamp: 5 }, 4),
-      ];
+  it.each([{ name: "missing fields", details: { readFiles: ["src/read.ts"] } }] satisfies Array<{
+    name: string;
+    details: unknown;
+  }>)("ignores $name persisted compaction details", ({ details }) => {
+    const largeContent = "x".repeat(200_000);
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+      {
+        type: "compaction",
+        id: "entry-1",
+        parentId: "entry-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "earlier summary",
+        firstKeptEntryId: "entry-0",
+        tokensBefore: 200_000,
+        details,
+      },
+      createMessageEntry({ role: "user", content: largeContent, timestamp: 3 }, 2),
+      createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
+      createMessageEntry({ role: "user", content: "recent tail", timestamp: 5 }, 4),
+    ];
 
-      const result = prepareCompaction(entries, settings);
+    const result = prepareCompaction(entries, settings);
 
-      expect(result.ok).toBe(true);
-      if (!result.ok || !result.value) {
-        throw new Error("expected malformed persisted details to be ignored");
-      }
-      expect(result.value.previousSummaryDetails).toBeUndefined();
-      expect([...result.value.fileOps.read]).toEqual([]);
-      expect([...result.value.fileOps.written]).toEqual([]);
-      expect([...result.value.fileOps.edited]).toEqual([]);
-    },
-  );
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected malformed persisted details to be ignored");
+    }
+    expect(result.value.previousSummaryDetails).toBeUndefined();
+    expect([...result.value.fileOps.read]).toEqual([]);
+    expect([...result.value.fileOps.written]).toEqual([]);
+    expect([...result.value.fileOps.edited]).toEqual([]);
+  });
 });
 
 describe("generateSummary progress updates", () => {
@@ -790,55 +707,55 @@ describe("generateSummary thinking options", () => {
     expect(streamFn).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
-    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
-  ])("rejects %s compaction output", async (_name, content) => {
-    const model = createSummaryModel(true);
-    const streamFn = vi.fn<StreamFn>(() => {
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content,
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: createUsage(1),
-          stopReason: "stop",
-          timestamp: 1,
-        },
+  it.each([["whitespace-only", [{ type: "text" as const, text: " \n\t " }]]])(
+    "rejects %s compaction output",
+    async (_name, content) => {
+      const model = createSummaryModel(true);
+      const streamFn = vi.fn<StreamFn>(() => {
+        const stream = createAssistantMessageEventStream();
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content,
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: createUsage(1),
+            stopReason: "stop",
+            timestamp: 1,
+          },
+        });
+        stream.end();
+        return stream;
       });
-      stream.end();
-      return stream;
-    });
 
-    const result = await generateSummary(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      1_000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "low",
-      streamFn,
-    );
+      const result = await generateSummary(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        model,
+        1_000,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "low",
+        streamFn,
+      );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected empty compaction output to fail");
-    }
-    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
-    expect(result.error).toMatchObject({
-      name: "CompactionError",
-      code: "summarization_failed",
-      message: "Summarization failed: model returned no summary text",
-    });
-  });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected empty compaction output to fail");
+      }
+      expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
+      expect(result.error).toMatchObject({
+        name: "CompactionError",
+        code: "summarization_failed",
+        message: "Summarization failed: model returned no summary text",
+      });
+    },
+  );
 
   it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
     const model = createSummaryModel(true);
@@ -901,16 +818,9 @@ describe("split-turn compaction", () => {
       budgets: [800, 500],
       focus: `<policy>${"preserve generated policy ".repeat(200)}</policy>`,
     },
-    {
-      name: "active overflow request",
-      history: true,
-      prefix: false,
-      budgets: [800],
-      activeRequest: "finish the current deployment review",
-    },
   ])(
     "forwards focus and serializes $name summaries",
-    async ({ history, prefix, budgets, focus = operatorFocus, activeRequest }) => {
+    async ({ history, prefix, budgets, focus = operatorFocus }) => {
       const model = createSummaryModel();
       const prompts: string[] = [];
       const outputBudgets: Array<number | undefined> = [];
@@ -951,7 +861,6 @@ describe("split-turn compaction", () => {
             ? [{ role: "user", content: "prefix", timestamp: 2 }, runtimeContext]
             : [],
           isSplitTurn: prefix,
-          ...(activeRequest ? { latestUnresolvedUserRequest: activeRequest } : {}),
           tokensBefore: 100,
           fileOps: createFileOps(),
           settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
@@ -986,11 +895,40 @@ describe("split-turn compaction", () => {
         expect(prompts[0]).toContain("## Goal");
         expect(prompts[0]).not.toContain("## Original Request");
       }
-      if (result.ok && activeRequest) {
-        expect(result.value.summary).toContain(
-          `## Latest unresolved user request\n${JSON.stringify(activeRequest)}`,
-        );
-      }
+    },
+  );
+});
+
+describe("compactWithoutSummary", () => {
+  const lossNotice = "2 earlier message(s) were removed without a summary";
+  // About 1,200 characters with the constraint in the middle: inside the 2,000-character
+  // split-turn ask bound, beyond the 800-character unresolved-request bound.
+  const filler = "Context for the split request. ".repeat(19);
+  const sourceAsk = `${filler}Constraint: keep SOURCE-ASK-MIDDLE. ${filler}`.trim();
+  it.each([{ name: "a constrained foreground budget", summaryTokenBudget: 450 }])(
+    "keeps the loss notice, source ask, and unresolved request beside $name",
+    (case_) => {
+      const result = compactWithoutSummary({
+        firstKeptEntryId: "kept-entry",
+        messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
+        turnPrefixMessages: [{ role: "user", content: sourceAsk, timestamp: 2 }],
+        isSplitTurn: true,
+        latestUnresolvedUserRequest: "finish the review",
+        previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+        tokensBefore: 100,
+        fileOps: createFileOps(),
+        settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+        summaryTokenBudget: case_.summaryTokenBudget,
+      });
+
+      expect(result.ok).toBe(true);
+      const summary = result.ok ? result.value.summary : "";
+      expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+      expect(summary).toContain(lossNotice);
+      expect(summary).toContain('"finish the review"');
+      expect(sourceAsk.length).toBeGreaterThan(1_100);
+      expect(summary).toContain(JSON.stringify(sourceAsk));
+      expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
     },
   );
 });

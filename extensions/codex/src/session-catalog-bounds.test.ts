@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
 import { CodexCatalogPersistence, type CodexCatalogState } from "./session-catalog-index-state.js";
-import {
-  CodexCatalogProjections,
-  projectCodexCatalogThread,
-} from "./session-catalog-projection.js";
+import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { CodexCatalogProjections } from "./session-catalog-projection.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
 
 describe("resident catalog bounded bookkeeping", () => {
@@ -29,7 +26,16 @@ describe("resident catalog bounded bookkeeping", () => {
       path: "/" + "p".repeat(4096),
       source: "cli",
     });
-    await expect(projectCodexCatalogThread(thread)).rejects.toThrow("rollout path");
+    const index = new CodexCatalogIndex({
+      homeId: "oversized-notification-path",
+      assertCurrent: () => {},
+      readNative: async () => ({ rows: [] }),
+    });
+    try {
+      await expect(index.upsertThread(thread)).rejects.toThrow("rollout path");
+    } finally {
+      await index.close();
+    }
   });
 
   it("invalidates an overflowing persistence backlog without dropping admitted writes", async () => {
@@ -64,21 +70,5 @@ describe("resident catalog bounded bookkeeping", () => {
     expect(deleted).not.toContain(key("pending-20000"));
     expect(deleted).not.toContain(key("pending-20001"));
     expect(report).toHaveBeenCalledOnce();
-  });
-
-  it("keeps old observations fenced after mutation bookkeeping reaches capacity", async () => {
-    const observations = new CodexCatalogObservations();
-    const gate = createDeferred<void>();
-    const pending = observations.observe(async (isCurrent) => {
-      await gate.promise;
-      return isCurrent("first");
-    });
-    observations.mark("first");
-    for (let i = 0; i < 20_001; i++) {
-      observations.mark(`later-${i}`);
-    }
-    gate.resolve();
-    await expect(pending).resolves.toBe(false);
-    await expect(observations.observe(async (isCurrent) => isCurrent("first"))).resolves.toBe(true);
   });
 });

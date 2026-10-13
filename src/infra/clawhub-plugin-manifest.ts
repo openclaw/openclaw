@@ -10,6 +10,7 @@ import {
   readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
   readClawHubStringField,
+  readRequiredClawHubStringArrayField,
   readRequiredClawHubStringField,
 } from "./clawhub-client.js";
 
@@ -45,15 +46,10 @@ export function parseClawHubPluginCapabilities(
     result.contracts = Object.fromEntries(
       Object.keys(contracts)
         .toSorted()
-        .map((family) => {
-          const names = readClawHubStringArrayField(contracts, family, "plugin contracts");
-          if (!names) {
-            throw new Error(
-              `Malformed ClawHub plugin contracts: expected ${family} to be a string array.`,
-            );
-          }
-          return [family, names];
-        }),
+        .map((family) => [
+          family,
+          readRequiredClawHubStringArrayField(contracts, family, "plugin contracts"),
+        ]),
     );
   }
   return result;

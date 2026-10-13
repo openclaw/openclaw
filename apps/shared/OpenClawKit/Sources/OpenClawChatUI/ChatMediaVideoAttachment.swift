@@ -171,7 +171,7 @@ struct ChatMediaVideoAttachment: View {
 
 @MainActor
 @Observable
-final class ChatMediaVideoPlayer: ChatMediaNowPlayingOwner {
+final class ChatMediaVideoPlayer: ChatMediaPlayer {
     let player: AVPlayer
     private(set) var isPlaying = false
     private(set) var isPlaybackBlocked = false
@@ -223,10 +223,6 @@ final class ChatMediaVideoPlayer: ChatMediaNowPlayingOwner {
         ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
     }
 
-    func stopForMediaPlaybackInterruption() {
-        self.pause()
-    }
-
     func pause() {
         self.player.pause()
         self.isPlaying = false
@@ -241,19 +237,6 @@ final class ChatMediaVideoPlayer: ChatMediaNowPlayingOwner {
             duration: duration.isFinite && duration > 0 ? duration : 0,
             elapsed: elapsed.isFinite && elapsed > 0 ? elapsed : 0,
             playbackRate: self.isPlaying ? 1 : 0)
-    }
-
-    func handleRemoteCommand(_ command: ChatMediaRemoteCommand) {
-        switch command {
-        case .play: self.play()
-        case .pause: self.pause()
-        case .toggle:
-            if self.isPlaying {
-                self.pause()
-            } else {
-                self.play()
-            }
-        }
     }
 
     func cleanup() {
