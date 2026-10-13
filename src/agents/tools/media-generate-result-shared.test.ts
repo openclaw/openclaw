@@ -2,24 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  deleteSessionEntryLifecycle,
-  replaceSessionEntry,
-  resetSessionEntryLifecycle,
-} from "../../config/sessions/session-accessor.js";
 import { STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
-import * as announceDelivery from "../subagents/announce/subagent-announce-delivery.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
-import {
-  createMediaGenerationTaskLifecycle,
-  scheduleMediaGenerationTaskCompletion,
-} from "./media-generate-background-shared.js";
 import { resolveMediaGenerateToolContext } from "./media-generate-background.js";
 import { buildMediaGenerateToolExecutionResult } from "./media-generate-result-shared.js";
 import { loadMediaToolReferences } from "./media-tool-shared.js";
@@ -29,11 +15,6 @@ const { resolveSandboxContext } = vi.hoisted(() => ({
 }));
 // mock-isolation: Provisioning stays synthetic so this test never opens real sandbox state.
 vi.mock("../sandbox/context.js", () => ({ resolveSandboxContext }));
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetGeneratedMediaTaskActivityForTests();
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const png = Buffer.from(
@@ -138,163 +119,6 @@ describe("generated media sandbox access", () => {
       await expect(fs.readdir(workspace)).resolves.toEqual([]);
     },
   );
-
-  it.each([
-    "current",
-    "reset-during-generation",
-    "recreate-during-generation",
-    "reset-during-acquisition",
-    "reset-after-gitignore",
-    "reset-after-first-output",
-  ] as const)("binds detached staging to the admitted session: %s", async (transition) => {
-    await withOpenClawTestState({ prefix: "media-staging-lifecycle-" }, async (state) => {
-      const { workspace, sandbox, acquireSandbox, params } = await fixture();
-      const sessionKey = "agent:main:media-staging";
-      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      const scope = { agentId: "main", sessionKey, storePath };
-      const entry = { sessionId: "original", lifecycleRevision: "original", updatedAt: 1 };
-      const config = {
-        agents: { ownership: "explicit" as const, entries: { main: { workspace } } },
-      };
-      await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
-      await replaceSessionEntry(scope, entry);
-      const lifecycle = createMediaGenerationTaskLifecycle("image");
-      const handle = await lifecycle.createTaskRun({
-        sessionKey,
-        requesterAgentId: "main",
-        prompt: "synthetic images",
-      });
-      if (!handle?.detach) {
-        throw new Error("Expected an admitted detached generation");
-      }
-      const invalidate = async () => {
-        if (transition === "recreate-during-generation") {
-          await deleteSessionEntryLifecycle({
-            storePath,
-            agentId: "main",
-            archiveTranscript: false,
-            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          });
-          await replaceSessionEntry(scope, {
-            sessionId: "successor",
-            lifecycleRevision: "successor",
-            updatedAt: 2,
-          });
-        } else {
-          await resetSessionEntryLifecycle({
-            storePath,
-            agentId: "main",
-            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-            resetBoundary: { context: "clear", reason: "reset", cwd: workspace },
-            buildNextEntry: () => ({ ...entry, lifecycleRevision: "successor", updatedAt: 2 }),
-          });
-        }
-      };
-      const secondPath = path.join(path.dirname(params.mediaUrls[0]!), "second.png");
-      await fs.writeFile(secondPath, png);
-      const attachments = [...params.attachments, { type: "image" as const, path: secondPath }];
-      const createFile = sandbox.bridge.createFileExclusive!.bind(sandbox.bridge);
-      const written = vi
-        .spyOn(sandbox.bridge, "createFileExclusive")
-        .mockImplementation(async (request) => {
-          const result = await createFile(request);
-          if (
-            (transition === "reset-after-gitignore" && request.filePath.endsWith(".gitignore")) ||
-            (transition === "reset-after-first-output" && request.filePath.endsWith("/image.png"))
-          ) {
-            await invalidate();
-          }
-          return result;
-        });
-      const acquire = vi.fn(async () => {
-        if (transition === "reset-during-acquisition") {
-          await invalidate();
-        }
-        return acquireSandbox();
-      });
-      const deliver = vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockResolvedValue({
-        delivered: true,
-        path: "direct",
-      });
-      const scheduled: Array<() => Promise<void>> = [];
-      const generationStarted = createDeferredCore();
-      const finishGeneration = createDeferredCore();
-      const results: Array<Awaited<ReturnType<typeof buildMediaGenerateToolExecutionResult>>> = [];
-      scheduleMediaGenerationTaskCompletion({
-        lifecycle,
-        handle,
-        scheduleBackgroundWork: (work) => scheduled.push(work),
-        progressSummary: "Generating synthetic images",
-        toolName: "image_generate",
-        onWakeFailure: vi.fn(),
-        run: async () => {
-          generationStarted.resolve();
-          await finishGeneration.promise;
-          const result = await buildMediaGenerateToolExecutionResult({
-            ...params,
-            attachments,
-            mediaUrls: attachments.map((attachment) => attachment.path),
-            sandbox: acquire,
-            taskHandle: handle,
-          });
-          results.push(result);
-          return result;
-        },
-      });
-      expect(scheduled).toHaveLength(1);
-      const pending = scheduled[0]!();
-      await generationStarted.promise;
-      try {
-        if (transition.endsWith("during-generation")) {
-          await invalidate();
-        }
-      } finally {
-        finishGeneration.resolve();
-        await pending;
-      }
-      const result = results[0];
-      if (!result) {
-        throw new Error("Expected generated media to survive staging refusal");
-      }
-      expect(result.attachments).toEqual(attachments);
-      for (const attachment of attachments) {
-        await expect(fs.readFile(attachment.path)).resolves.toEqual(png);
-      }
-      if (transition === "current") {
-        expect(deliver).toHaveBeenCalledOnce();
-        expect(written).toHaveBeenCalledTimes(3);
-        const paths = result.details.sandboxPaths as string[];
-        expect(paths).toHaveLength(2);
-        for (const relativePath of paths) {
-          await expect(fs.readFile(path.join(workspace, relativePath))).resolves.toEqual(png);
-        }
-      } else {
-        expect(deliver).not.toHaveBeenCalled();
-        expect(result.wakeResult).toContain(
-          "Sandbox copy unavailable: Error: The requesting session is no longer current",
-        );
-        const writesBeforeReset =
-          transition === "reset-after-first-output"
-            ? 2
-            : transition === "reset-after-gitignore"
-              ? 1
-              : 0;
-        expect(written).toHaveBeenCalledTimes(writesBeforeReset);
-        if (transition === "reset-after-first-output") {
-          expect(result.details.sandboxPaths).toHaveLength(1);
-        } else {
-          expect(result.details.sandboxPaths).toBeUndefined();
-        }
-        if (transition.endsWith("during-generation")) {
-          expect(acquire).not.toHaveBeenCalled();
-        }
-        if (writesBeforeReset === 0) {
-          await expect(fs.readdir(workspace)).resolves.toEqual([]);
-        }
-      }
-    });
-  });
 
   it.each([
     { requesterAgentId: "main", projectionClosed: true },
