@@ -697,9 +697,13 @@ display name. Passing a different `name` does not rename an existing project.
 `projects.list` returns recorded projects without checking Git. Recent projects
 and folders do not wait for session display details to refresh. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
-checkouts from visible sessions and managed worktrees. Concurrent discovery of
-the same checkout set shares one bounded Git pass; subsequent requests read
-fresh repository metadata, including external remote changes and moved checkouts.
+checkouts from visible sessions and managed worktrees. Listings return the last
+Git discovery snapshot immediately while one bounded background pass refreshes
+the same checkout set. A cold set initially includes only recorded worktree facts;
+session-only checkouts appear after discovery completes. External remote changes
+and moved or removed checkouts refresh in the background on the first listing
+after the snapshot is one minute old. A changed checkout set starts new discovery,
+and Gateway shutdown cancels pending refreshes and clears snapshots.
 Listings retain a session snapshot during discovery and recheck the contributing
 sessions before replying. Unrelated session creation and activity do not invalidate
 an in-flight listing; changed access to a contributing session still requires a retry.
