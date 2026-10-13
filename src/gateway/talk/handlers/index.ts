@@ -62,7 +62,6 @@ import {
   withSpeakerSelectionFallbackCompat,
 } from "../../../tts/speaker.js";
 import { CODE_HEAVY_SPOKEN_FALLBACK, isCodeHeavySpeechText } from "../../../tts/speech-text.js";
-import { resolveEffectiveTtsConfig } from "../../../tts/tts-config.js";
 import { synthesizeTalkSpeech } from "../../../tts/tts-synthesis.js";
 import {
   isTtsProviderConfiguredAsync,
@@ -210,9 +209,6 @@ function buildTalkTtsConfig(
 async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
   const realtimeAgentId = resolveTalkSessionAgentId(config, params.sessionKey);
-  const speechConfig = params.sessionKey
-    ? { ...config, tts: resolveEffectiveTtsConfig(config, realtimeAgentId) }
-    : config;
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
   const activeSpeechProvider = canonicalizeSpeechProviderId(talkResolved?.provider, config);
   const requestedProvider = normalizeOptionalString(params.provider);
@@ -265,8 +261,8 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
             speechAvailable &&
             (await configuredOrFalseAsync(() => {
               const setup =
-                provider.id === activeSpeechProvider ? buildTalkTtsConfig(speechConfig) : undefined;
-              const effectiveConfig = setup && !("error" in setup) ? setup.cfg : speechConfig;
+                provider.id === activeSpeechProvider ? buildTalkTtsConfig(config) : undefined;
+              const effectiveConfig = setup && !("error" in setup) ? setup.cfg : config;
               const effectiveTts = resolveTtsConfig(effectiveConfig);
               return isTtsProviderConfiguredAsync(effectiveTts, provider, effectiveConfig);
             })),

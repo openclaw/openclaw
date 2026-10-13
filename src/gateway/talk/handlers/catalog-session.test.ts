@@ -23,7 +23,7 @@ const sessionKey = "agent:researcher:catalog";
 
 describe("session-scoped Talk catalog", () => {
   it.each([false, true])(
-    "uses the selected agent's speech configuration (selected credentials: %s)",
+    "uses the selected agent's transcription credentials (selected credentials: %s)",
     async (selectedHasCredentials) => {
       await withOpenClawTestState(
         { label: "talk-catalog-session", env: { OPENAI_API_KEY: undefined } },
@@ -165,7 +165,14 @@ describe("session-scoped Talk catalog", () => {
                   await call("talk.catalog", { params, client, context, respond });
                   expect(respond.mock.calls[0]?.[2]).toBeUndefined();
                   expect(expectRespondOk(respond)).toMatchObject({
-                    speech: { providers: [expect.objectContaining({ id: "sample", configured })] },
+                    speech: {
+                      providers: [
+                        expect.objectContaining({
+                          id: "sample",
+                          configured: !selectedHasCredentials,
+                        }),
+                      ],
+                    },
                     transcription: {
                       ready: configured,
                       providers: [expect.objectContaining({ id: "openai", configured })],
