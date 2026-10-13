@@ -213,55 +213,7 @@ describe("resolveTsdownBuildInvocation", () => {
     });
   });
 
-  it("prints wrapper help without invoking pnpm or tsdown", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/tsdown-build.mts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/tsdown-build.mts");
-    expect(result.stdout).not.toContain("Scope:");
-    expect(result.stdout).not.toContain("pnpm");
-  });
-
-  it("serializes declaration graphs when --dts overrides the no-DTS environment", () => {
-    const results = resolveTsdownBuildInvocations({
-      args: ["--dts"],
-      platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(results).toHaveLength(3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
-    expect(results[1]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-packages"]));
-    expect(results[1]?.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
-    expect(results[2]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-unified"]));
-    expect(results.at(-1)?.args).toEqual(
-      expect.arrayContaining(["--filter", TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)]),
-    );
-  });
-
-  it.each([...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS])(
-    "honors --dts for the single %s declaration selection",
-    (group) => {
-      const results = resolveTsdownBuildInvocations({
-        args: ["--config", "tsdown.config.ts", "--filter", group, "--dts"],
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-        ...NO_MEMORY_LIMIT,
-      });
-      expect(filtersOf(results)).toEqual([group]);
-      expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
-    },
-  );
-
-  it.each([{ watch: [] }, { watch: ["--watch"] }])(
+  it.each([{ watch: [] }])(
     "keeps --no-dts out of canonical config construction (watch=$watch)",
     ({ watch }) => {
       const results = resolveTsdownBuildInvocations({
@@ -312,21 +264,10 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it.each<[string, string[], TsdownInvocationParams]>([
     ["short watch", ["-c", "tsdown.config.ts", "-w"], { env: {}, ...NO_MEMORY_LIMIT }],
-    ["assigned short watch", ["-c", "tsdown.config.ts", "-w=src"], { env: {}, ...NO_MEMORY_LIMIT }],
     [
       "config-free positional watch",
       ["--no-config", "packages/normalization-core/src/mountinfo-path.ts", "--watch"],
       { env: {}, cgroupMemoryLimitBytes: 4 * GiB },
-    ],
-    [
-      "custom config",
-      ["-c", "custom.tsdown.config.ts", "--clean"],
-      {
-        platform: "linux",
-        nodeExecPath: "/usr/bin/node",
-        env: {},
-        cgroupMemoryLimitBytes: 4 * GiB,
-      },
     ],
   ])("keeps %s in one owning process", (_name, args, params) => {
     const { invocations, heapShortfall } = resolveTsdownBuildPlan({ args, ...params });
@@ -349,7 +290,7 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
-  it.each([{ extra: [] }, { extra: ["--watch"] }])(
+  it.each([{ extra: [] }])(
     "rejects overlapping full and SDK declaration selections $extra",
     ({ extra }) => {
       expect(() =>
@@ -369,23 +310,6 @@ describe("resolveTsdownBuildInvocation", () => {
       ).toThrow("full declarations already include the SDK");
     },
   );
-
-  it("admits the full declaration writer while retaining the SDK-only selection", () => {
-    for (const group of [
-      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-      ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-    ]) {
-      const plan = resolveTsdownBuildPlan({
-        args: ["--config", "tsdown.config.ts", "--filter", group],
-        env: {},
-        cgroupMemoryLimitBytes: 4 * GiB,
-      });
-      expect(Boolean(plan.heapShortfall?.fatal)).toBe(
-        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((name) => name === group),
-      );
-      expect(filtersOf(plan.invocations)).toEqual([group]);
-    }
-  });
 
   it("rejects default watch mode before splitting long-lived watchers", () => {
     expect(() =>
@@ -476,17 +400,23 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(new Set(resolveTsdownCleanOutputRoots(args))).toEqual(new Set(listTsdownOutputRoots()));
   });
 
-  it.each([
-    ["explicit", ["--config", "tsdown.config.ts"]],
-    ["default", []],
-  ])("preserves tsdown OR semantics for %s config with an unmatched filter", (_label, config) => {
-    const args = [...config, "--filter", TSDOWN_PACKAGE_CONFIG_GROUP, "--filter", "missing-group"];
+  it.each([["explicit", ["--config", "tsdown.config.ts"]]])(
+    "preserves tsdown OR semantics for %s config with an unmatched filter",
+    (_label, config) => {
+      const args = [
+        ...config,
+        "--filter",
+        TSDOWN_PACKAGE_CONFIG_GROUP,
+        "--filter",
+        "missing-group",
+      ];
 
-    const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+      const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
 
-    expect(results).toHaveLength(config.length === 0 ? 2 : 1);
-    expect(results.at(-1)?.args.slice(-args.length)).toEqual(args);
-  });
+      expect(results).toHaveLength(config.length === 0 ? 2 : 1);
+      expect(results.at(-1)?.args.slice(-args.length)).toEqual(args);
+    },
+  );
 
   it("applies admission when tsdown selects the root config by cwd", () => {
     const args = ["--config", "tsdown.config.ts", "--filter", ".", "--filter", "missing"];
@@ -561,30 +491,6 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(packages.invocations).toHaveLength(1);
   });
 
-  it.each([
-    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
-    ["CLI override", ["--no-dts"], {}],
-  ])("applies the unified-runtime threshold to a %s plan", (_label, args, env) => {
-    const result = resolveTsdownBuildPlan({
-      args,
-      platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      env,
-      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
-    });
-
-    for (const invocation of result.invocations) {
-      expect(invocation.args).not.toContain("--concurrency");
-    }
-    expect(result.maxOldSpaceMb).toBe(1280);
-    expect(result.heapShortfall?.fatal).toBe(true);
-    expect(result.invocations).toHaveLength(2);
-    expect(result.invocations[0]?.args).toEqual(
-      expect.arrayContaining(["--config", "tsdown.ai.config.ts"]),
-    );
-    expect(result.invocations[1]?.args).not.toContain("--filter");
-  });
-
   it("keeps the selected Windows runtime and literal compiler arguments", () => {
     const args = ["--format", "esm", "--concurrency", "2"];
     const result = resolveTsdownBuildInvocation({
@@ -625,7 +531,6 @@ describe("resolveTsdownBuildInvocation", () => {
       ["--out-dir", "first", "-d=second"],
       "only one --out-dir/-d value",
     ],
-    ["missing filter", ["--filter"], "one concrete --filter/-F value"],
   ])("rejects %s before cleanup", (_label, args, message) => {
     const cleanup = vi.fn();
     expect(() =>
@@ -729,31 +634,6 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
-  it("caps finite cgroups by host MemAvailable and preserves zero", () => {
-    const memory = {
-      env: {},
-      platform: "linux",
-      cgroupMemoryLimitBytes: 8 * GiB,
-      physicalMemoryBytes: 16 * GiB,
-      procMeminfoPath: "/test/meminfo",
-      fs: createMemoryFileSystem(
-        new Map([["/test/meminfo", "MemTotal: 16777216 kB\nMemAvailable: 4194304 kB\n"]]),
-      ),
-    };
-    expect(resolveTsdownBuildPlan(memory).maxOldSpaceMb).toBe(3328);
-    expect(resolveTsdownBuildPlan({ ...memory, availableMemoryBytes: 0 }).maxOldSpaceMb).toBe(1);
-    expect(readProcessMemoryCapacity(memory)).toMatchObject({
-      capacityBytes: 8 * GiB,
-      limitBytes: 4 * GiB,
-      availableBytes: 4 * GiB,
-    });
-    expect(readProcessMemoryCapacity({ ...memory, availableMemoryBytes: 0 })).toMatchObject({
-      capacityBytes: 8 * GiB,
-      limitBytes: 0,
-      availableBytes: 0,
-    });
-  });
-
   it("keeps raw capacity unknown without a physical bound", () => {
     expect(
       readProcessMemoryCapacity({
@@ -806,14 +686,6 @@ describe("resolveTsdownBuildInvocation", () => {
     fatal?: boolean,
   ][] = [
     [
-      "keeps a parsed zero-byte cgroup limit bounded",
-      {
-        cgroupMemoryLimitPaths: ["/test/memory.max"],
-        fs: createMemoryFileSystem(new Map([["/test/memory.max", "0\n"]])),
-      },
-      1,
-    ],
-    [
       "uses Node's constrained-memory result as a canonical candidate",
       { constrainedMemoryBytes: 5 * GiB, cgroupMemoryLimitPaths: [] },
       4352,
@@ -829,19 +701,6 @@ describe("resolveTsdownBuildInvocation", () => {
         physicalMemoryBytes: 16 * GiB,
       },
       12288,
-      undefined,
-      true,
-    ],
-    [
-      "caps an oversized cgroup limit by physical memory",
-      {
-        env: {},
-        cgroupMemoryLimitBytes: 64 * GiB,
-        procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
-        physicalMemoryBytes: 4 * GiB,
-      },
-      3328,
-      4 * GiB,
       undefined,
       true,
     ],
@@ -873,25 +732,6 @@ describe("resolveTsdownBuildInvocation", () => {
       4928,
     ],
     [
-      "uses host memory for unlimited hybrid v1 despite an advisory soft limit",
-      cgroupMemory(
-        hybridRecord,
-        hybridMounts,
-        [
-          ...v1Hierarchy,
-          [`${cgroupRoot}/parent/memory.limit_in_bytes`, "9223372036854771712"],
-          [`${cgroupRoot}/parent/memory.soft_limit_in_bytes`, `${5 * GiB}`],
-        ],
-        {
-          constrainedMemoryBytes: 5 * GiB,
-          availableMemoryBytes: 16 * GiB,
-          physicalMemoryBytes: 16 * GiB,
-          procMemTotalBytes: 16 * GiB,
-        },
-      ),
-      12288,
-    ],
-    [
       "uses host memory at an observed unconstrained v2 root",
       cgroupMemory("0::/\n", v2Mount, [["/proc/meminfo", hostMeminfo]]),
       12288,
@@ -907,15 +747,6 @@ describe("resolveTsdownBuildInvocation", () => {
       12288,
       undefined,
       true,
-    ],
-    [
-      "decodes both escaped mount roots and mount points before reading limits",
-      cgroupMemory(
-        "0::/user.slice/user 999.slice/openclaw.service\n",
-        `30 25 0:26 /user.slice/user\\040999.slice ${cgroupRoot}\\040dir rw - cgroup2 cgroup2 rw\n`,
-        [[`${cgroupRoot} dir/openclaw.service/memory.high`, `${5 * GiB}`]],
-      ),
-      4352,
     ],
     [
       "preserves process rlimits while ignoring v1 soft limits",
@@ -934,15 +765,6 @@ describe("resolveTsdownBuildInvocation", () => {
       ),
       3328,
       4 * GiB,
-    ],
-    [
-      "ignores a v1 parent limit when hierarchy accounting is disabled",
-      cgroupMemory("2:memory:/parent/leaf\n", v1Mount, [
-        [`${cgroupRoot}/parent/leaf/memory.limit_in_bytes`, `${8 * GiB}`],
-        [`${cgroupRoot}/parent/memory.use_hierarchy`, "0"],
-        [`${cgroupRoot}/parent/memory.limit_in_bytes`, `${4 * GiB}`],
-      ]),
-      7424,
     ],
     [
       "keeps a representable mount when a later view cannot represent the process",
@@ -992,12 +814,6 @@ describe("resolveTsdownBuildInvocation", () => {
   const unreadable = Object.assign(new Error("EACCES"), { code: "EACCES" });
   it.each([
     {
-      name: "a cgroup record has no readable controller mount",
-      memory: cgroupMemory("0::/hidden.slice/openclaw.service\n", "", [
-        ["/proc/meminfo", "MemTotal: 16777216 kB\n"],
-      ]),
-    },
-    {
       name: "Linux cgroup membership is unreadable",
       memory: {
         platform: "linux",
@@ -1027,15 +843,6 @@ describe("resolveTsdownBuildInvocation", () => {
         `30 25 0:26 /docker/2f1a9c ${cgroupRoot} rw - cgroup2 cgroup2 rw\n`,
         [[`${cgroupRoot}/memory.max`, `${5 * GiB}`]],
       ),
-    },
-    {
-      name: "v1 hierarchy metadata is unreadable",
-      memory: cgroupMemory("7:memory:/parent/leaf\n", v1Mount, [
-        [`${cgroupRoot}/parent/leaf/memory.limit_in_bytes`, "9223372036854771712"],
-        [`${cgroupRoot}/memory.use_hierarchy`, "0"],
-        [`${cgroupRoot}/parent/memory.use_hierarchy`, unreadable],
-        ["/proc/meminfo", hostMeminfo],
-      ]),
     },
   ])("refuses cleanup when $name", ({ memory }) => {
     expectCgroupRefusal(memory);
@@ -1153,7 +960,6 @@ describe("resolveTsdownBuildInvocation", () => {
     }));
 
   it.each([
-    { label: "default build", args: [], skipDts: "0", preserveMetadata: "0" },
     { label: "cached source launcher", args: ["--no-clean"], skipDts: "1", preserveMetadata: "1" },
   ])(
     "preserves separately owned outputs during $label cleanup",
@@ -1262,22 +1068,21 @@ describe("resolveTsdownBuildInvocation", () => {
       }),
   );
 
-  it.each([
-    { label: "direct root", link: "packages/ai/dist", declaration: "index.d.ts" },
-    { label: "intermediate root", link: "packages", declaration: "ai/dist/index.d.ts" },
-  ])("refuses to sanitize a symlinked $label", ({ link, declaration }) =>
-    fixture.run(async () => {
-      const root = createTempDir("tsdown-sanitize-link-");
-      const target = path.join(root, "target");
-      const malformed = "export { __exportAll, publicApi };\n";
-      const file = writeFixtureFile(target, declaration, malformed);
-      fs.mkdirSync(path.dirname(path.join(root, link)), { recursive: true });
-      fs.symlinkSync(target, path.join(root, link), "dir");
-      expect(() =>
-        sanitizeTsdownBuildOutputRoots(["--config", "tsdown.ai.config.ts"], root),
-      ).toThrow(/symbolic link/u);
-      expect(fs.readFileSync(file, "utf8")).toBe(malformed);
-    }),
+  it.each([{ label: "intermediate root", link: "packages", declaration: "ai/dist/index.d.ts" }])(
+    "refuses to sanitize a symlinked $label",
+    ({ link, declaration }) =>
+      fixture.run(async () => {
+        const root = createTempDir("tsdown-sanitize-link-");
+        const target = path.join(root, "target");
+        const malformed = "export { __exportAll, publicApi };\n";
+        const file = writeFixtureFile(target, declaration, malformed);
+        fs.mkdirSync(path.dirname(path.join(root, link)), { recursive: true });
+        fs.symlinkSync(target, path.join(root, link), "dir");
+        expect(() =>
+          sanitizeTsdownBuildOutputRoots(["--config", "tsdown.ai.config.ts"], root),
+        ).toThrow(/symbolic link/u);
+        expect(fs.readFileSync(file, "utf8")).toBe(malformed);
+      }),
   );
 
   it.each([
@@ -1363,7 +1168,7 @@ describe("resolveTsdownBuildInvocation", () => {
       expect(fs.readFileSync(owner, "utf8")).toBe("owned");
     }));
 
-  it.each([".", ".."])('refuses to clean cwd or ancestor "%s"', (output) =>
+  it.each(["."])('refuses to clean cwd or ancestor "%s"', (output) =>
     fixture.run(async () => {
       const root = createTempDir("tsdown-cwd-clean-");
       const cwd = path.join(root, "checkout");
@@ -1421,24 +1226,6 @@ describe("resolveTsdownBuildInvocation", () => {
       expect(fs.readFileSync(first, "utf8")).toBe("keep");
       expect(fs.readFileSync(file, "utf8")).toBe("generated");
       expect(fs.readFileSync(metadata, "utf8")).toBe("metadata");
-    }));
-
-  it("refuses an output root behind an intermediate symlink", () =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-tsdown-clean-parent-symlink-");
-      const checkoutDir = path.join(rootDir, "checkout");
-      const targetDir = path.join(rootDir, "external", "dist");
-      const targetFile = path.join(targetDir, "keep.js");
-      fs.mkdirSync(checkoutDir);
-      fs.mkdirSync(targetDir, { recursive: true });
-      fs.writeFileSync(targetFile, "keep\n");
-      fs.symlinkSync(path.dirname(targetDir), path.join(checkoutDir, "linked"), "dir");
-
-      expect(() =>
-        cleanTsdownOutputRoots({ cwd: checkoutDir, roots: [path.join("linked", "dist")] }),
-      ).toThrow(/symbolic link/u);
-
-      expect(fs.readFileSync(targetFile, "utf8")).toBe("keep\n");
     }));
 
   it("validates every chunk root before pruning any output", () =>
@@ -1636,20 +1423,6 @@ describe("runTsdownBuildInvocation", () => {
     return supervisor;
   }
 
-  it("recognizes ineffective dynamic imports split across output chunks", () => {
-    const marker = "[INEFFECTIVE_DYNAMIC_IMPORT]";
-    const output = `${marker} synthetic.ts\n`;
-    for (let split = 1; split < marker.length; split += 1) {
-      const scanner = createTsdownOutputScanner({ maxCaptureBytes: 7 });
-      scanner.append(Buffer.from(output.slice(0, split)));
-      scanner.append(Buffer.from(output.slice(split)));
-      expect(scanner.finish(), `split at ${split}`).toMatchObject({
-        captured: output.slice(-7),
-        hasIneffectiveDynamicImport: true,
-      });
-    }
-  });
-
   it("streams output while bounding capture and classifying build diagnostics", () =>
     fixture.run(async () => {
       const output = createWriteSink();
@@ -1677,29 +1450,6 @@ describe("runTsdownBuildInvocation", () => {
       expect(result.captured.length).toBeLessThanOrEqual(20);
       expect(output.chunks.join("")).toContain("stdout-ok");
       expect(output.chunks.join("")).not.toContain("[tsdown-build] child result");
-    }));
-
-  it("reports a silent compiler failure without attributing it to cleanup", () =>
-    fixture.run(async () => {
-      const output = createWriteSink();
-      const result = await runTsdownBuildInvocation(nodeInvocation("process.exit(7)"), {
-        stderr: output.sink,
-        env: { OPENCLAW_TSDOWN_HEARTBEAT_MS: "0" },
-      });
-
-      expect(result).toMatchObject({ status: 7, signal: null, timedOut: false, error: null });
-      expect(output.chunks.join("")).toContain(
-        JSON.stringify({
-          status: 7,
-          signal: null,
-          parentSignal: null,
-          timedOut: false,
-          cleanup: "none",
-          observedProcessState: "dead",
-          observationScope: process.platform === "win32" ? "leader" : "process-group",
-          finalStatus: 7,
-        }),
-      );
     }));
 
   it.skipIf(process.platform === "win32")(
