@@ -23,6 +23,7 @@ import {
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
+  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
@@ -281,23 +282,20 @@ export async function prepareSubagentRegistrationRows(
   selectedRunIds: readonly string[],
   context: OpenClawStateWorkerContext,
 ): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
-  await prepareSubagentRunsCache(
+  const prepared = await prepareSubagentRunsCache(
     persistedSubagentRunsReadCache,
     readAllSubagentRunsInWorker,
     context,
   );
-  return () => {
-    const snapshot = loadPersistedSubagentRunsForRead(persistedSubagentRunsReadCache, context);
-    const lookup = getSessionListLookup(persistedSubagentRunsReadCache, snapshot);
-    return new Map(
-      indexedSnapshotRows(snapshot, [
-        ...new Set([
-          ...lookup.selectRunIds(new Set(selectedRunIds)),
-          ...lookup.selectChildren(new Set([childSessionKey])),
-        ]),
-      ]).map((entry) => [entry.runId, entry]),
+  const runIds = new Set(selectedRunIds);
+  return () =>
+    mergeSelectedFullRuns(
+      persistedSubagentRunsReadCache,
+      subagentRuns,
+      prepared,
+      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
+      { context },
     );
-  };
 }
 
 export function getSubagentRunsSnapshotForRead(

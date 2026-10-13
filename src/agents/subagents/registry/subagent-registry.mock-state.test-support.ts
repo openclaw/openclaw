@@ -118,7 +118,6 @@ export function createSubagentRegistryMockState() {
     emitSessionIdentityMutation: vi.fn((mutation: SessionIdentityMutation) =>
       notifyListeners(sessionIdentityMutationListeners, mutation),
     ),
-    clearSubagentRunsReadCacheForTest: vi.fn(),
     persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
     restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
     getSubagentRunsSnapshotForRead: vi.fn(

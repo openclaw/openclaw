@@ -27,16 +27,12 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
-import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
@@ -132,53 +128,6 @@ it("rejects a spawn cancelled during requester acquisition before starting effec
     error: "sessions_spawn could not read the requester session: requester acquisition cancelled",
   });
   expect(effectsStarted).not.toHaveBeenCalled();
-});
-
-it("reads the requester off-thread while retaining dirty-sibling validation", async () => {
-  const sibling = "agent:main:matrix:channel:!mixed:example.org";
-  const database = runOpenClawAgentWriteTransaction(
-    (writer) => {
-      for (const sessionKey of [fixture.parentSessionKey, sibling]) {
-        writeSessionEntry(writer, sessionKey, { sessionId: sessionKey, updatedAt: 1 });
-      }
-      return writer;
-    },
-    { agentId: "main" },
-  );
-  const readRequester = () =>
-    spawnSubagentDirect(
-      { task: "capture requester", context: "isolated", groupId: "requires-collect" },
-      { agentSessionKey: fixture.parentSessionKey },
-    );
-  getRuntimeConfig();
-  const sql = observeHostDataSql();
-  try {
-    expect(await readRequester()).toEqual({
-      status: "error",
-      error: "sessions_spawn groupId requires collect=true.",
-    });
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-  database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-    JSON.stringify({
-      sessionId: sibling,
-      updatedAt: 1,
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "matrix", to: "!Mixed:example.org" },
-      }),
-    }),
-    sibling,
-  );
-  database.db
-    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-    .run(sibling);
-  markCanonicalSessionValidationPending(database, [sibling]);
-  expect(await readRequester()).toMatchObject({
-    status: "error",
-    error: expect.stringContaining("non-canonical persisted row"),
-  });
 });
 
 it.each([

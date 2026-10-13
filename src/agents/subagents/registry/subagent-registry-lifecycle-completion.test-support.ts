@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -65,7 +66,7 @@ function policyReceipt(
       return [
         {
           subagent,
-          version: subagentRunRowVersion(row),
+          version: expectDefined(subagentRunRowVersion(row), "subagent completion row version"),
           cleanupHandled: entry.cleanupHandled,
         },
       ];

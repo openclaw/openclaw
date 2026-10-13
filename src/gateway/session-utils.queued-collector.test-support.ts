@@ -33,6 +33,7 @@ import type {
 } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
@@ -264,6 +265,12 @@ export function useQueuedCollectorFixture() {
       label: "Reserved collector",
       incognito: false,
       requesterInternalKey: parentKey,
+      parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+        cfg: getRuntimeConfig(),
+        key: parentKey,
+        agentId: "main",
+        projection: "full",
+      }),
       completionOwnerSessionKey: parentKey,
       creationPolicy,
       modelPatch: {},

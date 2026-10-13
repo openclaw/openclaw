@@ -74,6 +74,13 @@ it.each(["main", "research"])(
           requesterAgentId: "main",
           targetAgentId,
           requesterInternalKey: parentKey,
+          parentTarget: {
+            agentId: "main",
+            storePath: parent.path,
+            canonicalKey: parentKey,
+            storeKeys: [parentKey],
+            store: { [parentKey]: parent.readSession(parentKey, authority)!.entry },
+          },
           childSessionKey: childKey,
           incognito: true,
           expectedParentSessionId: "parent-session",

@@ -118,12 +118,18 @@ it.each([
         return upsert(...args);
       });
     try {
-      const result = await withIncognitoSessionBinding({ actor: parent }, () =>
+      const result = await withIncognitoSessionBinding({ actor: parent }, async () =>
         createInitialSubagentSession({
           cfg: {},
           requesterAgentId: parent.agentId,
           targetAgentId: childOwner.agentId,
           requesterInternalKey: parentKey,
+          parentTarget: await spawnRuntime.resolveGatewaySessionStoreTargetInWorker({
+            cfg: {},
+            key: parentKey,
+            agentId: parent.agentId,
+            projection: "full",
+          }),
           childSessionKey: childKey,
           incognito: true,
           expectedParentSessionId: name,
