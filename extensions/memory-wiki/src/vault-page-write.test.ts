@@ -26,6 +26,7 @@ describe("writeGuardedVaultPage", () => {
 
     await expect(
       writeGuardedVaultPage({
+        vaultRoot: "/tmp/wiki",
         vault,
         pagePath: "sources/page.md",
         content: "body",
@@ -43,6 +44,7 @@ describe("writeGuardedVaultPage", () => {
 
     await expect(
       writeGuardedVaultPage({
+        vaultRoot: "/tmp/wiki",
         vault,
         pagePath: "sources/page.md",
         content: "body",
@@ -61,6 +63,7 @@ describe("writeGuardedVaultPage", () => {
 
     await expect(
       writeGuardedVaultPage({
+        vaultRoot: "/tmp/wiki",
         vault,
         pagePath: "concepts/page.md",
         content: "body",
@@ -80,6 +83,7 @@ describe("writeGuardedVaultPage", () => {
 
     await expect(
       writeGuardedVaultPage({
+        vaultRoot: "/tmp/wiki",
         vault,
         pagePath: "sources/page.md",
         content: "body",

@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
+import { invalidateMemoryWikiVaultCounts } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { preserveHumanNotesBlock, slugifyWikiPageStem, slugifyWikiSegment } from "./markdown.js";
@@ -80,6 +81,7 @@ export async function ingestMemoryWikiSource(params: {
       existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
       "utf8",
     );
+    invalidateMemoryWikiVaultCounts(params.config.vault.path);
     params.signal?.throwIfAborted();
     await appendMemoryWikiLog(params.config.vault.path, {
       type: "ingest",

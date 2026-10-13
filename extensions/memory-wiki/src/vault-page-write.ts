@@ -1,5 +1,6 @@
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { invalidateMemoryWikiVaultCounts } from "./compiled-cache.js";
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
@@ -40,6 +41,7 @@ export async function readExistingWikiPage(
 }
 
 export async function writeGuardedVaultPage(params: {
+  vaultRoot: string;
   vault: VaultRoot;
   pagePath: string;
   content: string;
@@ -75,5 +77,7 @@ export async function writeGuardedVaultPage(params: {
       });
     }
     throw error;
+  } finally {
+    invalidateMemoryWikiVaultCounts(params.vaultRoot);
   }
 }

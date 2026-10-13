@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
+import { invalidateMemoryWikiVaultCounts } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { forEachMarkdownCodeRange } from "./markdown-links.js";
@@ -297,6 +298,7 @@ async function writeOkfConceptPage(params: {
     return { changed: false, created: !pageStat };
   }
   await writeGuardedVaultPage({
+    vaultRoot: params.vaultRoot,
     vault,
     pagePath: params.pagePath,
     content: params.content,
@@ -331,6 +333,7 @@ async function removeStaleOkfConceptPages(params: {
     const parsed = parseWikiMarkdown(raw);
     if (asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey) {
       await vault.remove(pagePath);
+      invalidateMemoryWikiVaultCounts(params.vaultRoot);
       removedPagePaths.push(pagePath);
     }
   }

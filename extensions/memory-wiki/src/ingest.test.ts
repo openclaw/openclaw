@@ -3,14 +3,45 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
+import { compileMemoryWikiVault } from "./compile.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("ingestMemoryWikiSource", () => {
+  it("refreshes status counts when ingest is aborted after writing its page", async () => {
+    const { rootDir, config } = await createVault({ initialize: true });
+    const inputPath = path.join(rootDir, "source.txt");
+    await fs.writeFile(inputPath, "New source\n");
+    await compileMemoryWikiVault(config);
+    expect((await resolveMemoryWikiStatus(config)).pageCounts.source).toBe(0);
+
+    const controller = new AbortController();
+    const pagePath = path.join(rootDir, "sources", "source.md");
+    const writeFile = fs.writeFile;
+    const write = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      await writeFile(...args);
+      if (args[0] === pagePath) {
+        controller.abort(new Error("Ingest cancelled"));
+      }
+    });
+    try {
+      await expect(
+        ingestMemoryWikiSource({ config, inputPath, signal: controller.signal }),
+      ).rejects.toThrow("Ingest cancelled");
+    } finally {
+      write.mockRestore();
+    }
+    expect(await resolveMemoryWikiStatus(config)).toMatchObject({
+      pageCounts: { source: 1 },
+      sourceCounts: { other: 1 },
+    });
+  });
+
   it("copies a local text file into sources markdown", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");

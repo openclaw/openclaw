@@ -87,6 +87,7 @@ export async function writeImportedSourcePage(params: {
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
   if (existing !== nextRendered) {
     await writeGuardedVaultPage({
+      vaultRoot: params.vaultRoot,
       vault,
       pagePath: params.pagePath,
       content: nextRendered,

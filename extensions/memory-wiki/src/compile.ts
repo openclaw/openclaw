@@ -1240,7 +1240,7 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
   if (importChanged) {
-    invalidateMemoryWikiVaultCounts(params.config);
+    invalidateMemoryWikiVaultCounts(params.config.vault.path);
   }
   const dashboardState = await readMemoryWikiDashboardState(params.config);
   params.signal?.throwIfAborted();

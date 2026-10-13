@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { invalidateMemoryWikiVaultCounts } from "./compiled-cache.js";
 import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
@@ -389,6 +390,7 @@ export async function pruneImportedSourceEntries(params: {
     if (pageContent !== undefined) {
       try {
         await vault.remove(entry.pagePath);
+        invalidateMemoryWikiVaultCounts(params.vaultRoot);
       } catch (error) {
         if (!(error instanceof FsSafeError && error.code === "not-found")) {
           continue;

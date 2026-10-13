@@ -12,6 +12,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
+import { invalidateMemoryWikiVaultCounts } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   parseWikiMarkdown,
@@ -200,6 +201,7 @@ async function writeWikiPage(params: {
     return false;
   }
   await root.write(params.relativePath, rendered);
+  invalidateMemoryWikiVaultCounts(params.rootDir);
   return true;
 }
 

@@ -179,6 +179,7 @@ type ActiveVault = {
   reconciled: boolean;
   snapshot?: MemoryWikiCompiledCacheSnapshot;
   counts?: Promise<MemoryWikiVaultCounts>;
+  countsNeedScan?: boolean;
 };
 
 type DurableVaultIdentity = {
@@ -250,6 +251,7 @@ export function activateMemoryWikiCompiledCacheOwner(
     active.compiledCachePublicationId === publicationId
   ) {
     active.counts = undefined;
+    active.countsNeedScan = false;
     return false;
   }
   activeVaults.set(ownerId, {
@@ -279,7 +281,7 @@ export function setMemoryWikiDashboardState(
   state: MemoryWikiDashboardPendingState,
 ): void {
   if (state.state !== "compile-required") {
-    invalidateMemoryWikiVaultCounts(config);
+    invalidateMemoryWikiVaultCounts(config.vault.path);
   }
   dashboardStates.set(dashboardStateKey(config), {
     ownerId: resolveMemoryWikiCompiledCacheOwnerId(config),
@@ -287,10 +289,13 @@ export function setMemoryWikiDashboardState(
   });
 }
 
-export function invalidateMemoryWikiVaultCounts(config: ResolvedMemoryWikiConfig): void {
-  const active = resolveActiveVault(config);
-  if (active) {
-    active.counts = undefined;
+export function invalidateMemoryWikiVaultCounts(vaultPath: string): void {
+  const resolvedPath = path.resolve(vaultPath);
+  for (const active of activeVaults.values()) {
+    if (active.path === resolvedPath) {
+      active.counts = undefined;
+      active.countsNeedScan = true;
+    }
   }
 }
 
@@ -303,7 +308,7 @@ export async function loadMemoryWikiVaultCounts(
     return collect(null);
   }
   const counts = (active.counts ??= (
-    dashboardStates.has(dashboardStateKey(config))
+    active.countsNeedScan || dashboardStates.has(dashboardStateKey(config))
       ? Promise.resolve(null)
       : loadMemoryWikiCompiledCache(config).catch(() => null)
   ).then(collect));
@@ -667,6 +672,7 @@ export async function writeMemoryWikiCompiledCache(
     compiledCachePublicationId: publicationId,
     reconciled: true,
     counts: counts ? Promise.resolve(counts) : undefined,
+    countsNeedScan: false,
     // Own the persisted payload, not compiler strings whose slices can retain entire
     // source pages. Reuse the serialized snapshot to detach every nested string
     // without changing its JSON representation (including lone surrogates).

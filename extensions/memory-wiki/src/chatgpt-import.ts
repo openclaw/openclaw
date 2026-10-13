@@ -23,6 +23,7 @@ import {
   type ChatGptRollbackRoot,
 } from "./chatgpt-import-recovery.js";
 import { compileMemoryWikiVault } from "./compile.js";
+import { invalidateMemoryWikiVaultCounts } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   getMemoryWikiImportRunStateStore,
@@ -543,6 +544,7 @@ async function writeTrackedImportPage(params: {
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   if (!params.existing) {
     await fs.writeFile(absolutePath, params.rendered, "utf8");
+    invalidateMemoryWikiVaultCounts(params.vaultRoot);
     params.record.createdPaths.push({ path: params.relativePath, contentHash });
     return;
   }
@@ -552,6 +554,7 @@ async function writeTrackedImportPage(params: {
   await fs.mkdir(path.dirname(snapshotAbsolutePath), { recursive: true });
   await fs.writeFile(snapshotAbsolutePath, params.existing, "utf8");
   await fs.writeFile(absolutePath, params.rendered, "utf8");
+  invalidateMemoryWikiVaultCounts(params.vaultRoot);
   params.record.updatedPaths.push({
     path: params.relativePath,
     snapshotPath: snapshotRelativePath,
@@ -885,6 +888,9 @@ export async function rollbackChatGptImportRun(params: {
             runRelativePath,
             ref,
           });
+          if (slot) {
+            invalidateMemoryWikiVaultCounts(vaultRoot);
+          }
           if (slot && (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] }))) {
             await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
           }
@@ -897,6 +903,7 @@ export async function rollbackChatGptImportRun(params: {
           }
           try {
             await vaultFs.create(entry.path, snapshot, { encoding: "utf8", mkdir: true });
+            invalidateMemoryWikiVaultCounts(vaultRoot);
             completed = true;
             break;
           } catch (error) {
