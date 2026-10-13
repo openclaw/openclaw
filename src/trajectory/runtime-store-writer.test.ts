@@ -420,9 +420,10 @@ it("bounds 2,000 queued events while a background append awaits settlement", asy
       expect(bytes).toBeLessThanOrEqual(maxRuntimeFileBytes * (start === 0 ? 1 : 2));
     };
     try {
-      recordCalls(0, 1_000);
+      recordCalls(0, 32);
       // Native persistence starts during the run, before any explicit final flush.
       await committed.promise;
+      recordCalls(32, 1_000);
       recordCalls(1_000, 2_000);
     } finally {
       settlement.resolve({ kind: "completed" });
