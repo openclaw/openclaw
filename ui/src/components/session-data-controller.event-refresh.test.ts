@@ -160,6 +160,7 @@ function createFilteredSessionController(
     connected: true,
     activeRouteId: "sessions",
     sessionCatalogRowsVisible: true,
+    sidebarReferencedSessionKeys: [],
     getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
     sessionDataContext: context,
     addController: () => undefined,
@@ -247,6 +248,39 @@ function createFilteredSessionController(
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it("publishes held archive and pull-request facts without invalidating unrelated rows", async () => {
+    const { controller, context, host } = createFilteredSessionController("all", 3, true);
+    controller.hostConnected();
+    await controller.refreshSidebarSessions();
+    const displayed = controller.sessionsResult;
+    const row = displayed!.sessions[0]!;
+    host.requestUpdate.mockClear();
+
+    const finish = context.sessions.beginArchive(row.key, row.sessionId);
+    expect(context.sessions.archiveVisibility(row.key)).toBe("pending");
+    expect(controller.sessionsResult).toBe(displayed);
+    expect(host.requestUpdate).toHaveBeenCalledOnce();
+
+    host.requestUpdate.mockClear();
+    finish?.();
+    expect(context.sessions.archiveVisibility(row.key)).toBeUndefined();
+    expect(host.requestUpdate).toHaveBeenCalledOnce();
+
+    host.requestUpdate.mockClear();
+    context.sessions.setPullRequestSummary(row.key, { numbers: [42], state: "open" });
+    expect(host.requestUpdate).toHaveBeenCalledOnce();
+    host.requestUpdate.mockClear();
+    context.sessions.setPullRequestSummary(row.key, { numbers: [42], state: "merged" });
+    expect(host.requestUpdate).toHaveBeenCalledOnce();
+    host.requestUpdate.mockClear();
+    context.sessions.setPullRequestSummary("agent:main:outside-window", {
+      numbers: [43],
+      state: "open",
+    });
+    expect(host.requestUpdate).not.toHaveBeenCalled();
+    controller.hostDisconnected();
+  });
+
   it("does not invalidate filtered sidebar rows for unrelated session publications", async () => {
     const { controller, context, host } = createFilteredSessionController("archived");
     controller.hostConnected();

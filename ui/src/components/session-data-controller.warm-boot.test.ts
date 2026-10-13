@@ -112,6 +112,7 @@ describe("sidebar live roster publication", () => {
         },
         activeRouteId: "sessions",
         sessionCatalogRowsVisible: true,
+        sidebarReferencedSessionKeys: [],
         getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
         sessionDataContext: context,
         addController: () => undefined,

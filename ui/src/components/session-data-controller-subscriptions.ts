@@ -1,5 +1,8 @@
+import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
 import {
   subscribeSidebarAgentSessionCaches,
@@ -8,14 +11,51 @@ import {
 
 type SessionDataSourceOwner = Parameters<typeof subscribeSidebarAgentSessionCaches>[1] &
   Parameters<typeof subscribeSessionDataGatewayEvents>[1] & {
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    activeSessionLineageRoot: GatewaySessionRow | null;
+    activeSessionLineageSelectedRow: GatewaySessionRow | null;
+    sessionCatalogs: readonly SessionCatalog[];
     synchronizeSessionScope(): void;
   };
+
+function sessionDataLiveFacts(
+  owner: SessionDataSourceOwner,
+  sessions: ApplicationContext["sessions"],
+  referencedKeys: readonly string[],
+) {
+  const rows = new Map(
+    [
+      ...(owner.sessionsResult?.sessions ?? []),
+      ...Object.values(owner.sessionResultsByAgent).flatMap((result) => result.sessions),
+      ...Object.values(owner.childSessionRowsByParent).flat(),
+      ...[owner.activeSessionLineageRoot, owner.activeSessionLineageSelectedRow].filter(
+        (row): row is GatewaySessionRow => row !== null,
+      ),
+    ].map((row) => [row.key, row.agentId]),
+  );
+  for (const key of [...adoptedCatalogSessionKeys(owner.sessionCatalogs), ...referencedKeys]) {
+    if (!rows.has(key)) {
+      rows.set(key, undefined);
+    }
+  }
+  return JSON.stringify(
+    [...rows].flatMap(([key, agentId]) => {
+      const archive = sessions.archiveVisibility(key);
+      const deletion = sessions.deletionState(key, agentId);
+      const pullRequest = sessions.pullRequestSummary(key);
+      const prepared = sessions.isPreparedWorkSession(key);
+      return archive || deletion || pullRequest || prepared
+        ? [[key, archive, deletion, pullRequest, prepared]]
+        : [];
+    }),
+  );
+}
 
 /** Source lifetimes and the shared render frame; data stays in the session owner. */
 export function createSessionDataSubscriptions(
   host: Pick<
     SessionDataControllerHost,
-    "requestUpdate" | "updateComplete" | "promoteCreatedSession"
+    "requestUpdate" | "updateComplete" | "promoteCreatedSession" | "sidebarReferencedSessionKeys"
   >,
   owner: SessionDataSourceOwner,
   synchronize: {
@@ -57,7 +97,16 @@ export function createSessionDataSubscriptions(
       () => owner.context?.sessions,
       (sessions) => {
         synchronize.sessions(sessions);
-        return sessions.subscribe(() => synchronize.sessions(sessions));
+        let liveFacts = sessionDataLiveFacts(owner, sessions, host.sidebarReferencedSessionKeys);
+        return sessions.subscribe(() => {
+          synchronize.sessions(sessions);
+          // Pending visibility and PR snapshots publish without replacing roster rows.
+          const next = sessionDataLiveFacts(owner, sessions, host.sidebarReferencedSessionKeys);
+          if (next !== liveFacts) {
+            liveFacts = next;
+            requestUpdate();
+          }
+        });
       },
     )
     .effect(

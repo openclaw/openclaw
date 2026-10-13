@@ -361,6 +361,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
       snapshot.sectionOrder,
       snapshot.error,
       sessions.eventSubscriptionError,
+      sessions.groupsStatus(),
     ];
     if (catalogInputs.some((value, index) => value !== this.sessionCatalogInputs[index])) {
       this.sessionCatalogInputs = catalogInputs;

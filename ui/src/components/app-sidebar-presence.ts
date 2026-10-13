@@ -44,7 +44,7 @@ export function sidebarPresenceScope(host: SidebarPresenceHost): SidebarPresence
     sessionsVisible
       ? Array.from(
           host.querySelectorAll<HTMLElement>(".sidebar-session-group-person"),
-          (person) => person.dataset.personCardKey?.slice("profile:".length) ?? "",
+          (header) => header.dataset.personCardKey?.slice("profile:".length) ?? "",
         )
       : [],
   );
