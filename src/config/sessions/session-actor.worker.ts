@@ -127,7 +127,10 @@ export function createSessionActorWorker(
     const resident = residents.get(sessionKey)?.state;
     return resident &&
       resident.hot.writeToken ===
-        token(database, resident.hot.target, resident.hot.dependencySessionIds)
+        readSqliteDatabasePendingScopedWriteToken(
+          database.db,
+          scopes(resident.hot.target, resident.hot.dependencySessionIds),
+        )
       ? resident
       : undefined;
   };
@@ -210,7 +213,6 @@ export function createSessionActorWorker(
       const working = forkSessionActorStoredState(before);
       replaceParticipants(working, participants);
       working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
-      working.hot = projectSessionActorHotState(working);
       const pendingToken = readSqliteDatabasePendingScopedWriteToken(
         database.db,
         scopes(working.hot.target, working.hot.dependencySessionIds),
@@ -233,7 +235,7 @@ export function createSessionActorWorker(
       return undefined;
     }
     const previousEntry = before.hot.entry;
-    return (
+    const publish = (
       postimages: SessionEntryWritePostimages,
       publication: SessionEntryReplacementPublication,
     ) => {
@@ -255,9 +257,8 @@ export function createSessionActorWorker(
         },
         window: postimage.window,
       });
-      working.hasBoard = postimage.sideTables.hasBoard;
+      working.hasBoard = working.hot.hasBoard = postimage.sideTables.hasBoard;
       working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
-      working.hot = projectSessionActorHotState(working);
       const pendingToken = readSqliteDatabasePendingScopedWriteToken(
         database.db,
         scopes(working.hot.target, working.hot.dependencySessionIds),
@@ -271,6 +272,13 @@ export function createSessionActorWorker(
           [sessionKey, freezeJsonSnapshot(structuredClone(working.hot))],
         ]);
       }
+    };
+    return {
+      transcript: {
+        sessionId: previousEntry.sessionId,
+        watermark: { ...before.hot.transcript.watermark },
+      },
+      publish,
     };
   };
   const registerTranscriptRewriteOwner = (database: OpenClawAgentDatabase) =>

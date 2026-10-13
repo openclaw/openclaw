@@ -211,6 +211,21 @@ verify_merge_route_projection() {
   merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
 }
 
+# GitHub retains superseded same-lane cancellations in the rollup/UNSTABLE projection.
+# The watcher owns supersession; this one-shot admission predicate is not a pinned
+# snapshot fact (see docs/reference/scripts/merge-admission.md).
+verify_auto_merge_unstable_checks() {
+  local pr="$1"
+  # --timeout bounds the single pass's evidence reads; --once never waits.
+  local watch_args=("$pr" "$PREP_HEAD_SHA" --completion rollup --once --timeout 120)
+  [ -z "${MERGE_REPO_NAME:-}" ] || watch_args+=(--repo "$MERGE_REPO_NAME")
+  if ! OCTOPOOL_FRESH=1 node "$script_parent_dir/watch-pr-ci.mjs" "${watch_args[@]}" >.local/merge-unstable-watch.log 2>&1; then
+    cat .local/merge-unstable-watch.log >&2
+    merge_outcome_stop "auto-merge admission of MERGEABLE/UNSTABLE requires a GREEN CI watcher pass at the prepared head: only superseded same workflow/event/job runs may be non-passing and the ci.yml run must succeed; inspect .local/merge-unstable-watch.log"
+    return 1
+  fi
+}
+
 merge_verify() {
   if [ "$#" -ne 2 ]; then
     echo "merge_verify requires a PR number and verification options." >&2
@@ -951,13 +966,16 @@ merge_run() {
     # can authorize a second route or request.
     case "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.pr | .mergeable + "/" + .mergeStateStatus')" in
       MERGEABLE/CLEAN) ;;
+      MERGEABLE/UNSTABLE)
+        verify_auto_merge_unstable_checks "$pr" || return 1
+        ;;
       MERGEABLE/BEHIND|MERGEABLE/BLOCKED)
         route=auto
         merge_args=(--auto "${merge_args[@]}")
         ;;
       *)
-        merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" null "CLEAN|BEHIND|BLOCKED" "MERGEABLE"
-        merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN, BEHIND, or BLOCKED status"; return 1 ;;
+        merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" null "CLEAN|UNSTABLE|BEHIND|BLOCKED" "MERGEABLE"
+        merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN, UNSTABLE, BEHIND, or BLOCKED status"; return 1 ;;
     esac
   fi
   if [ -n "$captured_body" ] && [ "$route" = queue ]; then

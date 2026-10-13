@@ -135,9 +135,21 @@ class ArchiveSession {
     ) {
       throw new Error("SQLite archive request changed its captured database owner");
     }
-    // The global FIFO ensures the previous scope is idle; never multiply warm heaps.
-    if (sessions.warm && sessions.warm !== this) {
-      await sessions.warm.retire();
+    // The FIFO leaves no native handles in the idle worker; transfer execution, not authority.
+    const previous = sessions.warm;
+    if (previous && previous !== this) {
+      if (
+        previous.options.env.OPENCLAW_STATE_DIR === this.options.env.OPENCLAW_STATE_DIR &&
+        !previous.connection?.retiring &&
+        !previous.connection?.failure &&
+        !previous.connection?.didExit
+      ) {
+        this.connection = previous.connection;
+        previous.connection = undefined;
+        sessions.warm = this;
+      } else {
+        await previous.retire();
+      }
     }
     this.assertCurrent();
     await this.connection?.retiring;

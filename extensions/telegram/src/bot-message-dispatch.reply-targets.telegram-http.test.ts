@@ -40,6 +40,106 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   const hasReaction = (call: (typeof calls)[number], emoji: string) =>
     call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
 
+  it.each([
+    { replyToMode: "first", target: "inbound" },
+    { replyToMode: "batched", target: "inbound" },
+    { replyToMode: "first", target: "explicit" },
+    { replyToMode: "batched", target: "explicit" },
+  ] as const)(
+    "preserves the $target final reply target after a $replyToMode progress card",
+    async ({ replyToMode, target }) => {
+      const { createTelegramDraftStream } = await import("./draft-stream.js");
+      const context = createContext();
+      const chat = {
+        id: -1001,
+        type: "supergroup",
+        title: "Forum",
+        is_forum: true,
+      } satisfies Message["chat"];
+      Object.assign(context, {
+        chatId: chat.id,
+        isGroup: true,
+        isForum: true,
+        replyThreadId: 15,
+        threadSpec: { scope: "forum", id: 15 },
+      });
+      context.msg = { ...context.msg, chat, message_thread_id: 15, is_topic_message: true };
+      context.route.sessionKey = "agent:default:telegram:group:-1001:topic:15";
+      Object.assign(context.ctxPayload, {
+        SessionKey: context.route.sessionKey,
+        ChatType: "group",
+        From: "telegram:-1001:topic:15",
+        To: "telegram:-1001:topic:15",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1001:topic:15",
+      });
+      const finalText = "The requested result is ready.";
+      const finalTarget = target === "inbound" ? context.msg.message_id : 9001;
+      const draftStreams: TelegramDraftStream[] = [];
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            itemId: "progress",
+            phase: "end",
+            progressText: "Checking the requested result.",
+          });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+          // Wait for receipt adoption, not just the server accepting the card.
+          await Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
+          expect(draftStreams.some((stream) => stream.hasConsumedReplyTarget())).toBe(true);
+          expect(acceptedCalls.find((call) => call.method === "sendMessage")?.fields).toMatchObject(
+            {
+              message_thread_id: 15,
+              reply_parameters: { message_id: context.msg.message_id },
+            },
+          );
+        },
+        {
+          mode: "progress",
+          toolProgress: false,
+          context,
+          replyToMode,
+          telegramCfg: {
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: false, commentary: true },
+            },
+          },
+          cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+          finalReply: {
+            text: finalText,
+            // The synthetic resolver supplies the target normally added by applyReplyTagsToPayload.
+            replyToId: String(finalTarget),
+          },
+          telegramDeps: {
+            ...defaultTelegramBotDeps,
+            createTelegramDraftStream: (params) => {
+              const stream = createTelegramDraftStream(params);
+              draftStreams.push(stream);
+              return stream;
+            },
+          },
+        },
+      );
+      const finalAt = acceptedCalls.findIndex(
+        (call) => call.method === "sendMessage" && call.fields.text === finalText,
+      );
+      expect(finalAt).toBeGreaterThanOrEqual(0);
+      const fields = acceptedCalls[finalAt]!.fields;
+      expect(fields.message_thread_id).toBe(15);
+      const reply = fields.reply_parameters;
+      expect(
+        reply && typeof reply === "object" && "message_id" in reply
+          ? reply.message_id
+          : fields.reply_to_message_id,
+      ).toBe(finalTarget);
+      const retiredAt = acceptedCalls.findIndex((call) => call.method === "deleteMessage");
+      expect(retiredAt).toBeGreaterThan(finalAt);
+      expect([...visibleMessages.values()]).toEqual([finalText]);
+    },
+  );
+
   it.each(["bot-reply", "older-source"] as const)(
     "selects the native reply target from %s context",
     async (selection) => {

@@ -22,18 +22,16 @@ import {
   serializeModelCatalogBundle,
   summarizeModelCatalogBundle,
 } from "../../scripts/publish-model-catalog.mts";
+import { MODELS_JSON_STATE } from "../../src/agents/models-config-state.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
-import {
-  resetUsageFormatCachesForTest,
-  resolveModelCostConfig,
-} from "../../src/utils/usage-format.js";
+import { resolveModelCostConfig } from "../../src/utils/usage-format.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   setRemoteModelCatalogOverlaySourcesForTest();
-  resetUsageFormatCachesForTest();
+  MODELS_JSON_STATE.costCache.clear();
   vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });

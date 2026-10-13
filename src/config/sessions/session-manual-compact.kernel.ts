@@ -27,7 +27,7 @@ export function applyManualCompactInTransaction(
     events: TranscriptEvent[];
     nowMs?: number;
   },
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded?: () => void },
 ) {
   assertSqliteTranscriptSnapshotUnchanged(database, scope.sessionId, input.rows);
   const current = readSessionEntrySelectionSnapshot(database, scope.sessionKey, true);

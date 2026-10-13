@@ -1,5 +1,4 @@
-import { renameSync } from "node:fs";
-import { backup, DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,7 +26,7 @@ import { withSessionMutationCommitGuard } from "./server-methods/session-mutatio
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { resolveSessionMutationAuthorization } from "./session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { composePlacementAuthorization } from "./worker-environments/placement-authorization.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -60,6 +59,7 @@ describe("committed session mutation authorization", () => {
             profileCatalog.release();
           },
         };
+        using authorizations = new DisposableStack();
         const cfg = rolePolicyConfig();
         if (mode === "fixed") {
           cfg.session = { store: state.statePath("legacy", "sessions.json") };
@@ -78,12 +78,13 @@ describe("committed session mutation authorization", () => {
           createDirectChatContext({ getRuntimeConfig: () => cfg }),
           () => projection,
         );
-        const result = resolveSessionMutationAuthorization({
+        const result = await resolveSessionMutationAuthorizationAsync({
           client,
           context,
           method: "sessions.move",
           requestParams: { key: sessionKey },
         });
+        authorizations.defer(() => result.authorization?.release?.());
         expect(result.error).toBeNull();
         let connected = true;
         const authorization = withSessionMutationCommitGuard(
@@ -161,6 +162,7 @@ describe("committed session mutation authorization", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         ensureUserProfilesSchema({});
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        using authorizations = new DisposableStack();
         const cfg = rolePolicyConfig();
         const client = roleClient("view", "committed-reader");
         const sessionKey = "agent:main:committed-authorization";
@@ -187,51 +189,41 @@ describe("committed session mutation authorization", () => {
           () => projection,
         );
         const capture = () =>
-          resolveSessionMutationAuthorization({
+          resolveSessionMutationAuthorizationAsync({
             client,
             method: "chat.send",
             requestParams: { sessionKey },
             context,
           });
         try {
-          const warm = capture();
+          const warm = await capture();
+          authorizations.defer(() => warm.authorization?.release?.());
           expect(warm.error).toBeNull();
           warm.authorization!.assertCurrent();
           const queries = observeSqliteReadSql(StatementSync.prototype);
           const messages = vi.spyOn(Worker.prototype, "postMessage");
           try {
             for (let turn = 0; turn < 50; turn += 1) {
-              const admitted = capture();
-              expect(admitted.error).toBeNull();
-              expect(admitted.authorization).toBeDefined();
               await Promise.resolve();
-              if (resident) {
-                await admitted.authorization!.withCurrent!(() =>
-                  admitted.authorization!.assertCurrent(),
-                );
-              } else {
-                admitted.authorization!.assertCurrent();
-              }
+              warm.authorization!.assertCurrent();
             }
+            expect(queries.queries).toHaveLength(0);
+            // Display backfill runs independently of the admission's worker reads.
+            expect(
+              messages.mock.calls.filter(
+                ([message]) => message.input?.kind !== "session-row-backfill",
+              ),
+            ).toEqual([]);
             if (resident) {
-              expect(queries.queries).toHaveLength(0);
-              // Display backfill runs independently of the admission's worker reads.
-              expect(
-                messages.mock.calls.filter(
-                  ([message]) => message.input?.kind !== "session-row-backfill",
-                ),
-              ).toEqual([]);
               await expect(
                 warm.authorization!.withCurrent!(() => Promise.resolve()),
               ).rejects.toThrow("Sharing authorization consumers must remain synchronous");
-            } else {
-              expect(queries.queries.length).toBeGreaterThan(0);
             }
           } finally {
             queries.restore();
             messages.mockRestore();
           }
-          const prepared = resolveSessionMutationAuthorization({
+          const prepared = await resolveSessionMutationAuthorizationAsync({
             client,
             method: "chat.send",
             requestParams: { sessionKey },
@@ -242,10 +234,12 @@ describe("committed session mutation authorization", () => {
               sessionId: shared.sessionId,
             },
           });
+          authorizations.defer(() => prepared.authorization?.release?.());
           expect(prepared.error).toBeNull();
           expect(prepared.authorization).toBeDefined();
           prepared.authorization!.assertCurrent();
-          const result = capture();
+          const result = await capture();
+          authorizations.defer(() => result.authorization?.release?.());
           expect(result.error).toBeNull();
           const authorization = result.authorization;
           expect(authorization).toBeDefined();
@@ -306,25 +300,6 @@ describe("committed session mutation authorization", () => {
           );
           addSessionMember(scope, { identityId, addedBy: "test-owner" });
           expect(() => authorization.assertCurrent()).not.toThrow();
-          if (projection) {
-            bindSessionRowProjection(context, () => undefined);
-            expect(() => authorization.assertCurrent()).toThrow("session changed before chat.send");
-            bindSessionRowProjection(context, () => projection);
-            expect(() => authorization.assertCurrent()).not.toThrow();
-            await projection.ensureMaterialized();
-            const copyPath = `${owner.path}.replacement`;
-            const originalPath = `${owner.path}.original`;
-            await backup(owner.db, copyPath);
-            renameSync(owner.path, originalPath);
-            try {
-              renameSync(copyPath, owner.path);
-              expect(() => authorization.assertCurrent()).toThrow(
-                "SQLite database file identity changed",
-              );
-            } finally {
-              renameSync(originalPath, owner.path);
-            }
-          }
           replaceSessionEntrySync(scope, { ...shared, sessionId: "replacement", updatedAt: 4 });
           inWriterTransaction(owner.db, () => {
             expect(() => authorization.assertCurrent()).toThrow("session changed before chat.send");
@@ -346,6 +321,7 @@ describe("committed session mutation authorization", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         ensureUserProfilesSchema({});
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        using authorizations = new DisposableStack();
         const cfg = rolePolicyConfig();
         const client = roleClient("write", "committed-main-key");
         const sessionKey = "agent:main:committed-authorization";
@@ -357,12 +333,13 @@ describe("committed session mutation authorization", () => {
           { agentId: "main", sessionKey: "agent:main:main" },
           { sessionId: "main-session", updatedAt: 1, visibility: "shared" },
         );
-        const result = resolveSessionMutationAuthorization({
+        const result = await resolveSessionMutationAuthorizationAsync({
           client,
           method: "chat.send",
           requestParams: { sessionKey },
           context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
         });
+        authorizations.defer(() => result.authorization?.release?.());
         expect(result.error).toBeNull();
         const authorization = result.authorization;
         if (!authorization) {

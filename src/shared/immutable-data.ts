@@ -26,7 +26,7 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
   const pending = [value];
   while (pending.length) {
     const candidate = pending.pop()!;
-    if (inspected.has(candidate) || deeplyFrozenPlainData.has(candidate)) {
+    if (inspected.has(candidate)) {
       continue;
     }
     if (!isPlainDataObject(candidate)) {

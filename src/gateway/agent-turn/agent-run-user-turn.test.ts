@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as execHandoff from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnContext } from "./types.js";
@@ -39,8 +42,23 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   return {
     ...actual,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.pending-inputs.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.pending-inputs.js")
+  >("../../config/sessions/session-accessor.pending-inputs.js");
+  return { ...actual, stageSessionPendingInput: mocks.stageSessionPendingInput };
+});
+
+vi.mock("../../config/sessions/session-accessor.transcript-target.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.transcript-target.js")
+  >("../../config/sessions/session-accessor.transcript-target.js");
+  return {
+    ...actual,
     resolveSessionTranscriptRuntimeTarget: mocks.resolveSessionTranscriptRuntimeTarget,
-    stageSessionPendingInput: mocks.stageSessionPendingInput,
   };
 });
 
@@ -116,6 +134,7 @@ describe("prepareAgentRunUserTurn", () => {
 
       await expect(
         prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted: vi.fn(),
           assertCurrent: () => {},
           request: {
             message: "must not reach the stale session",
@@ -162,6 +181,7 @@ describe("prepareAgentRunUserTurn", () => {
 
     await expect(
       prepareAgentRunUserTurn({
+        onUserTurnMediaPersisted: vi.fn(),
         request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
         cfg: {},
         sessionEntry,
@@ -201,11 +221,12 @@ describe("prepareAgentRunUserTurn", () => {
     let authorityActive = true;
     mocks.persistInboundImagesForTranscript.mockImplementationOnce(async () => {
       authorityActive = false;
-      return { entries: [{ id: "revoked-media", fact: {} }] };
+      return { entries: [{ id: "revoked-media", imageKind: "inline", fact: {} }] };
     });
 
     await expect(
       prepareAgentRunUserTurn({
+        onUserTurnMediaPersisted: vi.fn(),
         request: { message: "private image", idempotencyKey: "revoked-media-run" },
         cfg: {},
         sessionEntry,
@@ -235,4 +256,84 @@ describe("prepareAgentRunUserTurn", () => {
     expect(mocks.stageSessionPendingInput).not.toHaveBeenCalled();
     expect(mocks.persistedMessages).toEqual([]);
   });
+
+  it.each(["committed", "unknown", "unretained"] as const)(
+    "transfers failed preparation cleanup exactly once for %s input custody",
+    async (custody) => {
+      const sessionKey = "agent:main:worker-child";
+      const sessionEntry: SessionEntry = { sessionId: "media-custody-session", updatedAt: 1 };
+      mocks.loadSessionEntry.mockResolvedValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      mocks.persistInboundImagesForTranscript.mockResolvedValue({
+        entries: [{ id: "retained-media", imageKind: "inline", fact: {} }],
+      });
+      const failure =
+        custody === "unknown"
+          ? new SqliteWorkerError("input settlement unavailable", "outcome-unknown")
+          : new Error("input preparation failed");
+      mocks.stageSessionPendingInput.mockImplementationOnce(
+        async (
+          _scope: Parameters<typeof stageSessionPendingInput>[0],
+          options: Parameters<typeof stageSessionPendingInput>[1],
+        ) => {
+          if (custody === "committed") {
+            options.onCommitted?.({
+              state: "queued",
+              inputId: "committed-media-input",
+              message: options.message,
+              run: (operation) => operation(),
+              finish: vi.fn(),
+            });
+          }
+          throw failure;
+        },
+      );
+      const onUserTurnMediaPersisted = vi.fn();
+      const release = execHandoff.releaseExecApprovalFollowupRuntimeHandoff;
+      const cleanup = vi
+        .spyOn(execHandoff, "releaseExecApprovalFollowupRuntimeHandoff")
+        .mockImplementation((params) => {
+          expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);
+          return release(params);
+        });
+      try {
+        await expect(
+          prepareAgentRunUserTurn({
+            onUserTurnMediaPersisted,
+            assertCurrent: () => {},
+            request: { message: "retained input", idempotencyKey: "media-custody-run" },
+            cfg: {},
+            sessionEntry,
+            resolvedSessionKey: sessionKey,
+            admittedSessionId: sessionEntry.sessionId,
+            activeSessionAgentId: "main",
+            suppressVisibleSessionEffects: false,
+            requestedPromptPersistenceSuppression: false,
+            canUseInternalRuntimeHandoff: false,
+            message: "retained input",
+            effectiveTranscriptInputText: "retained input",
+            images: [],
+            offloadedRefs: [],
+            runId: "media-custody-run",
+            client: null,
+            context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+          }),
+        ).rejects.toBe(failure);
+        expect(cleanup).toHaveBeenCalledTimes(1);
+        expect(mocks.stageSessionPendingInput).toHaveBeenCalledTimes(1);
+        expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);
+        expect(mocks.deleteMediaBuffer).toHaveBeenCalledTimes(custody === "unretained" ? 1 : 0);
+        if (custody === "unretained") {
+          expect(mocks.deleteMediaBuffer).toHaveBeenCalledWith("retained-media", "inbound");
+        }
+      } finally {
+        cleanup.mockRestore();
+      }
+    },
+  );
 });

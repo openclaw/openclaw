@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createStateDomainPublication } from "../state/state-domain-publication.js";
 import { parsePersistedExecApprovals } from "./exec-approvals-config.js";
+import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import {
   observeSqliteWorkerCommittedFacts,
@@ -33,6 +34,7 @@ export function withExecApprovalsPublication(
     onCommitAdmitted: () => void,
   ) => ReturnType<SqliteWorkerAdmissionFactory>,
   context: OpenClawStateWorkerContext,
+  authorizationBatch?: readonly { input: ExecAuthorizationCommitInput }[],
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     let commitAdmitted = false;
@@ -46,6 +48,13 @@ export function withExecApprovalsPublication(
         publication = execApprovalsPublication.begin({
           identity: context.admission.identity.key,
           assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
+          // Usage cannot revoke execution; durable grants still change delayed approvals.
+          publishPending:
+            !authorizationBatch ||
+            authorizationBatch.some(
+              ({ input: { allowAlwaysDecision } }) =>
+                allowAlwaysDecision !== undefined && allowAlwaysDecision.kind !== "one-shot",
+            ),
         });
       }
     });

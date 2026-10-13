@@ -17,6 +17,7 @@ import {
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   initialTranscriptRect,
+  isTranscriptRangeCommitted,
   measureTranscriptRow,
   PositionRailGutterController,
 } from "./chat-transcript-geometry.ts";
@@ -355,6 +356,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     if (!this.initialPositionPending || (this.contentReady && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
+      if (this.initialPositionPending) {
+        this.initialPositionPending = false;
+        this.renderer.syncInitialPosition();
+      }
     }
     this.queueLayout();
     // Disclosure measurement owns this commit; its sizer lands on the next update.
@@ -558,6 +563,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
+  get isPositionSettled(): boolean {
+    const { pendingScrollOffset } = this.offsetState;
+    return this.contentReady && !this.initialPositionPending && !pendingScrollOffset;
+  }
+
   private canAutoFollow(): boolean {
     const command = this.offsetState.scrollCommand;
     return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
@@ -655,26 +665,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return true;
   }
 
-  private completeMessageReveal(): void {
-    const command = this.offsetState.scrollCommand;
-    if (command?.target !== "message") {
-      return;
-    }
-    const virtualizer = this.virtualizer;
-    if (this.messageReveal.reveal(this.threadInnerElement, command, virtualizer)) {
-      this.offsetState.scrollCommand = { behavior: command.behavior, target: "index" };
-      return;
-    }
-    // Expanding folded work can move the target beyond the initially mounted rows.
-    const rowKey = this.messageRowKeysById.get(command.messageId);
-    const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
-    if (rowIndex !== undefined) {
-      // Native scroll and row mounts continue the reveal. Requesting another
-      // render here can starve the offset notification that changes the range.
-      virtualizer.scrollToIndex(rowIndex, { align: "center" });
-    }
-  }
-
   setContentReady(ready: boolean): void {
     this.contentReady = ready;
   }
@@ -748,7 +738,13 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (!this.connected) {
       return;
     }
-    this.completeMessageReveal();
+    this.messageReveal.complete(
+      this.threadInnerElement,
+      this.offsetState,
+      this.virtualizer,
+      this.messageRowKeysById,
+      this.rowIndexesByKey,
+    );
     if (!this.initialPositionPending || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
       return;
     }
@@ -770,19 +766,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       this.scrollToEnd({ source: "auto", behavior: "instant" });
       this.offsetState.syncNativeOffset?.();
     }
-    for (const row of this.virtualizer.getVirtualItems()) {
-      const node = this.virtualizer.elementsCache.get(row.key);
-      if (
-        !node ||
-        !this.threadInnerElement?.contains(node) ||
-        Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) !== row.size
-      ) {
-        this.host.requestUpdate();
-        return;
-      }
+    if (isTranscriptRangeCommitted(this.threadInnerElement, this.virtualizer)) {
+      this.initialPositionPending = false;
+      this.renderer.syncInitialPosition();
     }
-    this.initialPositionPending = false;
-    this.renderer.syncInitialPosition();
     this.host.requestUpdate();
   };
 }
