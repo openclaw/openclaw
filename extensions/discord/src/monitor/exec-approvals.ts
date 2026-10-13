@@ -72,7 +72,7 @@ function buildTerminalPayload(params: {
       new Container(
         [
           new TextDisplay(params.applied ? "## Approval resolved" : "## Approval already resolved"),
-          new TextDisplay(`Canonical result: **${label}**`),
+          new TextDisplay(`Recorded result: **${label}**`),
           new Separator({ divider: false, spacing: "small" }),
           new TextDisplay(`-# ID: ${formatDiscordApprovalDisplayValue(approval.id)}`),
         ],

@@ -8,6 +8,7 @@ const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const badSteps = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
+// Historical pre-removal receipts still require these exact monitor identities.
 const monitorNames = new Set([
   "Cancel remaining PR work after a failure",
   "Classify PR failures and cancel eligible same-repository work",

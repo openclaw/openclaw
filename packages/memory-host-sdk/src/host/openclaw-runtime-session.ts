@@ -387,6 +387,16 @@ export function readBoundIncognitoMemoryCorpus(
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
+export async function prepareSessionEntriesInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntriesInWorker
+  >
+) {
+  const { prepareSessionEntriesInWorker: prepare } =
+    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
+  return prepare(...args);
+}
+
 export async function prepareSessionEntryInWorker(
   ...args: Parameters<
     typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
@@ -451,15 +461,27 @@ export {
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 
-/** Returns an opaque revision that changes for every canonical transcript mutation. */
+/**
+ * Returns an opaque revision that changes for every canonical transcript mutation.
+ * Read-only callers stay on the read-only reader; a missing transcript has no revision.
+ */
 export function readTranscriptContentRevisionSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): string {
-  const stats = readAccessorTranscriptStatsSync(params);
+  readOnly?: boolean;
+}): string | undefined {
+  const { readOnly, ...scope } = params;
+  // Inventory runs in pooled history Workers; a writable open there would claim an
+  // agent-database lease that only that Worker's process exit could release.
+  const stats = readOnly
+    ? readTranscriptStatsBatchReadOnlySync([scope])[0]
+    : readAccessorTranscriptStatsSync(scope);
+  if (!stats) {
+    return undefined;
+  }
   return [
     "sqlite",
     stats.maxSeq,

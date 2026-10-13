@@ -1,5 +1,6 @@
 /** Worker/admission-only physical store opening and transaction capabilities. */
 export { openEngineStore } from "../infra/database-engine/open.js";
+export { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 export {
   runEngineStoreReadSnapshot,
   runEngineWorkerWrite,

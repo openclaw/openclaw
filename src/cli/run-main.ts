@@ -1283,7 +1283,7 @@ async function runCliWithPreparedOutputMode(
           console.error("[openclaw]", message);
         }
         restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-        exitAfterSignalExitBarriers(1);
+        exitAfterSignalExitBarriers(1, "uncaught exception");
       });
 
       const invocation = resolveCliArgvInvocation(parseArgv);

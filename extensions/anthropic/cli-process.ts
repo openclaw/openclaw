@@ -1,10 +1,11 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   killProcessTree,
   prepareSecretInputStdio,
+  spawnOomScoreAdjusted,
   type SpawnStdioEntry,
 } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -35,7 +36,7 @@ function spawnClaudeCliProcess(
 ): ChildProcessWithoutNullStreams {
   const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
   using secretDelivery = prepareSecretInputStdio(stdio, secretInput);
-  const child = spawn(options.command, options.args, {
+  const child = spawnOomScoreAdjusted(options.command, options.args, {
     argv0: options.argv0,
     cwd: options.cwd,
     detached: process.platform !== "win32",

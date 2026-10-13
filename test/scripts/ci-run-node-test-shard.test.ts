@@ -16,7 +16,7 @@ import os, { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChildEnv,
   clonePersistentCacheSlots,
@@ -38,6 +38,7 @@ import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-sch
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const nativeQualificationFixtures = vi.hoisted(() => ({
   first: "packages/markdown-core/src/chunk-text.test.ts",
@@ -97,7 +98,15 @@ function makeScratchDir(): string {
   return dir;
 }
 
+beforeEach(() => {
+  const env = testRunnerFixtureEnv();
+  for (const name of ["CI", "GITHUB_ACTIONS", "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE"]) {
+    vi.stubEnv(name, env[name]);
+  }
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   for (const dir of scratchDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
@@ -499,7 +508,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     }
   });
 
-  it.each([{ node: 7, bun: 9, native: 11, expected: 7 }])(
+  it.each([{ node: 1, bun: 1, native: 1, expected: 1 }])(
     "finishes every release engine and retains its first failure: %s",
     async (row) => {
       const runChild = vi.fn(async (args: string[], env: NodeJS.ProcessEnv) =>
@@ -1894,8 +1903,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    { name: "ordinary failure", code: 7, signal: null, complete: true },
-    { name: "early stop", code: 7, signal: null, stop: true },
+    { name: "ordinary failure", code: 1, signal: null, complete: true },
+    { name: "early stop", code: 1, signal: null, stop: true },
+    { name: "infrastructure stop", code: 2, signal: null, stop: true },
     { name: "killed child", code: null, signal: "SIGKILL" },
     { name: "unknown exit", code: null, signal: null },
     { name: "unjoined child", code: 1, signal: null, unjoined: true, rejects: true },
@@ -1955,14 +1965,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     });
     const pending = runShardPlans(
       ["one", "two"].map((name) => ({ kind: "target" as const, name, target: `${name}.test.ts` })),
-      { concurrency: 1, continueOnFailure: !("stop" in scenario), env: {} },
+      { concurrency: 1, env: { CI: "stop" in scenario ? "" : "true" } },
     );
     if ("rejects" in scenario) {
       await expect(pending).rejects.toThrow();
     } else {
-      await expect(pending).resolves.toBe(scenario.code ?? 1);
+      await expect(pending).resolves.toBe(
+        scenario.signal === "SIGKILL" ? 137 : (scenario.code ?? 2),
+      );
     }
-    expect(spawn).toHaveBeenCalledTimes("stop" in scenario || "unjoined" in scenario ? 1 : 2);
+    expect(spawn).toHaveBeenCalledTimes(
+      "stop" in scenario || "unjoined" in scenario || scenario.code === null ? 1 : 2,
+    );
     expect(receipts).toEqual(
       "complete" in scenario
         ? [
@@ -1972,29 +1986,111 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
   });
 
-  it.each([{ continueOnFailure: true, expectedStarted: ["next"] }])(
-    "fails a malformed plan with continuation=$continueOnFailure",
-    async ({ continueOnFailure, expectedStarted }) => {
-      const started: string[] = [];
-      const exitCode = await runShardPlans(
-        [
-          { kind: "group" as const, name: "broken", plan: { configs: [] } },
-          { kind: "group" as const, name: "next", plan: { configs: ["next.config.ts"] } },
-        ],
-        {
-          concurrency: 1,
-          continueOnFailure,
-          env: {},
-          runChild: async (_args, _env, label) => {
-            started.push(label);
-            return 0;
-          },
-          scratchDir: makeScratchDir(),
+  it.each([
+    { name: "first upstream attempt", attempt: "1", repository: "openclaw/openclaw" },
+    { name: "failed-jobs retry", attempt: "2", repository: "openclaw/openclaw" },
+    { name: "fork", attempt: "1", repository: "example/openclaw" },
+  ])("drains every planned CI group after failure on $name", async ({ attempt, repository }) => {
+    const started: string[] = [];
+    const plans = ["first", "second", "third"].map((name) => ({
+      kind: "group" as const,
+      name,
+      plan: { configs: [`${name}.config.ts`] },
+    }));
+    await expect(
+      runShardPlans(plans, {
+        concurrency: 1,
+        env: { CI: "true", GITHUB_RUN_ATTEMPT: attempt, GITHUB_REPOSITORY: repository },
+        scratchDir: makeScratchDir(),
+        runChild: async (_args, _env, label) => {
+          started.push(label);
+          return label === "first" || label === "second" ? 1 : 0;
         },
-      );
+      }),
+    ).resolves.toBe(1);
+    expect(started).toEqual(["first", "second", "third"]);
+  });
 
-      expect(exitCode).toBe(1);
-      expect(started).toEqual(expectedStarted);
+  it.each([
+    { name: "local default", env: {}, codes: [1, 0, 0], expected: 1, started: 1 },
+    {
+      name: "local opt-out",
+      env: { OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "0" },
+      codes: [1, 0, 0],
+      expected: 1,
+      started: 1,
+    },
+    {
+      name: "local opt-in",
+      env: { OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1" },
+      codes: [1, 1, 0],
+      expected: 1,
+      started: 3,
+    },
+    {
+      name: "local infrastructure after failure",
+      env: { OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1" },
+      codes: [1, 2, 0],
+      expected: 2,
+      started: 2,
+    },
+    {
+      name: "CI infrastructure after failure",
+      env: { CI: "1" },
+      codes: [1, 2, 0],
+      expected: 2,
+      started: 2,
+    },
+    {
+      name: "CI ignores local opt-out",
+      env: { CI: "1", OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "0" },
+      codes: [1, 0, 0],
+      expected: 1,
+      started: 3,
+    },
+  ])(
+    "preserves the ordinary failure boundary for $name",
+    async ({ env, codes, expected, started }) => {
+      const labels: string[] = [];
+      const plans = ["first", "second", "third"].map((name) => ({
+        kind: "target" as const,
+        name,
+        target: `${name}.test.ts`,
+      }));
+      await expect(
+        runShardPlans(plans, {
+          concurrency: 1,
+          env: testRunnerFixtureEnv(env, {}),
+          scratchDir: makeScratchDir(),
+          runChild: async (_args, _env, label) => {
+            labels.push(label);
+            return codes[labels.length - 1]!;
+          },
+        }),
+      ).resolves.toBe(expected);
+      expect(labels).toEqual(plans.slice(0, started).map((plan) => plan.name));
     },
   );
+
+  it("stops admitting groups after a malformed CI plan", async () => {
+    const started: string[] = [];
+    const exitCode = await runShardPlans(
+      [
+        { kind: "group" as const, name: "broken", plan: { configs: [] } },
+        { kind: "group" as const, name: "next", plan: { configs: ["next.config.ts"] } },
+      ],
+      {
+        concurrency: 1,
+        env: { CI: "true" },
+        runChild: async (_args, _env, label) => {
+          started.push(label);
+          return 0;
+        },
+        scratchDir: makeScratchDir(),
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(started).toEqual([]);
+  });
 });

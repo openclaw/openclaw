@@ -251,6 +251,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
                     sessionKey: "agent:main:main",
                     canonicalKey: "agent:main:main",
                     storePath: state.sessionsDir(),
+                    assertCurrent: () => undefined,
                   },
                   assertCurrent: () => undefined,
                   assertTargetCurrent: () => undefined,

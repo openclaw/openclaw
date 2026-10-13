@@ -28,7 +28,6 @@ const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const introRoutes = [
   "appearance",
   "approvals",
-  "cloud-workers",
   "labs",
   "mcp",
   "secrets",
@@ -51,10 +50,7 @@ const settingsGuidanceLinks: ReadonlyArray<{
   route: string;
   container: string;
   section?: string;
-}> = [
-  { route: "cloud-workers", container: ".page-subtitle" },
-  { route: "mcp", section: "Configured servers", container: ".settings-section__desc" },
-];
+}> = [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
 
 const sectionAlignmentRoutes = [
   "appearance",
@@ -511,18 +507,22 @@ suite.define(() => {
         pathname: "/settings/appearance",
         routeId: "appearance",
       });
-      const desktopInsets = await page.evaluate(() => ({
-        configPadding: Number.parseFloat(
-          getComputedStyle(document.querySelector<HTMLElement>(".config-content")!).paddingLeft,
-        ),
-        headerPadding: Number.parseFloat(
-          getComputedStyle(document.querySelector<HTMLElement>(".content-header")!).paddingLeft,
-        ),
-        pagePadding: Number.parseFloat(
-          getComputedStyle(document.querySelector<HTMLElement>(".settings-page")!).paddingLeft,
-        ),
-      }));
-      expect(desktopInsets).toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
+      const readDesktopInsets = () =>
+        page.evaluate(() => ({
+          configPadding: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>(".config-content")!).paddingLeft,
+          ),
+          headerPadding: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>(".content-header")!).paddingLeft,
+          ),
+          pagePadding: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>(".settings-page")!).paddingLeft,
+          ),
+        }));
+      // The shared header transitions its padding after adopting the settings layout.
+      await expect
+        .poll(readDesktopInsets)
+        .toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
     } finally {
       await context.close();
     }
@@ -834,6 +834,11 @@ suite.define(() => {
           await page
             .getByRole("heading", { name: "Defaults for all agents", exact: true })
             .waitFor();
+        }
+
+        if (route === "cloud-workers") {
+          expect(await page.locator(".page-subtitle").count()).toBe(0);
+          await page.locator(".cloud-environments__advanced > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(

@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."local_workspace_projections" (
+CREATE TABLE "local_workspace_projections" (
   "worktree_id" text COLLATE "C" NOT NULL,
   "agent_id" text COLLATE "C" NOT NULL,
   "session_key" text COLLATE "C" NOT NULL,
@@ -30,5 +26,3 @@ CREATE TABLE "openclaw_state"."local_workspace_projections" (
   CHECK ((("journal_json" IS NULL) = ("journal_pack" IS NULL))),
   UNIQUE ("projection_path")
 );
-
-COMMIT;

@@ -35,7 +35,7 @@ describe("gateway chat metadata refresh", () => {
     });
   });
 
-  test("serves prepared agents during degraded first publication and adopts the recovered fleet", async () => {
+  test("serves published agents independently of missing owners and adopts the recovered fleet", async () => {
     const config = { agents: { entries: { main: {}, second: {} } } };
     const harness = createChatMetadataHarness(config);
     const mainOwner = createChatMetadataOwner(config, "main-model");
@@ -45,9 +45,10 @@ describe("gateway chat metadata refresh", () => {
     );
 
     try {
-      await expect(harness.runtime.refresh()).rejects.toThrow(
-        'prepared chat metadata owner is unavailable for agent "second"',
-      );
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "main-model" })],
+      });
       setPreparedModelRuntimeStartupStatus({
         degraded: true,
         pendingAgents: ["second"],
@@ -72,8 +73,12 @@ describe("gateway chat metadata refresh", () => {
       });
 
       secondOwner = undefined;
-      await expect(harness.runtime.refresh()).rejects.toThrow(
-        'prepared chat metadata owner is unavailable for agent "second"',
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "main-model" })],
+      });
+      await expect(harness.runtime.read({ agentId: "second" })).rejects.toThrow(
+        'prepared chat metadata is unavailable for agent "second"',
       );
     } finally {
       await harness.runtime.stop();

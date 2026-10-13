@@ -46,32 +46,35 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   props.onRequestUpdate?.();
 }
 
-export function renderComposerPastedTextSolid(
-  att: ChatAttachment,
-  props: ChatAttachmentControlsProps,
-) {
+function ComposerPastedText(componentProps: {
+  attachment: ChatAttachment;
+  controls: ChatAttachmentControlsProps;
+}) {
   const current = () =>
-    props.readSignal?.aborted
+    componentProps.controls.readSignal?.aborted
       ? undefined
-      : currentAttachments(props).find((item) => item.id === att.id);
-  const removeLabel = att.fileName?.trim()
-    ? t("chat.composer.removeNamedAttachment", { name: att.fileName })
-    : t("chat.composer.removeAttachment");
+      : currentAttachments(componentProps.controls).find(
+          (item) => item.id === componentProps.attachment.id,
+        );
+  const removeLabel = () =>
+    componentProps.attachment.fileName?.trim()
+      ? t("chat.composer.removeNamedAttachment", { name: componentProps.attachment.fileName })
+      : t("chat.composer.removeAttachment");
   const remove = () => {
-    if (!current() || props.disabled) {
+    if (!current() || componentProps.controls.disabled) {
       return;
     }
-    removeDraftAttachment(att, props);
+    removeDraftAttachment(componentProps.attachment, componentProps.controls);
   };
   const restoreAction = () => (
     <button
       class="chat-attachment-text-action"
       type="button"
-      disabled={props.disabled}
+      disabled={componentProps.controls.disabled}
       onClick={() => {
         const attachment = current();
-        if (attachment && !props.disabled) {
-          showPastedTextInComposer(attachment, props);
+        if (attachment && !componentProps.controls.disabled) {
+          showPastedTextInComposer(attachment, componentProps.controls);
         }
       }}
     >
@@ -83,13 +86,13 @@ export function renderComposerPastedTextSolid(
     if (!current()) {
       return;
     }
-    props.onOpenSidebar?.({
+    componentProps.controls.onOpenSidebar?.({
       kind: "attachment",
       attachmentKind: "document",
-      title: att.fileName ?? t("chat.attachments.pastedText"),
+      title: componentProps.attachment.fileName ?? t("chat.attachments.pastedText"),
       mimeType: "text/plain",
       plainText: true,
-      sourceIdentity: att.id,
+      sourceIdentity: componentProps.attachment.id,
       resolveSource: () => {
         const attachment = current();
         if (!attachment) {
@@ -108,8 +111,8 @@ export function renderComposerPastedTextSolid(
               <button
                 class="btn btn--sm"
                 type="button"
-                aria-label={removeLabel}
-                disabled={props.disabled}
+                aria-label={removeLabel()}
+                disabled={componentProps.controls.disabled}
                 onClick={remove}
               >
                 <LitContent value={icons.trash} />
@@ -122,24 +125,23 @@ export function renderComposerPastedTextSolid(
   };
   return (
     <openclaw-chat-pasted-text
-      prop:src={getChatAttachmentDataUrl(att) ?? undefined}
-      prop:sizeBytes={att.sizeBytes}
-      prop:scope={att.id}
+      prop:src={getChatAttachmentDataUrl(componentProps.attachment) ?? undefined}
+      prop:sizeBytes={componentProps.attachment.sizeBytes}
+      prop:scope={componentProps.attachment.id}
       prop:onOpen={open}
       prop:composerAction={renderRestoreAction()}
-      prop:composerRemoveAction={renderAttachmentRemove(removeLabel, props.disabled, remove)}
+      prop:composerRemoveAction={renderAttachmentRemove(
+        removeLabel(),
+        componentProps.controls.disabled,
+        remove,
+      )}
     ></openclaw-chat-pasted-text>
   );
 }
 
-function renderComposerPastedTextContent(props: {
-  args: Parameters<typeof renderComposerPastedTextSolid>;
-}) {
-  return <>{renderComposerPastedTextSolid(...props.args)}</>;
-}
-
 export function renderComposerPastedText(
-  ...args: Parameters<typeof renderComposerPastedTextSolid>
+  attachment: ChatAttachment,
+  controls: ChatAttachmentControlsProps,
 ) {
-  return solidTemplate(renderComposerPastedTextContent, { args });
+  return solidTemplate(ComposerPastedText, { attachment, controls });
 }

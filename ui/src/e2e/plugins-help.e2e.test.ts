@@ -48,7 +48,7 @@ suite.define(() => {
           .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
           .click();
         await gateway.deferNext("openclaw.chat");
-        await row.locator('wa-dropdown-item[value="ask"]').click();
+        await row.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
         await gateway.waitForRequest("openclaw.chat");
         await gateway.rejectDeferred("openclaw.chat", {
           code: "UNAVAILABLE",
@@ -148,7 +148,7 @@ suite.define(() => {
         expect(await input.inputValue()).toBe(editedUrl);
 
         await row.getByRole("button", { name: "Actions for Base URL", exact: true }).click();
-        await row.locator('wa-dropdown-item[value="ask"]').click();
+        await row.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
         const panel = page.locator("openclaw-assistant-panel .assistant-panel");
         const composer = panel.locator("textarea");
         await expect.poll(() => composer.inputValue()).toContain("Explain Base URL");
@@ -244,7 +244,7 @@ suite.define(() => {
         .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
         .click();
       const setting = page.locator('[data-setting="refreshMinutes"]');
-      await setting.locator('wa-dropdown-item[value="ask"]').click();
+      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       const composer = panel.locator("textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
@@ -263,7 +263,7 @@ suite.define(() => {
       await page
         .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
         .click();
-      await setting.locator('wa-dropdown-item[value="ask"]').click();
+      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
       expect(await password.inputValue()).toBe("");
       await expectTranscriptSpace(surface, "pending");
       await gateway.setMethodResponse("openclaw.chat", chatResponses["openclaw.chat"]);
@@ -329,11 +329,10 @@ suite.define(() => {
         .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
         .click();
       const setting = page.locator('[data-setting="refreshMinutes"]');
-      expect(await setting.locator("wa-dropdown-item").allTextContents()).toEqual([
-        "Reset value",
-        "Ask OpenClaw",
-      ]);
-      await setting.locator('wa-dropdown-item[value="ask"]').click();
+      expect(
+        (await setting.getByRole("menuitem").allTextContents()).map((label) => label.trim()),
+      ).toEqual(["Reset value", "Ask OpenClaw"]);
+      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
       await expect
         .poll(() => composer.inputValue())
         .toBe("Keep my existing draft.\n\nExplain Refresh interval (minutes)\n\nCurrent value: 15");
@@ -387,7 +386,7 @@ suite.define(() => {
       await secretRow
         .getByRole("button", { name: "Actions for Connection: API key", exact: true })
         .click();
-      await secretRow.locator('wa-dropdown-item[value="ask"]').click();
+      await secretRow.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
       await expect.poll(() => composer.inputValue()).toContain("Current value: <redacted>");
       expect(await composer.inputValue()).not.toContain("synthetic-should-never-enter-chat");
       await expectDockedEditor();

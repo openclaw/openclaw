@@ -176,7 +176,10 @@ describe("session startup catch-up", () => {
       true,
     );
 
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     await expect(harness.catchUp()).resolves.toEqual([]);
+    expect(harness.syncCalls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30_000);
     await harness.waitForSessionSync();
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
@@ -212,7 +215,9 @@ describe("session startup catch-up", () => {
       true,
     );
 
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     await expect(harness.catchUp()).resolves.toEqual([replacement.filePath]);
+    await vi.advanceTimersByTimeAsync(30_000);
     await harness.waitForSessionSync();
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
@@ -248,7 +253,9 @@ describe("session startup catch-up", () => {
       true,
     );
 
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     await expect(harness.catchUp()).resolves.toEqual([original.filePath]);
+    await vi.advanceTimersByTimeAsync(30_000);
     await harness.waitForSessionSync();
     expect(harness.indexedPaths).toEqual([]);
     expect(harness.getIndexedSourceState(originalEntry.path)).toEqual({
@@ -292,11 +299,13 @@ describe("session startup catch-up", () => {
       true,
     );
 
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const observed = observeHostDataSql();
     const cpuStart = process.threadCpuUsage();
     const started = performance.now();
     try {
       await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+      await vi.advanceTimersByTimeAsync(30_000);
       await harness.waitForSessionSync();
       const sourceSql = observed.queries.filter((sql) =>
         /\b(?:from|update)\s+["`]?memory_index_sources\b/i.test(sql),
@@ -358,7 +367,9 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const harness = await SessionStartupCatchupHarness.create([], true);
+    const harness = await SessionStartupCatchupHarness.create([], true, false, false, {
+      session: { store: storePath },
+    });
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
@@ -421,7 +432,9 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = await SessionStartupCatchupHarness.create([]);
+    const harness = await SessionStartupCatchupHarness.create([], false, false, false, {
+      session: { store: session.storePath },
+    });
     harness.afterNextCorpusListForTest(async () => {
       await configureTestSessionStore(replacement.storePath);
     });
@@ -453,7 +466,7 @@ describe("session startup catch-up", () => {
     const timerContexts: Array<{ turn?: string; pendingInput?: string }> = [];
     const originalSetTimeout = globalThis.setTimeout;
     const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
-      if (args[1] === 5000) {
+      if (args[1] === 30_000) {
         timerContexts.push({
           turn: turnContext.getStore(),
           pendingInput: pendingInputContext.getStore(),
@@ -480,7 +493,7 @@ describe("session startup catch-up", () => {
       );
       expect(timerContexts).toEqual([{ turn: undefined, pendingInput: undefined }]);
 
-      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(31_000);
       await harness.waitForCorpusList();
       await harness.waitForSessionSync();
 
@@ -513,7 +526,7 @@ describe("session startup catch-up", () => {
       await harness.waitForCorpusList();
       expect(harness.getPendingArchiveFiles()).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(31_000);
       await harness.waitForSessionSync();
 
       expect(harness.indexedPaths).toHaveLength(1);
@@ -537,7 +550,7 @@ describe("session startup catch-up", () => {
       try {
         emitSessionTranscriptUpdate({ sessionFile: session.filePath });
         await harness.waitForCorpusList();
-        await vi.advanceTimersByTimeAsync(6000);
+        await vi.advanceTimersByTimeAsync(31_000);
         await harness.waitForSessionSync();
 
         expect([harness.getPendingArchiveFiles(), harness.getDirtyArchiveFiles()]).toEqual([

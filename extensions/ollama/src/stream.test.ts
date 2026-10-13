@@ -104,6 +104,7 @@ describe("buildAssistantMessage", () => {
     };
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.usage).toMatchObject({
+      usageReport: { state: "available" },
       input: 20,
       cacheRead: 80,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 150 },
@@ -194,6 +195,60 @@ describe("createOllamaStreamFn thinking events", () => {
     }
     return events;
   }
+
+  it.each([
+    [0, 0, 0],
+    [1_250_000, 2_500_000, 3.75],
+  ])("retains final processing timing (%i ns + %i ns)", async (prompt, evalDuration, expected) => {
+    const events = await streamOllamaEvents([
+      {
+        ...makeOllamaResponse({ content: "ok" }),
+        done: false,
+        prompt_eval_duration: 50_000_000,
+        eval_duration: 60_000_000,
+      },
+      {
+        ...makeOllamaResponse({}),
+        prompt_eval_duration: prompt,
+        eval_duration: evalDuration,
+        load_duration: 900_000_000,
+      },
+    ]);
+    expect(events.find((event) => event.type === "done")).toMatchObject({
+      message: {
+        diagnostics: [
+          {
+            type: "provider_timing",
+            timestamp: expect.any(Number),
+            details: { processingMs: expected },
+          },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    {},
+    { prompt_eval_duration: 1 },
+    { eval_duration: 1 },
+    { prompt_eval_duration: -1, eval_duration: 1 },
+    { prompt_eval_duration: "1", eval_duration: 1 },
+    { prompt_eval_duration: Number.MAX_VALUE, eval_duration: Number.MAX_VALUE },
+  ])("omits missing, partial, or invalid final processing timing: %j", async (timing) => {
+    const events = await streamOllamaEvents([
+      {
+        ...makeOllamaResponse({ content: "ok" }),
+        done: false,
+        prompt_eval_duration: 1_000_000,
+        eval_duration: 2_000_000,
+      },
+      { ...makeOllamaResponse({}), ...timing },
+    ]);
+    const terminal = events.find((event) => event.type === "done");
+    expect(terminal).toBeDefined();
+    expect(terminal).toMatchObject({ message: { content: [{ type: "text", text: "ok" }] } });
+    expect(terminal).not.toHaveProperty("message.diagnostics");
+  });
 
   it.each([undefined, "Private reasoning"])(
     "keeps native tool narration unsigned with reasoning %s",

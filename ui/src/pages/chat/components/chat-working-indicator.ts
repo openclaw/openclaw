@@ -6,6 +6,7 @@ import type {
 import { icons } from "../../../components/icons.ts";
 import "../../../components/elapsed-time.tsx";
 import "../../../components/working-phrase.ts";
+import "./chat-retry-status.tsx";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";
 import { t } from "../../../i18n/index.ts";
@@ -60,12 +61,12 @@ export function renderChatWorkingIndicator(
     /** Shows the session's subagents; without it their count is plain text. */
     onOpenSubagents?: () => void;
     startupLabel?: string;
+    retryAt?: number;
     outputTokens?: number | null;
     presentation?: "standalone" | "continuation";
   } = {},
 ) {
   // Keep the transcript indicator until roster hydration supplies live child activity.
-  // Waiting copy belongs to the composer, including view-only conversations.
   if (options.waitingSubagents && options.subagentActivity !== undefined) {
     return options.subagentActivity;
   }
@@ -117,7 +118,7 @@ export function renderChatWorkingIndicator(
                     : indicator === "brand"
                       ? "chat-reading-indicator--brand"
                       : selectWorkingClawSurprise(part.key, {
-                          eligible: !waitingApproval,
+                          eligible: !waitingApproval && !options.startupLabel,
                         })
                 }"
                 aria-hidden="true"
@@ -128,12 +129,19 @@ export function renderChatWorkingIndicator(
       }
       <span class="chat-working-indicator__status">
         <span class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
-          >${statusLabel}</span
+          >${
+            !waitingApproval && options.retryAt !== undefined
+              ? html`<openclaw-chat-retry-status
+                  .retryAt=${options.retryAt}
+                ></openclaw-chat-retry-status>`
+              : statusLabel
+          }</span
         >
         ${
           waitingApproval
             ? nothing
             : html`
+                ${options.startupLabel ? html`<span aria-hidden="true">·</span>` : nothing}
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}

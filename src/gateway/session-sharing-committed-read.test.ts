@@ -27,7 +27,6 @@ import { withSessionMutationCommitGuard } from "./server-methods/session-mutatio
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { resolveSessionSharingTarget } from "./session-sharing-policy.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { composePlacementAuthorization } from "./worker-environments/placement-authorization.js";
@@ -49,7 +48,7 @@ function inWriterTransaction(db: DatabaseSync, check: () => void) {
 
 describe("committed session mutation authorization", () => {
   it.each(["resident", "fixed"] as const)(
-    "keeps %s worker grants current after membership changes without shared-state reads",
+    "revokes %s worker grants after committed membership changes without main-thread reads",
     async (mode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         ensureUserProfilesSchema({});
@@ -72,7 +71,6 @@ describe("committed session mutation authorization", () => {
         replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, visibility: "shared" });
         const identityId = client.authenticatedUserProfile!.profileId;
         addSessionMember(scope, { identityId, addedBy: "test-owner" });
-        const source = resolveSessionSharingTarget({ cfg, sessionKey })!.readSource!;
         const projection =
           mode === "resident" ? await createSessionRowProjection({ cfg }) : undefined;
         await projection?.ensureMaterialized();
@@ -101,18 +99,7 @@ describe("committed session mutation authorization", () => {
           | Awaited<ReturnType<NonNullable<typeof authorization.prepareWorkerGrant>>>
           | undefined;
         try {
-          const messages = vi.spyOn(Worker.prototype, "postMessage");
-          const preparationSql = observeHostDataSql();
-          try {
-            grant = await authorization.prepareWorkerGrant!();
-            if (mode === "resident") {
-              expect(preparationSql.queries).toEqual([]);
-              expect(messages).not.toHaveBeenCalled();
-            }
-          } finally {
-            preparationSql.restore();
-            messages.mockRestore();
-          }
+          grant = await authorization.prepareWorkerGrant!();
           const database = openOpenClawStateDatabase();
           const placements = createWorkerSessionPlacementStore({ database });
           const active = await advancePlacementFixtureToActive(placements, database, {
@@ -143,18 +130,7 @@ describe("committed session mutation authorization", () => {
               { assertCurrent: authorize },
             );
             operationId = begun.intent.operationId;
-            if (mode === "resident") {
-              expect(sql.queries).toEqual([]);
-            } else {
-              expect(sql.queries.some((query) => query.includes("session_nodes"))).toBe(true);
-              expect(
-                sql.queries.filter((query) =>
-                  /config_machine_state|agent_databases|user_profiles|worker_session_placements/.test(
-                    query,
-                  ),
-                ),
-              ).toEqual([]);
-            }
+            expect(sql.queries).toEqual([]);
           } finally {
             sql.restore();
           }
@@ -163,18 +139,7 @@ describe("committed session mutation authorization", () => {
           expect(() => grant!.assertCurrent()).toThrow("Placement request connection closed");
           connected = true;
           expect(() => grant!.assertCurrent()).not.toThrow();
-          if (mode === "resident") {
-            removeSessionMember(scope, identityId);
-          } else {
-            const foreign = new DatabaseSync(source.path);
-            try {
-              foreign
-                .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
-                .run(sessionKey, identityId);
-            } finally {
-              foreign.close();
-            }
-          }
+          removeSessionMember(scope, identityId);
           await expect(
             placements.cancelPlacementMove(
               { operationId, sessionId },

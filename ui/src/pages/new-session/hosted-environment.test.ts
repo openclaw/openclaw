@@ -1,8 +1,9 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
@@ -10,7 +11,7 @@ import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-import { renderNewSessionPlaceControls } from "./target-controls.ts";
+import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 const runtime = {
   id: "agentsapi",
   source: "model" as const,
@@ -229,20 +230,23 @@ describe("hosted environment selection", () => {
     expect(state.folder).toBe("/local/project");
     expect(state.worktree).toBe(true);
     const element = document.createElement("div");
-    render(
-      renderNewSessionPlaceControls({
-        context,
-        data,
-        gateway: fixture.gateway,
-        place: state,
-        submitting: false,
-        pendingPlacement: false,
-        onConnectMachine: vi.fn(),
-        onNavigate: vi.fn(),
-        onFocusComposer: vi.fn(),
-        requestUpdate: vi.fn(),
-      }),
-      element,
+    mountSolid(
+      () =>
+        createComponent(NewSessionPlaceControls, {
+          params: {
+            context,
+            data,
+            gateway: fixture.gateway,
+            place: state,
+            submitting: false,
+            pendingPlacement: false,
+            onConnectMachine: vi.fn(),
+            onNavigate: vi.fn(),
+            onFocusComposer: vi.fn(),
+            requestUpdate: vi.fn(),
+          },
+        }),
+      { container: element },
     );
     expect(element.querySelector("#new-session-project-trigger")).not.toBeNull();
     expect(element.querySelector("#new-session-checkout-trigger")).not.toBeNull();
@@ -287,20 +291,23 @@ describe("hosted environment selection", () => {
     expect(f.place.hostedEnvironment).toBeDefined();
     await f.gateway.refreshCloudProfiles();
     const element = document.createElement("div");
-    render(
-      renderNewSessionPlaceControls({
-        context: f.context,
-        data: undefined,
-        gateway: f.gateway,
-        place: f.place,
-        submitting: false,
-        pendingPlacement: false,
-        onConnectMachine: vi.fn(),
-        onNavigate: vi.fn(),
-        onFocusComposer: vi.fn(),
-        requestUpdate: vi.fn(),
-      }),
-      element,
+    mountSolid(
+      () =>
+        createComponent(NewSessionPlaceControls, {
+          params: {
+            context: f.context,
+            data: undefined,
+            gateway: f.gateway,
+            place: f.place,
+            submitting: false,
+            pendingPlacement: false,
+            onConnectMachine: vi.fn(),
+            onNavigate: vi.fn(),
+            onFocusComposer: vi.fn(),
+            requestUpdate: vi.fn(),
+          },
+        }),
+      { container: element },
     );
     expect(element.textContent).toContain("Chooses the first eligible connected device");
     expect(element.textContent).not.toContain("Chooses the least-busy connected device");

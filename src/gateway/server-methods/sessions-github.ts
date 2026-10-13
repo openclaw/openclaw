@@ -194,13 +194,12 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           sessionKey: params.sessionKey,
           agentId,
         });
-        try {
-          const result = await coordinator.requestPersonalForSessionV2(params, admitted.action);
-          admitted.action.assertCurrent();
-          respond(true, result);
-        } finally {
-          admitted.release();
-        }
+        using _ = { [Symbol.dispose]: () => admitted.release() };
+
+        const result = await coordinator.requestPersonalForSessionV2(params, admitted.action);
+        admitted.action.assertCurrent();
+        respond(true, result);
+
         return;
       }
       const loaded = readGitHubPublicationSession(sessionKey, agentId ? { agentId } : undefined);
@@ -218,20 +217,18 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         agentId: caller?.agentId ?? loaded.agentId,
       };
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
-      try {
-        const result = await coordinator.requestForSessionV2({
-          ...params,
-          ...session,
-          requester: admitted.requester,
-          ...(caller?.operationalRunInstance?.runId
-            ? { expectedRunId: caller.operationalRunInstance.runId }
-            : {}),
-        });
-        sessionMutationAuthorization?.assertCurrent();
-        respond(true, result);
-      } finally {
-        admitted.release();
-      }
+      using _ = { [Symbol.dispose]: () => admitted.release() };
+
+      const result = await coordinator.requestForSessionV2({
+        ...params,
+        ...session,
+        requester: admitted.requester,
+        ...(caller?.operationalRunInstance?.runId
+          ? { expectedRunId: caller.operationalRunInstance.runId }
+          : {}),
+      });
+      sessionMutationAuthorization?.assertCurrent();
+      respond(true, result);
     },
   ),
   "sessions.github.options": defineSessionGitHubMethod(
@@ -241,11 +238,12 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const deadline = new AbortController();
       await raceWithTimeout(
         async () => {
-          const read = await prepareGitHubPublicationOptionsRead(
+          using read = await prepareGitHubPublicationOptionsRead(
             options,
             options.params,
             deadline.signal,
           );
+
           const coordinator = options.context.githubPublicationService;
           if (!coordinator) {
             options.respond(false, undefined, publicationStateUnavailableError());
@@ -318,7 +316,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.status",
     validateSessionGitHubStatusParams,
     async (options) => {
-      const read = await prepareGitHubPublicationOptionsRead(options, options.params);
+      using read = await prepareGitHubPublicationOptionsRead(options, options.params);
+
       const service = options.context.githubPublicationService;
       if (!service) {
         options.respond(false, undefined, publicationStateUnavailableError());
@@ -328,6 +327,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         read.personal.kind === "eligible"
           ? await service.preparePersonalStatus(options.params.requestId)
           : undefined;
+      using _ = { [Symbol.dispose]: () => prepared?.release() };
+
       const session = read.currentSession();
       const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
@@ -357,13 +358,11 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("GitHub publication is unavailable.");
       }
       const admitted = await preparePersonalGitHubSessionActionV2(options, options.params);
-      try {
-        const result = await service.confirmPersonalV2(options.params, admitted.action);
-        admitted.action.assertCurrent();
-        options.respond(true, result);
-      } finally {
-        admitted.release();
-      }
+      using _ = { [Symbol.dispose]: () => admitted.release() };
+
+      const result = await service.confirmPersonalV2(options.params, admitted.action);
+      admitted.action.assertCurrent();
+      options.respond(true, result);
     },
   ),
 };

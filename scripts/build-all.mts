@@ -8,8 +8,10 @@ import { performance } from "node:perf_hooks";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
   finalizeBuildStepCache,
+  resetBuildCacheInputs,
   resolveBuildStepCacheState,
   restoreBuildStepCacheOutputs,
+  writeBuildCacheInputs,
   type BuildCacheStep,
 } from "./lib/build-artifact-cache.mts";
 import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
@@ -102,8 +104,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   ]),
   pluginAssetStep("build"),
   {
-    // Cap overlapping native bundle allocations in the shared runtime pass.
-    ...tsxStep("tsdown", "scripts/tsdown-build.mts", "--concurrency", "1"),
+    ...tsxStep("tsdown", "scripts/tsdown-build.mts"),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
   },
   declarationStep("tsdown-ai", "tsdown.ai.config.ts", [TSDOWN_AI_OUTPUT_ROOT]),
@@ -131,10 +132,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
   {
     ...nodeStep("ui:build", ["scripts/ui.js", "build"]),
-    // No build-all cache: ui/vite.config.ts derives the Control UI build ID
-    // from package.json, git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a
-    // file-input signature cannot exactly invalidate generated assets and a
-    // warm hit could restore stale service-worker/app cache metadata.
+    // The UI owner caches its bundles and refreshes release identity before publication.
     cache: undefined,
   },
   tsxStep("write-build-info", "scripts/write-build-info.ts"),
@@ -401,7 +399,14 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
     params.deferIsolatedAssets && step.label === "plugins:assets:build" ? ["--defer-isolated"] : [];
   return {
     command: params.nodeExecPath ?? nodeBin,
-    args: [...step.args, ...assetArgs],
+    args: [
+      ...step.args,
+      ...assetArgs,
+      // Native allocations are outside the JS heap. Keep small build hosts serial.
+      ...(step.label === "tsdown"
+        ? ["--concurrency", Number(env[TSDOWN_MAX_OLD_SPACE_MB_ENV]) >= 12288 ? "2" : "1"]
+        : []),
+    ],
     options: {
       stdio: "inherit",
       env,
@@ -435,11 +440,13 @@ export function formatBuildAllDuration(durationMs: number) {
   });
 }
 
-export function formatBuildAllTimingSummary(timings: BuildAllTiming[]) {
+export function formatBuildAllTimingSummary(
+  timings: BuildAllTiming[],
+  totalMs = timings.reduce((sum, timing) => sum + timing.durationMs, 0),
+) {
   if (timings.length === 0) {
     return "[build-all] phase timings: no phases ran";
   }
-  const totalMs = timings.reduce((sum, timing) => sum + timing.durationMs, 0);
   const phases = timings
     .toSorted((left, right) => right.durationMs - left.durationMs)
     .map((timing) => {
@@ -503,6 +510,9 @@ export async function runBuildAllSteps(
   const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
   const finalizeCache = params.finalizeCache ?? finalizeBuildStepCache;
   const cwd = params.cwd ?? process.cwd();
+  if (!params.runStep) {
+    resetBuildCacheInputs(cwd);
+  }
   const inputDeps = { cwd, distRoot: path.join(cwd, "dist"), fs, env: buildEnv, spawnSync };
   const capturesNativeInputs =
     !params.runStep && steps.some((step) => step.label.endsWith("build-stamp"));
@@ -570,7 +580,6 @@ export async function runBuildAllSteps(
       };
     });
   const timings: BuildAllTiming[] = [];
-  let exitCode = 0;
   if (heapShortfall) {
     if (heapShortfall.fatal) {
       logger.error(heapShortfall.message);
@@ -578,59 +587,106 @@ export async function runBuildAllSteps(
     }
     logger.warn(heapShortfall.message);
   }
-  for (const step of steps) {
-    params.signal?.throwIfAborted();
-    const cacheStartedAt = now();
-    const cacheState = resolveCacheState(step, { env: buildEnv });
-    const cacheDurationMs = now() - cacheStartedAt;
-    const startedAt = now();
-    let stepToRun = step;
-    let reusedCache = false;
-    if (cacheEnabled && cacheState.fresh) {
-      if (cacheState.restorable) {
-        invalidateInputStamps();
-        if (!restoreCache(cacheState)) {
-          throw new Error(`Build cache changed before restoration: ${step.label}; rerun the build`);
+  const runSteps = async (sequence: BuildAllStep[]) => {
+    for (const step of sequence) {
+      params.signal?.throwIfAborted();
+      const cacheStartedAt = now();
+      const cacheState = resolveCacheState(step, { env: buildEnv });
+      const cacheDurationMs = now() - cacheStartedAt;
+      const startedAt = now();
+      let stepToRun = step;
+      let reusedCache = false;
+      if (cacheEnabled && cacheState.fresh) {
+        if (cacheState.restorable) {
+          invalidateInputStamps();
+          if (!restoreCache(cacheState)) {
+            throw new Error(
+              `Build cache changed before restoration: ${step.label}; rerun the build`,
+            );
+          }
         }
+        const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
+        if (!cacheHitStep) {
+          const durationMs = cacheDurationMs + now() - startedAt;
+          timings.push({ label: step.label, status: "cached", durationMs });
+          logger.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
+          continue;
+        }
+        reusedCache = true;
+        stepToRun = cacheHitStep;
       }
-      const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
-      if (!cacheHitStep) {
-        const durationMs = cacheDurationMs + now() - startedAt;
-        timings.push({ label: step.label, status: "cached", durationMs });
-        logger.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
-        continue;
+      logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
+      const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv, deferIsolatedAssets });
+      invalidateInputStamps();
+      const result = await runStep(invocation);
+      params.signal?.throwIfAborted();
+      const durationMs = cacheDurationMs + now() - startedAt;
+      if (result.status !== 0) {
+        timings.push({ label: step.label, status: "failed", durationMs });
+        logger.error(
+          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
+        );
+        return typeof result.status === "number" ? result.status : 1;
       }
-      reusedCache = true;
-      stepToRun = cacheHitStep;
+      if (step.label === "plugins:assets:build" && !params.runStep) {
+        buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
+        runtimeInputSignature = resolveRunNodeInputSignature(
+          { ...inputDeps, env: runtimeEnv },
+          "runtime",
+        );
+      }
+      // Runtime-only tsdown cleans its output roots. Cache hits restore
+      // declarations again after that pass so the full build stays complete.
+      if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
+        throw new Error(`Build cache changed during ${step.label}; rerun the build`);
+      }
+      timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
+      logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
     }
-    logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
-    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv, deferIsolatedAssets });
-    invalidateInputStamps();
-    const result = await runStep(invocation);
-    params.signal?.throwIfAborted();
-    const durationMs = cacheDurationMs + now() - startedAt;
-    if (result.status !== 0) {
-      timings.push({ label: step.label, status: "failed", durationMs });
-      logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
-      exitCode = typeof result.status === "number" ? result.status : 1;
-      break;
+    return 0;
+  };
+  const startedAt = now();
+  const uiIndex = steps.findIndex((step) => step.label === "ui:build");
+  const runtimeIndex =
+    steps.findLastIndex(
+      (step) =>
+        step.label.startsWith("tsdown") ||
+        step.label === "external-plugins:local-dist" ||
+        step.label === "write-unified-entry-dts" ||
+        step.label === "write-plugin-sdk-entry-dts",
+    ) + 1;
+  let exitCode: number;
+  if (runtimeIndex > 0 && uiIndex > runtimeIndex) {
+    exitCode = await runSteps(steps.slice(0, runtimeIndex));
+    if (exitCode === 0) {
+      // Compilers and plugin bundles retain the serial memory budget. UI owns
+      // its staged subtree; join it with runtime checks before final metadata.
+      const results = await Promise.allSettled([
+        runSteps(steps.slice(runtimeIndex, uiIndex)),
+        runSteps([steps[uiIndex]!]),
+      ]);
+      for (const result of results) {
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+        exitCode ||= result.value;
+      }
+      if (exitCode === 0) {
+        exitCode = await runSteps(steps.slice(uiIndex + 1));
+      }
     }
-    if (step.label === "plugins:assets:build" && !params.runStep) {
-      buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
-      runtimeInputSignature = resolveRunNodeInputSignature(
-        { ...inputDeps, env: runtimeEnv },
-        "runtime",
-      );
-    }
-    // Runtime-only tsdown cleans its output roots. Cache hits restore
-    // declarations again after that pass so the full build stays complete.
-    if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
-      throw new Error(`Build cache changed during ${step.label}; rerun the build`);
-    }
-    timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
-    logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
+    timings.sort(
+      (left, right) =>
+        steps.findIndex((step) => step.label === left.label) -
+        steps.findIndex((step) => step.label === right.label),
+    );
+  } else {
+    exitCode = await runSteps(steps);
   }
-  logger.error(formatBuildAllTimingSummary(timings));
+  logger.error(formatBuildAllTimingSummary(timings, now() - startedAt));
+  if (exitCode === 0 && !params.runStep) {
+    writeBuildCacheInputs(cwd);
+  }
   return { exitCode, timings };
 }
 

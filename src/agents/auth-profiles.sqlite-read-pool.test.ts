@@ -12,16 +12,17 @@ import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
+import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import {
   inspectAgentAuthProfileJsonCellReadOnly,
   readAuthProfileRowsReadOnly,
-  writeAuthProfileJsonCell,
 } from "./auth-profiles/sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,
@@ -74,6 +75,7 @@ describe("auth profile sqlite reader lifecycle", () => {
   it("reads a captured owner projection after native close without retaining schema metadata", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-transfer-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    registerOpenClawAgentDatabaseIdentity(writer, databasePath);
     writer.exec(`CREATE TABLE auth_profile_store (
       store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`);
@@ -113,6 +115,7 @@ describe("auth profile sqlite reader lifecycle", () => {
   it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-facts-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    registerOpenClawAgentDatabaseIdentity(writer, databasePath);
     const storeSchema = `CREATE TABLE auth_profile_store (
       store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`;
@@ -176,7 +179,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     }
   });
 
-  it("revalidates format after final pool close and rejects a replacement file", async () => {
+  it("reuses sealed format after final pool close and rejects a replacement file", async () => {
     await withReaders((agentDir) => {
       const pathname = resolveAuthProfileDatabasePath(agentDir);
       const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
@@ -191,15 +194,7 @@ describe("auth profile sqlite reader lifecycle", () => {
         closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
         observed.queries.length = 0;
         expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
-        expect(
-          formatQueries().filter((sql) => /^PRAGMA schema_version\b/iu.test(sql)),
-        ).toHaveLength(1);
-        expect(formatQueries().filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
-          1,
-        );
-        expect(
-          formatQueries().filter((sql) => /FROM main\.sqlite_schema\b/iu.test(sql)),
-        ).toHaveLength(1);
+        expect(formatQueries()).toEqual([]);
         observed.queries.length = 0;
         expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
         expect(formatQueries()).toEqual([]);

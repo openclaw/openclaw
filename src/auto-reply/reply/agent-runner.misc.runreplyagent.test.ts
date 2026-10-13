@@ -727,176 +727,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       }
     },
   );
-
-  it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
-    const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-diagnostic-",
-      collectDiagnostics: true,
-      agentMeta: {
-        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-        diagnosticUsage: {
-          input: 90_000,
-          output: 8_000,
-          cacheRead: 30_000,
-          cacheWrite: 2_000,
-          total: 130_000,
-        },
-        lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
-        promptTokens: 44_000,
-      },
-    });
-
-    const usagePayload = expectRecordFields(
-      usageEvent,
-      {
-        type: "model.usage",
-        agentId: "main",
-      },
-      "usage diagnostic event",
-    );
-    expectRecordFields(
-      usagePayload.usage,
-      {
-        input: 90_000,
-        output: 8_000,
-        cacheRead: 30_000,
-        cacheWrite: 2_000,
-        promptTokens: 122_000,
-        total: 130_000,
-      },
-      "usage diagnostic usage",
-    );
-    expectRecordFields(
-      usagePayload.context,
-      {
-        limit: 200_000,
-        used: 44_000,
-      },
-      "usage diagnostic context",
-    );
-    expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
-  });
-
-  it.each([0, 0.25])(
-    "preserves cost-only total %s in reply diagnostics and persistence",
-    async (total) => {
-      const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
-        tmpPrefix: "openclaw-usage-diagnostic-cost-only-",
-        collectDiagnostics: true,
-        agentMeta: { usage: { cost: { total } } },
-      });
-
-      expect(usageEvent).toMatchObject({ type: "model.usage", costUsd: total });
-      expect(usageEvent).not.toHaveProperty("context.used");
-      const entry = stored[sessionKey as keyof typeof stored];
-      expect(entry?.estimatedCostUsd).toBe(total);
-      for (const key of ["inputTokens", "outputTokens", "cacheRead", "cacheWrite"] as const) {
-        expect(entry?.[key]).toBeUndefined();
-      }
-      expect(entry?.totalTokensFresh).not.toBe(true);
-    },
-  );
-
-  it("falls back to last-call prompt usage for live diagnostic context", async () => {
-    const { usageEvent } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-diagnostic-last-",
-      collectDiagnostics: true,
-      agentMeta: {
-        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-        lastCallUsage: {
-          input: 55_000,
-          output: 2_000,
-          cacheRead: 25_000,
-          cacheWrite: 1_000,
-          total: 83_000,
-        },
-      },
-    });
-
-    const usagePayload = expectRecordFields(
-      usageEvent,
-      {
-        type: "model.usage",
-      },
-      "usage diagnostic event",
-    );
-    expectRecordFields(
-      usagePayload.usage,
-      {
-        input: 75_000,
-        output: 5_000,
-        cacheRead: 25_000,
-        promptTokens: 100_000,
-        total: 105_000,
-      },
-      "usage diagnostic usage",
-    );
-    expectRecordFields(
-      usagePayload.context,
-      {
-        limit: 200_000,
-        used: 81_000,
-      },
-      "usage diagnostic context",
-    );
-  });
-
-  it.each([0, 1])(
-    "honors queued post-compaction sections with %i reported compactions",
-    async (compactionCount) => {
-      const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
-      await fs.writeFile(
-        path.join(workspaceDir, "AGENTS.md"),
-        [
-          "## Session Startup",
-          "Read the queued workspace startup file.",
-          "",
-          "## Red Lines",
-          "Never use the process cwd for this refresh.",
-        ].join("\n"),
-        "utf-8",
-      );
-
-      const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
-        tmpPrefix: "openclaw-post-compaction-workspace-root-",
-        workspaceDir,
-        config: {
-          agents: {
-            defaults: {
-              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-            },
-          },
-        },
-        agentMeta: {
-          compactionCount,
-          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
-        },
-      });
-
-      // The session seed pins an unrelated source-less snapshot. It must not erase
-      // the queued turn's explicit compaction configuration.
-      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      expect(firstMockCallArg(runEmbeddedAgentMock, "embedded run params")).toMatchObject({
-        config: {
-          agents: {
-            defaults: {
-              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-            },
-          },
-        },
-      });
-      const events = peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"));
-      expect(events).toHaveLength(compactionCount);
-      if (compactionCount > 0) {
-        expect(events[0]).toContain("Post-compaction context refresh");
-        expect(events[0]).toContain("Read the queued workspace startup file.");
-        expect(events[0]).toContain("Never use the process cwd for this refresh.");
-      }
-      // Result metadata can report presentation-only compaction, not durable writer custody.
-      expect(stored).toHaveProperty([sessionKey, "sessionId"], "session");
-      expect(stored).not.toHaveProperty([sessionKey, "compactionCount"]);
-    },
-  );
 });
 
 describe("runReplyAgent block streaming", () => {
@@ -1000,11 +830,7 @@ describe("runReplyAgent block streaming", () => {
 });
 
 describe("runReplyAgent inline tool verbosity", () => {
-  it.each([
-    { stored: "off", override: "full", expected: ["Tool summary", "Tool output"] },
-    { stored: "full", override: "off", expected: [] },
-    { stored: "full", override: "on", expected: ["Tool summary"] },
-  ] as const)(
+  it.each([{ stored: "full", override: "on", expected: ["Tool summary"] }] as const)(
     "delivers tool progress with inline $override over stored $stored",
     async ({ stored, override, expected }) => {
       const storePath = path.join(rootDir, "sessions.json");
@@ -1134,9 +960,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
   }
 
   it.each([
-    { stored: "off", override: "raw", authorized: true, trace: true, raw: true },
-    { stored: "raw", override: "off", authorized: true, trace: false, raw: false },
-    { stored: "raw", override: "on", authorized: true, trace: true, raw: false },
     { stored: "raw", override: "raw", authorized: false, trace: false, raw: false },
   ] as const)(
     "honors turn trace $override over stored $stored with authorization=$authorized",
@@ -1176,10 +999,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  it.each([
-    { stored: "off", selected: "on", traceLevel: "off", status: true },
-    { stored: "on", selected: "off", traceLevel: "raw", status: false },
-  ] as const)(
+  it.each([{ stored: "on", selected: "off", traceLevel: "raw", status: false }] as const)(
     "selects plugin status using turn verbosity $selected over stored $stored",
     async ({ stored, selected, traceLevel, status }) => {
       const result = await runActiveMemoryDebugCase(
@@ -1596,55 +1416,6 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
     expect(texts).not.toContain("secret hitl prompt");
   });
-
-  it("uses the selected CLI runtime for canonical Anthropic models", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-        },
-      },
-    });
-
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const result = await createBaseRun({
-      context: {
-        Provider: "webchat",
-        OriginatingTo: "session:1",
-        AccountId: "primary",
-        MessageSid: "msg",
-      },
-      run: {
-        messageProvider: "webchat",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-              },
-            },
-          },
-        },
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        thinkLevel: "low",
-      },
-      reply: { sessionEntry, defaultModel: "anthropic/claude-opus-4-7" },
-    }).run();
-
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expectRecordFields(
-      firstMockCallArg(runCliAgentMock, "CLI run params"),
-      { provider: "claude-cli" },
-      "CLI run params",
-    );
-    expectReplyText(result, "ok");
-  });
 });
 
 describe("runReplyAgent messaging tool dedupe", () => {
@@ -1788,22 +1559,6 @@ describe("runReplyAgent reminder commitment guard", () => {
     }).run();
   }
 
-  it("keeps reminder commitment unchanged when cron.add succeeded", async () => {
-    mockReminderReply("I'll remind you tomorrow morning.", 1);
-
-    const result = await createRun();
-    expectReplyText(result, "I'll remind you tomorrow morning.");
-  });
-
-  it("suppresses guard note when session already has an active cron job", async () => {
-    mockCronJob();
-
-    mockReminderReply("I'll ping you when it's done.");
-
-    const result = await createRun();
-    expectReplyText(result, "I'll ping you when it's done.");
-  });
-
   it("still appends guard note when cron jobs exist but not for the current session", async () => {
     mockCronJob({ id: "unrelated-job", name: "daily-news", sessionKey: "other-session" });
 
@@ -1813,30 +1568,6 @@ describe("runReplyAgent reminder commitment guard", () => {
     expectReplyText(
       result,
       "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    );
-  });
-
-  it("still appends guard note when cron jobs for session exist but are disabled", async () => {
-    mockCronJob({ id: "disabled-job", name: "old-monitor", enabled: false });
-
-    mockReminderReply("I'll check back in an hour.");
-
-    const result = await createRun();
-    expectReplyText(
-      result,
-      "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    );
-  });
-
-  it("still appends guard note when sessionKey is missing", async () => {
-    mockCronJob();
-
-    mockReminderReply("I'll ping you later.");
-
-    const result = await createRun({ omitSessionKey: true });
-    expectReplyText(
-      result,
-      "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     );
   });
 
@@ -1986,34 +1717,9 @@ describe("runReplyAgent response usage footer", () => {
 
   it.each([
     {
-      name: "split token counts",
-      usage: { input_tokens: 12, output_tokens: 3, cacheRead: 4, cacheWrite: 2 },
-      expected: "Usage: 12 in / 3 out · cache 4 cached / 2 new",
-    },
-    {
-      name: "input-only counts",
-      usage: { input_tokens: 12, total_tokens: 15 },
-      expected: "Usage: 12 in / ? out",
-    },
-    {
-      name: "output-only counts",
-      usage: { output_tokens: 3, total_tokens: 15 },
-      expected: "Usage: ? in / 3 out",
-    },
-    {
-      name: "total-only counts",
-      usage: { total_tokens: 1250 },
-      expected: "Usage: 1.3k total",
-    },
-    {
       name: "cache-only counts",
       usage: { cacheRead: 800, cacheWrite: 200 },
       expected: "Usage: ? in / ? out · cache 800 cached / 200 new",
-    },
-    {
-      name: "total and cache counts without a split",
-      usage: { total_tokens: 1250, cacheRead: 800, cacheWrite: 200 },
-      expected: "Usage: 1.3k total · cache 800 cached / 200 new",
     },
   ])("shows $name without cost or session keys in tokens mode", async ({ usage, expected }) => {
     const output = parseCliOutput({

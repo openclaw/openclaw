@@ -1,4 +1,5 @@
 // Test environment tests validate shared env setup helpers.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -602,6 +603,48 @@ describe("installTestEnv", () => {
           testEnv.cleanup();
           expect(process.env.FAL_KEY).toBe("fal-sentinel-not-a-real-key-0123456789");
           expect(process.env.OPENAI_API_KEY).toBe("openai-sentinel-not-a-real-key-0123456789");
+        },
+      );
+    },
+  );
+
+  it.each(["live-aware", "hermetic"] as const)(
+    "clears counted Git config together and restores it in non-live %s mode",
+    (mode) => {
+      const gitConfig = {
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "http.https://config-fixture.invalid/.extraheader",
+        GIT_CONFIG_VALUE_0: "Authorization: Bearer synthetic-fixture-token",
+        GIT_CONFIG_KEY_1: "openclaw.fixture",
+        GIT_CONFIG_VALUE_1: "caller-value",
+        GIT_CONFIG_KEY_19: "openclaw.unused",
+        GIT_CONFIG_VALUE_19: "",
+      };
+      withEnv(
+        {
+          LIVE: undefined,
+          OPENCLAW_LIVE_TEST: undefined,
+          OPENCLAW_LIVE_GATEWAY: undefined,
+          ...gitConfig,
+          OPENAI_API_KEY: "synthetic-provider-key",
+        },
+        () => {
+          const callerEnv = { ...process.env };
+          const testEnv = installTestEnv({ mode });
+          cleanupFns.push(testEnv.cleanup);
+          const git = spawnSync(
+            "git",
+            ["-c", "openclaw.isolated=active", "config", "--get", "openclaw.isolated"],
+            { encoding: "utf8" },
+          );
+          expect(git.status, git.stderr).toBe(0);
+          expect(git.stdout.trim()).toBe("active");
+          expect(Object.keys(gitConfig).filter((key) => process.env[key] !== undefined)).toEqual(
+            [],
+          );
+          expect(process.env.OPENAI_API_KEY).toBeUndefined();
+          testEnv.cleanup();
+          expect(changedEnvKeys(callerEnv)).toEqual([]);
         },
       );
     },

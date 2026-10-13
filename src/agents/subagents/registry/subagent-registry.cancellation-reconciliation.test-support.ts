@@ -395,9 +395,7 @@ export function registerCancellationReconciliationTests({
       ).toBe(false);
       if (source === "new completion") {
         expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalledWith(transcriptTarget);
-        await expect(
-          fs.access(expectDefined(attachmentsDir, "retained attachments")),
-        ).resolves.toBeUndefined();
+        await fs.access(expectDefined(attachmentsDir, "retained attachments"));
       } else {
         expect(mocks.entries[childSessionKey]).toEqual(originalEntry);
         expect(

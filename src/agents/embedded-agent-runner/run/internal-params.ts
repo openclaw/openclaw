@@ -6,6 +6,7 @@ import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
@@ -47,6 +48,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   preparedTtsPreferences?: PreparedTtsPreferences;
   /** Fail-closed caller input admission against the actual prepared model, before dispatch. */
   assertModelInput?: (model: Pick<Model, "input">) => void;
+  /** Keep source-owned custody separate from streamed-block completion in one observation. */
+  resolveReplyDeliveryFacts?: (minimumAssistantMessageIndex?: number) => Promise<{
+    source: ReplyDeliveryState;
+    terminal: ReplyDeliveryState;
+  }>;
   /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
   onAttemptStart?: () => void;
   /** Keep a bounded auxiliary tool set directly visible after runtime admission. */

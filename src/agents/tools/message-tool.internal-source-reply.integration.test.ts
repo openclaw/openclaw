@@ -35,6 +35,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
@@ -87,6 +88,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-source-commit-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:webchat:dm:cron-source-commit";
         const sessionId = "cron-source-commit-session";
         const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
@@ -158,6 +160,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-source-remote-media-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:webchat:dm:cron-source-media";
         const sessionId = "cron-source-media-session";
         const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
@@ -239,68 +242,80 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("projects a real targetless send and preserves the automatic final reply", async () => {
-    const tool = createCurrentSourceMessageTool();
+  it.each([true, false])(
+    "projects a targetless send and preserves automatic final text only for progress (final=%s)",
+    async (final) => {
+      const tool = createCurrentSourceMessageTool();
 
-    const toolResult = await tool.execute("message-call", {
-      action: "send",
-      message: "Visible progress from the message tool.",
-    });
-    expect(toolResult.details).toMatchObject({
-      channel: "webchat",
-      target: "current-run",
-      sourceReplyDeliveryMode: "message_tool_only",
-      sourceReplySink: "internal-ui",
-      sourceReply: { text: "Visible progress from the message tool." },
-    });
-    expect(toolResult.content).toEqual([
-      {
-        type: "text",
-        text: "Sent visible reply to the current source conversation via internal-ui.",
-      },
-    ]);
+      const toolResult = await tool.execute("message-call", {
+        action: "send",
+        message: "Visible progress from the message tool.",
+        final,
+      });
+      expect(toolResult.details).toMatchObject({
+        channel: "webchat",
+        target: "current-run",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplySink: "internal-ui",
+        sourceReply: { text: "Visible progress from the message tool." },
+      });
+      expect(toolResult.content).toEqual([
+        {
+          type: "text",
+          text: "Sent visible reply to the current source conversation via internal-ui.",
+        },
+      ]);
 
-    const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
-    expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });
+      const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+      expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });
+      const delivery = readEmbeddedMessageDeliveryFact(
+        asOptionalRecord(toolResult.details)?.messageDelivery,
+      );
+      expect(delivery?.sourceReplyDelivered === true).toBe(final);
 
-    const embeddedPayloads = buildEmbeddedRunPayloads({
-      assistantTexts: ["Visible automatic final reply."],
-      lastAssistant: undefined,
-      currentAssistant: undefined,
-      sessionKey: "agent:main:webchat:dm:dashboard",
-      sourceReplyDeliveryMode: "automatic",
-      messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
-      runId: "webchat-run",
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
-    });
-    const { replyPayloads: payloads } = await buildReplyPayloads({
-      payloads: embeddedPayloads,
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      replyToMode: "off",
-      messagingToolSentTexts: ["Visible progress from the message tool."],
-    });
-
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Visible progress from the message tool.",
-      "Visible automatic final reply.",
-    ]);
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
+      const embeddedPayloads = buildEmbeddedRunPayloads({
+        assistantTexts: ["Visible automatic final reply."],
+        lastAssistant: undefined,
+        currentAssistant: undefined,
         sessionKey: "agent:main:webchat:dm:dashboard",
-        text: "Visible progress from the message tool.",
-        idempotencyKey: "webchat-run:internal-source-reply:0",
-      },
-    });
-    expect(getReplyPayloadMetadata(payloads[1] as object)?.sourceReplyTranscriptMirror).toBe(
-      undefined,
-    );
-  });
+        sourceReplyDeliveryMode: "automatic",
+        didDeliverSourceReplyViaMessageTool: delivery?.sourceReplyDelivered,
+        messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
+        runId: "webchat-run",
+        verboseLevel: "off",
+        reasoningLevel: "off",
+        toolResultFormat: "plain",
+      });
+      const { replyPayloads: payloads } = await buildReplyPayloads({
+        payloads: embeddedPayloads,
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        replyToMode: "off",
+        messagingToolSentTexts: ["Visible progress from the message tool."],
+      });
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        final
+          ? ["Visible progress from the message tool."]
+          : ["Visible progress from the message tool.", "Visible automatic final reply."],
+      );
+      expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main:webchat:dm:dashboard",
+          text: "Visible progress from the message tool.",
+          idempotencyKey: "webchat-run:internal-source-reply:0",
+        },
+      });
+      if (!final) {
+        expect(getReplyPayloadMetadata(payloads[1] as object)?.sourceReplyTranscriptMirror).toBe(
+          undefined,
+        );
+      }
+    },
+  );
 
   it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
     const tool = createCurrentSourceMessageTool({
@@ -334,6 +349,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-buffer-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
         const attachment = Buffer.from("<!doctype html><h1>Proof</h1>");
@@ -367,6 +383,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-error-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const media = path.join(state.workspaceDir, "missing.txt");
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
@@ -391,6 +408,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-remote-media-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const remoteWorkspaceDir = state.path("remote-workspace");
         await fs.mkdir(remoteWorkspaceDir, { recursive: true });
@@ -454,6 +472,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const { stateDir, workspaceDir } = state;
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const sessionKey = "agent:main:webchat:dm:restart-proof";
@@ -638,6 +657,7 @@ describe("WebChat message tool internal source reply", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "source-reply-append-outcome-" },
         async (state) => {
+          setRuntimeConfigSnapshot({});
           const sessionKey = "agent:main:webchat:dm:append-outcome";
           const sessionId = "append-outcome-session";
           const storePath = path.join(

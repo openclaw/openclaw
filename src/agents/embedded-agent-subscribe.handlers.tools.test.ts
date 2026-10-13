@@ -20,6 +20,11 @@ import { createProcessSessionFixture } from "./bash-process-registry.test-helper
 import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
+import {
+  activateAskUserPrompt,
+  createBasicAskUserArgs,
+  finishPendingAskUserPrompts,
+} from "./embedded-agent-subscribe.handlers.tools.ask-user.test-support.js";
 import { handleToolExecutionUpdate } from "./embedded-agent-subscribe.handlers.tools.progress.js";
 import { registerToolChannelProgressTests } from "./embedded-agent-subscribe.handlers.tools.progress.test-support.js";
 import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
@@ -31,14 +36,19 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
-import {
-  createAskUserTool,
-  normalizeAskUserParams,
-  reserveAskUserPromptDelivery,
-} from "./tools/ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
+import { normalizeAskUserParams, reserveAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
+
+// mock-isolation: Keep prompt-readiness RPCs on the fixture, never the operator Gateway.
+vi.mock("./harness/gateway-question-dispatch.runtime.js", () => ({
+  callGatewayTool: async (method: string) => {
+    if (method !== "question.list") {
+      throw new Error(`Unexpected question readiness RPC: ${method}`);
+    }
+    return { questions: [] };
+  },
+}));
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionUpdateEvent = {
@@ -71,64 +81,7 @@ function updateTool(ctx: ToolHandlerContext, event: ToolExecutionUpdateEvent) {
   });
 }
 
-const pendingAskUserFinishes = new Set<() => Promise<void>>();
-
-function createBasicAskUserArgs() {
-  return {
-    questions: [
-      {
-        id: "target",
-        header: "Target",
-        question: "Where next?",
-        options: [{ label: "Staging" }, { label: "Production" }],
-      },
-    ],
-  };
-}
-
-async function activateAskUserPrompt(toolCallId: string, args: unknown) {
-  let questionId: string | undefined;
-  let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
-  const tool = createAskUserTool({
-    sessionKey: "agent:unit-session",
-    runId: "run-test",
-    gatewayCall: async (method, _opts, params) => {
-      if (method === "question.request") {
-        if (!params || typeof params !== "object" || !("id" in params)) {
-          throw new Error("question.request params missing id");
-        }
-        questionId = String(params.id);
-        return { id: questionId };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          resolveAnswer = resolve;
-        });
-      }
-      throw new Error(`unexpected method ${method}`);
-    },
-  });
-  const pending = tool.execute(toolCallId, args);
-  let finished = false;
-  const finish = async () => {
-    if (finished) {
-      return;
-    }
-    finished = true;
-    await vi.waitFor(() => expect(resolveAnswer).toBeTypeOf("function"));
-    resolveAnswer?.({ status: "cancelled" });
-    await pending;
-    pendingAskUserFinishes.delete(finish);
-  };
-  pendingAskUserFinishes.add(finish);
-  await vi.waitFor(() => expect(questionId).toBeTypeOf("string"));
-  return { questionId: questionId!, finish };
-}
-
-afterEach(async () => {
-  await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
-  resetPendingAskUserQuestionsForTest();
-});
+afterEach(finishPendingAskUserPrompts);
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
 
@@ -2312,7 +2265,7 @@ describe("messaging tool media URL tracking", () => {
         result: { details: { redacted: true } },
       });
       expect(ctx.state.messagingToolSentTexts).toEqual([message]);
-      expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+      expect(ctx.state.sourceReplyDeliveryState).toBe(isError ? "missing" : "delivered");
     },
   );
 

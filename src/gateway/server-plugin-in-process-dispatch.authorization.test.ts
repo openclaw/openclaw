@@ -14,6 +14,7 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -88,6 +89,41 @@ describe("typed in-process agent authorization", () => {
   beforeEach(() => {
     startTurn.mockReset();
     waitForTurn.mockReset();
+  });
+
+  it("releases session fact observers after a typed child launch", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:subagent:heap-child";
+      const context = createContext();
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId: "heap-child-session", updatedAt: 1 },
+      );
+      const listeners = readGlobalSingleton(
+        Symbol.for("openclaw.sessionIdentityMutationListeners"),
+      );
+      if (!(listeners instanceof Set)) {
+        throw new Error("Session identity observer owner is unavailable");
+      }
+      const original = new Set(listeners);
+      startTurn.mockImplementation(async ({ io }) => {
+        io.emitAcceptance([true, { runId: "heap-child-run", status: "accepted" }, undefined]);
+      });
+
+      await expect(
+        dispatchGatewayMethodInProcess(
+          "agent",
+          { sessionKey, message: "synthetic child", idempotencyKey: "heap-child-run" },
+          {
+            forceSyntheticClient: true,
+            operatorRoleActor: { kind: "system" },
+            resolveGatewayContext: () => context,
+          },
+        ),
+      ).resolves.toEqual({ runId: "heap-child-run", status: "accepted" });
+      expect(listeners).toEqual(original);
+    });
   });
 
   it.each([false, true])(

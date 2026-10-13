@@ -31,7 +31,7 @@ const hoisted = vi.hoisted(() => ({
   resolveSessionSharingRole: vi.fn<
     typeof import("../session-sharing-policy.js").resolveSessionSharingRole
   >(() => "viewer"),
-  resolveSessionSharingTarget: vi.fn(() => null as Record<string, unknown> | null),
+  resolveSessionSharingTargetAsync: vi.fn(async () => null as Record<string, unknown> | null),
 }));
 
 vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
@@ -47,7 +47,7 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
 vi.mock("../session-sharing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-sharing.js")>()),
   resolveSessionSharingRole: hoisted.resolveSessionSharingRole,
-  resolveSessionSharingTarget: hoisted.resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync: hoisted.resolveSessionSharingTargetAsync,
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
@@ -171,7 +171,7 @@ describe("session catalog caller visibility", () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
     sessionEntries = [];
     hoisted.resolveSessionSharingRole.mockReset().mockReturnValue("viewer");
-    hoisted.resolveSessionSharingTarget.mockReset().mockReturnValue(null);
+    hoisted.resolveSessionSharingTargetAsync.mockReset().mockResolvedValue(null);
   });
 
   it("rejects hidden targets before read, import, continue, or archive dispatch", async () => {
@@ -533,7 +533,7 @@ describe("session catalog caller visibility", () => {
 
   it("permits a view-capped person to archive a foreign session after explicit membership", async () => {
     setActors([["agent:main:other", "profile-other"]]);
-    hoisted.resolveSessionSharingTarget.mockReturnValue({
+    hoisted.resolveSessionSharingTargetAsync.mockResolvedValue({
       agentId: "main",
       canonicalKey: "agent:main:other",
       storeKey: "agent:main:other",

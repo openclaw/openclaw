@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
+import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import { brokerSpawnOptions } from "./spawn-broker/host.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
@@ -23,6 +24,9 @@ export function spawnProcess(
       : initiateSpawn
         ? initiateSpawn(() => spawn(command, args, options))
         : spawn(command, args, options);
+  if (!options.shell && options.argv0 !== undefined) {
+    prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
+  }
   recordChildProcessSpawn(command, child);
   return child;
 }

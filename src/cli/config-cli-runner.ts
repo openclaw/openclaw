@@ -29,6 +29,7 @@ import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-inp
 import {
   normalizeConfigMutationExplicitSetPath,
   normalizeConfigMutationModelRefs,
+  shouldNormalizeConfigMutationProviderCatalogs,
 } from "./config-cli-model-normalization.js";
 import {
   assertNonDestructiveReplacement,
@@ -284,7 +285,14 @@ export async function runConfigOperations(params: {
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-  const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
+  const modelNormalizationOptions = {
+    pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+    env: mutationStart.writeOptions.envSnapshotForRestore,
+  };
+  let currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved, {
+    ...modelNormalizationOptions,
+    normalizeProviderCatalogs: false,
+  });
   let mutationSchema: Promise<ConfigSchemaResponse | undefined> | undefined;
   const getMutationSchema = () =>
     (mutationSchema ??= import("../config/runtime-schema.js")
@@ -456,7 +464,19 @@ export async function runConfigOperations(params: {
     }
     nextConfig = coerceConfig(restored.result);
   }
-  nextConfig = normalizeConfigMutationModelRefs(nextConfig);
+  const normalizeProviderCatalogs = shouldNormalizeConfigMutationProviderCatalogs({
+    before: snapshot.resolved,
+    after: nextConfig,
+    touchedPaths: appliedOperations.map(({ setPath }) => setPath),
+    env: modelNormalizationOptions.env,
+  });
+  if (normalizeProviderCatalogs) {
+    currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved, modelNormalizationOptions);
+  }
+  nextConfig = normalizeConfigMutationModelRefs(nextConfig, {
+    ...modelNormalizationOptions,
+    normalizeProviderCatalogs,
+  });
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   // Parent merge paths own policy, but inherited children are not caller-authored values.
   const resolutionEnv = mutationStart.writeOptions.envSnapshotForRestore ?? process.env;

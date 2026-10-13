@@ -16,7 +16,7 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   dispatchInboundMessageMock,
@@ -169,9 +169,9 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
     const reset = await directSessionReq<{ deleted?: boolean }>("sessions.reset", { key });
     expect(reset.payload).toMatchObject({ deleted: true });
-    expect(resolveGatewaySessionStoreTarget({ cfg: getRuntimeConfig(), key }).storePath).toBe(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    );
+    expect(
+      (await resolveGatewaySessionStoreTargetInWorker({ cfg: getRuntimeConfig(), key })).storePath,
+    ).toBe(resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }));
     const incognitoDatabase = openOpenClawAgentDatabase({
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),

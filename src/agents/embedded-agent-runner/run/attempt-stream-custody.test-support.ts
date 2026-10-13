@@ -10,6 +10,7 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -167,7 +168,11 @@ export async function createStreamCustodyFixture(
         },
       },
     },
-    setup: { sessionAgentId: "main" },
+    setup: {
+      sessionAgentId: "main",
+      prepStages: createStageTimingTracker(() => 0),
+      emitPrepStageSummary: vi.fn(),
+    },
     diagnostics: { runTrace: createDiagnosticTraceContext() },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
   } as unknown as EmbeddedAttemptExecutionPhaseInput;

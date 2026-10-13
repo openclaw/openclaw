@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
@@ -223,6 +224,13 @@ export type PendingSessionEntryPublication = {
   superseded: Set<string>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
+  entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  /** An undefined value records a participant command with no projection change. */
+  participantProjections?: ReadonlyMap<
+    string,
+    Pick<InternalSessionEntry, "participants" | "participantCount"> | undefined
+  >;
   /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
   generationUnchanged: Set<string>;
   settled: boolean;
@@ -263,12 +271,14 @@ export function assertSessionEntryCreationTarget(
   assertSessionEntryCreationCurrent(creation);
   const sourcePath =
     creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
+  const sourceIdentity =
+    creation.source.kind === "native"
+      ? findOpenClawAgentDatabaseIdentity(creation.source.database)?.identity
+      : creation.source.databaseIdentity;
   const matchesDatabaseIdentity =
-    creation.source.kind !== "native" &&
+    typeof sourceIdentity === "string" &&
     target.databaseIdentity ===
-      (creation.source.kind === "actor"
-        ? creation.source.databaseIdentity
-        : `file:${creation.source.databaseIdentity}`);
+      (creation.source.kind === "actor" ? sourceIdentity : `file:${sourceIdentity}`);
   const matchesTarget =
     target.databaseIdentity !== undefined
       ? matchesDatabaseIdentity

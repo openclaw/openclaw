@@ -45,6 +45,7 @@ describe("command-startup-policy", () => {
       ["uninstall"],
       ["agent", "exec"],
       ["status"],
+      ["node", "status"],
       ["triage"],
       ["agents", "bindings"],
       ["agents", "add"],

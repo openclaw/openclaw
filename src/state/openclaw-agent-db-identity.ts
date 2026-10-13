@@ -24,12 +24,16 @@ const identities = resolveGlobalSingleton(
         incarnation: string;
         filename: string;
         canonicalPath: string;
+        ownerDatabasePath?: string;
       }
     >(),
 );
 
 /** Prepare physical and connection identity once at open; cached aliases are not resolved again. */
-export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
+export function registerOpenClawAgentDatabaseIdentity(
+  db: DatabaseSync,
+  ownerDatabasePath?: string,
+): void {
   const filename = normalizeDatabasePath(db.location() ?? "");
   const admitted = filename ? getSqliteDatabaseAdmissionIdentityForPath(filename) : undefined;
   const file = admitted
@@ -47,6 +51,7 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
     incarnation: randomUUID(),
     filename,
     canonicalPath: file?.canonicalPath ?? filename,
+    ownerDatabasePath: ownerDatabasePath ? resolveDatabasePathKey(ownerDatabasePath) : undefined,
   });
 }
 

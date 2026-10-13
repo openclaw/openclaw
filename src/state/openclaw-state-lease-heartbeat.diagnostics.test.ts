@@ -5,6 +5,7 @@ import type {
   LeaseHeartbeatParentMessage,
   LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
+import type { StateLeaseRenewal } from "./openclaw-state-lease-renewal.worker.js";
 
 const fixture = vi.hoisted(() => ({
   worker: undefined as EventEmitter | undefined,
@@ -78,6 +79,35 @@ vi.mock("./openclaw-state-db-handle.js", () => ({
 vi.mock("./openclaw-state-lease-store.js", () => ({
   renewOpenClawStateLeaseInTransaction: fixture.renew,
   readOpenClawStateLeaseExpiry: fixture.readExpiry,
+}));
+// mock-isolation: Diagnostics inject storage outcomes; scheduler tests cover native SQLite.
+vi.mock("./openclaw-state-lease-renewal.worker.js", () => ({
+  createStateLeaseRenewalScheduler: () => {
+    const pending = new Map<StateLeaseRenewal, ReturnType<typeof setTimeout>>();
+    return {
+      schedule(entry: StateLeaseRenewal, expiresAt: number) {
+        clearTimeout(pending.get(entry));
+        pending.set(
+          entry,
+          setTimeout(
+            () => {
+              pending.delete(entry);
+              try {
+                entry.complete({ expiresAt: fixture.renew() });
+              } catch (error) {
+                entry.complete({ error });
+              }
+            },
+            expiresAt - entry.leaseMs + entry.intervalMs - Date.now(),
+          ),
+        );
+      },
+      cancel(entry: StateLeaseRenewal) {
+        clearTimeout(pending.get(entry));
+        pending.delete(entry);
+      },
+    };
+  },
 }));
 
 const acquiredAt = 1_800_000_000_000;

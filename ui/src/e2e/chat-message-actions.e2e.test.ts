@@ -771,7 +771,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-session-toolbar .sidebar-new-session"),
+        page.locator(".sidebar-rail .sidebar-new-session"),
         `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(

@@ -16,7 +16,7 @@ import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environme
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
-import { resolveWorkerTurnTranscriptTarget } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
@@ -318,13 +318,14 @@ it.each(["end", "error"] as const)(
       expectedLifecycleRevision: entry.lifecycleRevision,
       expectedWriterRunId: entry.activeWriterRunId,
     };
+    await using sourceAuthority = await prepareWorkerTurnTranscriptSource(sessionTarget);
     const source = {
       sessionTarget,
       receiptAuthority: () => {
         if (!placementGate.validateWorkerTurn(turnClaim)) {
           throw new Error("worker turn was revoked");
         }
-        resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
+        sourceAuthority();
       },
     };
     const receiver = createWorkerLiveEventReceiver();

@@ -246,6 +246,7 @@ describe("webchat commentary media", () => {
         logGateway: { warn } as never,
         session: {
           ...scope,
+          storePath: transcriptContext.sessionTarget.storePath,
           backingSessionId: scope.sessionId,
           cfg,
           clientRunId: runId,

@@ -12,14 +12,13 @@ import type {
   MemoryIndexPreparationInput,
   prepareMemoryIndexChunks,
 } from "./manager-index-preparation.js";
+import type { MemoryIndexReadCommand, MemoryIndexReadOperations } from "./manager-index-read.js";
 import type {
   MemoryKeywordWorkerQuery,
   MemorySearchWorkerInput,
   MemorySearchWorkerOutput,
   MemoryVectorWorkerQuery,
 } from "./manager-search.worker.js";
-import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
-import type { loadMemorySourceFileState } from "./manager-source-state.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
 type MemoryTranscriptStatsScope = Omit<
@@ -122,15 +121,6 @@ export async function runMemoryIndexState(target: MemoryReadTarget, signal?: Abo
   return result.state;
 }
 
-export async function runMemoryDatabaseFacts(databasePath: string, agentId: string) {
-  const result = await runRetrieval(
-    { databasePath, agentId, kind: "index-facts" },
-    {},
-    "index facts",
-  );
-  return result.facts;
-}
-
 export async function runMemoryVectorLoad(
   target: { agentId?: string; path?: string } | undefined,
   extensionPath?: string,
@@ -171,18 +161,20 @@ export async function runMemoryRecallMetadata(
   );
 }
 
-export async function runMemorySourceState(
+export async function runMemoryIndexRead<Command extends MemoryIndexReadCommand>(
   target: MemoryReadTarget,
-  query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">,
-) {
-  const fileIdentity = readMemoryShadowIdentity(target.databasePath);
+  command: Command,
+): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
   const result = await runRetrieval(
-    { ...target, kind: "source-state", query, fileIdentity },
-    { inputBytes: query.paths?.reduce((bytes, path) => bytes + path.length * 2, 0) ?? 0 },
-    "source state",
+    { ...target, kind: "index-read", command },
+    { inputBytes: JSON.stringify(command).length * 2 },
+    "index read",
   );
-  assertMemoryShadowIdentity(target.databasePath, fileIdentity);
-  return result.rows;
+  if (result.read.type !== command.type) {
+    throw new Error("Memory index reader returned another operation");
+  }
+  // SAFETY: The paired worker returned the result tagged with this command's type.
+  return result.read.value as MemoryIndexReadOperations[Command["type"]]["output"];
 }
 
 export async function runMemoryCuratedCandidates(

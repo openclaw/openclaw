@@ -13,6 +13,26 @@ import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
+export type SqliteWorkerRequestCustodyDescriptor = {
+  slot: Int32Array<SharedArrayBuffer>;
+  request: Int32Array<SharedArrayBuffer>;
+};
+
+export type SqliteWorkerExecutionAuthority = {
+  logical: Int32Array<SharedArrayBuffer>;
+  native: Int32Array<SharedArrayBuffer>;
+  physicalIdentity: string;
+  incarnation: string;
+  birthtime?: string;
+};
+
+export type SqliteWorkerAdmissionRequest = {
+  stage: "open" | "prepare" | "transaction" | "commit";
+  facts: unknown;
+  /** Opt-in wait budget in milliseconds; omission retains the live-owner wait. */
+  deadlineMs?: number;
+};
+
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 /** Process-private locator; live owner admission remains separate from this identity. */
 export type SqliteWorkerEphemeralTarget = {
@@ -74,6 +94,8 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  requestCustody?: SqliteWorkerRequestCustodyDescriptor;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];

@@ -13,6 +13,19 @@ const failedEventModel = {
 } as unknown as Model;
 
 describe("OpenAI Responses payload debug summary", () => {
+  it("reports function and hosted tool names without naming an empty function entry", () => {
+    const summary = summarizeResponsesPayload({
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", function: { name: "wait" } },
+        { type: "web_search" },
+        { type: "function" },
+      ],
+    });
+
+    expect(summary).toContain("tools=count=4 names=exec,wait,web_search");
+  });
+
   it("reports compaction replay identities without exposing opaque content", () => {
     const summary = summarizeResponsesPayload({
       model: "gpt-5.6-sol",

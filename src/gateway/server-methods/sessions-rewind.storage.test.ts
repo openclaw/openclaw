@@ -105,6 +105,9 @@ it.each(mutationMethods)(
             parentId: "alternate-user",
             targetId: "user-2",
           });
+          await waitForSessionTranscriptIndexReconcile(
+            toDatabaseOptions(resolveSqliteScope(source)),
+          );
           initialized.resolve();
           await release.promise;
         },

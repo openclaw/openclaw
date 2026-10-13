@@ -593,6 +593,10 @@ serveOwnedWorkerTasks(
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
+      if (request.kind === "session-entries") {
+        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return { entries: await prepareSessionMemoryEntries(request.entries) };
+      }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
@@ -633,15 +637,8 @@ serveOwnedWorkerTasks(
               await import("./session-transcript-hydration-read.worker.js");
             return readSessionEntrySnapshotRequest(request);
           }
-          const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
-            await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const entry = await buildSessionEntryInProcess(request.absPath, request.options);
-          return {
-            entry,
-            resetRecallCutoff: entry
-              ? readSessionEntryResetRecallCutoff(entry)
-              : { state: "absent" },
-          };
+          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
+          return prepareSessionMemoryEntry(request);
         },
       );
     };

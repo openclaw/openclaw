@@ -1,6 +1,7 @@
 /* Full-page new-session draft: the welcome and draft form one top-anchored
    composition, with the target row and composer between hero and recents. */
-openclaw-new-session-page {
+openclaw-new-session-page,
+.new-session-page {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -9,12 +10,8 @@ openclaw-new-session-page {
 
 .new-session-page {
   position: relative;
-  display: flex;
   flex-direction: column;
-  flex: 1 1 0;
   width: 100%;
-  min-width: 0;
-  min-height: 0;
 }
 
 /* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
@@ -660,13 +657,17 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__project-search input {
   width: 100%;
-  min-width: 0;
   padding: 6px 8px;
+  background: var(--bg);
+  font: inherit;
+}
+
+.new-session-page__project-search input,
+.new-session-page__menu-field input {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg);
   color: var(--text);
-  font: inherit;
   font-size: 12px;
   outline: none;
 }
@@ -706,14 +707,8 @@ wa-popover.new-session-page__picker-popover
 
 .new-session-page__menu-field input {
   flex: 1 1 auto;
-  min-width: 0;
   padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
 }
 
 .new-session-page__menu-field input:focus-visible {
@@ -1495,8 +1490,23 @@ wa-popover.new-session-page__where-popover {
 }
 
 .new-session-page__environment-option[aria-disabled="true"] {
-  opacity: 0.5;
+  color: var(--muted);
   cursor: default;
+}
+
+.new-session-page__unavailable-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 11px;
+}
+
+.new-session-page__unavailable-status svg {
+  display: block;
+  width: 13px;
+  height: 13px;
 }
 
 .new-session-page__environment-heading {

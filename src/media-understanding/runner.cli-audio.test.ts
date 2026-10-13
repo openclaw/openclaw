@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { runCliEntry } from "./runner.entries.js";
@@ -261,6 +263,105 @@ describe("media-understanding CLI audio entry", () => {
       expect(result).toBeNull();
     }
   });
+
+  it.each([
+    { language: "fr", expected: "fr" },
+    { language: "fr", request: { language: "es" }, expected: "es" },
+    { language: "fr", config: { language: "de" }, expected: "de" },
+    { expected: undefined },
+    { language: "", expected: undefined },
+    { language: "fr", request: { language: "" }, expected: undefined },
+    { language: "fr", request: { language: " " }, expected: " " },
+    { command: "whisper-cli", language: "fr", expected: undefined },
+  ])("forwards auto-discovered Whisper language: %j", async (options) => {
+    await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
+      const command = options.command ?? "whisper";
+      await fs.writeFile(
+        path.join(dir, `${command}${process.platform === "win32" ? ".cmd" : ""}`),
+        "synthetic executable",
+        { mode: 0o755 },
+      );
+      const model = path.join(dir, "model.bin");
+      await fs.writeFile(model, "synthetic model");
+      runExecMock.mockImplementation(async (_executable, args: string[]) => {
+        if (command === "whisper") {
+          await fs.writeFile(
+            path.join(
+              expectDefined(args[args.indexOf("--output_dir") + 1], "Whisper output directory"),
+              `${path.parse(args.at(-1) ?? "").name}.txt`,
+            ),
+            "fixture transcript",
+          );
+        } else if (args.includes("-of")) {
+          await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript");
+        }
+        return { stdout: "", stderr: "" };
+      });
+      await withAudioFixture("openclaw-auto-language", async ({ ctx, media, cache }) => {
+        const result = await withEnvAsync(
+          { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: undefined },
+          () =>
+            runCapability({
+              capability: "audio",
+              cfg: { tools: { media: { audio: { language: options.language } } } },
+              ctx,
+              media,
+              attachments: cache,
+              providerRegistry: new Map(),
+              request: options.request,
+              config: options.config,
+            }),
+        );
+        expect(result.outputs[0]?.text).toBe("fixture transcript");
+      });
+      const args = runExecMock.mock.calls.find(
+        ([executable]) =>
+          executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
+      )?.[1];
+      expect(args).toBeDefined();
+      if (options.expected === undefined) {
+        expect(args).not.toContain("--language");
+      } else {
+        expect(args.filter((arg: string) => arg === "--language")).toHaveLength(1);
+        expect(args[args.indexOf("--language") + 1]).toBe(options.expected);
+      }
+      expect(args).not.toContain("{{Language}}");
+    });
+  });
+
+  it.each([
+    {
+      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
+      language: "de",
+      request: { language: "en" },
+      expected: ["--language", "en", expect.any(String)],
+    },
+    {
+      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
+      language: "de",
+      expected: ["--language", "de", expect.any(String)],
+    },
+    {
+      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
+      expected: ["--language", "fr", expect.any(String)],
+    },
+    {
+      args: ["--language", "it", "{{AttachmentPath}}"],
+      language: "de",
+      request: { language: "en" },
+      expected: ["--language", "it", expect.any(String)],
+    },
+    { args: ["{{AttachmentPath}}"], request: { language: "en" }, expected: [expect.any(String)] },
+  ])(
+    "preserves explicit CLI language arguments: %j",
+    async ({ args, language, request, expected }) => {
+      await runAudioEntry(
+        { command: "whisper", args, language },
+        { config: { language: "fr" }, request },
+      );
+      expect(runExecMock.mock.calls[0]?.[1]).toEqual(expected);
+    },
+  );
 
   it("removes the CLI scratch directory when audio conversion fails", async () => {
     let scratchDir = "";

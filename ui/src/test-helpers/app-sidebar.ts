@@ -71,6 +71,8 @@ export type SidebarLifecycleState = HTMLElement & {
   sidebarEntries: readonly string[];
   sidebarAgentsMode: "chip" | "roster";
   navigationVisible: boolean;
+  navigationView: AppSidebarSessionNavigationElement["navigationView"];
+  navigationCollapsed: AppSidebarSessionNavigationElement["navigationCollapsed"];
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];

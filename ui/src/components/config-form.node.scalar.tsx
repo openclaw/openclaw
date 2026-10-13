@@ -32,7 +32,6 @@ import {
   finishScalarEdit,
   scalarEditHintForInput,
   scalarValueBranch,
-  syncScalarEditIdentity,
   syncScalarInputIdentity,
   setControlValidity,
   type ScalarEditHint,
@@ -261,29 +260,23 @@ function ScalarInput(props: {
               .message,
     );
   };
-  createEffect(
-    () => ({ current: state(), stepped: props.stepped }),
-    ({ current, stepped }) => {
-      if (!stepped) {
-        syncScalarEditIdentity(input, current.controlPathKey, current.presentationIdentity);
-      }
-      // The first value is set only once; subsequent updates are owned by the
-      // existing draft-preserving scalar identity contract.
-      if (!initialized) {
-        input.value = current.renderedValue;
-        initialized = true;
-      }
-      syncScalarInputIdentity(
-        input,
-        current.controlIdentity,
-        current.sourceIdentity,
-        current.controlPathKey,
-        current.presentationIdentity,
-        current.renderedValue,
-        revalidate,
-      );
-    },
-  );
+  createEffect(state, (current) => {
+    // The first value is set only once; subsequent updates are owned by the
+    // existing draft-preserving scalar identity contract.
+    if (!initialized) {
+      input.value = current.renderedValue;
+      initialized = true;
+    }
+    syncScalarInputIdentity(
+      input,
+      current.controlIdentity,
+      current.sourceIdentity,
+      current.controlPathKey,
+      current.presentationIdentity,
+      current.renderedValue,
+      revalidate,
+    );
+  });
   let patchSource = untrack(() => props.params.value);
   let patchedValue = patchSource;
   const commitScalarValue = (
@@ -483,10 +476,7 @@ function ScalarInput(props: {
   );
   return (
     <FieldRow
-      label={state().field.label}
-      help={state().field.help}
-      helpId={state().field.helpId}
-      showLabel={state().field.showLabel}
+      {...state().field}
       errorId={state().errorId}
       defaultDescription={
         state().effectiveRedacted || state().masked
@@ -537,10 +527,7 @@ export function SelectInput(props: {
   });
   return (
     <FieldRow
-      label={field().label}
-      help={field().help}
-      helpId={field().helpId}
-      showLabel={field().showLabel}
+      {...field()}
       defaultDescription={renderSchemaDefaultDescription(props.params.schema, props.params.value)}
       control={
         <select

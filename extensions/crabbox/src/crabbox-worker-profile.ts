@@ -292,6 +292,26 @@ export function resolveCrabboxWarmImageProfileKey(
     .digest("hex");
 }
 
+export function resolveCrabboxPreparationTarget(
+  profile: WorkerProfile,
+  machineClass?: string,
+  os?: string,
+) {
+  const parsed = parseCrabboxProfile(profile);
+  const effective = resolveCrabboxWarmImageProfile(
+    parsed,
+    machineClass ?? parsed.class,
+    os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
+  );
+  return effective.warmImage && effective.class && !effective.setupEnv?.length
+    ? {
+        machineClass: effective.class,
+        platform: effective.target,
+        profileKey: resolveCrabboxWarmImageProfileKey(effective),
+      }
+    : undefined;
+}
+
 type CrabboxProvisionProfile = CrabboxProfile &
   ({ warmImage: false } | { warmImage: true; class: string });
 

@@ -76,6 +76,7 @@ import {
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -96,10 +97,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       sessionId: defaults?.sessionId,
     });
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
-  const subagentExecution =
-    resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
-      cfg: defaults?.config,
-    }).depth > 0;
+  let subagentExecutionPromise: Promise<boolean> | undefined;
+  const resolveSubagentExecution = () =>
+    (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
+      () =>
+        resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
+          cfg: defaults?.config,
+        }).depth > 0,
+    ));
   // Agent runs own one tool instance; unprepared store snapshots are read on first exec.
   // A new run constructs a new instance and observes later store mutations.
   let storeEnvPromise: Promise<Readonly<SecretStoreExecEnvironment>> | undefined =
@@ -244,10 +249,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       let execCommandOverride: string | undefined;
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
-      const foregroundFallbackWarning =
-        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
-          ? "Warning: continuation options are unavailable; running synchronously."
-          : undefined;
       const yieldWindow = allowBackground
         ? params.background === true
           ? 0
@@ -298,6 +299,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         sandboxRequired: defaults?.sandboxRequired,
       });
       const host = target.effectiveHost;
+      const foregroundFallbackWarning =
+        (host === "node" || !backgroundAvailable) &&
+        (params.background === true || typeof params.yieldMs === "number")
+          ? host === "node"
+            ? "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session."
+            : "Warning: continuation options are unavailable; running synchronously."
+          : undefined;
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
@@ -417,6 +425,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
+        const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.

@@ -24,6 +24,7 @@ describe("plugin registry SQLite session ownership", () => {
       onTestFinished(clearRuntimeConfigSnapshot);
       const subagent = {
         complete: vi.fn(async () => ({ text: "completed" })),
+        forkSession: vi.fn(async () => ({ text: "completed" })),
         run: vi.fn(async () => ({ runId: "workboard-run" })),
         waitForRun: vi.fn(async () => ({ status: "ok" as const })),
         getSessionMessages: vi.fn(async () => ({ messages: [] })),
@@ -97,6 +98,7 @@ describe("plugin registry SQLite session ownership", () => {
         );
         const pending = api.runtime.subagent.run({ sessionKey, message: "continue" });
         runtimeConfig = { agents: { entries: { replacement: {} } } };
+        setRuntimeConfigSnapshot(runtimeConfig);
         await expect(pending).rejects.toThrow('owned by plugin "harness-owner"');
         expect(subagent.run).toHaveBeenCalledOnce();
       } finally {

@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { isPathInside } from "../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { readSqliteDatabaseSiblingWriteRevision } from "../infra/sqlite-database-admission.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
@@ -19,7 +18,6 @@ import {
 } from "../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
@@ -34,15 +32,11 @@ import type {
   OpenClawAgentDatabaseOptions,
   OpenClawAgentDatabaseOwnerInspection,
 } from "./openclaw-agent-db-contract.js";
-import {
-  findOpenClawAgentDatabaseIdentity,
-  isOpenClawAgentDatabasePathCurrent,
-} from "./openclaw-agent-db-identity.js";
+import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   assertAgentDatabaseMaintenanceAuthority,
   hasAgentDatabaseMaintenanceAuthority,
   readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
-  recordOpenClawAgentDatabaseAdmission,
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
@@ -59,7 +53,6 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   clearOpenClawAgentDatabaseValidationCache,
-  getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
@@ -90,7 +83,6 @@ type AgentDatabaseLifecycle = {
     {
       leaseId: string;
       env: NodeJS.ProcessEnv;
-      verification?: { writeRevision: number; validation: OpenClawAgentDatabaseValidation };
     }
   >;
   terminal: ReturnType<typeof createSqliteTerminalOpenLatch>;
@@ -108,6 +100,7 @@ export type PendingAgentDatabaseOpen = {
   operations: number;
   releaseBorrow?: () => void;
   validation?: OpenClawAgentDatabaseValidation;
+  integrityRevoked?: boolean;
   workerPrepared?: boolean;
 };
 type RetainedAgentDatabaseClose = { agentId: string; path: string; close: () => void };
@@ -137,50 +130,9 @@ export function registerAgentDatabaseHandle(
   database: OpenClawAgentDatabase,
   leaseId: string,
   env: NodeJS.ProcessEnv,
-  deferred: boolean,
 ): void {
-  const validation = deferred ? getOpenClawAgentDatabaseValidation(database) : undefined;
-  const writeRevision = validation
-    ? readSqliteDatabaseSiblingWriteRevision(database.db)
-    : undefined;
-  cache.leases.set(database.path, {
-    leaseId,
-    env,
-    ...(validation && writeRevision !== undefined
-      ? { verification: { writeRevision, validation } }
-      : {}),
-  });
+  cache.leases.set(database.path, { leaseId, env });
   cache.databases.set(database.path, database);
-}
-
-/** Only the original writer can promote its background scan into durable proof. */
-export function recordOpenClawAgentDatabaseBackgroundVerification(
-  database: OpenClawAgentDatabase,
-  beforePublication: () => void,
-): boolean {
-  const lease = cache.leases.get(database.path);
-  const witness = lease?.verification;
-  if (!lease || !witness || cache.databases.get(database.path) !== database) {
-    return false;
-  }
-  lease.verification = undefined;
-  return runSqliteImmediateTransactionSync(database.db, () => {
-    beforePublication();
-    // The writer lock keeps the captured committed revision current through publication.
-    if (
-      Atomics.load(new Int32Array(witness.validation.valid), 0) !== 1 ||
-      !isOpenClawAgentDatabasePathCurrent(database) ||
-      readSqliteDatabaseSiblingWriteRevision(database.db) !== witness.writeRevision
-    ) {
-      return false;
-    }
-    return recordOpenClawAgentDatabaseAdmission(
-      lease.leaseId,
-      { agentId: database.agentId, path: database.path, env: lease.env },
-      witness.validation.identity,
-      true,
-    );
-  });
 }
 
 /** Queue a non-throwing runtime publication on the outer database commit edge. */
@@ -353,7 +305,7 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
     }
     try {
       // Registry discovery metadata survives eviction; only explicit disposal removes it.
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       cache.databases.delete(database.path);
       cache.failures.delete(database.path);
       unregisterUnusedAgentDatabaseExitClose();

@@ -100,6 +100,7 @@ it.each(["main", "policy", "borrowed"] as const)(
   "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
       const classificationKey =
         policyAgent === "borrowed" ? executionKey : `agent:${policyAgent}:authority-policy`;
@@ -179,6 +180,9 @@ it.each(["main", "policy", "borrowed"] as const)(
         const calls = observeMainThreadSql();
         try {
           discovery.mockClear();
+          expect(() => snapshot.fingerprint(run.run)).toThrow(
+            "Tool authority classification session changed",
+          );
           expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
           if (reader) {
             expect(discovery).not.toHaveBeenCalled();
@@ -203,6 +207,7 @@ it.each(["main", "policy", "borrowed"] as const)(
           calls.restore();
         }
       } finally {
+        snapshot.close();
         discovery.mockRestore();
         await admission?.databaseClaim.release();
       }
@@ -303,6 +308,7 @@ it.each(["execution", "separate"] as const)(
         await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
         expect(discovery).not.toHaveBeenCalled();
       } finally {
+        independent.close();
         discovery.mockRestore();
         admitted.operation.complete();
         await waitForReplyRunSuccessorAdmission(executionKey, null);

@@ -237,6 +237,14 @@ export function createIncognitoSessionWorker(
       stage: "prepare",
       facts: { identity, sessions: facts },
     });
+  const withFacts = <Result extends { value: unknown; keys: readonly string[] }>({
+    value,
+    keys,
+  }: Result) =>
+    withIncognitoSessionFacts<Result["value"]>(
+      value,
+      keys.flatMap((key) => read(key).facts),
+    );
   return {
     async prepare(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
       if (command.type === "session.turn.prepare" || command.type === "session.turn.commit") {
@@ -324,14 +332,11 @@ export function createIncognitoSessionWorker(
           assertKey(command.input.sessionKey);
         }
         const execute = () => {
-          const { value, keys } = isIncognitoEntryCreationCommand(command)
+          const result = isIncognitoEntryCreationCommand(command)
             ? entryCreation.execute(command)
             : entryPatch.execute(command);
-          keys.forEach(assertKey);
-          return withIncognitoSessionFacts(
-            value,
-            keys.flatMap((key) => read(key).facts),
-          );
+          result.keys.forEach(assertKey);
+          return withFacts(result);
         };
         return command.type.endsWith(".commit")
           ? execute()
@@ -381,13 +386,7 @@ export function createIncognitoSessionWorker(
       }
       if (isIncognitoManagerCommand(command)) {
         assertKey(command.input.sessionKey);
-        const execute = () => {
-          const { value, keys } = manager.execute(command);
-          return withIncognitoSessionFacts(
-            value,
-            keys.flatMap((key) => read(key).facts),
-          );
-        };
+        const execute = () => withFacts(manager.execute(command));
         return isIncognitoManagerWrite(command.type)
           ? execute()
           : readOnly(() => {
@@ -420,13 +419,7 @@ export function createIncognitoSessionWorker(
         if (!isIncognitoStoreComputeCommand(command)) {
           assertKey(command.input.sessionKey);
         }
-        const execute = () => {
-          const { value, keys } = compute.execute(command);
-          return withIncognitoSessionFacts(
-            value,
-            keys.flatMap((key) => read(key).facts),
-          );
-        };
+        const execute = () => withFacts(compute.execute(command));
         if (isIncognitoComputeWrite(command.type)) {
           return execute();
         }
@@ -461,12 +454,9 @@ export function createIncognitoSessionWorker(
       if (isIncognitoLifecycleCommand(command)) {
         incognitoLifecycleKeys(command, identity).forEach(assertKey);
         const execute = () => {
-          const { value, keys } = lifecycle.execute(command);
-          keys.forEach(assertKey);
-          return withIncognitoSessionFacts(
-            value,
-            keys.flatMap((key) => read(key).facts),
-          );
+          const result = lifecycle.execute(command);
+          result.keys.forEach(assertKey);
+          return withFacts(result);
         };
         return isIncognitoLifecycleWrite(command.type) ? execute() : readOnly(execute);
       }

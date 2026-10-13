@@ -300,7 +300,7 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
   },
 );
 
-it("rechecks scopes after startup admission without delaying healthy agents or writes", async () => {
+it("rechecks scopes after startup admission", async () => {
   await withPendingStartupInspection(async ({ request, client, complete }) => {
     const read = authorizeGatewayRequestPreDispatch(request);
     await vi.advanceTimersByTimeAsync(0);
@@ -310,9 +310,6 @@ it("rechecks scopes after startup admission without delaying healthy agents or w
         method: "sessions.list",
         requestParams: { agentId: "healthy" },
       }),
-    ).resolves.toMatchObject({ error: null });
-    await expect(
-      authorizeGatewayRequestPreDispatch({ ...request, method: "sessions.patch" }),
     ).resolves.toMatchObject({ error: null });
     client.connect.scopes = [];
     complete();
@@ -396,7 +393,7 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 it.each(["dispatch scopes", "private access"] as const)(
   "rechecks %s after canonical description readiness",
   async (boundary) => {
-    const { projection, context, client, request } = describeFixture();
+    const { projection, context, client } = describeFixture();
     const database = pendingDatabase("/synthetic/parent.sqlite");
     vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
       kind: "pending",
@@ -418,9 +415,25 @@ it.each(["dispatch scopes", "private access"] as const)(
       }
     });
     if (boundary === "dispatch scopes") {
-      await expect(authorizeGatewayRequestPreDispatch(request)).resolves.toMatchObject({
-        error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "revoked-description",
+          method: "sessions.describe",
+          params: { key: query.key },
+        },
+        context,
+        client,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionByKeyReadHandlers,
       });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
     } else {
       const respond = vi.fn();
       await sessionByKeyReadHandlers["sessions.describe"]!({

@@ -724,6 +724,7 @@ describe("generic plugin-owned live session registry", () => {
       payloads: [{ text: "original delivery" }],
       meta: { durationMs: 1 },
       didSendViaMessagingTool: outcome === "delivered-cleanup-error",
+      didDeliverSourceReplyViaMessageTool: outcome === "delivered-cleanup-error",
     };
     const run = cleanupScope.run(() =>
       settlePreparedCliRun({

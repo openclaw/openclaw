@@ -11,7 +11,6 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
@@ -55,10 +54,7 @@ import {
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
 import { createSessionActorBoardStore } from "./session-actor-board-store.js";
-import {
-  prepareBoardSourceAuthority,
-  reportBoardCleanupFailure,
-} from "./sqlite-board-authority.js";
+import { reportBoardCleanupFailure } from "./sqlite-board-authority.js";
 import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";
 import {
   ensureBoardSchema,
@@ -160,10 +156,7 @@ export class SqliteBoardStore implements BoardStore {
       env,
       path: resolveOpenClawAgentSqlitePath({ ...resolved, env }),
     };
-    const assertCurrent = () => {
-      options?.assertCurrent?.();
-      this.assertTargetCurrent(target, resolved);
-    };
+    const assertCurrent = () => this.assertTargetCurrent(target, resolved);
     if (resolved.incognito) {
       const { actor, authority } = resolved.incognito;
       if (actor.agentId !== resolved.agentId || actor.path !== databaseOptions.path) {
@@ -180,6 +173,7 @@ export class SqliteBoardStore implements BoardStore {
       currentAuthority.assertCurrent();
       const execute = async (writeAuthority: IncognitoSessionAuthority) => {
         try {
+          options?.assertCurrent?.();
           const committed = await actorWrite(actor, writeAuthority, resolved.sessionKey);
           sessionChanges.emitBatch(committed.changes);
           return committed.value;
@@ -265,18 +259,11 @@ export class SqliteBoardStore implements BoardStore {
             lifecycleRevision: entry.lifecycleRevision,
           };
         }
-        const authority = await prepareBoardSourceAuthority(options?.assertCurrent, identity);
-        const nativeSource = incognito || authority.nativeSource;
         const assertPreparedCurrent = () => {
           assertDatabaseCurrent();
-          this.assertTargetCurrent(target, resolved);
-          if (nativeSource) {
-            assertOpenCurrent();
-          } else {
-            authority.assertCurrent();
-          }
+          assertOpenCurrent();
         };
-        const withDatabase = nativeSource
+        const withDatabase = incognito
           ? withOpenClawAgentDatabaseAsync
           : withOpenClawAgentDatabaseRuntime;
         return withDatabase(
@@ -286,8 +273,9 @@ export class SqliteBoardStore implements BoardStore {
               await prepare();
             }
             assertPreparedCurrent();
-            if (nativeSource) {
-              // Cross-store and process-held source checks cannot share the target worker's snapshot.
+            if (incognito) {
+              // The legacy process-held database cannot be reopened in another thread.
+              options?.assertCurrent?.();
               ensureBoardSchema(database);
               return runOpenClawAgentWriteTransaction(
                 (current) => {
@@ -310,15 +298,15 @@ export class SqliteBoardStore implements BoardStore {
                       agentId: databaseOptions.agentId,
                       sessionKey: resolved.sessionKey,
                       expectedSession,
-                      sources: authority.checks.map(({ predicate }) => predicate),
                     }
                   : undefined) satisfies BoardWorkerInput,
-                assertAdmission: authority.assertAdmission,
               },
             );
             let outcome: Result<T, unknown>;
             try {
               const value = await publication.run(async (scope) => {
+                // Source revocation blocks new admissions; admitted writes may finish their commit.
+                options?.assertCurrent?.();
                 let committed: BoardWriteOutcome<T>;
                 try {
                   committed = await worker(scope, resolved.sessionKey);
@@ -362,19 +350,6 @@ export class SqliteBoardStore implements BoardStore {
             return outcome.value;
           },
           assertPreparedCurrent,
-        ).then(
-          async (value) => {
-            try {
-              await releaseSessionSourceAuthorities([authority]);
-            } catch (error) {
-              reportBoardCleanupFailure(error);
-            }
-            return value;
-          },
-          async (error: unknown) => {
-            await releaseSessionSourceAuthorities([authority], [error]);
-            throw error;
-          },
         );
       },
       true,

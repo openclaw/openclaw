@@ -10,6 +10,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 
 const fixture = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
+  closeNative: vi.fn<() => Promise<void>>(),
   budget: vi.fn(),
   activation: vi.fn(),
   finish: vi.fn(),
@@ -71,6 +72,10 @@ vi.mock("../cli/update-cli/update-command-windows-task.js", () => ({
 }));
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabaseAsync: fixture.close,
+}));
+// mock-isolation: Finalizer fixtures observe cleanup without closing the test process's native workers.
+vi.mock("./worker-native-lifecycle.js", () => ({
+  closeDefaultRetainedNativeWorkerSource: fixture.closeNative,
 }));
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
@@ -140,6 +145,8 @@ async function runWorker(
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => {
     await cleanup?.();
+  });
+  fixture.closeNative.mockImplementation(async () => {
     settled.resolve();
   });
   process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...(mode ? [mode] : [])];

@@ -154,7 +154,6 @@ export async function runClaudeCliNativeSpawnProof(
   );
   const instance = await createOpenClawTestInstance({
     name: `claude-cli-spawn-${kind}`,
-    entrypoint: ["scripts/run-node.mjs"],
     env: {
       ...env,
       OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -236,13 +235,6 @@ export async function runClaudeCliNativeSpawnProof(
         },
       },
     });
-    const prepared = await instance.cli(["--version"], {
-      timeoutMs: 240_000,
-      execPath: process.execPath,
-    });
-    if (prepared.code !== 0) {
-      throw new Error(`CLI preparation failed: ${JSON.stringify(prepared)}`);
-    }
     const result = await instance.cli(
       [
         "agent",
