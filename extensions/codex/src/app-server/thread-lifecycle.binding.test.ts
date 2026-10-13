@@ -1654,6 +1654,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       nativeScope: "total",
       retained: true,
       expectedLimit: 120_000,
+      nativeLoaded: null,
     },
     {
       name: "leaving Ultrafast with the native default scope",
@@ -1663,6 +1664,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       nativeScope: undefined,
       retained: true,
       expectedLimit: 120_000,
+      nativeLoaded: null,
     },
     {
       name: "entering Ultrafast with unchanged inherited settings",
@@ -1672,6 +1674,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       nativeScope: "total",
       retained: true,
       expectedLimit: 120_000,
+      nativeLoaded: null,
     },
     {
       name: "replacing an unavailable Ultrafast thread",
@@ -1681,6 +1684,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       nativeScope: "total",
       retained: false,
       expectedLimit: 260_000,
+      nativeLoaded: null,
     },
     {
       name: "deferring unloaded native-owned threads to replacement authority",
@@ -1767,7 +1771,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         first.liveThreadEphemeralPolicy,
       );
     }
-    if ("nativeLoaded" in testCase) {
+    if (testCase.nativeLoaded !== null) {
       const binding = (await readCodexAppServerBinding(sessionFile))!;
       await writeRawCodexAppServerBinding(sessionFile, { ...binding, preserveNativeModel: true });
       fixture.seed(threadStartResult(first.threadId), {
@@ -1781,7 +1785,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       };
     }
     params.fastMode = testCase.nextFastMode;
-    if ("nativeLoaded" in testCase) {
+    if (testCase.nativeLoaded !== null) {
       const before = await readCodexAppServerBinding(sessionFile);
       await expect(startOrResumeThread(common)).rejects.toThrow(
         testCase.nativeLoaded
