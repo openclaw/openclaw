@@ -6,7 +6,16 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -69,6 +78,7 @@ import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -321,6 +331,7 @@ type CliContextBudgetTestCase = {
 };
 
 describe("prepareCliRunContext", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-prepare-");
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
   async function withAuthenticatedHistory(
@@ -647,7 +658,7 @@ describe("prepareCliRunContext", () => {
     fixture = createCliRunnerPrepareFixture((params) => {
       setRuntimeConfigSnapshot(params.config ?? {});
       return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
-    });
+    }, sessionDirs);
   });
 
   afterEach(async () => {
