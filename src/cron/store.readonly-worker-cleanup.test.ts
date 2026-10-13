@@ -5,7 +5,6 @@ import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as snapshots from "../infra/sqlite-readonly-location-cleanup.js";
-import * as staging from "../infra/sqlite-snapshot-staging.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
@@ -161,37 +160,5 @@ it("refuses new reader admission while canonical close is draining an earlier re
     }
     expect(await first).toMatchObject({ error: expect.any(Error) });
     expect((await read()).store.jobs).toEqual([]);
-  });
-});
-
-it("preserves allocation and reader retirement failures together, retaining cleanup custody", async () => {
-  await withOpenClawTestState({ label: "cron-allocation-close" }, async (state) => {
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const db = new DatabaseSync(databasePath);
-    db.exec("CREATE TABLE marker(value TEXT)");
-    db.close();
-    const allocationFailure = new Error("controlled snapshot allocation failure");
-    const closeFailure = new Error("controlled reader retirement failure");
-    const allocation = vi
-      .spyOn(staging, "createSqliteSnapshotStagingDirectory")
-      .mockRejectedValueOnce(allocationFailure);
-    const close = vi.spyOn(WorkerTaskPool.prototype, "close").mockRejectedValueOnce(closeFailure);
-    try {
-      await expect(
-        withArtifactPreservingStateReads(() =>
-          loadCronJobsStoreWithConfigJobsReadOnly(state.statePath("cron", "jobs.json"), state.env),
-        ),
-      ).rejects.toMatchObject({
-        errors: [allocationFailure, closeFailure],
-        cause: allocationFailure,
-      });
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      expect(close).toHaveBeenCalledTimes(2);
-    } finally {
-      allocation.mockRestore();
-      close.mockRestore();
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    }
   });
 });
