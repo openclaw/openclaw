@@ -786,7 +786,8 @@ suite.define(() => {
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .locator(".sidebar-recent-session__name")
         .evaluate((label) => getComputedStyle(label).fontWeight);
-      expect(activeWeight).toBe(inactiveWeight);
+      expect(activeWeight).toBe("600");
+      expect(inactiveWeight).toBe("500");
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSort.click();

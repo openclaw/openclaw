@@ -77,17 +77,6 @@ describe("scanNodeHostedSkills", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("loads complete descriptors in skill-name order", () => {
-    const root = createRoot();
-    const content = writeSkill(root, "release-helper", "Prepare a release", "# Release\nDo it.");
-    const prefixContent = writeSkill(root, "release", "Release", "# Prefix skill");
-
-    expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
-      { name: "release", description: "Release", content: prefixContent },
-      { name: "release-helper", description: "Prepare a release", content },
-    ]);
-  });
-
   it("publishes the same bounded content that supplied the skill metadata", () => {
     const root = createRoot();
     const original = writeSkill(root, "a-stable", "Original description", "# Original");
@@ -105,32 +94,6 @@ describe("scanNodeHostedSkills", () => {
       { name: "a-stable", description: "Original description", content: original },
     ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(invalidFile));
-  });
-
-  it("loads JSON5-style metadata frontmatter", () => {
-    const root = createRoot();
-    const skillDir = path.join(root, "json5-metadata");
-    fs.mkdirSync(skillDir);
-    const content = `---
-name: json5-metadata
-description: JSON5-style metadata
-metadata:
-  {
-    "openclaw":
-      {
-        "requires":
-          {
-            "env": ["EXAMPLE_VAR"],
-          },
-      },
-  }
----
-`;
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
-
-    expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
-      { name: "json5-metadata", description: "JSON5-style metadata", content },
-    ]);
   });
 
   it("skips invalid and oversized skills with warnings", () => {

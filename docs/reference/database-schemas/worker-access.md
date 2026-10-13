@@ -1150,10 +1150,17 @@ an overlapping read; it still validates its exact context at acceptance.
 
 Initial bounded hydration can also supply model context when it contains the whole
 active path. The manager retains detached, sanitized bytes and consumes them only
-under its existing source, writer FIFO, and native-mutation checks while the
-physical store's write revision remains unchanged. Truncated or changed views use
-the normal worker reader. Hydration and anchors share the projection's version
-and watermark in their existing snapshot.
+while its view and the physical store's receipt-owned write revision remain
+unchanged, under the current writer and selected reader. This synchronous handoff
+does not reacquire a history worker, recapture file identity, join the writer FIFO,
+or rebuild a second manager. A later pending write may complete after snapshot
+acceptance; writes and external effects keep their own authority checks. Truncated,
+changed, or admission-fenced views use the normal worker reader. Reset, compaction,
+fork, and retargeting invalidate through the same receipts or manager view. The
+writable manager, callbacks, resource extensions, and transport authority remain
+attempt-scoped; history replicas and provider connections retain their existing
+session owners. Hydration and anchors share the projection's version and watermark
+in their existing snapshot.
 
 Turn writers carry current entry facts into source and custody checks. Publication
 can reuse a writer-certified entry postimage while its transaction revision still
@@ -3995,9 +4002,8 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
-Memory source-state reads, cache pruning, standing-intent operations, and session
-collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy. Small
+Memory cache pruning, standing-intent operations, and session collaboration
+writes without a preparation callback use that single-command path. Memory bindings reuse the canonical connection's installed policy. Small
 source replacements and embedding-cache writes carry a bounded inline batch in
 one request through the same tombstone, capacity, and commit checks.
 Larger inputs retain bounded fragment messages and stage one publication in worker
@@ -4153,9 +4159,11 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, checking that
-its handle is open at admission. Source snapshots use that same publication owner;
-read-only diagnostics use the retrieval worker. Shadow session publication prepares
+Published source hashes, chunks, embedding-cache rows, session tombstones, and
+index/source snapshots use the existing retrieval worker's read-only connection.
+They retain their physical source and caller lifetime without reserving the agent
+writer FIFO. Private shadow databases keep their publication worker and private
+queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
 inside its committing transaction. The shadow's empty tombstone table never grants

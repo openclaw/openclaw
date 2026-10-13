@@ -788,6 +788,7 @@ export const en: TranslationMap & {
     copyLink: "Copy link",
     archiveSessionOnly: "Session only",
     communication: {
+      title: "Cross-session messaging",
       send: "Send messages",
       receive: "Receive messages",
       always: "Always",
@@ -3752,7 +3753,6 @@ export const en: TranslationMap & {
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",
-      offlineQueuedHint: "{count} in this conversation’s outbox.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",
