@@ -16,6 +16,7 @@ import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/sessio
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { sleep } from "../utils/sleep.js";
+import { findCarriedCompletion } from "./cli-announce-carried-completion.test-helpers.js";
 import { resolveClaudeCliSessionFilePathAsync } from "./cli-session-history.claude.js";
 import type { GatewayClient } from "./client.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -389,10 +390,12 @@ export async function verifyCliBackendAnnounceOrdering({
 }
 
 /**
- * A restricted completion turn runs in its own Claude session. The requester's next
- * turn resumes its bound session, which holds that exchange as quoted context only when
- * the requester's history account boundary is known; an opaque login must withhold it.
- * Read from Claude's own transcript for that session, the record the model resumes.
+ * A completion handoff resumes the requester's bound Claude session when only prompt
+ * content drifted, or runs in its own session when its MCP projection hashes differently.
+ * Either way the requester's next turn resumes the bound session and owes that completion
+ * as quoted context, but only when the requester's history account boundary is known; an
+ * opaque login must withhold it. Read from Claude's own transcript for that session, the
+ * record the model resumes.
  */
 export async function verifyCliBackendAnnounceContinuity({
   client,
@@ -431,32 +434,44 @@ export async function verifyCliBackendAnnounceContinuity({
   if (!transcriptPath) {
     throw new Error(`Claude transcript for bound session ${boundBefore} was not found`);
   }
+  // Claude's record text is read verbatim; the matcher also tolerates collapsed whitespace.
   const userTexts = (await fs.readFile(transcriptPath, "utf8")).split("\n").flatMap((line) => {
     const record = line.trim()
       ? (JSON.parse(line) as { type?: unknown; message?: { content?: unknown } })
       : undefined;
     return record?.type === "user"
-      ? [extractTextFromChatContent(record.message?.content, { joinWith: "" }) ?? ""]
+      ? [
+          extractTextFromChatContent(record.message?.content, {
+            joinWith: "",
+            normalizeText: (text) => text,
+          }) ?? "",
+        ]
       : [];
   });
-  const carried = userTexts.find((text) => text.includes("sourceTool=subagent_announce"));
+  // The handoff resumes this session when only prompt content drifted, or runs in its own
+  // session when its MCP projection hashes differently. The follow-up turn owes the
+  // completion record either way; a resumed handoff may therefore be quoted twice.
+  const completionResumedBoundSession = userTexts.some((text) =>
+    text.startsWith("[Inter-session message]"),
+  );
+  // Tool-result rows have no text; the follow-up prompt is the last user turn with text.
+  const followUpInput = userTexts.findLast((text) => text.trim().length > 0) ?? "";
+  const carried = findCarriedCompletion(followUpInput, announce.completionReply);
   logStep("announce-continuity:resumed", {
     boundCliSessionId: boundBefore,
     userTurns: userTexts.length,
     historyAuthorized,
+    completionResumedBoundSession,
     carriedCompletion: carried !== undefined,
     followUpReply: extractPayloadText(followUp.result),
   });
-  // The completion turn never ran in the bound session itself.
-  expect(userTexts.some((text) => text.startsWith("[Inter-session message]"))).toBe(false);
   if (!historyAuthorized) {
-    expect(carried, "an unowned login must not replay the completion exchange").toBeUndefined();
-    expect(userTexts.at(-1)).toContain("occurred outside this Claude session");
+    expect(
+      userTexts.find((text) => findCarriedCompletion(text, announce.completionReply)),
+      "an unowned login must not replay the completion exchange",
+    ).toBeUndefined();
+    expect(followUpInput).toContain("occurred outside this Claude session");
     return;
   }
-  expect(carried, "resumed Claude session lacks the completion exchange").toBeDefined();
-  // Quoted context is JSON, so the relayed reply appears in its escaped form.
-  expect(carried).toContain(
-    JSON.stringify(announce.completionReply.trim().slice(0, 48)).slice(1, -1),
-  );
+  expect(carried, "follow-up input lacks the completion record").toBeDefined();
 }
