@@ -50,11 +50,53 @@ struct LiveActivityPresentationArbiterTests {
         #expect(arbiter.activeToolCount == 2)
         #expect(arbiter.current?.state.verbatimDetail == "second")
 
+        let staleDate = now.addingTimeInterval(600)
+        arbiter.refreshTools(staleDate: staleDate)
+        arbiter.refreshVoice(staleDate: staleDate)
+        #expect(arbiter.current?.staleDate == staleDate)
+
         arbiter.endTool(id: "tool-2", sessionKey: "main")
         #expect(arbiter.current?.state.verbatimDetail == "first")
+        #expect(arbiter.current?.staleDate == staleDate)
 
         arbiter.endTool(id: "tool-1", sessionKey: "main")
         #expect(arbiter.current?.state.status == .voiceActive)
+        #expect(arbiter.current?.staleDate == staleDate)
+
+        arbiter.startTool(
+            id: "tool-3",
+            request: Self.request(status: .toolRunning, detail: "third", startedAt: now))
+        arbiter.setVoice(nil)
+        arbiter.refreshTools(staleDate: staleDate)
+        arbiter.refreshVoice(staleDate: staleDate)
+        #expect(arbiter.current?.state.verbatimDetail == "third")
+        #expect(arbiter.current?.staleDate == staleDate)
+    }
+
+    @Test
+    func `tool heartbeats do not renew a voice card restored after restart`() {
+        let now = Date(timeIntervalSince1970: 100)
+        let voice = Self.request(status: .voiceActive, detail: nil, startedAt: now)
+        let refreshedDeadline = now.addingTimeInterval(600)
+        var arbiter = LiveActivityPresentationArbiter()
+        arbiter.adoptInitialHydratedVoice(voice)
+        arbiter.startTool(
+            id: "tool-1",
+            request: Self.request(status: .toolRunning, detail: "first", startedAt: now))
+        arbiter.refreshTools(staleDate: refreshedDeadline)
+        arbiter.refreshVoice(staleDate: refreshedDeadline)
+        #expect(arbiter.current?.staleDate == refreshedDeadline)
+
+        arbiter.endTool(id: "tool-1", sessionKey: "main")
+        #expect(arbiter.current == voice)
+        #expect(!arbiter.hasLiveVoice)
+
+        arbiter.setVoice(voice)
+        arbiter.refreshVoice(staleDate: refreshedDeadline)
+        #expect(arbiter.current?.staleDate == refreshedDeadline)
+        #expect(arbiter.hasLiveVoice)
+        arbiter.clearAll()
+        #expect(!arbiter.hasLiveVoice)
     }
 
     @Test

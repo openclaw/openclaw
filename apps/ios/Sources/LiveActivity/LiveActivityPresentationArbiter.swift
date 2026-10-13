@@ -49,6 +49,7 @@ struct LiveActivityPresentationArbiter {
     private(set) var connection: LiveActivityPresentationRequest?
     private(set) var attention: LiveActivityPresentationRequest?
     private(set) var voice: LiveActivityPresentationRequest?
+    private(set) var hasLiveVoice = false
     private(set) var hydratedToolFallback: LiveActivityPresentationRequest?
     private var toolsByIdentity: [ToolIdentity: LiveActivityPresentationRequest] = [:]
     private var toolOrder: [ToolIdentity] = []
@@ -98,6 +99,12 @@ struct LiveActivityPresentationArbiter {
             self.hydratedToolFallback = nil
         }
         self.voice = request
+        self.hasLiveVoice = request != nil
+    }
+
+    /// A restored card keeps its deadline until this process receives live voice state.
+    mutating func adoptInitialHydratedVoice(_ request: LiveActivityPresentationRequest) {
+        self.voice = request
     }
 
     /// Called only by synchronous process-start hydration before the manager
@@ -107,6 +114,7 @@ struct LiveActivityPresentationArbiter {
     }
 
     mutating func refreshVoice(staleDate: Date) {
+        guard self.hasLiveVoice else { return }
         self.voice?.staleDate = staleDate
     }
 
@@ -142,7 +150,7 @@ struct LiveActivityPresentationArbiter {
     mutating func clearAll() {
         self.connection = nil
         self.attention = nil
-        self.voice = nil
+        self.setVoice(nil)
         self.hydratedToolFallback = nil
         self.toolsByIdentity.removeAll(keepingCapacity: true)
         self.toolOrder.removeAll(keepingCapacity: true)
