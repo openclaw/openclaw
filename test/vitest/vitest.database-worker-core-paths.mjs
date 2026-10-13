@@ -43,6 +43,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/trajectory/runtime-store.sqlite.test.ts",
   "src/state/openclaw-agent-db.checkonce.test.ts",
   "src/state/openclaw-state-db-checkonce.test.ts",
+  "src/state/openclaw-state-lease-renewal.worker.test.ts",
   "src/state/openclaw-state-db-schema-version.test.ts",
   "src/state/openclaw-agent-db.lease-owner.test.ts",
   "src/state/openclaw-agent-db.open-timing.test.ts",

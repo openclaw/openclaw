@@ -311,7 +311,9 @@ export function configureSqliteWalMaintenance(
     };
   }
   enableMacosCheckpointFullfsync(db);
-  db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
+  db.exec(
+    `PRAGMA wal_autocheckpoint = ${isSqliteWalWorkerMaintained(db) ? 0 : autoCheckpointPages};`,
+  );
   db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
   const tripwireDatabasePath =
     process.platform === "linux" && options.databasePath && fs.existsSync(options.databasePath)
@@ -455,6 +457,7 @@ export function configureSqliteWalMaintenance(
     }
     return { reclaimedPages, checkpoint: checkpointOwner.snapshot };
   };
+  let stopCheckpointTick: (() => void) | undefined;
   const maintain = createSqliteWalMaintenanceScheduler(
     db,
     maintainPeriodic,
@@ -472,6 +475,7 @@ export function configureSqliteWalMaintenance(
       nextPageBudget = 0;
       return budget;
     },
+    () => stopCheckpointTick?.(),
   );
   const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>
     runInSqliteMaintenanceContext(() =>
@@ -507,8 +511,8 @@ export function configureSqliteWalMaintenance(
       return maintain();
     });
   }
-  if (checkpointTickMs > 0) {
-    schedule("tick", checkpointTickMs, maintain);
+  if (checkpointTickMs > 0 && !isSqliteWalWorkerMaintained(db)) {
+    stopCheckpointTick = schedule("tick", checkpointTickMs, maintain).cancel;
   }
 
   const beginClose = () => {

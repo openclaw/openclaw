@@ -48,6 +48,7 @@ describe("shared state lease renewal", () => {
     db.prepare("UPDATE state_leases SET owner = 'successor' WHERE lease_key = 'replaced'").run();
     db.prepare("UPDATE state_leases SET expires_at = 129999 WHERE lease_key = 'expired'").run();
     const before = readSqliteDatabaseWriteTokenForPath(filename);
+    expect(before).toBeTypeOf("string");
 
     await vi.advanceTimersByTimeAsync(30_000);
 
