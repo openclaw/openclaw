@@ -39,3 +39,10 @@ export {
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
+
+export {
+  createOwnedStdioProcess,
+  closeOwnedStdioProcess,
+  type OwnedStdioProcess,
+  type OwnedStdioProcessOptions,
+} from "../process/owned-stdio.js";
