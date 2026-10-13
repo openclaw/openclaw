@@ -41,6 +41,10 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (entry.requesterSettleWake) {
     return true;
   }
+  // Give-up cleanup is terminal unless a requester settle wake still owns delivery.
+  if (entry.delivery?.status === "failed" && typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
   return (
     entry.completion?.required === true &&
     entry.delivery?.disposition !== "intentional_non_delivery" &&

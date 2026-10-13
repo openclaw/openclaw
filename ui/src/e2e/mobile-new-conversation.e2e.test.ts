@@ -193,15 +193,15 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
         await action.tap();
-        const menu = page.locator(".sidebar-new-session-menu:visible");
-        await menu.locator('wa-dropdown-item[value="writer"]').waitFor();
+        const menu = page.locator('.sidebar-new-session-menu [role="menu"]:visible');
+        await menu.locator('[role="menuitem"][data-value="writer"]').waitFor();
         expect(
           await menu
-            .locator("wa-dropdown-item a")
+            .locator('a[role="menuitem"]')
             .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
         ).toEqual(["/new?agent=research", "/new?agent=writer"]);
         await capture("agent-menu");
-        await menu.locator('wa-dropdown-item[value="writer"]').click();
+        await menu.locator('[role="menuitem"][data-value="writer"]').click();
         await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=writer" });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       });

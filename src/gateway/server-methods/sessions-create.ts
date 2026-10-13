@@ -168,13 +168,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
-    const assertSessionCreateCurrent = bindGatewayDeviceRevocation(() => {
-      requestAuthority.assertCurrent();
-      assertRequiredWorkerSessionCreateCurrent(getCurrentConfig(), requiredProfile, p);
-      authority.commitGuard?.();
-      sessionMutationAuthorization?.assertCurrent();
-      assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
-    }, hasCurrentClientAuthority);
+    const assertSessionCreateCurrent = Object.assign(
+      bindGatewayDeviceRevocation(() => {
+        requestAuthority.assertCurrent();
+        assertRequiredWorkerSessionCreateCurrent(getCurrentConfig(), requiredProfile, p);
+        authority.commitGuard?.();
+        sessionMutationAuthorization?.assertCurrent();
+        assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
+      }, hasCurrentClientAuthority),
+      { retain: sessionMutationAuthorization?.retain },
+    );
     // Account selection is connection-bound until committed. Placement then consumes
     // that committed session under its retained request and session authority.
     const commitGuard = () => {

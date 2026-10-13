@@ -85,7 +85,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
   }
   applyPlacementReadPublication(owner, change, sequence);
-  if (affectsPlacementObservation(change)) {
+  if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
   }
   if (change.kind !== "tools") {
@@ -353,10 +353,12 @@ export function stagePlacementTurnClaimWorkerPublication(
   workspacePlacement?: WorkerSessionPlacementRecord,
   projection?: WorkerSessionPlacementReadResult,
   nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
+  inventoryUnchanged = false,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
     localOnly: facts.state === "local" && (previousState === null || previousState === "local"),
+    ...(inventoryUnchanged ? { inventoryUnchanged: true as const } : {}),
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),

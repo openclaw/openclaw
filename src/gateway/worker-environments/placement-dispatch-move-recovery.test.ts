@@ -11,6 +11,8 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -294,8 +296,12 @@ describe("worker Gateway move recovery", () => {
         placements,
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
-          resolveGatewaySessionStoreTargetInWorker: async () => target,
-          resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+          resolveGatewaySessionStoreTargetInWorker: (params) =>
+            resolveGatewaySessionStoreTargetInWorker({
+              ...params,
+              cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+            }),
+          resolveCanonicalSessionEntryFromStoreKeys,
         }),
         cancelSessionWork: async ({ assertCurrent }) => assertCurrent(),
         revokeSessionAuthority: vi.fn(),

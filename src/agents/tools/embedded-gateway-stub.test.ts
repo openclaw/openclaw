@@ -42,7 +42,7 @@ const runtime = vi.hoisted(() => ({
     messages: [] as unknown[],
     pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
   })),
-  resolveTranscriptSessionKeyBySessionId: vi.fn(() => "agent:main:main"),
+  resolveSessionKeyBySessionIdAsync: vi.fn(async () => "agent:main:main"),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 6 * 1024 * 1024),
   listProjectedSessions: vi.fn(
@@ -84,7 +84,7 @@ describe("embedded gateway stub", () => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.readChatHistoryPage.mockClear();
-    runtime.resolveTranscriptSessionKeyBySessionId.mockClear();
+    runtime.resolveSessionKeyBySessionIdAsync.mockClear();
     runtime.loadGatewaySessionEntryReadOnlyInWorker.mockClear();
     runtime.resolveSessionAgentId.mockClear();
     runtime.resolveSessionStoreKey.mockClear();

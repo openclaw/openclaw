@@ -204,9 +204,6 @@ export async function certifySessionCanonicalValidationPending(
                       assertCurrent();
                       execution?.assertCurrent();
                       worker.assertCurrent(databaseOptions, currentClaim);
-                      if (validation && readValidation() !== validation) {
-                        throw new Error("Canonical validation admission changed");
-                      }
                     };
                     assertCommitAllowed();
                     return await worker.runCanonicalValidation({
@@ -249,7 +246,7 @@ export async function certifySessionCanonicalValidationPending(
             assertReadinessCurrent();
             claim?.assertCurrent();
             const currentValidation = readValidation();
-            if (!currentValidation || (validation && validation !== currentValidation)) {
+            if (!currentValidation) {
               throw new Error("SQLite session reclamation database owner is no longer current");
             }
             validation ??= currentValidation;

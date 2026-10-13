@@ -127,14 +127,24 @@ describe("agent session deduplication across reconnect", () => {
     async () => {
       const startedAt = performance.now();
       let stage = "start-provider";
-      onTestFailed(() => {
-        process.stderr.write(
-          `Session dedup reconnect failed at stage=${stage}, elapsedMs=${Math.round(performance.now() - startedAt)}\n`,
-        );
-      });
       const provider = await startHeldResponsesProvider({
         modelRef: MODEL_REF,
         terminalText: TERMINAL_TEXT,
+      });
+      let gatewayLogs = () => "Gateway startup did not return a ready child.";
+      onTestFailed(() => {
+        process.stderr.write(
+          [
+            "Session dedup reconnect fixture failed",
+            JSON.stringify({
+              stage,
+              elapsedMs: Math.round(performance.now() - startedAt),
+              providerRequests: provider.requests.length,
+            }),
+            gatewayLogs().slice(-12_000),
+            "",
+          ].join("\n"),
+        );
       });
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
@@ -160,10 +170,13 @@ describe("agent session deduplication across reconnect", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
-        onListening: () => {
-          stage = "gateway-ready";
+        onListening: ({ logs }) => {
+          gatewayLogs = logs;
+          stage = "gateway-listening";
         },
       });
+      gatewayLogs = gateway.logs;
+      stage = "gateway-ready";
       cleanups.push(async () => provider.release());
 
       stage = "connect-client-a";
@@ -184,7 +197,6 @@ describe("agent session deduplication across reconnect", () => {
             clientConnected: clientA.connected,
           }).slice(0, 2_000) + "\n",
         );
-        process.stderr.write(gateway.logs().slice(-12_000) + "\n");
       });
       stage = "accept-original-run";
       const acceptedA = await clientA.request<AgentResult>(

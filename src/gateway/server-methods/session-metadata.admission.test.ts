@@ -27,7 +27,7 @@ import {
 import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -114,11 +114,11 @@ describe("session metadata writer admission", () => {
         const { scope, owner, other } = await seedMetadata(state);
         replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, visibility });
         const viewer = identifiedClient(other.id);
-        const target = resolveSessionSharingTarget({
+        const target = (await resolveSessionSharingTargetAsync({
           cfg: {},
           sessionKey: scope.sessionKey,
           agentId: scope.agentId,
-        })!;
+        }))!;
         expect(
           resolveSessionSharingRole({
             cfg: {},
@@ -141,11 +141,11 @@ describe("session metadata writer admission", () => {
         expect(request.errors).toEqual([]);
         expect(request.respond.mock.calls[0]?.[0]).toBe(true);
         expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
-        const current = resolveSessionSharingTarget({
+        const current = (await resolveSessionSharingTargetAsync({
           cfg: {},
           sessionKey: scope.sessionKey,
           agentId: scope.agentId,
-        })!;
+        }))!;
         expect(current.entry.createdActor?.id).toBe(owner.id);
         expect(
           resolveSessionSharingRole({

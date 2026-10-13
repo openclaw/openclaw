@@ -12,7 +12,7 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   authorizeResolvedSessionMutationAsync,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
 
@@ -100,7 +100,10 @@ describe("session sharing sandbox requirements", () => {
         },
       );
 
-      const hostTarget = resolveSessionSharingTarget({ cfg, sessionKey: hostSessionKey });
+      const hostTarget = await resolveSessionSharingTargetAsync({
+        cfg,
+        sessionKey: hostSessionKey,
+      });
       expect(hostTarget).not.toBeNull();
       if (!hostTarget) {
         throw new Error("expected persisted maintainer session");

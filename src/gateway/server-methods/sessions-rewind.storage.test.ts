@@ -15,7 +15,6 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
   patchSessionEntryCore,
@@ -30,6 +29,10 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { removeSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
@@ -48,6 +51,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
@@ -238,8 +242,9 @@ async function revokeDuringWriterWait(
     }
     return pending;
   });
-  const mutation = invoke();
+  let mutation: ReturnType<typeof invokeMessageCut> | undefined;
   try {
+    mutation = invoke();
     await awaitGateBeforeSettlement(
       queued.promise,
       mutation.error,
@@ -250,9 +255,9 @@ async function revokeDuringWriterWait(
     writer.mockRestore();
     release.resolve();
     await heldWriter;
-    await mutation.error;
+    await mutation?.error;
   }
-  return mutation;
+  return expectDefined(mutation, "queued message cut");
 }
 
 async function revokeWithPublicLifecyclePredecessor(
@@ -260,7 +265,6 @@ async function revokeWithPublicLifecyclePredecessor(
   requestContext: GatewayRequestContext,
   invoke: () => ReturnType<typeof invokeMessageCut>,
 ) {
-  await initializeSessionReadContext(requestContext);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -285,7 +289,7 @@ async function revokeWithPublicLifecyclePredecessor(
     }
     return pending;
   });
-  const sourceEntry = loadSessionEntryReadOnly(scope);
+  const sourceEntry = await readSessionEntryReadOnlyInWorker(scope);
   const respond = vi.fn<RespondFn>();
   const params = { sessionKey: scope.sessionKey, identityId: "member" };
   const removal = (async () => {
@@ -335,6 +339,8 @@ it.each(
   async ({ method, lockWhileQueued }) => {
     await withOpenClawTestState({ label: "message-cut-locked-owner" }, async (testState) => {
       await testState.writeConfig(cfg);
+      // Native fault injection needs its handle before asynchronous writers start.
+      openOpenClawAgentDatabase({ agentId: "main" });
       const scope = await seedMessageCutSource();
       let before: Awaited<ReturnType<typeof readMutationStorage>> | undefined;
       const lockSource = async () => {
@@ -390,6 +396,9 @@ describe("sessions.fork storage ownership", () => {
     async ({ kind, incognito }) => {
       await withOpenClawTestState({ label: "message-fork-storage" }, async (testState) => {
         await testState.writeConfig(cfg);
+        if (kind === "repository-changed") {
+          openOpenClawAgentDatabase({ agentId: "main" });
+        }
         const sourceScope = await seedMessageCutSource(incognito);
         const { sessionKey } = sourceScope;
         const repository = kind.startsWith("repository")
@@ -415,7 +424,10 @@ describe("sessions.fork storage ownership", () => {
             sessionRoot: projectRoot,
           });
         }
-        const sourceEntry = expectDefined(loadSessionEntryReadOnly(sourceScope), "fork source");
+        const sourceEntry = expectDefined(
+          await readSessionEntryReadOnlyInWorker(sourceScope),
+          "fork source",
+        );
         const sourceEvents = await loadTranscriptEvents(sourceScope);
         const grants: string[] = [];
         const sourceReads: string[] = [];
@@ -457,13 +469,15 @@ describe("sessions.fork storage ownership", () => {
                 .mockImplementation(async (...args) => {
                   const target = await prepareRepository(...args);
                   repositoryForkId = target.workspaceId;
-                  runOpenClawAgentWriteTransaction(
-                    (database) =>
-                      writeSessionEntry(database, sessionKey, {
-                        ...sourceEntry,
-                        repositoryWorkspaceId: undefined,
-                      }),
-                    { agentId: sourceScope.agentId },
+                  await runOpenClawAgentWriteAdmission({ agentId: sourceScope.agentId }, () =>
+                    runOpenClawAgentWriteTransaction(
+                      (database) =>
+                        writeSessionEntry(database, sessionKey, {
+                          ...sourceEntry,
+                          repositoryWorkspaceId: undefined,
+                        }),
+                      { agentId: sourceScope.agentId },
+                    ),
                   );
                   racedStorage = await readMutationStorage(sourceScope);
                   expect(racedStorage.source?.repositoryWorkspaceId).toBeUndefined();
@@ -521,7 +535,7 @@ describe("sessions.fork storage ownership", () => {
         const childScope = { agentId: "main", sessionKey: result.sessionKey };
         // Resolve exactly the returned key, without supplying the source's volatile store path.
         const child = expectDefined(
-          loadSessionEntryReadOnly(childScope),
+          await readSessionEntryReadOnlyInWorker(childScope),
           "fork child at returned key",
         );
         expect(isIncognitoSessionKey(result.sessionKey)).toBe(incognito);
@@ -556,11 +570,14 @@ describe("sessions.fork storage ownership", () => {
           expect.objectContaining({ type: "session", id: child.sessionId }),
           ...sourceEvents.slice(1, 3),
         ]);
-        expect(loadSessionEntryReadOnly(sourceScope)).toEqual(sourceEntry);
+        expect(await readSessionEntryReadOnlyInWorker(sourceScope)).toEqual(sourceEntry);
         await expect(loadTranscriptEvents(sourceScope)).resolves.toEqual(sourceEvents);
 
         // Omitting the incognito key deliberately inspects the durable agent store.
-        const durableRows = listSessionEntriesReadOnly({ agentId: "main" });
+        const durableRows = await readSessionEntrySummariesInWorker({
+          agentId: "main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        });
         expect(durableRows.some((row) => row.sessionKey === result.sessionKey)).toBe(!incognito);
         await expect(
           loadTranscriptEvents({ agentId: "main", sessionId: child.sessionId }),
@@ -573,9 +590,12 @@ describe("sessions.fork storage ownership", () => {
         if (incognito) {
           memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath });
         } else {
+          // Worker-only stores can close without a cached main-thread handle.
           await closeOpenClawAgentDatabaseByPathAsync(databasePath);
         }
-        expect(loadSessionEntryReadOnly(childScope)).toEqual(incognito ? undefined : child);
+        expect(await readSessionEntryReadOnlyInWorker(childScope)).toEqual(
+          incognito ? undefined : child,
+        );
         await expect(loadTranscriptEvents(childTranscriptScope)).resolves.toEqual(
           incognito ? [] : childEvents,
         );
@@ -645,6 +665,8 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
   async (revocation) => {
     await withOpenClawTestState({ label: "message-fork-participation" }, async (testState) => {
       await testState.writeConfig(cfg);
+      // Both variants use native fixture reads; admit their handle before asynchronous writers.
+      openOpenClawAgentDatabase({ agentId: "main" });
       const scope = await seedMessageCutSource();
       await addSessionMember(scope, {
         identityId: "member",
@@ -662,6 +684,7 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
         connect: { role: "operator", scopes: ["operator.write"] },
       } as GatewayClient;
       const requestContext = context();
+      await initializeSessionReadContext(requestContext);
       const admission = await resolveSessionMutationAuthorizationAsync({
         client,
         method: "sessions.fork",
@@ -727,6 +750,7 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
 it("sessions.fork retains member authority while restoring cold source history", async () => {
   await withOpenClawTestState({ label: "message-cut-cold-restore" }, async (testState) => {
     await testState.writeConfig(cfg);
+    const coldDatabase = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const scope = await seedMessageCutSource();
     await addSessionMember(scope, {
       identityId: "member",
@@ -736,27 +760,28 @@ it("sessions.fork retains member authority while restoring cold source history",
     const options = toDatabaseOptions(resolveSqliteScope(scope));
     await waitForSessionTranscriptIndexReconcile(options);
     // Age the idle source past the cold-storage threshold through its entry owner.
-    runOpenClawAgentWriteTransaction((database) => {
-      const source = expectDefined(loadSessionEntryReadOnly(scope), "source entry");
-      writeSessionEntry(database, scope.sessionKey, { ...source, updatedAt: 1 });
-      database.db
-        .prepare(
-          "UPDATE session_nodes SET last_activity_at = NULL, last_interaction_at = NULL WHERE session_key = ?",
-        )
-        .run(scope.sessionKey);
-      database.db
-        .prepare(
-          "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
-        )
-        .run(scope.sessionId);
-    }, options);
+    await runOpenClawAgentWriteAdmission(options, () =>
+      runOpenClawAgentWriteTransaction((database) => {
+        const source = expectDefined(loadSessionEntryReadOnly(scope), "source entry");
+        writeSessionEntry(database, scope.sessionKey, { ...source, updatedAt: 1 });
+        database.db
+          .prepare(
+            "UPDATE session_nodes SET last_activity_at = NULL, last_interaction_at = NULL WHERE session_key = ?",
+          )
+          .run(scope.sessionKey);
+        database.db
+          .prepare(
+            "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+      }, options),
+    );
     expect(
       await runSessionColdStorageMaintenance({
         config: { ...cfg, session: { maintenance: { coldStorage: { enabled: true } } } },
       }),
     ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-    const database = openOpenClawAgentDatabase(options).db;
-    expect(readSessionColdTranscript(database, scope.sessionId)).toBeDefined();
+    expect(readSessionColdTranscript(coldDatabase, scope.sessionId)).toBeDefined();
     const client = {
       authenticatedUserId: "member@example.com",
       authenticatedUserProfile: {
@@ -786,7 +811,7 @@ it("sessions.fork retains member authority while restoring cold source history",
 
       expect(await mutation.error).toBeUndefined();
       expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-      expect(readSessionColdTranscript(database, scope.sessionId)).toBeUndefined();
+      expect(readSessionColdTranscript(coldDatabase, scope.sessionId)).toBeUndefined();
     } finally {
       admission.authorization?.release?.();
     }

@@ -677,49 +677,64 @@ describe("session sharing board ticket authority", () => {
       const unscopedTicket = issueTicket();
       const memberClient = identifiedClient("outsider@example.com");
 
-      const outsider = await resolveSessionMutationAuthorizationAsync({
-        client: memberClient,
-        method: "board.action",
-        requestParams: { ticket, agentId: "work" },
-        context: gatewayA,
-      });
-      expect(outsider.error).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-      const owner = await resolveSessionMutationAuthorizationAsync({
-        client: identifiedClient("owner@example.com"),
-        method: "board.action",
-        requestParams: { ticket, agentId: "work" },
-        context: gatewayA,
-      });
-      using _ = { [Symbol.dispose]: () => owner.authorization?.release?.() };
-      expect(owner.error).toBeNull();
-      const wrongGateway = await resolveSessionMutationAuthorizationAsync({
-        client: identifiedClient("owner@example.com"),
-        method: "board.action",
-        requestParams: { ticket, agentId: "work" },
-        context: gatewayB,
-      });
-      expect(wrongGateway.error).toMatchObject({
-        details: { code: "SESSION_MUTATION_TARGET_REQUIRED" },
-      });
+      const authorizations: Awaited<ReturnType<typeof resolveSessionMutationAuthorizationAsync>>[] =
+        [];
+      using _ = {
+        [Symbol.dispose]: () => {
+          for (const result of authorizations) {
+            result.authorization?.release?.();
+          }
+        },
+      };
+      const authorize = async (
+        request: Parameters<typeof resolveSessionMutationAuthorizationAsync>[0],
+      ) => {
+        const result = await resolveSessionMutationAuthorizationAsync(request);
+        authorizations.push(result);
+        return result.error;
+      };
+
+      expect(
+        await authorize({
+          client: memberClient,
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayA,
+        }),
+      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      expect(
+        await authorize({
+          client: identifiedClient("owner@example.com"),
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayA,
+        }),
+      ).toBeNull();
+      expect(
+        await authorize({
+          client: identifiedClient("owner@example.com"),
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayB,
+        }),
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
       gatewayAActive = false;
-      const stoppedGateway = await resolveSessionMutationAuthorizationAsync({
-        client: identifiedClient("owner@example.com"),
-        method: "board.event",
-        requestParams: { ticket, agentId: "work" },
-        context: gatewayA,
-      });
-      expect(stoppedGateway.error).toMatchObject({
-        details: { code: "SESSION_MUTATION_TARGET_REQUIRED" },
-      });
-      const unscoped = await resolveSessionMutationAuthorizationAsync({
-        client: memberClient,
-        method: "board.action",
-        requestParams: { ticket: unscopedTicket, agentId: "work" },
-        context: gatewayA,
-      });
-      expect(unscoped.error).toMatchObject({
-        details: { code: "SESSION_MUTATION_TARGET_REQUIRED" },
-      });
+      expect(
+        await authorize({
+          client: identifiedClient("owner@example.com"),
+          method: "board.event",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayA,
+        }),
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+      expect(
+        await authorize({
+          client: memberClient,
+          method: "board.action",
+          requestParams: { ticket: unscopedTicket, agentId: "work" },
+          context: gatewayA,
+        }),
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     });
   });
 });

@@ -12,6 +12,7 @@ export const gatewayPluginTestFiles = [
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agent-runtime-identity-token.test.ts",
+  "src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts",
   "src/gateway/agent-turn/agent-run-media.test.ts",
   "src/gateway/agent-turn/agent-session-preparation.worker.test.ts",
   "src/gateway/approval-fixture.test.ts",
@@ -120,6 +121,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mention-directory.test.ts",
   "src/gateway/mention-inbox.compat.test.ts",
   "src/gateway/mention-inbox.sharing-target.test.ts",
+  "src/gateway/mention-inbox.target-capacity.test.ts",
   "src/gateway/model-account-connect.compat.test.ts",
   "src/gateway/model-account-connect.worker.test.ts",
   "src/gateway/node-claude-skill-runtime.test.ts",
@@ -269,6 +271,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.topology.test.ts",
   "src/gateway/session-row-selection.test.ts",
   "src/gateway/session-sharing-committed-read.test.ts",
+  "src/gateway/session-sharing-creation-receipts.test.ts",
   "src/gateway/session-sharing-groups.test.ts",
   "src/gateway/session-sharing-preparation.creation-settlement.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",

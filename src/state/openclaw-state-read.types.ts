@@ -400,7 +400,6 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
-      versions?: Map<string, string | null>;
       descendants?: { sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {

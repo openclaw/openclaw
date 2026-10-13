@@ -378,7 +378,8 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     };
     setActiveEmbeddedRun("recovered-session", handle, sessionKey);
     try {
-      expect(await rpcReq(owner.ws, "sessions.abort", { key: sessionKey, runId })).toMatchObject({
+      const result = await rpcReq(owner.ws, "sessions.abort", { key: sessionKey, runId });
+      expect(result, JSON.stringify(result.error)).toMatchObject({
         ok: true,
         payload: { status: "aborted", abortedRunId: runId },
       });

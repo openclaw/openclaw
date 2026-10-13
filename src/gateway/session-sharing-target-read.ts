@@ -26,7 +26,7 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import { readSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
   hiddenSessionNotFound,
-  resolveSessionSharingTarget,
+  resolveIncognitoSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import {
@@ -39,8 +39,6 @@ import {
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 
 export type SessionSharingReadProjection = Pick<
   SessionRowProjection,
@@ -196,11 +194,6 @@ export function readSessionMutationTarget(params: {
   sessionScope?: SessionOperatorScope;
   sessionRowRead?: SessionRowReadView;
   targetRef: SessionMutationTarget;
-  targetCount: number;
-  lookupCaches: () => {
-    storeCache: GatewaySessionStoreCache;
-    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-  };
 }):
   | {
       target: SessionSharingTarget | null;
@@ -283,13 +276,19 @@ export function readSessionMutationTarget(params: {
           : null,
       };
     }
+    if (!isIncognitoSessionKey(params.targetRef.sessionKey)) {
+      return {
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Session facts are unavailable; retry the request",
+        ),
+      };
+    }
     let preparedReadSource: SessionSharingTarget["readSource"];
-    const target = resolveSessionSharingTarget({
+    const target = resolveIncognitoSessionSharingTarget({
       cfg: params.cfg,
       sessionKey: params.targetRef.sessionKey,
       agentId: input.value,
-      ...params.lookupCaches(),
-      exactRead: params.targetCount === 1,
       onReadSource: (source) => {
         preparedReadSource = source;
       },

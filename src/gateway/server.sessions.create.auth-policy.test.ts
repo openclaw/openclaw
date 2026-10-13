@@ -54,6 +54,9 @@ it("retains committed initial turns through fencing and denies their final write
         cfg: configIO.getRuntimeConfig(),
         agentId: "main",
         key,
+        projection: "list",
+        exactRead: true,
+        readOnly: false,
       });
       return {
         key,

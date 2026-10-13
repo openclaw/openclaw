@@ -338,7 +338,7 @@ async function prepareHistoryRead(
     }
     case "session-title-fields": {
       const { readSessionTitleFieldsFromTranscript } =
-        await import("../../gateway/session-transcript-title-reader.js");
+        await import("../../gateway/session-transcript-title-reader.worker.js");
       return () =>
         runWithSessionTranscriptReadFence(request.admission, () => ({
           kind: request.kind,

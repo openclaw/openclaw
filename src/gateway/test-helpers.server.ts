@@ -58,7 +58,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerOptions } from "./server.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
-import { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
@@ -430,7 +429,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     "utf-8",
   );
   resetConfigRuntimeState();
-  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   resetGatewayMutableTestFixtures();
   resetSystemEventsForTest();
@@ -478,7 +476,6 @@ async function resetGatewayTestRuntimeOnly() {
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   resetConfigRuntimeState();
-  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   // A suite fixture owns this physical store until its explicit disposal.
   // Publishing a temporary default would revoke its retained execution owner.

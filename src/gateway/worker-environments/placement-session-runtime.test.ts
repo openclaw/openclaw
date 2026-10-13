@@ -681,17 +681,18 @@ describe("worker placement runtime capability projection", () => {
       createdAtMs: 0,
       updatedAtMs: 0,
     };
+    let executionMode: "worker-turn" | "remote-exec" = "worker-turn";
     const context = {
       workerSessionPlacementService: {
-        getMany: () => new Map([[sessionId, placement]]),
+        getMany: () => new Map([[sessionId, { ...placement, executionMode }]]),
         prepareSessionPlacement: async () => ({
           prepareRead: () => undefined,
-          current: () => placement,
+          current: () => ({ ...placement, executionMode }),
           release() {},
         }),
       },
     };
-    const error = await preparePatchError({
+    const prepared = await prepareSessionWorkerPlacementPatchValidation({
       agentId: "main",
       cfg: {} as never,
       context: context as never,
@@ -706,6 +707,12 @@ describe("worker placement runtime capability projection", () => {
       sessionKey: "agent:main:s8",
       validateModelRuntime: true,
     });
-    expect(error).toBeUndefined();
+    try {
+      expect(prepared.validate()).toBeUndefined();
+      executionMode = "remote-exec";
+      expect(prepared.validate()).toContain("cannot change cloud placement execution mode");
+    } finally {
+      prepared.release();
+    }
   });
 });

@@ -258,6 +258,7 @@ suite.define(() => {
         }),
       )
       .toEqual({ borderStyle: "none", boxShadow: "none" });
+    await expect.poll(() => sidebarNewThread.getAttribute("aria-disabled")).toBeNull();
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect

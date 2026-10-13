@@ -8,6 +8,7 @@ import {
   withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
@@ -75,9 +76,7 @@ export async function recordMessageToolRunOutcome(params: {
           { type: "session.messageToolOutcome.record", input: values },
           selectedAuthority,
         );
-        if (result.kind === "rolled-back") {
-          throw new Error(result.error.message);
-        }
+        readSessionActorStorageResult(result);
         return true;
       },
     );

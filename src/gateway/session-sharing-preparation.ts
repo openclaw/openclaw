@@ -14,8 +14,6 @@ import type {
   SessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
-import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import {
   createSessionStoreRegistryMutationFilter,
@@ -40,45 +38,25 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../state/openclaw-agent-db-resources.js";
+import { readSessionSharingFactsInWorker } from "./session-sharing-facts-read.js";
 import { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
 import { prepareMemorySessionMutationFacts } from "./session-sharing-memory-facts.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-routing.js";
+import type {
+  PreparedSessionSourceFacts,
+  PreparedSessionSharingSource,
+  ExistingSessionMutationFacts,
+  SessionFactsRequest,
+  SessionFactsRead,
+} from "./session-sharing-target.types.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import { prepareGatewaySessionStoreTargetReadOnly } from "./session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
-import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
-export type PreparedSessionSourceFacts = PreparedSessionMutationFacts & {
-  /** Physical source retained by the same read custody as the sharing facts. */
-  sourcePath?: string;
-  sourceAgentId?: string;
-  readSource?: CapturedSessionEntryReadSource;
-};
-
-type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
-  target: NonNullable<PreparedSessionMutationFacts["target"]>;
-};
-
-export { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
-export { captureSessionMutationRouting } from "./session-sharing-routing.js";
-
-type SessionFactsRequest = {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  preserveQualifiedAddress?: boolean;
-  storageReady?: Promise<void>;
-};
-export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
-  readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
-  bindCreation(this: void, operation: SessionEntryCreationOperation): void;
-  followRegistration?(this: void, change: AgentDatabaseRegistryChange): void;
-  prepareRead(this: void): Promise<void> | undefined;
-  readCurrent(this: void, cfg: OpenClawConfig): Facts;
-  release(this: void): void;
-};
+export { SessionMutationFactsUnavailableError, captureSessionMutationRouting };
+export type { PreparedSessionSourceFacts, SessionFactsRead };
 
 /** Negative reads retain the same keyed publication and source guards as existing rows. */
 export function prepareSessionMutationFacts(
@@ -343,15 +321,7 @@ export async function prepareSessionMutationFacts(
     assertRegistryPublication = () => {
       inventoryRead.assertRegistryCurrent();
     };
-    const members = new Map<
-      string,
-      {
-        facts: NonNullable<
-          Awaited<ReturnType<typeof readSessionEntriesFromStoreInWorker>>["sharing"]
-        >;
-        source: CapturedSessionEntryReadSource;
-      }
-    >();
+    const members = new Map<string, PreparedSessionSharingSource>();
     const retainedReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
     const selected = await inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
       const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
@@ -379,13 +349,11 @@ export async function prepareSessionMutationFacts(
         async (reads, select) => {
           for (const read of reads) {
             assertActive();
-            const loaded = await readSessionEntriesFromStoreInWorker(
+            const loaded = await readSessionSharingFactsInWorker(
               {
                 agentId: read.agentId ?? agentId,
                 storePath: read.storePath,
                 sessionKeys: read.options.exactKeys!,
-                projection: "sharing",
-                includeAuthorization: true,
                 env: inventory.env,
               },
               (source) => {
@@ -602,7 +570,6 @@ export async function prepareSessionMutationFacts(
           : new SessionMutationFactsUnavailableError({ cause: error });
       }
     };
-    readCurrent(params.cfg);
     const bindCreation = (operation: SessionEntryCreationOperation) => {
       // Existing rows already follow write receipts; only absence needs a creation transition.
       if (facts?.target === null) {
@@ -616,6 +583,10 @@ export async function prepareSessionMutationFacts(
       const pending = [...acquiringReads.values()].flatMap((read) => read.prepareRead() ?? []);
       return pending.length > 0 ? Promise.all(pending).then(() => {}) : undefined;
     };
+    const pending = prepareRead();
+    if (pending) {
+      await pending;
+    }
     return { storageTarget, bindCreation, prepareRead, readCurrent, release, followRegistration };
   } catch (error) {
     release();

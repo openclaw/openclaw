@@ -12,7 +12,11 @@ import {
 } from "./conversation-delivery-store.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -79,10 +83,37 @@ async function fixture() {
   if (created.kind !== "committed") {
     throw new Error(created.error.message);
   }
-  return { actor, entry: created.value };
+  return { actor, binding, entry: created.value };
 }
 
 describe("memory conversation delivery store", () => {
+  it("reports a bound publication failure while retaining the delivery receipt", async () => {
+    const { binding } = await fixture();
+    const input = {
+      operationId: "send-publication",
+      operationKind: "send" as const,
+      conversationRef,
+      sourceSessionKey: sessionKey,
+      message: "hello",
+      preparedMessageId: "prepared-publication",
+    };
+    const stop = failSessionActorMemoryPublication(sessionKey);
+    try {
+      await expect(
+        runWithSessionActorStorage(binding, () => beginConversationDeliveryOperation(scope, input)),
+      ).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+    } finally {
+      stop();
+    }
+    expect(await getConversationDeliveryOperation(scope, input.operationId)).toMatchObject({
+      status: "created",
+      preparedMessageId: input.preparedMessageId,
+    });
+    expect(await beginConversationDeliveryOperation(scope, input)).toMatchObject({
+      created: false,
+    });
+  });
+
   it("shares one receipt across retries and rejects reused input without changing it", async () => {
     await fixture();
     const input = {

@@ -192,20 +192,19 @@ export async function resumeMainSession(
   const isCurrent = () => {
     return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   };
-  return (
-    (await runWithMainSessionRecoveryAdmission({
-      ...params,
-      sessionId: params.entry.sessionId,
-      admission: params.recoveryAdmission,
-      isCurrent,
-      run: (recoveryAdmission) =>
-        resumeMainSessionWithinAdmission({
-          ...params,
-          recoveryAdmission,
-          shouldContinue: recoveryAdmission.shouldContinue,
-        }),
-    })) ?? "skipped"
-  );
+  const result = await runWithMainSessionRecoveryAdmission({
+    ...params,
+    sessionId: params.entry.sessionId,
+    admission: params.recoveryAdmission,
+    isCurrent,
+    run: (recoveryAdmission) =>
+      resumeMainSessionWithinAdmission({
+        ...params,
+        recoveryAdmission,
+        shouldContinue: recoveryAdmission.shouldContinue,
+      }),
+  });
+  return result ?? "skipped";
 }
 
 async function resumeMainSessionWithinAdmission(
@@ -369,8 +368,7 @@ async function resumeMainSessionWithinAdmission(
       await rollbackReservation("cancel_reservation");
       return "skipped";
     }
-    // Persist one stable RPC id before dispatch. A transport rejection is
-    // ambiguous; retries must reuse this id so accepted work cannot duplicate.
+    // Reuse one RPC id on retries: transport rejection does not prove the dispatch was rejected.
     const recoveryStatePrepared = await applySessionEntryReplacements({
       agentId: target.agentId,
       sessionKeys: [params.sessionKey],
@@ -568,6 +566,7 @@ async function resumeMainSessionWithinAdmission(
     if (resumeResult === "started" && agentParams.deliver && deliveryContext && taskRemainsOwed()) {
       deliveryCurrent = await prepareRestartRecoveryDeliveryCurrent({
         ...target,
+        storePath: requesterStorePath,
         sessionKey: dispatchSessionKey,
         sessionId: params.entry.sessionId,
         recoveryRunId,

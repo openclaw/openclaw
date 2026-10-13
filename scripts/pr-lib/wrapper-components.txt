@@ -686,6 +686,7 @@ src/config/sessions/store-entry-shape.ts
 src/config/sessions/store-entry.ts
 src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts
+src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
@@ -2314,6 +2315,7 @@ src/config/sessions/session-transcript-search-policy.ts
 src/config/sessions/session-transcript-turn-state.ts
 src/config/sessions/session-window-created-at.ts
 src/config/sessions/session-work-start.ts
+src/config/sessions/session-worker-receipt.ts
 src/config/sessions/transcript-event-media.ts
 src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts

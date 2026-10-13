@@ -113,6 +113,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
             cfg,
             key,
+            target,
             store: store as Record<string, SessionEntry>,
             agentId: requestedAgentId,
           });

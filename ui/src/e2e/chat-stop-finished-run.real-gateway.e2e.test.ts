@@ -199,6 +199,8 @@ suite.define(() => {
         const pending = new Map<string, Frame>();
         const knownRunIds = new Set<string>();
         let runId: string | undefined;
+        let capturedSessionId: string | undefined;
+        let withholdCompletionNotifications = false;
         let sockets = 0;
         let dropped = 0;
         let delayTerminalDescriptors = true;
@@ -219,10 +221,19 @@ suite.define(() => {
           });
           return result.sessions.find((row) => row.key === sessionKey) ?? null;
         };
-        const terminalNotification = (frame: Frame) => {
+        const shouldWithholdNotification = (frame: Frame) => {
           const payload = frame.payload;
           if (!runId || frame.type !== "event" || payload?.sessionKey !== sessionKey) {
             return false;
+          }
+          if (
+            withholdCompletionNotifications &&
+            capturedSessionId &&
+            (payload.sessionId === undefined || payload.sessionId === capturedSessionId) &&
+            (frame.event === "sessions.changed" || frame.event === "session.message")
+          ) {
+            // Cleanup can trigger history before its terminal snapshot is published.
+            return true;
           }
           if (payload.clientRunId === runId && payload.runId) {
             knownRunIds.add(payload.runId);
@@ -287,17 +298,27 @@ suite.define(() => {
                     }
                     if (frame.method === "chat.send") {
                       const captured = frame.params?.idempotencyKey;
+                      const requestedSessionId = frame.params?.sessionId;
                       if (
                         runId ||
                         frame.params?.sessionKey !== sessionKey ||
-                        typeof captured !== "string"
+                        typeof captured !== "string" ||
+                        typeof requestedSessionId !== "string"
                       ) {
                         throw new Error(
                           "UNQUALIFIED: unexpected additional chat send or missing exact run identity",
                         );
                       }
                       runId = captured;
+                      capturedSessionId = requestedSessionId;
                       knownRunIds.add(captured);
+                    }
+                    if (
+                      frame.method === "chat.abort" &&
+                      frame.params?.sessionKey === sessionKey &&
+                      frame.params?.runId === runId
+                    ) {
+                      withholdCompletionNotifications = false;
                     }
                   }
                   server.send(message);
@@ -309,7 +330,7 @@ suite.define(() => {
                   if (frame.type === "res") {
                     received.push(frame);
                   }
-                  if (terminalNotification(frame)) {
+                  if (shouldWithholdNotification(frame)) {
                     dropped += 1;
                     // Preserve the sequence so reconnect cannot repair the deliberately missed terminal event.
                     const replacement = JSON.stringify({
@@ -471,6 +492,7 @@ suite.define(() => {
                   activeRow?.hasActiveRun === true && activeRow.status === "running";
                 proof.browserOwnedActiveRun = (await browserState()).runId === runId;
                 expect(sockets).toBe(1);
+                withholdCompletionNotifications = true;
                 provider.release();
                 stage = "observe exact authoritative terminal row";
                 await expect

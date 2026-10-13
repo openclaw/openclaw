@@ -8,11 +8,11 @@ import { captureSessionEntryMetadataRead } from "../../config/sessions/session-e
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import type { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
+import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 
 /** Source edits revoke the fork; a changed destination conservatively retains its repository. */
 export async function prepareRewindRepositoryEntries(
-  source: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  source: GatewaySessionEntryRead,
   targetKey: string,
   assertCurrent: () => void,
 ) {

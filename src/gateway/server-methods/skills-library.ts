@@ -17,7 +17,6 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "../../config/sessions/session-entry-current-check.js";
-import { captureSessionEntrySourceAssertion } from "../../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
   prepareSessionSourceAuthority,
@@ -52,7 +51,6 @@ import {
 } from "../session-sharing-read.js";
 import {
   authorizeSessionSharingTarget,
-  resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
@@ -120,45 +118,7 @@ export async function activateLibrarySelection(
     let plannedSelections: SkillLibrarySelection[] | undefined;
     const sessionChanged = () =>
       new SkillLibraryError("CONFLICT", "Session changed before activation; refresh and retry.");
-    const source =
-      selected.source ??
-      captureSessionEntrySourceAssertion({
-        scope: {
-          agentId: target.agentId,
-          sessionKey: target.storeKey,
-          storePath: target.storePath,
-        },
-        readSource: target.readSource,
-        expected: target.entry,
-        fields: ["sessionId", "lifecycleRevision", "pluginOwnerId"],
-        refuse: () => {
-          throw sessionChanged();
-        },
-        assertCurrent: () => {
-          const current = resolveSessionSharingTarget({
-            cfg: context.getRuntimeConfig(),
-            sessionKey: params.sessionKey,
-          });
-          if (
-            !current ||
-            current.entry.sessionId !== target.entry.sessionId ||
-            current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-            current.storePath !== target.storePath ||
-            current.storeKey !== target.storeKey
-          ) {
-            throw sessionChanged();
-          }
-          const error = resolvePluginSessionOwnershipError({
-            action: "patch",
-            entry: current.entry,
-            key: current.canonicalKey,
-            pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
-          });
-          if (error) {
-            throw new SessionMutationAuthorizationChangedError(error);
-          }
-        },
-      });
+    const source = selected.source;
     const assertCurrent = composeSessionSourceAssertion(
       [authority.assertCurrent, authorization.authorization?.assertCurrent, source],
       (assertSources) => {
@@ -199,7 +159,7 @@ async function selectedSession(
   sessionKey: string,
 ): Promise<{
   target: SessionSharingTarget;
-  source: SessionSourceAssertion | undefined;
+  source: SessionSourceAssertion;
   assertCurrent: () => void;
   release: () => void | Promise<void>;
 }> {
@@ -323,17 +283,10 @@ async function selectedSession(
     },
   );
   const assertRouting = captureSessionMutationRouting(sourceCfg);
-  const resolve = (
-    preparedTarget?: SessionSharingTarget | null,
-    authorize = true,
-  ): SessionSharingTarget => {
+  const resolve = (authorize = true): SessionSharingTarget => {
     const cfg = options.context.getRuntimeConfig();
     assertRouting(cfg);
-    const target = actorFacts
-      ? actorFacts.readCurrent().target
-      : preparedTarget === undefined
-        ? resolveSessionSharingTarget({ cfg, sessionKey })
-        : preparedTarget;
+    const target = actorFacts?.readCurrent().target;
     if (!target) {
       throw new SkillLibraryError("NOT_FOUND", "Session not found.");
     }
@@ -392,14 +345,12 @@ async function selectedSession(
     if (actorFacts) {
       assertCurrent();
     }
-    const source: SessionSourceAssertion | undefined = actorFacts
-      ? Object.assign(assertMutationCurrent, {
-          async prepareSessionSource() {
-            assertMutationCurrent();
-            return { assertCurrent: assertMutationCurrent, checks: [] };
-          },
-        })
-      : undefined;
+    const source: SessionSourceAssertion = Object.assign(assertMutationCurrent, {
+      async prepareSessionSource() {
+        assertMutationCurrent();
+        return { assertCurrent: assertMutationCurrent, checks: [] };
+      },
+    });
     return {
       target,
       assertCurrent,

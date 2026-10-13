@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -19,6 +20,7 @@ import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoresInWorker,
+  withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
 import {
   addSessionMemberInWorker,
@@ -617,5 +619,53 @@ it("rejects ordered reads that invert an inherited store acquisition", async () 
         ),
       ),
     ).rejects.toThrow("would invert inherited SQLite writer admission order");
+  });
+});
+
+it("captures a cold read's physical source after the preceding writer creates it", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = { agentId: "cold-source", env };
+    const storePath = resolveOpenClawAgentSqlitePath(database);
+    const sessionKey = "agent:cold-source:admitted-source";
+    const writerEntered = createDeferred();
+    const create = createDeferred();
+    const readEntered = createDeferred();
+    let capturedIdentity: { key: string; birthtime?: string } | undefined;
+    const writer = runOpenClawAgentWriteAdmission(database, async () => {
+      writerEntered.resolve();
+      await create.promise;
+      const opened = openOpenClawAgentDatabase(database);
+      writeSessionEntry(opened, sessionKey, { sessionId: "admitted-source", updatedAt: 1 });
+    });
+    await writerEntered.promise;
+    const read = withSessionStoreReaderInWorker(
+      { ...database, storePath },
+      async ({ reader }) => {
+        readEntered.resolve();
+        return reader.readExactEntries({ sessionKeys: [sessionKey], env });
+      },
+      {
+        prepareSource: (_source, identity) => {
+          capturedIdentity = identity;
+        },
+      },
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        readEntered.promise,
+        read,
+        "Cold reader did not reach admission",
+      );
+      create.resolve();
+      const [result] = await Promise.all([read, writer]);
+      expect(result.entries[0]?.entry.sessionId).toBe("admitted-source");
+      expect(capturedIdentity).toMatchObject({
+        key: `file:${result.source?.databaseIdentity}`,
+        birthtime: result.source?.databaseBirthtime,
+      });
+    } finally {
+      create.resolve();
+      await Promise.allSettled([read, writer]);
+    }
   });
 });

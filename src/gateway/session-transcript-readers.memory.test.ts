@@ -25,10 +25,8 @@ import {
   readSessionTranscriptBoundedMessageTailPageAsync,
   readSessionTranscriptSummaryAsync,
 } from "./session-transcript-readers.js";
-import {
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-} from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.worker.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),

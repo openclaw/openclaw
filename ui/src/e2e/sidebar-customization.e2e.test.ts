@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -795,25 +796,13 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate(async (element) => {
-          const host = element as HTMLElement & {
-            requestUpdate(): void;
-            updateComplete: Promise<unknown>;
-          };
-          // The shell refreshes this snapshot whenever its lazy outbox runtime
-          // loads. Keep the warning fixture stable until geometry is measured.
-          const storedOutboxes = {
+        await sidebar.evaluate((element) => {
+          // This layout fixture supplies the sidebar's declared presentation input.
+          (element as AppSidebarElement).storedOutboxes = {
             total: 1,
             attentionCountForSession: () => 1,
             hasSessionDraft: () => false,
           };
-          Object.defineProperty(host, "storedOutboxes", {
-            configurable: true,
-            get: () => storedOutboxes,
-            set: () => undefined,
-          });
-          host.requestUpdate();
-          await host.updateComplete;
         });
 
         const activity = home.locator(".session-glyph");

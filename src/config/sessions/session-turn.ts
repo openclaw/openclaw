@@ -475,11 +475,10 @@ export async function appendSessionTurnInWorker(
               { ...actor, snapshot: (current) => inputActor.snapshot(current) },
               authority,
               async (snapshot) => {
-                const before = snapshot;
-                // Rebase the cache version, retaining the originally selected lifecycle.
-                if (before) {
+                // Metadata may advance; the writer checks the captured lifecycle at commit.
+                if (snapshot) {
                   expectedState ??= buildRestartRecoveryExpectedState(
-                    before.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
+                    snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
                   );
                 }
                 if (!expectedState) {
@@ -507,8 +506,6 @@ export async function appendSessionTurnInWorker(
                 const command = {
                   commandId: randomUUID(),
                   phaseId: `${phase}:${options.expectedSessionId}`,
-                  // Memory commands use their FIFO owner's current state, not a cached version.
-                  expected: memory ? undefined : before?.version,
                   expectedState,
                   lifecycle: {},
                   turn: plan,

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { recordCommittedSessionMetadataPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   prepareGitHubPublicationOptionsRead,
@@ -9,13 +10,14 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSession: vi.fn<typeof import("../session-utils.js").loadGatewaySessionEntryReadOnly>(),
+  loadSession:
+    vi.fn<(key: string, options?: { agentId?: string }) => ReturnType<typeof sessionRead>>(),
   roleScopes: undefined as string[] | undefined,
 }));
 
 // mock-isolation: Throw on legacy synchronous reads so publication tests enforce the async storage boundary.
 vi.mock("../session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: () => {
+  loadIncognitoGatewaySessionEntryReadOnly: () => {
     throw new Error("Synchronous publication read");
   },
 }));
@@ -117,6 +119,7 @@ function createRequest() {
 }
 
 function sessionRead(agentId = "main") {
+  const entry: SessionEntry = { sessionId: "session-cache-test", updatedAt: 1 };
   return {
     cfg: {},
     canonicalKey: `agent:${agentId}:main`,
@@ -124,7 +127,7 @@ function sessionRead(agentId = "main") {
     storePath: "/test/sessions.json",
     store: {},
     storeKeys: [`agent:${agentId}:main`],
-    entry: { sessionId: "session-cache-test", updatedAt: 1 },
+    entry,
     legacyKey: undefined,
   };
 }
@@ -223,7 +226,7 @@ describe("GitHub publication request discovery", () => {
         ...loaded,
         entry: { ...loaded.entry, archivedAt: archivedAt ?? undefined },
       });
-      const read = await prepareGitHubPublicationOptionsRead(createRequest(), {
+      using read = await prepareGitHubPublicationOptionsRead(createRequest(), {
         sessionKey: "main",
       });
       releases.push(read.release);
