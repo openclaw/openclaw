@@ -90,6 +90,7 @@ it("prepares the selected realtime catalog once per request and refreshes availa
         ...rawConfig,
         model: rawConfig.model ?? (await readDefault()),
       }),
+      isConfigured: () => false,
       isConfiguredAsync: readAvailability,
       capabilities: {
         transports: ["gateway-relay"],
