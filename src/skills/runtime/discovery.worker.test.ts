@@ -81,28 +81,25 @@ it("shares one installed-index read across workspaces and observes writes on the
     requests: workspaces.map((workspaceDir) => ({
       key: workspaceDir,
       environment,
-      plan: {
-        input: {
-          workspaceDir,
-          environment,
-          acpRuntimeAvailable: false,
-          options: {
-            config,
-            bundledSkillsDir: "",
-            managedSkillsDir: path.join(stateDir, "skills"),
-            pluginSkillsDir: path.join(stateDir, "plugin-skills"),
+      selection: {
+        kind: "planned",
+        plan: {
+          input: {
+            workspaceDir,
+            environment,
+            acpRuntimeAvailable: false,
+            options: {
+              config,
+              bundledSkillsDir: "",
+              managedSkillsDir: path.join(stateDir, "skills"),
+              pluginSkillsDir: path.join(stateDir, "plugin-skills"),
+            },
           },
         },
-      },
-      request: {
-        sourcePlan: {
-          workspaceDir,
-          roots: [],
-          pluginSkillRoots: [],
-          managedSkillsDir: path.join(stateDir, "skills"),
+        request: {
+          limits: resolveSkillDiscoveryLimits(),
+          additionalBins: [],
         },
-        limits: resolveSkillDiscoveryLimits(),
-        additionalBins: [],
       },
     })),
   };

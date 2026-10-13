@@ -32,7 +32,13 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   ) =>
     consume({
       database: { agentId: scope.agentId, path: scope.storePath },
-      reader: { readEntries: async () => ({ entries: hoisted.listSessionEntriesMock(scope) }) },
+      reader: {
+        readExactEntries: async (request: { selection: { sessionIdOrKey: string } }) => ({
+          entries: hoisted
+            .listSessionEntriesMock(scope)
+            .filter(({ entry }) => entry.sessionId === request.selection.sessionIdOrKey),
+        }),
+      },
     }),
 }));
 
@@ -98,6 +104,28 @@ describe("resolveSessionKeyForRequest", () => {
     hoisted.listAgentIdsMock.mockReset();
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
   });
+
+  it.each([resolveStoredSessionKeyForSessionId, resolveSessionKeyForRequestCore])(
+    "refuses a session that rolls over after ID selection (%#)",
+    async (resolve) => {
+      mockSessionStores({
+        "/stores/main.json": {
+          "agent:main:work": { sessionId: "selected-id", updatedAt: 1 },
+        },
+      });
+      hoisted.loadExactSessionEntryMock.mockReturnValue({
+        sessionKey: "agent:main:work",
+        entry: { sessionId: "replacement-id", updatedAt: 2 },
+      });
+      await expect(
+        resolve({
+          cfg: { session: { store: "/stores/{agentId}.json" } },
+          agentId: "main",
+          sessionId: "selected-id",
+        }),
+      ).rejects.toThrow("Stored session changed while resolving its ID");
+    },
+  );
 
   it("prefers the current store when equal duplicates exist across stores", async () => {
     const mainStore = {

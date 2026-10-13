@@ -383,6 +383,40 @@ describe("Telegram admitted model input", () => {
     },
   );
 
+  it.each([
+    { emoji: "\u{1F3B2}", value: 4, body: "[Dice \u{1F3B2} = 4]" },
+    { emoji: "\u{1F3B0}", value: 64, body: "[Dice \u{1F3B0} = 64]" },
+  ])("delivers a dice-only $emoji update", async ({ emoji, value, body }) => {
+    await receive(await createBot(false, true, config()), {
+      ...textMessage("", false),
+      text: undefined,
+      dice: { emoji, value },
+    });
+
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]?.BodyForAgent).toBe(body);
+  });
+
+  it("keeps a mention-skipped dice roll in ambient group history", async () => {
+    const received = vi.fn();
+    registerInternalHook("message:received", received);
+    const cfg = config({ requireMention: true, ingest: true });
+    cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
+
+    await receive(await createBot(false, true, cfg), {
+      ...textMessage(""),
+      text: undefined,
+      dice: { emoji: "\u{1F3AF}", value: 3 },
+    });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ content: "[Dice \u{1F3AF} = 3]" }),
+      }),
+    );
+  });
+
   it("renders nested rich-only messages in order and retains sender attribution", async () => {
     const rich = {
       blocks: [

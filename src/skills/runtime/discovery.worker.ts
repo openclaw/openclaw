@@ -86,18 +86,29 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   // Share physical inventory facts across workspaces, then discard them for the next pass.
   const pluginCache = createPluginCache();
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
+  const selectPlan = (sourceInput: SkillsSourcePlanInput) => {
+    const key = JSON.stringify(sourceInput);
+    const plan = plans.get(key) ?? resolveInputPlan(sourceInput, pluginCache);
+    plans.set(key, plan);
+    return plan;
+  };
   return {
     kind: "scan",
-    results: request.requests.map(({ key, request: sourceRequest, environment, plan }) => {
+    results: request.requests.map(({ key, environment, selection }) => {
       applyEnvironment(environment);
-      let resolvedPlan = sourceRequest.sourcePlan;
-      if (plan) {
-        const planKey = JSON.stringify(plan.input);
-        resolvedPlan = plans.get(planKey) ?? resolveInputPlan(plan.input, pluginCache);
-        plans.set(planKey, resolvedPlan);
-      }
-      sourceRequest.sourcePlan =
-        plan?.scope === "gateway" ? splitSkillSourcePlan(resolvedPlan).gatewayPlan : resolvedPlan;
+      const resolvedPlan =
+        selection.kind === "planned"
+          ? selectPlan(selection.plan.input)
+          : selection.plan
+            ? selectPlan(selection.plan.input)
+            : selection.request.sourcePlan;
+      const sourceRequest = {
+        ...selection.request,
+        sourcePlan:
+          selection.kind === "selected" && selection.plan?.scope === "gateway"
+            ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
+            : resolvedPlan,
+      };
       const sources = readWorkspaceSkillSources(sourceRequest);
       const entries = mergeSkillRecords(sources.entries, key, []);
       appendLowerPrecedenceSkillRecords(
@@ -108,7 +119,7 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
       return {
         key,
         sources,
-        plan: plan ? resolvedPlan : undefined,
+        plan: selection.plan ? resolvedPlan : undefined,
         fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
       };
     }),

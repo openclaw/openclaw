@@ -7,11 +7,6 @@ extension CLIInstaller {
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async throws -> String
     {
         let manager = GatewayProcessManager.shared
-        let unfinished = PostAppUpdateReceiptStore.pending(currentVersion: targetVersion)
-            ?? PostAppUpdateReceiptStore.pendingSetupRecovery()
-        guard unfinished?.coreUpdatePending != true || unfinished?.coreUpdate == .gateway else {
-            throw GatewayHostingError(message: "Another managed runtime update is incomplete. Finish it before setup.")
-        }
         guard manager.installation == .managed,
               let arguments = GatewayLaunchAgentManager.launchdProgramArguments()
         else { throw GatewayHostingError(message: GatewayProcessManager.Installation.ownershipFailure) }
@@ -54,8 +49,7 @@ extension CLIInstaller {
         let status = await self.managedStatus(
             expectedVersion: targetVersion, installedCLI: cli, usesBundledRuntime: false)
         let pending = PostAppUpdateReceiptStore.pending(currentVersion: targetVersion)
-            ?? PostAppUpdateReceiptStore.pendingSetupRecovery()
-        let repair = status.isReady && pending?.coreUpdatePending == true
+        let repair = status.isReady && (pending?.coreUpdate == .gateway || pending?.coreUpdate == .legacyCanonical)
         if status.isReady, !repair { return cli.prefix.last ?? status.location }
         let found: String
         let required: String
@@ -101,6 +95,7 @@ extension CLIInstaller {
             else { throw GatewayHostingError(message: "The Gateway service changed during setup; retry.") }
         }
         try await checkCurrent()
+        var dispatchedReceipt: PostAppUpdateReceipt?
         let outcome = await self.updateManaged(
             targetVersion: required,
             restartGateway: restartGateway,
@@ -108,7 +103,7 @@ extension CLIInstaller {
             installedCLI: cli,
             checkCurrent: checkCurrent,
             onDispatch: {
-                try PostAppUpdateReceiptStore.recordSetupRecovery(
+                dispatchedReceipt = PostAppUpdateReceiptStore.recordSetupRecovery(
                     fromVersion: found,
                     toVersion: required,
                     runtimeBuildID: Bundle.main.infoDictionary?["OpenClawRuntimeBuildID"] as? String)
@@ -121,10 +116,8 @@ extension CLIInstaller {
         guard case let .success(_, installedVersion) = outcome, installedVersion == required else {
             throw GatewayHostingError(message: "The Node update did not verify the app's exact version; retry setup.")
         }
-        guard let completed = PostAppUpdateReceiptStore.completeCoreRepair(currentVersion: required, owner: .gateway),
-              !completed.coreUpdatePending
-        else {
-            throw GatewayHostingError(message: "Another managed runtime update still needs repair.")
+        if let dispatchedReceipt {
+            PostAppUpdateReceiptStore.completeCoreRepair(receipt: dispatchedReceipt, owner: .gateway)
         }
         return cli.prefix.last ?? status.location
     }

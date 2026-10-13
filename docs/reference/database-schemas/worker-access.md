@@ -47,6 +47,12 @@ Every refresh still re-admits the current database source and checks its authori
 Reader retirement stops change publications and joins the retained reader;
 the next Gateway generation rebinds retained observers before startup admission.
 
+Persisted auth-row observation belongs to the host. Catalog workers reload
+credentials through their native task owner instead of retaining background row
+readers for WAL notifications. Workers still observe physical file replacement
+to retire native SQLite handles; session-only WAL activity needs no worker auth
+reread.
+
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
@@ -86,6 +92,14 @@ the final handle retires those facts, so the next open admits the database again
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
+
+The SQLite worker broker also retains the canonical database and owner-lock paths
+captured at open. Ordinary operations reuse those paths while still checking live
+ownership; they do not resolve filesystem aliases again. Repointing an alias does
+not redirect an open worker handle. Closing and reopening captures the new path
+identity, and open admission still rejects replacements that collide with a live
+owner. Creation and schema-maintenance requests keep their target checks at the
+actual effect.
 
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed

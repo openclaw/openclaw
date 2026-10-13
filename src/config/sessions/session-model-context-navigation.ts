@@ -21,6 +21,7 @@ export const MODEL_CONTEXT_NAVIGATION_KEYS = [
   "fromId",
   "customType",
   "display",
+  "excludeFromContext",
   "label",
   "name",
 ] as const;

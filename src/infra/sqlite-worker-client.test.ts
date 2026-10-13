@@ -21,6 +21,11 @@ function createActor(): Actor {
     id: 1,
     key: "client-fixture",
     databasePath: "/fixture/state.sqlite",
+    stateAccess: {
+      canonicalPath: "/fixture/state.sqlite",
+      assertAccessAllowed() {},
+      assertReadAllowed() {},
+    },
     pathReferences: new Map([["/fixture/state.sqlite", 1]]),
     moduleUrl: "file:///fixture/sqlite-backend.js",
     inputHash: "client-fixture",
