@@ -133,6 +133,7 @@ export async function watchQueuedMediaGenerationHandoff(
   if (!entry) {
     return "pending";
   }
+  // SAFETY: failed delivery tombstones persist failedAt in the stored JSON; the live payload type omits it.
   const failedAt = (entry as { failedAt?: unknown }).failedAt;
   if (typeof failedAt === "number" || entry.settlementOutcome === "moved-to-failed") {
     return "failed";
