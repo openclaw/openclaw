@@ -1,4 +1,5 @@
 import { hash } from "node:crypto";
+import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
@@ -53,6 +54,8 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   }));
   const replacement = {
     model: model.id,
+    prompt_cache_key: "private-affinity",
+    previous_response_id: "private-response",
     messages,
     stream: true,
     tools: [...allowedTools, { type: "function", function: { name: "hidden" } }],
@@ -76,7 +79,18 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   let wire: string | undefined;
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     wire = await new Request(input, init).text();
-    return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    return new Response(sse, {
+      headers: {
+        "content-type": "text/event-stream",
+        "openai-processing-ms": "12.5",
+        "openai-model": "private-model",
+        "openai-organization": "private-account",
+        "x-openai-route": "private-route",
+        "x-openai-region": "private-region",
+        "x-request-id": "private-request",
+        "set-cookie": "private-cookie",
+      },
+    });
   });
   configureAiTransportHost({ ...originalHost, buildModelFetch: () => fetchMock });
   const state: ProviderPromptState = {};
@@ -136,14 +150,67 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       scopeDigest: expect.any(String),
       digest: hash("sha256", expectedWire),
       byteWeight: 614_400,
+      wire: {
+        requestBytes: 614_400,
+        prefixBytes: 4096,
+        prefixHash: hash("sha256", Buffer.from(expectedWire).subarray(0, 4096)),
+        cacheKeyPresent: true,
+        cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
+        previousResponseIdPresent: true,
+        modelHash: hash("sha256", JSON.stringify(model.id)).slice(0, 16),
+        routeHash: hash("sha256", model.baseUrl).slice(0, 16),
+        attempts: 1,
+        retried: false,
+        response: {
+          status: 200,
+          headers: {
+            "openai-processing-ms": 12.5,
+            "openai-model": hash("sha256", "private-model").slice(0, 16),
+            "openai-organization": hash("sha256", "private-account").slice(0, 16),
+            "x-openai-route": hash("sha256", "private-route").slice(0, 16),
+            "x-openai-region": hash("sha256", "private-region").slice(0, 16),
+            "x-request-id": hash("sha256", "private-request").slice(0, 16),
+          },
+        },
+      },
       cachePrefix: {
         system: hash("sha256", "{}"),
         tools: hash("sha256", JSON.stringify({ tools: allowedTools })),
-        messages: messages.map((message) => hash("sha256", JSON.stringify(message))),
+        messages: messages.map((message, index) => {
+          const digest = hash("sha256", JSON.stringify(message));
+          return index < 32
+            ? {
+                digest,
+                fields: {
+                  role: hash("sha256", JSON.stringify(message.role)),
+                  content: hash("sha256", JSON.stringify(message.content)),
+                },
+              }
+            : { digest };
+        }),
+        messageField: "messages",
         messageCount: 100,
-        parameters: hash("sha256", JSON.stringify(["messages", { model: model.id, stream: true }])),
+        parameters: {
+          digest: hash(
+            "sha256",
+            JSON.stringify({
+              model: model.id,
+              prompt_cache_key: "private-affinity",
+              previous_response_id: "private-response",
+              stream: true,
+            }),
+          ),
+          fields: {
+            model: hash("sha256", JSON.stringify(model.id)),
+            prompt_cache_key: hash("sha256", '"private-affinity"'),
+            previous_response_id: hash("sha256", '"private-response"'),
+            stream: hash("sha256", "true"),
+          },
+        },
+        continuation: true,
       },
     });
+    expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 
     markLastProviderPromptContextRejected(state);
@@ -158,8 +225,28 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   }
 });
 
+it("observes serialized values without letting the observer change request bytes or stream behavior", () => {
+  const toJSON = vi.fn(() => ({ stream: true, input: ["fixture"], omitted: undefined }));
+  const observer = vi.fn((value: unknown) => {
+    expect(value).toEqual({ stream: true, input: ["fixture"] });
+    if (typeof value !== "object" || value === null) {
+      throw new Error("Expected the serialized request object");
+    }
+    Object.assign(value, { stream: false, input: ["changed"] });
+  });
+  const encoded = serializeModelRequestBody({ toJSON }, observer);
+  expect(observer).toHaveBeenCalledTimes(1);
+  expect(toJSON).toHaveBeenCalledTimes(1);
+  expect(new TextDecoder().decode(encoded.body)).toBe('{"stream":true,"input":["fixture"]}');
+  expect(encoded.stream).toBe(true);
+});
+
 it("fingerprints serialized prompt segments with bounded, content-free history metadata", () => {
-  const message = { role: "user", content: "private history content" };
+  const message = {
+    role: "user",
+    content: "private history content",
+    ...Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`private-${index}`, index])),
+  };
   const input = Array.from({ length: 514 }, () => message);
   let serializations = 0;
   const payload = {
@@ -179,12 +266,26 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
   expect(first.cachePrefix).toEqual({
     system: hash("sha256", '{"instructions":"private instructions"}'),
     tools: hash("sha256", '{"tools":[{"type":"function","name":"private_tool_name"}]}'),
-    messages: Array.from({ length: 512 }, () =>
-      hash("sha256", '{"role":"user","content":"private history content"}'),
-    ),
+    messages: Array.from({ length: 512 }, (_, index) => ({
+      digest: hash("sha256", JSON.stringify(message)),
+      ...(index < 32
+        ? {
+            fields: {
+              role: hash("sha256", '"user"'),
+              content: hash("sha256", '"private history content"'),
+              other: expect.stringMatching(/^[a-f0-9]{64}$/),
+            },
+          }
+        : {}),
+    })),
+    messageField: "input",
     messageCount: 514,
     tail: hash("sha256", JSON.stringify([message, message])),
-    parameters: hash("sha256", '["input",{"private_parameter_name":"private parameter value"}]'),
+    parameters: {
+      digest: hash("sha256", '{"private_parameter_name":"private parameter value"}'),
+      fields: { other: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    },
+    continuation: false,
   });
   expect(JSON.stringify(first.cachePrefix)).not.toContain("private");
 

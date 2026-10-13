@@ -224,7 +224,7 @@ timeout.
   clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
   with a fresh session when the failure is eligible for recovery.
 - Set it to `"invalidated-only"` to suppress fresh replacement unless the
-  canonical invalidation predicate proves the old session is dead. Only
+  shared invalidation check proves the old session is dead. Only
   `session_expired` does so.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
@@ -239,24 +239,24 @@ only for behavior that really belongs to the backend.
 
 `CliBackendPlugin` can also define:
 
-| Hook                               | Use                                                                         |
-| ---------------------------------- | --------------------------------------------------------------------------- |
-| `normalizeConfig(config, context)` | Normalize the registered static adapter with runtime context                |
-| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
-| `prepareExecution(ctx)`            | Create temporary auth, config, or environment bridges before launch         |
-| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
-| `textTransforms`                   | Bidirectional prompt/output replacements                                    |
-| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
-| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
-| `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
-| `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
-| `projectNativeToolAuthority`       | Map the observed native tool list to canonical capabilities for cron caps   |
-| `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
-| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
-| `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
-| `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
-| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
-| `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
+| Hook                               | Use                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------- |
+| `normalizeConfig(config, context)` | Normalize the registered static adapter with runtime context                      |
+| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation       |
+| `prepareExecution(ctx)`            | Create temporary auth, config, or environment bridges before launch               |
+| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                                |
+| `textTransforms`                   | Bidirectional prompt/output replacements                                          |
+| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                           |
+| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                            |
+| `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable            |
+| `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging         |
+| `projectNativeToolAuthority`       | Map the observed native tool list to standard OpenClaw capabilities for cron caps |
+| `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                           |
+| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                      |
+| `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                       |
+| `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract                  |
+| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend       |
+| `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                      |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
@@ -308,7 +308,7 @@ normal CLI runs do not require it. A backend without this declaration cannot
 mint verified CLI setup authority. A `bundled-package-tree` declaration names
 the exact `package.json` owner and requires the package entrypoint to be the
 command. OpenClaw hashes the bounded complete installed package tree, including
-nested dependencies, and fails closed for redirecting symlinks,
+nested dependencies, and rejects redirecting symlinks,
 launchers outside the declared package, required external dependency
 declarations, oversized trees, and unknown scripts. Declare this only when that
 tree contains the complete inference implementation; optional tool integrations
@@ -319,7 +319,7 @@ executable selected from `PATH`. Explicit script paths do not require their
 suffix in `PATHEXT`; bare command lookup still follows `PATH` and `PATHEXT`.
 
 If the same backend also ships a self-contained native executable, list its
-canonical basenames in `nativeExecutableNames`. Other native commands remain
+standard basenames in `nativeExecutableNames`. Other native commands remain
 unverified.
 
 `ctx.executionMode` is `"agent"` for normal turns and `"side-question"` for
@@ -327,11 +327,11 @@ ephemeral `/btw` calls. Use it when the CLI needs different one-shot flags,
 such as disabling native tools, session persistence, or resume behavior for
 BTW. If a backend normally has `nativeToolMode: "always-on"` but its
 side-question argv reliably disables those tools, also set
-`sideQuestionToolMode: "disabled"`; otherwise OpenClaw fails closed when BTW
+`sideQuestionToolMode: "disabled"`; otherwise OpenClaw refuses to run when BTW
 requires a no-tools CLI run.
 
 Set `nativeToolMode: "selectable"` only when the backend can disable every
-backend-native tool for an individual run. Restricted runs receive a canonical
+backend-native tool for an individual run. Restricted runs receive a shared
 contract: `ctx.toolAvailability.native` is the exact backend-native list and
 `ctx.toolAvailability.openClaw` is the exact list of OpenClaw tool names. The
 host independently limits the generated MCP configuration and grant to that
@@ -345,8 +345,8 @@ Declare how the backend enforces that contract:
   return enforcing argv for both fresh and resumed runs.
 - `toolAvailabilityEnforcement: "prepare-execution"` requires
   `prepareExecution`. The hook must stage an exact per-run policy and return
-  `toolAvailabilityEnforced: true`; missing acknowledgement fails closed and
-  OpenClaw cleans up the staged resources before launch.
+  `toolAvailabilityEnforced: true`; missing acknowledgement blocks launch and
+  OpenClaw cleans up the staged resources.
 
 Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
@@ -360,7 +360,7 @@ input is the parent turn's `system/init.tools` list, intersected with
 can remove tools after CLI argument selection, so defaults are never inferred.
 Each turn starts with pending authority: MCP discovery remains available, but
 tool calls reject visibly until initialization supplies the list. Warm turns
-cannot borrow a previous turn's snapshot. Return only canonical names from the
+cannot borrow a previous turn's snapshot. Return only standard names from the
 core vocabulary (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `web_search`, `web_fetch`), each derived from a native tool the host enforces
 through this contract. Core validates the result before updating the active
@@ -487,14 +487,14 @@ Supported bridge modes:
 
 Only enable the bridge when the CLI can actually consume it. If the CLI has
 its own built-in tool layer that cannot be disabled, set `nativeToolMode:
-"always-on"` so OpenClaw can fail closed when a caller requires no native
+"always-on"` so OpenClaw can refuse to run when a caller requires no native
 tools. If it can disable every native tool per run, use `"selectable"` with the
 `resolveExecutionArgs` contract above.
 
 ## Selecting the backend
 
 Users select a standalone backend through its model-ref prefix. A backend that
-declares a canonical `modelProvider` can instead be selected through that
+declares a standard `modelProvider` can instead be selected through that
 provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
 
 ```json5
@@ -510,7 +510,7 @@ provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
 }
 ```
 
-Put credentials in OpenClaw auth profiles or plugin-owned config. Ensure the
+Put credentials in OpenClaw auth profiles or plugin-owned config. Check that the
 registered command is on the gateway service's `PATH`; deployments that need a
 different path or argv should change or wrap the plugin registration.
 

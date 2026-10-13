@@ -21,6 +21,7 @@ import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export interface SidebarMenusControllerHost extends SessionOrganizerControllerHost {
   readonly querySelector: HTMLElement["querySelector"];
+  readonly querySelectorAll: HTMLElement["querySelectorAll"];
   readonly activeRouteId?: NavigationRouteId;
   readonly basePath: string;
   readonly canPairDevice: boolean;
@@ -37,7 +38,6 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   sidebarAgentsMode: "chip" | "roster";
   readonly pinnedAgentIds: readonly string[];
-  readonly preferencesBrowserOnly: boolean;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<

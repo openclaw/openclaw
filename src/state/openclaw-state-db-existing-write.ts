@@ -10,14 +10,12 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import {
   assertSqliteSchemaContains,
+  getCanonicalSqliteNamedIndexContracts,
   getCanonicalSqliteTableNames,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
-import {
-  admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
-  registerSqliteSchemaMutationListener,
-} from "../infra/sqlite-schema-facts.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
   type SqliteTransactionOptions,
@@ -168,8 +166,13 @@ function createExistingOpenClawStateWriter(
       .digest("hex")}`,
     (value) => (typeof value === "number" ? value : undefined),
   );
+  const ensureAdditiveSchema = contract.initializeAdditiveSchema
+    ? createSqliteSchemaEnsurer(() => contract.schemaSql, {
+        tables: getCanonicalSqliteTableNames(contract.schemaSql),
+        indexes: getCanonicalSqliteNamedIndexContracts(contract.schemaSql).map(({ name }) => name),
+      })
+    : undefined;
   let closed = false;
-  let admitted: { version: number; existingSchema: boolean } | undefined;
   return {
     run<T>(operation: ExistingWriteOperation<T>, currentOptions: ExistingWriteOptions) {
       if (closed || !db.isOpen) {
@@ -184,14 +187,10 @@ function createExistingOpenClawStateWriter(
       }
       assertSameFile();
       const existingSchema = isExistingOpenClawStateSchema(pathname);
-      if (admitted && existingSchema !== admitted.existingSchema) {
-        throw new Error("Existing-state writer schema admission changed.");
-      }
       const busyTimeoutMs =
         currentOptions.busyTimeoutMs ?? contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       setSqliteBusyTimeout(db, busyTimeoutMs);
-      let pendingAdmission: typeof admitted;
-      const result = runManagedStateTransaction(
+      return runManagedStateTransaction(
         db,
         () => {
           assertSameFile();
@@ -202,7 +201,7 @@ function createExistingOpenClawStateWriter(
           });
           const priorVersion = admission.get(db);
           const needsAdmission = priorVersion === undefined;
-          if (needsAdmission && existingSchema) {
+          if (existingSchema) {
             assertExistingOpenClawStateRuntimeSchema(db, pathname);
           }
           const validate = () =>
@@ -237,7 +236,8 @@ function createExistingOpenClawStateWriter(
               ...contract.schemaCompatibility,
               allowedMissingTables: getCanonicalSqliteTableNames(contract.schemaSql),
             });
-            db.exec(contract.schemaSql); // sqlite-allow-raw -- Declared canonical feature-local additive DDL only.
+            admitSqliteSchema(db);
+            ensureAdditiveSchema?.(db);
             assertSqliteSchemaContains(
               db,
               pathname,
@@ -249,33 +249,9 @@ function createExistingOpenClawStateWriter(
             admitSqliteSchema(db);
             admission.publish(db, version);
           }
-          pendingAdmission = { version, existingSchema };
-          const beforeSchema = getAdmittedSqliteSchemaFacts(db);
-          if (!beforeSchema) {
-            throw new Error("Existing-state writer schema facts are unavailable.");
-          }
-          let schemaChanged = false;
-          const stopObservingSchema = registerSqliteSchemaMutationListener(db, () => {
-            schemaChanged = true;
-          });
-          let value: T;
-          try {
-            value = operation({ db, path: pathname, recoveryChanges });
-          } finally {
-            stopObservingSchema();
-          }
+          // Internal callers own their declared schema and only mutate its rows here.
+          const value = operation({ db, path: pathname, recoveryChanges });
           assertSameFile();
-          if (schemaChanged) {
-            // A mutation hint may be no-op DDL; compare the admitted catalog markers.
-            const afterSchema = getAdmittedSqliteSchemaFacts(db);
-            if (
-              !afterSchema ||
-              afterSchema.schemaVersion !== beforeSchema.schemaVersion ||
-              afterSchema.userVersion !== beforeSchema.userVersion
-            ) {
-              throw new Error("Existing-state transaction cannot migrate schema.");
-            }
-          }
           if (contract.recoverTaskDeliveryOrphans) {
             assertSqliteIntegrity(db, pathname);
           }
@@ -288,10 +264,6 @@ function createExistingOpenClawStateWriter(
           operationLabel: contract.operationLabel,
         },
       );
-      if (pendingAdmission) {
-        admitted = pendingAdmission;
-      }
-      return result;
     },
     assertSettled() {
       assertSameFile();

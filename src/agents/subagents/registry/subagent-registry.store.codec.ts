@@ -3,11 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+} from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type CanonicalSubagentRunRecord = SubagentRunRecord &

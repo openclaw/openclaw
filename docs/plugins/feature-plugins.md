@@ -63,7 +63,7 @@ uses the custom-plugin setting.
 ## Create a feature plugin
 
 Enable the [Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui) before opening the
-scaffold's browser views.
+generated plugin's browser views.
 
 ```bash
 openclaw plugins init draft-review --name "Draft Review" --type feature
@@ -74,7 +74,7 @@ npm run validate
 openclaw plugins install .
 ```
 
-The scaffold includes a draft-analysis operation, an agent tool, a native page,
+The starter plugin includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
 open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
@@ -159,7 +159,7 @@ Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
 right-click, **Shift+F10**, or the context-menu key on the focused link, including
 nested and pinned entries. Selecting an action closes the menu; **Escape** or an
 outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
-pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+pin and `host.ui.unpinNavigation(id)` to remove it; repeated calls have no additional effect. Plugins choose
 which actions to offer and own confirmation for destructive actions.
 
 For a dashboard widget, also register a backend
@@ -207,7 +207,7 @@ does not expose a separate headless chat service for a completely independent
 workspace.
 
 A composer replacement receives the current draft, admission state, disabled
-reason, and canonical `setDraft`, `send`, and optional `abort` operations. Use
+reason, and standard `setDraft`, `send`, and optional `abort` operations. Use
 these operations instead of issuing a raw chat RPC. `send()` resolves `true`
 when admitted, `false` when rejected, or `undefined` for a local command or no
 submission. Show rejected submissions rather than clearing the draft. Composer
@@ -355,7 +355,11 @@ authority and mutation guards with their existing owners.
 The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
 imports. The content hash covers the complete generation, including its chunks.
 CSS remains attached to the entry; loading a JavaScript chunk does not attach
-stylesheets. Embed other static assets in the bundle; arbitrary files are
+stylesheets. Authenticated bootstrap advertises the entry, stylesheets, and static
+JavaScript dependencies so the browser can preload them together before the
+Gateway connection completes. Activation still waits for the current catalog,
+asset grants, and all stylesheets; dynamic imports remain lazy.
+Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
 `require` calls, and `require.resolve` are rejected. Import validation checks the

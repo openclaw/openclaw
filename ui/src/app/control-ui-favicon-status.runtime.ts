@@ -14,6 +14,7 @@ import {
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
+import { canUseQuestionPrompts } from "./question-prompt-client.ts";
 import {
   createQuestionPromptState,
   disposeQuestionPromptState,
@@ -142,6 +143,7 @@ export function connectControlUiFavicon(
     const snapshot = context.gateway.snapshot;
     const questionClient =
       snapshot.phase === "connected" &&
+      canUseQuestionPrompts(snapshot) &&
       isGatewayMethodAdvertised({ hello: snapshot.hello }, "question.list")
         ? snapshot.client
         : null;

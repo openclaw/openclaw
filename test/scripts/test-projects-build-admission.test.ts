@@ -609,7 +609,7 @@ describe("packed CI config continuation", () => {
     if (scenario.signaled) {
       expect(exit).toHaveBeenCalledWith("SIGTERM");
     } else if (!scenario.rejected) {
-      expect(process.exitCode).toBe(1);
+      expect(process.exitCode).toBe(scenario.code === null || scenario.timeout ? 2 : 1);
     }
   });
 });
@@ -965,6 +965,7 @@ describe("cache lease completion", () => {
     { signal: "SIGTERM", code: 143 },
     { signal: null, code: 143 },
     { signal: null, code: 0 },
+    { signal: null, code: 1 },
   ] as const)(
     "fails on the first no-output timeout without retrying (signal=$signal, code=$code)",
     async ({ signal, code }) => {
@@ -987,7 +988,7 @@ describe("cache lease completion", () => {
 
       await runTestProjects(exitBySignal, ["test/vitest/vitest.cli.config.ts"]);
 
-      expect(process.exitCode).toBe(143);
+      expect(process.exitCode).toBe(code === 0 || code === 1 ? 2 : 143);
       expect(commands.reader).toHaveBeenCalledTimes(1);
       expect(exitBySignal).not.toHaveBeenCalled();
       expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed /u));
@@ -1102,6 +1103,8 @@ describe("cache lease completion", () => {
 
   it.each([
     { outcome: "failure", scope: "local", expected: 3 },
+    { outcome: "infrastructure", scope: "local", expected: 2 },
+    { outcome: "infrastructure", scope: "ci-continued", expected: 2 },
     { outcome: "signal", scope: "local", expected: 2 },
     { outcome: "rejection", scope: "local", expected: 2 },
     { outcome: "failure", scope: "ci-focused", expected: 2 },
@@ -1196,7 +1199,7 @@ describe("cache lease completion", () => {
           first.reject(new Error("unverified group completion"));
         } else {
           first.resolve({
-            code: 1,
+            code: outcome === "infrastructure" ? 2 : 1,
             signal: outcome === "signal" ? "SIGTERM" : null,
             groupJoined,
           });
@@ -1225,7 +1228,9 @@ describe("cache lease completion", () => {
         }
       }
       if (outcome !== "rejection") {
-        expect(process.exitCode).toBe(outcome === "signal" ? 143 : 1);
+        expect(process.exitCode).toBe(
+          outcome === "signal" ? 143 : outcome === "infrastructure" ? 2 : 1,
+        );
       }
     },
   );
@@ -1265,19 +1270,20 @@ describe("test-projects build admission", () => {
           ? { kind: "ready", indexPath: "fixture-index" }
           : { kind: "stale", indexPath: "fixture-index", buildId: assetBuildId },
       );
-      await start(mixed ? [e2eTarget, avatarTarget] : [avatarTarget]);
-      await Promise.race([runtime.started, terminal.promise]);
-      const ui = createPreparationGate<number>(commands.prepare);
-      if (mixed) {
-        // E2E reuse still needs the UI's stricter current-head preparation.
-        commands.prepare.mockResolvedValueOnce(0);
-      }
+      const entry = start(mixed ? [e2eTarget, avatarTarget] : [avatarTarget]);
+      let ui: ReturnType<typeof createPreparationGate<number>> | undefined;
       try {
+        await Promise.race([runtime.started, entry]);
+        ui = createPreparationGate<number>(commands.prepare);
+        if (mixed) {
+          // E2E reuse still needs the UI's stricter current-head preparation.
+          commands.prepare.mockResolvedValueOnce(0);
+        }
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.uiAssets).not.toHaveBeenCalled();
         commands.runtimeBuildId = "rebuilt-runtime";
         runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
-        await Promise.race([ui.started, terminal.promise]);
+        await Promise.race([ui.started, entry]);
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
           args: ["scripts/ui.js", "build"],
@@ -1286,11 +1292,11 @@ describe("test-projects build admission", () => {
           path.resolve("dist/control-ui"),
           "rebuilt-runtime",
         );
-        assetBuildId = commands.runtimeBuildId;
+        assetBuildId = commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID;
       } finally {
         runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
-        ui.resolve(0);
-        await terminal.promise;
+        ui?.resolve(0);
+        await entry;
       }
       const outcome = await terminal.promise;
       if (outcome instanceof Error) {
@@ -1325,7 +1331,7 @@ describe("test-projects build admission", () => {
         ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
         ["scripts/ui.js", "build"],
       ]);
-      expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
+      expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 2);
       if (outcome === "still stale") {
         expect(await terminal.promise).toMatchObject({
           message: "Control UI setup left stale assets for runtime fixture-runtime",
@@ -1580,9 +1586,9 @@ describe("test-projects build admission", () => {
         }
         return { completion: readers.promise, getForwardedSignal: () => undefined };
       });
-      await start(e2e ? [...targets, e2eTarget] : targets);
+      const entry = start(e2e ? [...targets, e2eTarget] : targets);
       try {
-        await Promise.race([preparation.started, terminal.promise]);
+        await Promise.race([preparation.started, entry]);
         expect(commands.reader).not.toHaveBeenCalled();
         if (!e2e) {
           expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
@@ -1598,13 +1604,13 @@ describe("test-projects build admission", () => {
           preparation.resolve(outcome === "exit" ? 7 : 0);
         }
         if (outcome === "success") {
-          await Promise.race([readersStarted.promise, terminal.promise]);
+          await Promise.race([readersStarted.promise, entry]);
           expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1);
         }
       } finally {
         preparation.resolve(0);
         readers.resolve({ code: 0, signal: null });
-        await terminal.promise;
+        await entry;
       }
       if (outcome === "success") {
         expect(await terminal.promise).toMatch(/^\[test\] passed 2 Vitest shards/u);
@@ -1615,7 +1621,7 @@ describe("test-projects build admission", () => {
       if (e2e) {
         expect(commands.prepare).not.toHaveBeenCalled();
       }
-      expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 1);
+      expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 2);
     },
   );
 
@@ -1660,9 +1666,9 @@ describe("test-projects build admission", () => {
       if (mode === "prebuilt") {
         preparation.resolve({});
       }
-      await start([nativeHostTarget]);
+      const entry = start([nativeHostTarget]);
       try {
-        await Promise.race([preparation.started, terminal.promise]);
+        await Promise.race([preparation.started, entry]);
         if (mode !== "prebuilt") {
           expect(commands.reader).not.toHaveBeenCalled();
           expect(commands.prepareE2e).toHaveBeenCalledOnce();
@@ -1673,13 +1679,13 @@ describe("test-projects build admission", () => {
         } else {
           preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
         }
-        await terminal.promise;
+        await entry;
       }
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.prepareE2e).toHaveBeenCalledOnce();
       expect(commands.reader).toHaveBeenCalledTimes(mode === "failed build" ? 0 : 1);
       if (mode === "failed build") {
-        expect(process.exitCode).toBe(1);
+        expect(process.exitCode).toBe(2);
       } else {
         expect(commands.reader).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -1699,19 +1705,19 @@ describe("test-projects build admission", () => {
         vi.stubEnv(flag, "1");
       }
       const preparation = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
-      await start([
+      const entry = start([
         ...targets,
         e2eTarget,
         ...(flag ? [] : ["packages/sdk/src/app-sdk-external-boundary.e2e.test.ts"]),
       ]);
       try {
-        await Promise.race([preparation.started, terminal.promise]);
+        await Promise.race([preparation.started, entry]);
         expect(commands.prepareE2e).toHaveBeenCalledOnce();
         expect(commands.prepare).not.toHaveBeenCalled();
         expect(commands.reader).not.toHaveBeenCalled();
       } finally {
         preparation.resolve(flag ? {} : { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        await terminal.promise;
+        await entry;
       }
       expect(await terminal.promise).toMatch(/^\[test\] passed 3 Vitest shards/u);
       if (flag) {
@@ -1746,7 +1752,7 @@ describe("plugin batch build admission", () => {
     async ({ parallel, outcome }) => {
       const { resolveExtensionBatchPlan, createExtensionTestProcessTargetChunks } =
         await import("../../scripts/lib/extension-test-plan.mts");
-      const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch.mts");
+      const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
       const batch = resolveExtensionBatchPlan({
         extensionIds: outcome === 0 ? ["qa-lab", "matrix", "firecrawl"] : ["qa-lab", "matrix"],
       });
@@ -1925,7 +1931,7 @@ describe("plugin batch build admission", () => {
     async ({ ids = ["qa-lab"], args = [], include, build, configs }) => {
       const { resolveExtensionBatchPlan } =
         await import("../../scripts/lib/extension-test-plan.mts");
-      const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch.mts");
+      const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
       const env = include
         ? { OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("include.json", include) }
         : {};

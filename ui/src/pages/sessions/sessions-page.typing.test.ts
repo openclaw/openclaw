@@ -13,7 +13,12 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
+import {
+  createContext,
+  createGateway,
+  createRenderedPage,
+  reconnectPage,
+} from "./sessions-page.test-support.ts";
 
 function result(key: string): SessionsListResult {
   return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
@@ -458,7 +463,7 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(400);
         expect(requests).toHaveLength(2);
         if (retirement === "detach") {
-          document.body.append(page);
+          reconnectPage(page);
         } else if (retirement === "context") {
           const replacement = createGateway(client);
           replacementSessions = createTestSessionCapability(replacement.gateway);
@@ -555,14 +560,10 @@ describe("Sessions page typing ownership", () => {
       await edit("latest");
       setScope(null);
       await page.updateComplete;
-      const statusGroup = page.querySelector<HTMLElement & { value: string }>(
-        ".sessions-view-segment",
-      )!;
-      statusGroup.value = "archived";
-      statusGroup.dispatchEvent(new Event("change", { bubbles: true }));
+      const statusGroup = page.querySelector<HTMLElement>(".sessions-view-segment")!;
+      statusGroup.querySelector<HTMLInputElement>('input[value="archived"]')!.click();
       await page.updateComplete;
-      statusGroup.value = "all";
-      statusGroup.dispatchEvent(new Event("change", { bubbles: true }));
+      statusGroup.querySelector<HTMLInputElement>('input[value="all"]')!.click();
       await page.updateComplete;
       expect(requests).toHaveLength(2);
       expect(page.result).toBeNull();

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
@@ -7,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
@@ -44,6 +44,7 @@ import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { channelAvatarRevision } from "./channel-avatar-reference.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
@@ -58,6 +59,7 @@ import { isSessionPermissionChangePending } from "./session-permission-change.js
 import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   GatewaySessionModelSource,
@@ -98,6 +100,7 @@ export function readSessionRowInputs(params: {
   key: string;
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -110,6 +113,7 @@ export function readSessionRowInputs(params: {
   configuredAgentIds?: ReadonlySet<string>;
   agentId: string;
   skipTranscriptUsageFallback?: boolean;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
   includeSwarmChildren?: boolean;
 }) {
@@ -126,6 +130,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
@@ -150,6 +155,7 @@ export function readSessionRowInputs(params: {
           rowContext,
           agentId,
           storeAgentId: params.storeAgentId,
+          transcriptUsage: params.transcriptUsage,
         })
       : undefined;
   const { provider, model } = selectedModel;
@@ -197,6 +203,7 @@ export function readSessionRowInputs(params: {
     modelContextTokens: catalogEntry?.contextTokens,
     modelContextWindow: contextWindowProfile.contextTokens,
     allowAsyncLoad: false,
+    allowCacheLookup: false,
   });
   const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
@@ -256,7 +263,7 @@ export function readSessionRowInputs(params: {
         entry,
         provider,
         model,
-        agentHarnessId: thinkingProjection.agentRuntime.id,
+        agentHarnessId: thinkingProjection.capacityRuntime,
         resolvedContextTokens: contextWindowProfile.contextTokens
           ? Math.min(
               resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
@@ -339,7 +346,7 @@ export function resolveGatewaySessionActiveModel(params: {
           selectedModel: selectedModel.model,
           sessionEntry: params.entry,
           config: params.cfg,
-          terminalModel: params.terminalModel,
+          terminalModel: params.terminalModel ?? null,
           sessionScope: {
             agentId: params.storeAgentId ?? params.agentId,
             sessionKey: params.sessionKey,
@@ -362,11 +369,6 @@ export function resolveGatewaySessionActiveModel(params: {
   }).active
     ? { provider: active.provider, model: active.model }
     : undefined;
-}
-
-/** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
-function channelAvatarRevision(reference: string): string {
-  return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
 }
 
 /** Profile publications invalidate display facts independently of stored session metadata. */
@@ -454,7 +456,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
-  // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
     sessionModelRevision: sessionModelRevision(entry),
@@ -462,8 +463,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
     incognito: entry?.incognito,
-    spawnedBy: undefined,
-    controlOwnerSessionKey: undefined,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
@@ -528,7 +527,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
-    agentStatus: undefined,
     observerDigest: observerDigest
       ? {
           ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
@@ -565,24 +563,12 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
-    totalTokens: undefined,
-    totalTokensFresh: undefined,
-    goal: undefined,
-    estimatedCostUsd: undefined,
-    status: undefined,
-    subagentRunState: undefined,
-    hasActiveSubagentRun: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    lastRunError: undefined,
     providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
     parentSessionKey: entry?.parentSessionKey,
     parentSessionId: entry?.parentSessionId,
-    childSessions: undefined,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(
       entry?.responseUsage,
@@ -597,8 +583,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     }).mode,
     modelProvider: input.rowModelIdentity.provider,
     model: input.rowModelIdentity.model,
-    activeModelProvider: undefined,
-    activeModel: undefined,
     modelOverrideSource:
       input.selectedModel.storedOverrideSource === "parent"
         ? "inherited"
@@ -620,6 +604,12 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
+  // JSON omits undefined fields; keep the resident projection equally sparse.
+  for (const field in row) {
+    if (Reflect.get(row, field) === undefined) {
+      Reflect.deleteProperty(row, field);
+    }
+  }
   return {
     row,
     source: {
@@ -635,8 +625,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       identityProjection: input.identityProjection,
       configuredAgentIds: input.configuredAgentIds,
       lightweight: input.lightweight,
-      freshSessionTotalTokens: input.freshSessionTotalTokens,
       usageByFallbackModel: input.usageByFallbackModel,
+      freshSessionTotalTokens: input.freshSessionTotalTokens,
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,

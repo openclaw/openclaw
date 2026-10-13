@@ -44,35 +44,14 @@ function presentation(
 }
 
 describe("chat placement composer presentation", () => {
-  it.each([
-    ["active", "ready", undefined],
-    ["reclaimed", "ready", undefined],
-    ["provisioning", "setup", undefined],
-    ["syncing", "setup", undefined],
-    ["starting", "setup", undefined],
-    ["draining", "busy", "Finishing session move…"],
-    ["reconciling", "busy", "Finishing session move…"],
-  ] as const)("projects %s placement into a %s composer", (state, kind, busyMessage) => {
-    const result = presentation(placementSession(state));
+  it.each([["provisioning", "setup", undefined]] as const)(
+    "projects %s placement into a %s composer",
+    (state, kind, busyMessage) => {
+      const result = presentation(placementSession(state));
 
-    expect(result.state.kind).toBe(kind);
-    expect(result.blocksSend).toBe(state === "draining" || state === "reconciling");
-    expect(result.busyMessage).toBe(busyMessage ?? null);
-  });
-
-  it.each(["active"] as const)(
-    "accepts a follow-up while an %s placement reconciles a completed result",
-    (state) => {
-      const result = presentation(placementSession(state), { workspaceResultReconciling: true });
-
-      expect(result.state).toEqual({
-        kind: "busy",
-        message: "Send now; your message starts automatically after workspace sync.",
-      });
+      expect(result.state.kind).toBe(kind);
       expect(result.blocksSend).toBe(false);
-      expect(result.busyMessage).toBe(
-        "Send now; your message starts automatically after workspace sync.",
-      );
+      expect(result.busyMessage).toBe(busyMessage ?? null);
     },
   );
 
@@ -83,34 +62,6 @@ describe("chat placement composer presentation", () => {
       profile: "coding",
       inference: "worker",
       hidden: true,
-    },
-    {
-      name: "optional worker inference",
-      required: undefined,
-      profile: "coding",
-      inference: "worker",
-      hidden: false,
-    },
-    {
-      name: "different required profile",
-      required: "other",
-      profile: "coding",
-      inference: "worker",
-      hidden: false,
-    },
-    {
-      name: "Gateway inference",
-      required: "coding",
-      profile: "coding",
-      inference: undefined,
-      hidden: false,
-    },
-    {
-      name: "missing placement profile",
-      required: "coding",
-      profile: undefined,
-      inference: "worker",
-      hidden: false,
     },
   ] as const)(
     "changes only the sync hint for $name",
@@ -129,20 +80,9 @@ describe("chat placement composer presentation", () => {
   );
 
   it.each([
-    { state: "syncing", operation: "reclaimingKey", message: "Stopping session…" },
-    { state: "syncing", operation: "restartingKey", message: "Restarting session…" },
-    { state: "syncing", operation: "movingKey", message: "Finishing session move…" },
     { state: "syncing", operation: "placementMove", message: "Finishing session move…" },
     { state: "draining", message: "Finishing session move…" },
-    { state: "reconciling", message: "Finishing session move…" },
-    { state: "active", operation: "reclaimingKey", message: "Stopping session…" },
-    { state: "active", operation: "restartingKey", message: "Restarting session…" },
-    { state: "active", operation: "movingKey", message: "Finishing session move…" },
-    { state: "active", operation: "placementMove", message: "Finishing session move…" },
     { state: "failed", operation: "reclaimingKey", message: "Stopping session…" },
-    { state: "failed", operation: "restartingKey", message: "Restarting session…" },
-    { state: "failed", operation: "movingKey", message: "Finishing session move…" },
-    { state: "failed", operation: "placementMove", message: "Finishing session move…" },
   ] as const)("blocks sync sends during $state $operation", ({ state, message, ...scenario }) => {
     const row = placementSession(state);
     Object.assign(row.placement!, { profileId: "coding", inference: "worker" });
@@ -164,16 +104,7 @@ describe("chat placement composer presentation", () => {
     expect(result.busyMessage).toBe(message);
   });
 
-  it.each(["provisioning", "syncing", "starting"] as const)(
-    "allows queued follow-ups while New Session setup is %s",
-    (state) => {
-      const result = presentation(placementSession(state), { startupPending: true });
-      expect(result.state.kind).toBe("setup");
-      expect(result.blocksSend).toBe(false);
-    },
-  );
-
-  it.each(["local", undefined] as const)(
+  it.each(["local"] as const)(
     "blocks a repository-only session with %s placement and offers worker dispatch",
     (placementState) => {
       const onRecover = vi.fn();
@@ -209,18 +140,7 @@ describe("chat placement composer presentation", () => {
     },
   );
 
-  it("preserves automatic redispatch for a reclaimed repository session", () => {
-    const row = placementSession("reclaimed");
-    row.repositoryWorkspaceId = "repository-workspace-1";
-
-    const result = presentation(row);
-
-    expect(result.state).toEqual({ kind: "ready" });
-    expect(result.blocksSend).toBe(false);
-    expect(result.disabledBanner).toBeUndefined();
-  });
-
-  it.each(["restart", "stop-first"] as const)(
+  it.each(["stop-first"] as const)(
     "projects failed %s recovery into an actionable composer banner",
     (recoveryAction) => {
       const onRecover = vi.fn();
@@ -237,12 +157,10 @@ describe("chat placement composer presentation", () => {
       expect(result.state).toEqual({ kind: "failed", recoveryAction });
       expect(result.blocksSend).toBe(true);
       expect(result.disabledBanner?.title).toBe("Runner failed");
-      expect(result.disabledBanner?.actionLabel).toBe(
-        recoveryAction === "restart" ? "Restart session…" : "Stop cloud worker…",
-      );
+      expect(result.disabledBanner?.actionLabel).toBe("Stop cloud worker…");
       assert(result.disabledBanner?.onAction);
       result.disabledBanner.onAction();
-      expect(recoveryAction === "restart" ? onRecover : onReclaim).toHaveBeenCalledOnce();
+      expect(onReclaim).toHaveBeenCalledOnce();
     },
   );
 

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { Tool } from "./types.js";
 import { validateToolArguments } from "./validation.js";
@@ -38,6 +38,69 @@ describe("validateToolArguments", () => {
       }),
     ).toThrow("  - room.~1%2F.leaf:");
   });
+
+  it.each(["anyOf", "oneOf", "TypeBox"])(
+    "preserves accepted %s values before coercing other branches or sibling fields",
+    (form) => {
+      const cases: { branches: TSchema[]; value: unknown }[] = [
+        { branches: [Type.Number(), Type.String()], value: "00123" },
+        { branches: [Type.String(), Type.Number()], value: 42 },
+        { branches: [Type.String(), Type.Boolean()], value: false },
+        { branches: [Type.Array(Type.Integer()), Type.String()], value: '["2"]' },
+        {
+          branches: [Type.Object({ id: Type.Integer() }), Type.Object({ id: Type.String() })],
+          value: { id: "00123" },
+        },
+      ];
+      for (const { branches, value } of cases) {
+        for (const alternatives of [branches, branches.toReversed()]) {
+          const schema = form === "TypeBox" ? Type.Union(alternatives) : { [form]: alternatives };
+          const validate = validator("union-value", {
+            type: "object",
+            properties: { value: schema, count: { type: "integer" } },
+            required: ["value", "count"],
+          });
+          const input = { value: structuredClone(value), count: "2" };
+          expect(validate(input)).toEqual({ value, count: 2 });
+          expect(input).toEqual({ value, count: "2" });
+        }
+      }
+    },
+  );
+
+  it.each(["anyOf", "oneOf"])(
+    "recovers unmatched %s branches while preserving accepted nested values",
+    (keyword) => {
+      const validate = validator("nested-union", {
+        type: "object",
+        properties: {
+          value: {
+            [keyword]: [
+              {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { [keyword]: [{ type: "number" }, { type: "string" }] },
+                    count: { type: "integer" },
+                  },
+                  required: ["id", "count"],
+                },
+              },
+              { type: "boolean" },
+            ],
+          },
+        },
+      });
+      expect(validate({ value: [{ id: "00123", count: "2" }] })).toEqual({
+        value: [{ id: "00123", count: 2 }],
+      });
+      expect(validate({ value: "true" })).toEqual({ value: true });
+      expect(() => validate({ value: [{ id: "00123", count: "invalid" }] })).toThrow(
+        /Validation failed/,
+      );
+    },
+  );
 
   it("keeps invalid non-null values out of nullable integer schemas", () => {
     for (const union of [
@@ -196,6 +259,44 @@ describe("validateToolArguments", () => {
     );
   });
 
+  it("preserves an accepted union value during TypeBox record recovery", () => {
+    const tool: Tool = {
+      name: "union-record",
+      description: "Preserve a string while recovering record values",
+      parameters: Type.Object({
+        value: Type.Union([Type.Number(), Type.String()]),
+        counts: Type.Record(Type.String(), Type.Integer()),
+      }),
+    };
+    expect(
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "union-record-call",
+        name: tool.name,
+        arguments: { value: "00123", counts: { first: "1" } },
+      }),
+    ).toEqual({ value: "00123", counts: { first: 1 } });
+  });
+
+  it("still rejects values accepted by multiple oneOf branches", () => {
+    const tool: Tool = {
+      name: "exclusive-union",
+      description: "Require exactly one matching branch",
+      parameters: {
+        type: "object",
+        properties: { value: { oneOf: [{ type: "number" }, { type: "integer" }] } },
+      },
+    };
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "exclusive-call",
+        name: tool.name,
+        arguments: { value: 1 },
+      }),
+    ).toThrow(/Validation failed/);
+  });
+
   it("preserves null in anyOf [{type: string}, {type: null}] without coercing to empty string (#96716)", () => {
     const validate = validator("nullable-tool", {
       type: "object",
@@ -217,6 +318,17 @@ describe("validateToolArguments — root references", () => {
   function validate(parameters: Tool["parameters"], value: unknown) {
     return validator("refs", parameters)({ value });
   }
+
+  it.each(["anyOf", "oneOf"])("preserves values accepted by a referenced %s branch", (keyword) => {
+    const parameters = {
+      type: "object",
+      properties: {
+        value: { [keyword]: [{ $ref: "#/$defs/number" }, { $ref: "#/$defs/text" }] },
+      },
+      $defs: { number: { type: "number" }, text: { type: "string" } },
+    };
+    expect(validate(parameters, "00123")).toEqual({ value: "00123" });
+  });
 
   it.each(["anyOf", "oneOf"])("checks %s alternatives in their root context", (keyword) => {
     const parameters = {
@@ -242,6 +354,14 @@ describe("validateToolArguments — root references", () => {
     for (const options of [{}, { $defs: { unused: { type: "string" } } }]) {
       const parameters = Type.Object({ value }, options);
       expect(validate(parameters, "02")).toEqual({ value: "02" });
+      const recoverable = Type.Object(
+        {
+          value: Type.Union([Type.Refine(Type.Number(), (number) => number >= 10), Type.Boolean()]),
+        },
+        options,
+      );
+      expect(() => validate(recoverable, "02")).toThrow(/Validation failed/);
+      expect(validate(recoverable, "12")).toEqual({ value: 12 });
     }
   });
 

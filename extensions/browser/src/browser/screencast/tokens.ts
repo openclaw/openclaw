@@ -9,7 +9,7 @@ export type BrowserScreencastTokenParams = {
   maxWidth: number;
   maxHeight: number;
   quality: number;
-  lifecycleGeneration: number;
+  profileSignal: AbortSignal;
   lifecycleSignal: AbortSignal;
   requesterSignal?: AbortSignal;
   isRequesterCurrent?: () => boolean;

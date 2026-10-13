@@ -28,7 +28,7 @@ import {
 } from "./main-session-restart-recovery-diagnostics.js";
 import {
   loadExpectedRestartRecoveryTarget,
-  captureExpectedRestartRecoveryCurrent,
+  prepareExpectedRestartRecoveryCurrent,
 } from "./main-session-restart-recovery-exact-target.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
@@ -95,6 +95,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   agentIds?: ReadonlySet<string>;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
+  onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
   handledSessionKeys?: Set<string>;
   activeSessionIds?: Iterable<string>;
@@ -183,6 +184,8 @@ async function recoverExpectedRestartRecovery(
     expectedTarget: ExpectedRestartRecoveryTarget;
     lifecycleGeneration?: string;
     observationOnly?: boolean;
+    onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
+    onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
     shouldContinue?: () => boolean;
     signal?: AbortSignal;
     stateDir?: string;
@@ -193,18 +196,17 @@ async function recoverExpectedRestartRecovery(
     ...params.expectedTarget,
     claim: params.expectedTarget.claim && { ...params.expectedTarget.claim },
   };
-  const isCurrent = captureExpectedRestartRecoveryCurrent({
+  const current = await prepareExpectedRestartRecoveryCurrent({
     expected,
     storePath: params.storePath,
   });
+  using _ = { [Symbol.dispose]: current.release };
+  const { isCurrent } = current;
   const preparation = prepareRestartRecovery(params.gatewayRuntime, params.signal);
   if (preparation && (await preparation) !== undefined) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  if (
-    !(await loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath })) ||
-    !isCurrent()
-  ) {
+  if (!isCurrent()) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
   return (
@@ -307,6 +309,24 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
   const startupCheckedStorePaths = params.startupCheckedStorePaths ?? new Set<string>();
+  // Only candidates observed by this startup can wake on later preparation commits.
+  type PendingPreparation = {
+    target: ExhaustedRestartRecoveryTarget;
+    queued: boolean;
+    changed: boolean;
+  };
+  const pendingPreparation = new Map<string, Map<string, PendingPreparation>>();
+  const retainPendingPreparation = (target: ExhaustedRestartRecoveryTarget) => {
+    const stores =
+      pendingPreparation.get(target.sessionKey) ?? new Map<string, PendingPreparation>();
+    const pending = stores.get(target.storePath);
+    if (pending) {
+      pending.target = target;
+    } else {
+      stores.set(target.storePath, { target, queued: false, changed: false });
+    }
+    pendingPreparation.set(target.sessionKey, stores);
+  };
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
     agentIds?: ReadonlySet<string>,
@@ -344,6 +364,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           },
           stateDir: params.stateDir,
           handledSessionKeys,
+          onPreparationPending: retainPendingPreparation,
           excludedStoreTargets: new Set(marking.failedTargets?.map(restartRecoveryStoreTargetKey)),
           lifecycleGeneration,
           shouldContinue,
@@ -442,10 +463,117 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       .filter((refusal) => refusal.code === "agent-database-inspection-pending")
       .map((refusal) => refusal.agentId),
   );
-  let run = Promise.resolve().then(() => runRecovery());
+  const recoverPreparation = async (target: ExhaustedRestartRecoveryTarget) => {
+    let exhausted = false;
+    let pending = false;
+    const recover = (observationOnly = false) => {
+      pending = false;
+      return runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          recoverExpectedRestartRecovery({
+            ...target,
+            expectedTarget: target,
+            cfg: params.getConfig(),
+            stateDir: params.stateDir,
+            gatewayRuntime: params.gatewayRuntime,
+            lifecycleGeneration,
+            shouldContinue,
+            observationOnly,
+            signal: abortController.signal,
+            onPreparationPending: () => {
+              pending = true;
+            },
+            onExhaustedTarget: () => {
+              exhausted = true;
+            },
+          }),
+        "main-session:preparation-recovery",
+        abortController.signal,
+      );
+    };
+    await runRecoveryRetries({
+      initialDelayMs: 0,
+      maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
+      shouldContinue,
+      signal: abortController.signal,
+      attempt: async (finalAttempt) => {
+        exhausted = false;
+        let result = await recover();
+        if (finalAttempt && exhausted) {
+          result = await recover(true);
+        }
+        if (finalAttempt && result.failed > 0) {
+          mainSessionRecoveryLog.warn(
+            `main-session preparation recovery gave up for ${target.sessionKey}`,
+          );
+        }
+        return result.failed === 0;
+      },
+      onError: (error, finalAttempt) => {
+        if (finalAttempt) {
+          mainSessionRecoveryLog.warn(`main-session preparation recovery failed: ${String(error)}`);
+        }
+      },
+    });
+    return pending;
+  };
+  const drainPreparation = async (pending: PendingPreparation) => {
+    try {
+      do {
+        pending.changed = false;
+        if (!(await recoverPreparation(pending.target))) {
+          const { sessionKey, storePath } = pending.target;
+          const stores = pendingPreparation.get(sessionKey);
+          stores?.delete(storePath);
+          if (stores?.size === 0) {
+            pendingPreparation.delete(sessionKey);
+          }
+          return;
+        }
+        // A preparation commit during the read must wake its still-pending result.
+      } while (pending.changed);
+    } finally {
+      pending.queued = false;
+    }
+  };
+  let run = Promise.resolve().then(async () => {
+    await runRecovery();
+    // The scan can precede a preparation commit. Recheck its captured candidates once.
+    const pending: PendingPreparation[] = [];
+    for (const stores of pendingPreparation.values()) {
+      for (const target of stores.values()) {
+        pending.push(target);
+      }
+    }
+    for (const target of pending) {
+      if (!target.queued) {
+        target.queued = true;
+        await drainPreparation(target);
+      }
+    }
+  });
   const unsubscribe = sessionChanges.subscribe(
     AsyncLocalStorage.bind((change) => {
-      if (!shouldContinue() || !isSessionStoreTopologyChange(change)) {
+      if (!shouldContinue()) {
+        return;
+      }
+      if ("sessionKey" in change) {
+        const stores = pendingPreparation.get(change.sessionKey);
+        if (!stores) {
+          return;
+        }
+        for (const pending of stores.values()) {
+          // Publications can use a physical SQLite path instead of the captured logical store.
+          // They only wake recovery; the exact reader and admission revalidate the target.
+          pending.changed = true;
+          if (!pending.queued) {
+            pending.queued = true;
+            run = run.then(() => drainPreparation(pending));
+          }
+        }
+        return;
+      }
+      if (!isSessionStoreTopologyChange(change)) {
         return;
       }
       const admitted = new Set<string>();
@@ -459,9 +587,6 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           admitted.add(agentId);
         }
       }
-      if (pendingAgents.size === 0) {
-        unsubscribe();
-      }
       if (admitted.size > 0) {
         // Admission can finish after the first scan. Retain this startup's
         // cutoff and serial preparation without borrowing the publisher's scope.
@@ -469,12 +594,10 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       }
     }),
   );
-  if (pendingAgents.size === 0) {
-    unsubscribe();
-  }
   return {
     stop: async () => {
       unsubscribe();
+      pendingPreparation.clear();
       unregisterRotation();
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.

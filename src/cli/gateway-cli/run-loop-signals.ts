@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -33,6 +34,7 @@ export function createGatewayRunSignals(params: {
   logger: Pick<SubsystemLogger, "debug" | "info" | "warn" | "error">;
   timeoutMs: number;
   getIteration: () => object;
+  isTerminal: () => boolean;
   isForcedExitStarted: () => boolean;
   isForegroundUpdateClosed: () => boolean;
   isRuntimeResetPending: () => boolean;
@@ -40,7 +42,7 @@ export function createGatewayRunSignals(params: {
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
-  forceExit: (reason: string) => Promise<void>;
+  forceExit: (reason: string) => void;
   request: (
     action: GatewayRunSignalAction,
     signal: GatewayRunSignalRequest["signal"],
@@ -97,7 +99,10 @@ export function createGatewayRunSignals(params: {
     const acceptedAtMs = performance.now();
     signalAdmission = beginGatewayRestartSignalAdmission() ?? signalAdmission;
     const isCurrent = () =>
-      signalsActive && !params.isForcedExitStarted() && params.getIteration() === iteration;
+      signalsActive &&
+      !params.isTerminal() &&
+      !params.isForcedExitStarted() &&
+      params.getIteration() === iteration;
     const assertCurrent = () => {
       if (!isCurrent()) {
         throw new Error("Gateway signal belongs to a retired lifecycle iteration");
@@ -119,7 +124,7 @@ export function createGatewayRunSignals(params: {
     const deadline = consumeIntent
       ? setTimeout(
           () => {
-            void params.forceExit("gateway.restart_signal_settlement_timeout");
+            params.forceExit("gateway.restart_signal_settlement_timeout");
           },
           Math.max(0, params.timeoutMs - (performance.now() - acceptedAtMs)),
         )
@@ -164,7 +169,12 @@ export function createGatewayRunSignals(params: {
       }
     });
   };
-  const onSigterm = () => {
+  // In-process emitters can retire their async scope during shutdown. The loop
+  // owns signal consumption and restart, including the next state-lock acquisition.
+  const onSigterm = AsyncLocalStorage.bind(() => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGTERM");
     gatewayLog.debug("signal SIGTERM received");
     const terminalHostedStop = params.getTerminalHostedStop();
@@ -212,8 +222,11 @@ export function createGatewayRunSignals(params: {
         });
       },
     );
-  };
-  const onSigint = () => {
+  });
+  const onSigint = AsyncLocalStorage.bind(() => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGINT");
     gatewayLog.debug("signal SIGINT received");
     if (params.isForcedExitStarted()) {
@@ -226,7 +239,7 @@ export function createGatewayRunSignals(params: {
         request("stop", "SIGINT", undefined, undefined, undefined, { acceptedAtMs }),
       (error) => gatewayLog.error(`failed to handle SIGINT: ${formatErrorMessage(error)}`),
     );
-  };
+  });
   const restartSignalFailed = (err: unknown, releaseToken = true) => {
     gatewayLog.error(`SIGUSR2 handler failed: ${formatErrorMessage(err)}`);
     if (!releaseToken) {
@@ -245,7 +258,10 @@ export function createGatewayRunSignals(params: {
       }
     }
   };
-  const onRestartSignal = () => {
+  const onRestartSignal = AsyncLocalStorage.bind(() => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGUSR2");
     gatewayLog.debug("signal SIGUSR2 received");
     if (params.isForegroundUpdateClosed()) {
@@ -298,7 +314,7 @@ export function createGatewayRunSignals(params: {
     } catch (err) {
       restartSignalFailed(err);
     }
-  };
+  });
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);

@@ -186,7 +186,7 @@ describe("exec foreground failures", () => {
     expect(text).toMatch(/timed out/i);
     expect(text).toContain("external side effects may already have completed");
     expect(text).toContain("Verify the resulting state before retrying");
-    expect(text).toContain("Do not automatically rerun non-idempotent commands");
+    expect(text).toContain("Do not automatically rerun commands unless repeating them is safe");
     expect(text).toContain("known to be safe to retry");
     expect(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
     expect(text).not.toContain("OOM-score wrapper");

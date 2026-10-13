@@ -13,7 +13,7 @@ import {
   type PluginHelpReference,
 } from "../custodian/plugin-help.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 
 /** The page publishes its loaded selection; the existing Ask store owns conversation state. */
 export class PluginHelpController implements ReactiveController {

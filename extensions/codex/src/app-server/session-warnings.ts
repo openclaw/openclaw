@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { patchSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  prepareSessionEntryPatch,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { readCodexAppServerWarningMessage } from "./client-notifications.js";
 import { readCodexNotificationScope } from "./notification-correlation.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
@@ -72,7 +75,7 @@ export async function projectCodexSessionWarning(params: {
     return await params.project();
   };
   try {
-    await patchSessionEntry({
+    await prepareSessionEntryPatch({
       agentId: session.agentId,
       sessionKey: session.sessionKey,
       storePath: session.storePath,
@@ -81,7 +84,7 @@ export async function projectCodexSessionWarning(params: {
       skipMaintenance: true,
       // The canonical session write FIFO serializes the read/project/acknowledge
       // sequence across attempts. No SQLite transaction is held while projecting.
-      update: async (entry) => {
+      prepare: async (entry) => {
         foundSession = true;
         params.assertCurrent();
         if (

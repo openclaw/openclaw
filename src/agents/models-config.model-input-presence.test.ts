@@ -152,6 +152,7 @@ describe("models config input presence", () => {
         for (let pass = 0; pass < 2; pass++) {
           const plan = writePlan(
             await planOpenClawModelsJson({
+              authStore: { version: 1, profiles: {} },
               context: {
                 cfg,
                 discoveryAuthConfig: cfg,

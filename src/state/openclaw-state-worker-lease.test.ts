@@ -7,6 +7,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { Actor } from "../infra/sqlite-worker-broker.types.js";
 import { createSqliteWorkerClient } from "../infra/sqlite-worker-client.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -118,6 +119,10 @@ afterEach(() => {
 });
 
 function createLeaseFixture() {
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  custody.post();
   const actor: Actor = {
     nativeStopped: Promise.resolve(),
     markNativeStopped() {},
@@ -132,7 +137,7 @@ function createLeaseFixture() {
     },
     references: 1,
     opened: Promise.resolve(),
-    openDispatch: { dispatched: true },
+    openDispatch: { custody },
     initialized: true,
     backendClosed: false,
   };

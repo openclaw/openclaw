@@ -16,8 +16,10 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   resolveUiConversationIdentity,
   scopedSessionArtifactKey,
+  uiConversationMatches,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -46,6 +48,25 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   private typingRequestSentAt?: number;
   private pendingTypingRequest?: () => void;
 
+  protected invalidateSessionSharing(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const event = readSessionChangedEvent(payload);
+    const states = new Map(this.sessionSharingStates);
+    for (const cacheKey of states.keys()) {
+      const [agentId, sessionKey] = cacheKey.split("\0");
+      if (event && !uiConversationMatches(state, sessionKey, event.key, event.agentId, agentId)) {
+        continue;
+      }
+      // Removing the request slot also fences reads started before the change.
+      states.delete(cacheKey);
+      this.sessionSharingHydrationTargets.delete(cacheKey);
+    }
+    this.sessionSharingStates = states;
+  }
+
   protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
     const sessionId = session?.sessionId?.trim();
     if (!session || !sessionId || !this.presented || !canManageChatSessionSharing(session)) {
@@ -60,8 +81,9 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
     const states = new Map(this.sessionSharingStates);
-    states.delete(cacheKey);
-    this.sessionSharingStates = states;
+    if (states.delete(cacheKey)) {
+      this.sessionSharingStates = states;
+    }
     // Selecting a new generation under the same key must supersede an older
     // in-flight read. loadSessionSharing owns the connection and instance guards.
     void this.loadSessionSharing(session, true);
@@ -154,7 +176,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     ) {
       this.sessionSuggestions = [];
       this.sessionSuggestionRole = undefined;
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -177,7 +199,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       }
       this.sessionSuggestions = result.suggestions;
       this.sessionSuggestionRole = result.role;
-      this.requestUpdate();
+      this.chatState.requestBackgroundUpdate();
     } catch {
       if (
         requestVersion === this.sessionSuggestionsRequestVersion &&
@@ -185,7 +207,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         this.sessionSuggestions = [];
         this.sessionSuggestionRole = undefined;
-        this.requestUpdate();
+        this.chatState.requestBackgroundUpdate();
       }
     }
   }
@@ -219,7 +241,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       );
     }
     this.sessionSuggestionBusyIds.delete(event.suggestion.id);
-    this.requestUpdate();
+    this.chatState.requestBackgroundUpdate();
     if (shouldRefresh) {
       void this.refreshSessionSuggestions();
     }

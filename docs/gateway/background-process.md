@@ -32,6 +32,7 @@ Behavior:
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail. On the Gateway and in its sandbox, a yielded handle does not make an ordinary command independent: the browser's **Stop** button and typed `/stop` cancel the selected request's commands. Stop waits for process cleanup and reports when cleanup could not be confirmed. Completed output remains available, and canceled commands do not emit a new completion notification. Managed workers retain the separate behavior described below.
 - Use `background: true` only for a deliberately independent service. Request Stop leaves that service running; use its process handle to stop it separately. Normal turn completion also preserves ordinary commands that are still running.
 - Launch failures return the operating-system error and release worker cleanup even when no process starts.
+- Native Windows command shells retain `SystemRoot` when launched with a replacement environment, including on ARM64. Other omitted variables stay absent, and an explicitly supplied `SystemRoot` takes precedence.
 - Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
 - With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
@@ -41,7 +42,7 @@ Behavior:
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 - For long-running work that starts now: start it once and rely on automatic completion wake (when enabled). The wake fires when the command emits output or fails, and on chat channels also when it exits cleanly with no output.
-- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a deterministic notification filter, and it does not disable the completion turn.
+- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn.
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
@@ -162,7 +163,7 @@ service relays also retain their own parent-loss cleanup.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
 
-Canonical credential readers also use the broker. If it confirms that a reader
+Readers of stored credentials also use the broker. If it confirms that a reader
 never started, the read falls back once to a local process with the original
 environment and working directory. Cancellation, timeouts, uncertain launches, and
 cleanup failures do not trigger a retry. Snapshot-backed credential readers keep

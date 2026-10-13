@@ -14,6 +14,7 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import { livePresentation, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import "../../../components/tooltip.ts";
@@ -22,6 +23,8 @@ import {
   renderGitHubPublicationAction,
   renderGitHubPublicationDetails,
 } from "./chat-github-publication.ts";
+
+registerGitHubEnglish();
 
 const DISMISSED_STORAGE_KEY = "openclaw.chat.dismissedPullRequests";
 // Bounds localStorage growth: dismissals for the oldest sessions fall off
@@ -362,7 +365,7 @@ export function renderChatPullRequests(props: {
     </div>`;
   }
   if (props.pullRequests.length === 0) {
-    return nothing;
+    return null;
   }
   const recovery =
     retainedPublication && (!published || publication?.error) ? publication : undefined;

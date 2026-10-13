@@ -966,14 +966,6 @@ describe("dispatchReplyFromConfig", () => {
       (_configuredPath?: unknown, options?: { agentId?: string }) =>
         options?.agentId === "opencode" ? targetStorePath : sourceStorePath,
     );
-    sessionStoreMocks.loadSessionStore.mockImplementation(
-      (storePath?: string) => (storePath ? stores[storePath] : undefined) ?? {},
-    );
-    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
-      (params?: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
-        existing: params?.store[params.sessionKey],
-      }),
-    );
     sessionStoreMocks.loadSessionEntry.mockImplementation((paramsUnknown: unknown) => {
       const params = paramsUnknown as { sessionKey: string; storePath: string };
       return stores[params.storePath]?.[params.sessionKey];

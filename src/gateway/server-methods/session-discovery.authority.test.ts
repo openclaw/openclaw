@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -21,8 +22,9 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 const { discovery } = vi.hoisted(() => ({ discovery: vi.fn(async () => {}) }));
 // Library storage, workspace discovery, and exec-policy storage have separate owners.
+// mock-isolation: Discovery authority tests isolate exec-policy storage from the session authorization boundary.
 vi.mock("../../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 vi.mock("../../skills/discovery/chat-commands.js", () => ({
   prepareSkillCommandsForAgents: vi.fn(async () => {
@@ -83,6 +85,7 @@ async function withDiscoveryState(
       skills: { load: { watch: false } },
       agents: { entries: { main: { workspace: state.workspaceDir } } },
     };
+    setRuntimeConfigSnapshot(cfg);
     await seed();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
@@ -96,6 +99,7 @@ async function withDiscoveryState(
         projection,
         setConfig: (value) => {
           cfg = value;
+          setRuntimeConfigSnapshot(cfg);
         },
         async call(method, client, hasCurrentClientAuthority) {
           const responses: Parameters<RespondFn>[] = [];

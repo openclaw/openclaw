@@ -172,3 +172,15 @@ export function migrateCanonicalSessionWriterValidation(db: DatabaseSync): void 
     UPDATE session_key_contract SET canonical_ready = NULL WHERE id = 1;
   `);
 }
+
+export function seedCanonicalSessionValidationPending(db: DatabaseSync): void {
+  // Migration records work only; the canonical owner validates and certifies row contents.
+  db.exec(`
+    INSERT INTO session_canonical_validation_pending (session_key)
+    SELECT node.session_key FROM session_nodes AS node
+    WHERE NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+  `);
+}

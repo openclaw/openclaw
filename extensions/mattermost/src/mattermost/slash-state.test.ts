@@ -362,26 +362,6 @@ describe("slash-state request routing", () => {
     );
   });
 
-  it("routes by registered team and command when token lookup misses", async () => {
-    activate({
-      accountId: "a1",
-      tokens: ["old-token"],
-      commands: [createRegisteredCommand()],
-    });
-    activate({
-      accountId: "a2",
-      tokens: ["other-token"],
-      commands: [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
-    });
-
-    const result = await routeSlashRequest({
-      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
-    });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toBe("a1");
-  });
-
   it("rejects a registered team and command shared by multiple accounts", async () => {
     activate({
       accountId: "a1",

@@ -6,14 +6,14 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
-import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
-import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
@@ -22,7 +22,7 @@ import {
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
@@ -47,7 +47,6 @@ import {
   type CronCreatorToolAllowlistEntry,
   type CronToolsAllowCaptureRef,
 } from "../agents/tools/cron-tool.js";
-import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
 import {
   hasSessionControlAuthority,
@@ -55,9 +54,11 @@ import {
 } from "../agents/tools/sessions-operator-authority.js";
 import type { SkillWorkshopRunOptions } from "../agents/tools/skill-workshop-tool-factory.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -96,6 +97,7 @@ export async function resolveGatewayScopedTools(
     agentThreadId?: string;
     senderIsOwner?: boolean;
     admittedRunContext?: AdmittedRunContext;
+    sessionEventSourcePolicy?: SessionEventSourcePolicy;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -200,7 +202,7 @@ export async function resolveGatewayScopedTools(
   } = configuredToolPolicies;
   const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const senderId = params.channelContext?.sender?.id;
-  const requesterPolicies = resolveGatewayRequesterToolPolicies(params, {
+  const requesterPolicies = await resolveGatewayRequesterToolPolicies(params, {
     runtimePolicySessionKey,
     policyAgentId,
     nodeExecSurface,
@@ -211,7 +213,7 @@ export async function resolveGatewayScopedTools(
     requesterPolicies.inheritedToolPolicySource === "sender"
       ? params.sessionPermissionPolicy
       : undefined;
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: sessionAgentId,
@@ -358,6 +360,7 @@ export async function resolveGatewayScopedTools(
   });
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
+    computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
@@ -394,13 +397,6 @@ export async function resolveGatewayScopedTools(
       : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
-    questionPrompt: createChannelQuestionPromptDelivery({
-      cfg: params.cfg,
-      channel: params.messageProvider,
-      to: params.currentChannelId ?? params.agentTo,
-      accountId: params.accountId,
-      threadId: params.currentThreadTs ?? params.agentThreadId,
-    }),
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
@@ -436,14 +432,20 @@ export async function resolveGatewayScopedTools(
   assertCurrent();
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
-      ? resolveExecDefaults({
-          cfg: params.cfg,
-          sessionEntry: params.execSession,
-          execOverrides: params.execOverrides,
-          agentId: policyAgentId,
-          sessionKey: runtimePolicySessionKey,
-          sandboxAvailable: sandboxed,
-        })
+      ? await resolvePreparedExecDefaultsAsync(
+          prepareExecDefaults(
+            {
+              cfg: params.cfg,
+              sessionEntry: params.execSession,
+              execOverrides: params.execOverrides,
+              agentId: policyAgentId,
+              sessionKey: runtimePolicySessionKey,
+              sandboxAvailable: sandboxed,
+            },
+            sandboxRuntime,
+          ),
+          loadExecApprovalsReadOnlyAsync,
+        )
       : undefined;
   const nodeExecDefaults =
     nodeExecSurface &&
@@ -460,8 +462,9 @@ export async function resolveGatewayScopedTools(
   const includeMediatedShellTools = mediatedToolFamilies.has("shell");
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
-      ? await createOpenClawCodingToolsAsync({
+      ? await createOpenClawCodingToolsInternalAsync({
           ...commonToolOptions(),
+          sessionEventSourcePolicy: params.sessionEventSourcePolicy,
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,

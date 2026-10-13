@@ -509,7 +509,7 @@ describe("Bun SQLite library selection", () => {
     expect(f.select).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the runtime default when no library exists, including a blank override", () => {
+  it("refuses Apple's runtime library when no library exists, including a blank override", () => {
     const f = fixture({
       exists: vi.fn(() => false),
       probe: vi.fn(() => {
@@ -517,11 +517,30 @@ describe("Bun SQLite library selection", () => {
       }),
       env: { OPENCLAW_SQLITE_LIBRARY: "  " },
     });
-    const selection = f.ensure();
-    expect(selection).toEqual({ source: "runtime" });
-    expect(f.ensure()).toBe(selection);
+    const refusal =
+      `No supported SQLite library for Bun on macOS (${process.arch}). ` +
+      "Apple's system SQLite fails OpenClaw's read-only database connections. " +
+      `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`;
+    expect(() => f.ensure()).toThrow(refusal);
+    expect(() => f.ensure()).toThrow(refusal);
     expect(f.exists).toHaveBeenCalledTimes(3);
     expect(f.probe).toHaveBeenCalledTimes(3);
+    expect(f.select).not.toHaveBeenCalled();
+  });
+
+  it("names present candidates a translated process cannot load", () => {
+    // An x64 Bun under Rosetta cannot dlopen the arm64-only Homebrew library.
+    const f = fixture({
+      exists: vi.fn((libraryPath) => libraryPath === homebrew),
+      probe: vi.fn((libraryPath) => {
+        throw new Error(
+          libraryPath === homebrew ? "dlopen: incompatible architecture" : "dlopen failed",
+        );
+      }),
+    });
+    expect(() => f.ensure()).toThrow(
+      `No supported SQLite library for Bun on macOS (${process.arch}); unusable: ${homebrew} (dlopen: incompatible architecture). `,
+    );
     expect(f.select).not.toHaveBeenCalled();
   });
 

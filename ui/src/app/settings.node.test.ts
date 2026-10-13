@@ -12,11 +12,8 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
-import {
-  applyServerUiPrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
+import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { backgroundPreferenceStorageKey, saveBackgroundPreference } from "./settings-background.ts";
 import {
   loadGatewaySessionSelection,
@@ -306,7 +303,7 @@ describe("gateway settings and layout persistence", () => {
     },
   );
 
-  it("persists sidebar entries across save and load, normalizing bad values", () => {
+  it("persists rail shortcuts across save and load, normalizing bad values", () => {
     const gwUrl = expectedGatewayUrl("");
     saveSettings(
       makeUiSettings(gwUrl, {
@@ -316,55 +313,63 @@ describe("gateway settings and layout persistence", () => {
       }),
     );
     expect(loadSettings().sidebarEntries).toEqual(["route:cron"]);
+    expect(readStored().railShortcuts).toEqual(["route:tasks", "route:cron"]);
+    expect(readStored()).not.toHaveProperty("sidebarEntries");
     expect(loadSettings().navWidth).toBe(258);
     expect(readStored()).not.toHaveProperty("navCollapsed");
 
-    // Corrupt the persisted list; load falls back to the default pinned set.
+    // Corrupt the persisted list; load falls back to the empty rail.
     writeStored({
       ...readStored(),
-      sidebarEntries: "route:tasks",
+      railShortcuts: "route:tasks",
       navWidth: 220,
       navCollapsed: true,
     });
-    expect(loadSettings().sidebarEntries).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
+    expect(loadSettings().sidebarEntries).toEqual([]);
     expect(loadSettings().navWidth).toBe(258);
     expect(loadSettings().navCollapsed).toBe(false);
   });
 
-  it("loads and upgrades settings written by 2026.7.1", () => {
-    const gatewayUrl = expectedGatewayUrl("");
-    const sessionsByGateway = {
-      [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
-    };
-    writeStored({
-      gatewayUrl,
-      theme: "claw",
-      themeMode: "dark",
-      navWidth: 300,
-      sessionsByGateway,
-      sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7],
-    });
-    const settings = loadSettings();
-    expect(settings).toMatchObject({
-      gatewayUrl,
-      sessionKey: "agent:main:work",
-      lastActiveSessionKey: "agent:main:work",
-      themeMode: "dark",
-      navWidth: 300,
-    });
-    expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
-    expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
-    saveSettings(settings);
-    expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
-    expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
-    expect(loadSettings()).toEqual(settings);
-  });
+  it.each(["direct save", "unrelated locale patch"])(
+    "keeps legacy sidebar order and pins out of rail shortcuts through %s",
+    (action) => {
+      const gatewayUrl = expectedGatewayUrl("");
+      const sessionsByGateway = {
+        [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
+      };
+      const sidebarEntries = ["route:chat", "route:activity", "route:usage", "route:cron"];
+      const sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
+      writeStored({
+        gatewayUrl,
+        theme: "claw",
+        themeMode: "dark",
+        navWidth: 300,
+        sessionsByGateway,
+        sidebarEntries,
+        sidebarPinnedRoutes,
+      });
+      if (action === "unrelated locale patch") {
+        patchSettings({ locale: "de" });
+      }
+      const settings = loadSettings();
+      expect(settings).toMatchObject({
+        gatewayUrl,
+        sessionKey: "agent:main:work",
+        lastActiveSessionKey: "agent:main:work",
+        themeMode: "dark",
+        navWidth: 300,
+      });
+      expect(settings.sidebarEntries).toEqual([]);
+      saveSettings(settings);
+      expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
+      expect(readStored()).toMatchObject({
+        sidebarEntries,
+        sidebarPinnedRoutes,
+        railShortcuts: [],
+      });
+      expect(loadSettings()).toEqual(settings);
+    },
+  );
 
   it("persists roster mode and defaults invalid stored modes to chip", () => {
     saveSettings({ ...loadSettings(), sidebarAgentsMode: "roster" });

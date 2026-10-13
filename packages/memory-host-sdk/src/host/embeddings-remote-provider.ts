@@ -28,6 +28,8 @@ export function createRemoteEmbeddingProvider(params: {
   client: RemoteEmbeddingClient;
   errorPrefix: string;
   maxInputTokens?: number;
+  /** Provider-documented cap on input items per embeddings request. */
+  maxInputsPerRequest?: number;
   /** Keep query arrays in one request when the provider has no query/document wire distinction. */
   batchQueryInputs?: boolean;
   /** Additional payload fields; model and input remain owned by the shared request path. */
@@ -63,6 +65,7 @@ export function createRemoteEmbeddingProvider(params: {
     id: params.id,
     model: client.model,
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
+    maxInputsPerRequest: params.maxInputsPerRequest,
     embed: async (input, options) => {
       const text = typeof input === "string" ? input : input.text;
       const [vec] = await embedMany([text], options);

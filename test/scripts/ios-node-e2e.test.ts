@@ -223,14 +223,6 @@ async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promi
 }
 
 describe("ios-node-e2e", () => {
-  it("prints CLI help without connecting", async ({ signal }) => {
-    const result = await runScriptRaw(["--help"], signal);
-
-    expect(result).toMatchObject({ signal: null, status: 0, timedOut: false });
-    expect(result.stdout).toContain("Usage: bun scripts/dev/ios-node-e2e.ts");
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects unknown CLI args before connecting", async ({ signal }) => {
     const result = await runScript("ws://127.0.0.1:9", signal, ["--wat"]);
 

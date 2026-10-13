@@ -4,6 +4,10 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +42,7 @@ import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,
   createCodexTestBindingStore,
+  createCodexTestContextEngineBinding as contextEngineBinding,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -46,6 +51,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import * as threadOwnershipQueue from "./thread-ownership-queue.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
@@ -73,20 +79,6 @@ function compactionParams(
     workspaceDir: tempDir,
     trigger: "manual",
     ...overrides,
-  };
-}
-
-function contextEngineBinding() {
-  return {
-    schemaVersion: 1 as const,
-    engineId: "lossless-claw",
-    policyFingerprint: "policy-1",
-    projection: {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    },
   };
 }
 
@@ -122,6 +114,7 @@ function startCompaction(
 
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetCodexTestBindingStore();
     tempDir = sessionDirs.make();
     finishCompactionTestCleanup = beginCompactionTestCleanup();
@@ -132,6 +125,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       await finishCompactionTestCleanup(task.result?.state === "fail");
     } finally {
       resetCodexAppServerClientFactoryForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 
@@ -183,7 +177,9 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result).toMatchObject({
       ok: false,
       compacted: false,
-      reason: expect.stringContaining("Codex session execution policy changed"),
+      reason: expect.stringMatching(
+        /Codex session (generation is no longer current|execution policy changed)/,
+      ),
     });
     expect(bindingStore.read(current)).toEqual(binding);
   });
@@ -218,6 +214,17 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
     await queueEntered.promise;
 
+    const compactionQueued = createDeferred<void>();
+    const enqueueMutation = threadOwnershipQueue.withCodexAppServerThreadMutation;
+    const queueSpy = vi
+      .spyOn(threadOwnershipQueue, "withCodexAppServerThreadMutation")
+      .mockImplementation((threadId, run) => {
+        const pending = enqueueMutation(threadId, run);
+        if (threadId === binding.threadId) {
+          compactionQueued.resolve();
+        }
+        return pending;
+      });
     const pending = maybeCompactCodexAppServerSessionImpl(
       {
         sessionId: current.sessionId,
@@ -231,16 +238,19 @@ describe("maybeCompactCodexAppServerSession", () => {
       { bindingStore, clientFactory },
     );
     try {
-      await flushAsyncTasks();
+      await compactionQueued.promise;
       expect(clientFactory).not.toHaveBeenCalled();
 
       await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
     } finally {
+      queueSpy.mockRestore();
       releaseQueue.resolve();
       await held;
     }
 
-    await expect(pending).rejects.toThrow("Codex session generation is no longer current");
+    await expect(pending).rejects.toThrow(
+      "Codex session execution policy changed; prepare the operation again.",
+    );
     expect(clientFactory).not.toHaveBeenCalled();
     expect(fake.request).not.toHaveBeenCalled();
     expect(bindingStore.read(current)).toEqual(binding);
@@ -683,25 +693,27 @@ describe("maybeCompactCodexAppServerSession", () => {
     let bindingReads = 0;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn((...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
-        const result = testCodexAppServerBindingStore.read(...args);
-        if (bindingReads++ === 0) {
-          seedCodexTestBinding(sessionFile, {
-            threadId: "thread-2",
-            cwd: tempDir,
-            contextEngine: {
-              ...originalContextEngine,
-              projection: {
-                schemaVersion: 1,
-                mode: "thread_bootstrap",
-                epoch: "epoch-2",
-                fingerprint: "fingerprint-2",
+      readAsync: vi.fn(
+        async (...args: Parameters<typeof testCodexAppServerBindingStore.readAsync>) => {
+          const result = await testCodexAppServerBindingStore.readAsync(...args);
+          if (bindingReads++ === 0) {
+            seedCodexTestBinding(sessionFile, {
+              threadId: "thread-2",
+              cwd: tempDir,
+              contextEngine: {
+                ...originalContextEngine,
+                projection: {
+                  schemaVersion: 1,
+                  mode: "thread_bootstrap",
+                  epoch: "epoch-2",
+                  fingerprint: "fingerprint-2",
+                },
               },
-            },
-          });
-        }
-        return result;
-      }),
+            });
+          }
+          return result;
+        },
+      ),
     };
 
     const result = requireCompactResult(
@@ -748,25 +760,27 @@ describe("maybeCompactCodexAppServerSession", () => {
     let bindingReads = 0;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn((...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
-        const result = testCodexAppServerBindingStore.read(...args);
-        if (bindingReads++ === 0) {
-          seedCodexTestBinding(sessionFile, {
-            threadId: "thread-2",
-            cwd: tempDir,
-            contextEngine: {
-              ...originalContextEngine,
-              projection: {
-                schemaVersion: 1,
-                mode: "thread_bootstrap",
-                epoch: "epoch-2",
-                fingerprint: "fingerprint-2",
+      readAsync: vi.fn(
+        async (...args: Parameters<typeof testCodexAppServerBindingStore.readAsync>) => {
+          const result = await testCodexAppServerBindingStore.readAsync(...args);
+          if (bindingReads++ === 0) {
+            seedCodexTestBinding(sessionFile, {
+              threadId: "thread-2",
+              cwd: tempDir,
+              contextEngine: {
+                ...originalContextEngine,
+                projection: {
+                  schemaVersion: 1,
+                  mode: "thread_bootstrap",
+                  epoch: "epoch-2",
+                  fingerprint: "fingerprint-2",
+                },
               },
-            },
-          });
-        }
-        return result;
-      }),
+            });
+          }
+          return result;
+        },
+      ),
     };
 
     const result = requireCompactResult(

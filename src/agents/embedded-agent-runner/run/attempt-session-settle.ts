@@ -71,10 +71,7 @@ export type EmbeddedAttemptSessionResources = {
 };
 
 /** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
-export function createEmbeddedAttemptSessionResources(
-  config: EmbeddedRunAttemptParams["config"],
-  signal: AbortSignal,
-) {
+export function createEmbeddedAttemptSessionResources(signal: AbortSignal) {
   const resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
     buildAbortSettlePromise: () => null,
@@ -87,7 +84,6 @@ export function createEmbeddedAttemptSessionResources(
         return undefined;
       }
       return buildExecAutoReviewTranscript({
-        config,
         messages: live.session.messages,
         userTurnOrigins: new Map(
           live
@@ -144,12 +140,20 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       input.trajectoryRecorder.recordEvent("session.ended", sessionEndData);
     }
   }
-  await flushEmbeddedAttemptTrajectoryRecorder({
-    runId: attempt.runId,
-    sessionId: attempt.sessionId,
-    log,
-    trajectoryRecorder: input.trajectoryRecorder,
-  });
+  if (
+    !input.deferredLifecycleOwner ||
+    input.state.terminal.kind !== "ok" ||
+    input.state.terminal.settlementWarning ||
+    attempt.abortSignal?.aborted ||
+    input.state.beforeAgentRunBlockedBy !== undefined
+  ) {
+    await flushEmbeddedAttemptTrajectoryRecorder({
+      runId: attempt.runId,
+      sessionId: attempt.sessionId,
+      log,
+      trajectoryRecorder: input.trajectoryRecorder,
+    });
+  }
 
   // Agent retries can report idle before retried tools finish; waiting before
   // the flush prevents synthetic missing-tool results (#8643). Teardown keeps

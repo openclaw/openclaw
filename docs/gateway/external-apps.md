@@ -151,7 +151,7 @@ and returns:
   "status": "draining",
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
-  "retryAfterMs": 20000,
+  "retryAfterMs": 5000,
   "activeCount": 2,
   "blockers": [
     { "kind": "root-request", "count": 1, "message": "1 active request" },
@@ -169,7 +169,9 @@ block readiness. Neither policy terminates or detaches terminals during
 preparation, polling, renewal, resume, or lease expiry.
 
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
-`retryAfterMs`. While blockers remain, status returns `status: "draining"`
+`retryAfterMs`. A held drain recommends five-second polling so completed work
+does not leave new work waiting through the longer busy-preparation retry.
+While blockers remain, status returns `status: "draining"`
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call refreshes the active-work snapshot. If protected lifecycle or
 final-chat writes are pending, the RPC waits up to 15 seconds for them to settle,
@@ -251,7 +253,7 @@ predecessor and handle transport closure through their lifecycle owner.
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
 and resume all return that error, the Gateway remains not-ready and
-fail-closed, and the host must not freeze or snapshot it. OpenClaw retries the
+refuses new work, and the host must not freeze or snapshot it. OpenClaw retries the
 scheduler automatically and reopens admission only after recovery succeeds. A
 mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
 Gateway's control-plane write limit of 30 attempts per minute; honor the
@@ -311,7 +313,8 @@ contract.
 
 <Tip>
   For host wake scheduling, keep the OpenClaw-facing part in an in-process
-  plugin and project idempotent full snapshots to the external host adapter.
+  plugin and send full snapshots to the external host adapter. Applying the same
+  snapshot again must have no additional effect.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
   projection](/plugins/hooks/lifecycle#safe-external-cron-projection).

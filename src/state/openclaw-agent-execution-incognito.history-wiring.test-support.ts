@@ -9,7 +9,7 @@ import type { IncognitoSessionAuthority } from "../config/sessions/session-incog
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
 import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import { readSessionTranscriptModelContextAsync } from "../config/sessions/session-transcript-context-read.js";
-import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { hasSessionTranscriptMessage } from "../config/sessions/session-transcript-message-presence.js";
@@ -20,6 +20,7 @@ import {
 import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
+import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import * as cronJobNames from "../cron/store/job-name.js";
 import { readChatHistoryDelta } from "../gateway/server-methods/chat-history-delta.js";
 import {
@@ -304,6 +305,9 @@ export function registerIncognitoHistoryWiringTests(
       expect(await hasSessionTranscriptMessage(scope)).toBe(true);
       const message = events.find((event) => isRecord(event) && event.type === "message");
       assert(isRecord(message) && typeof message.id === "string");
+      expect(
+        await readRecentUserAssistantTextForSession({ ...scope, role: "assistant", limit: 2 }),
+      ).toMatchObject([{ id: message.id, role: "assistant", text: "wired history proof" }]);
       expect(await findTranscriptEvent(scope, { kind: "latest" })).toMatchObject({
         event: { id: message.id },
       });
@@ -553,6 +557,11 @@ export function registerIncognitoHistoryWiringTests(
     expect(visited).toEqual([
       { message: { role: "user", content: "after marker", timestamp: 2 }, seq: 2 },
     ]);
+    expect(
+      await withIncognitoSessionActor(actor, () =>
+        readRecentUserAssistantTextForSession({ ...target, role: "user", limit: 2 }),
+      ),
+    ).toMatchObject([{ role: "user", text: "after marker", timestamp: 2 }]);
   });
 
   it("rejects async preview transaction grants while commit grants remain synchronous", async () => {
@@ -580,7 +589,7 @@ export function registerIncognitoHistoryWiringTests(
   });
 
   it.each(["unchanged", "revoke", "abort", "append", "release"] as const)(
-    "revalidates async model context consumers after %s and joins their lifetime",
+    "settles async model context consumers after %s and joins their lifetime",
     async (mode) => {
       const { actor, env } = fixture;
       const session = await create(`async-model-context-${mode}`);

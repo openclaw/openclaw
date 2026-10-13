@@ -3,13 +3,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   loadTranscriptEvents,
   loadSessionEntryReadOnly,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -47,12 +48,10 @@ function loadSessionRuntime() {
 
 async function createHandlers(identity = IDENTITY) {
   const runtime = await loadSessionRuntime();
-  const target = runtime.resolveGatewaySessionStoreTargetWithStore({
+  const target = await runtime.resolveGatewaySessionStoreTargetInWorker({
     cfg: getRuntimeConfig(),
     key: identity.sessionKey,
     agentId: identity.agentId,
-    clone: false,
-    exactRead: true,
   });
   const entry = loadSessionEntryReadOnly({
     ...identity,
@@ -84,10 +83,11 @@ async function readRecoveryEvents(identity = IDENTITY) {
 }
 
 describe("worker workspace recovery transcript reporting", () => {
-  it.each(["leaf", "reset", "opaque"])(
+  it.each(["reset", "opaque"])(
     "selects conflict reports through %s navigation without adopting an inactive clear",
     async (navigation) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
         const conflict = {
           paths: ["edited.ts"],
@@ -154,11 +154,11 @@ describe("worker workspace recovery transcript reporting", () => {
   );
   it.each([
     { label: "invalid staged ref", paths: ["edited.ts"], stagedResultRef: "refs/heads/main" },
-    { label: "empty paths", paths: [], stagedResultRef: "refs/openclaw/worker-results/result-1" },
   ])(
     "reports $label as unknown instead of treating a retained conflict as absent",
     async (details) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
         await replaceTranscriptEvents(IDENTITY, [
           { type: "session", id: IDENTITY.sessionId, version: CURRENT_SESSION_VERSION },
@@ -189,6 +189,7 @@ describe("worker workspace recovery transcript reporting", () => {
     "reports a %s session as unavailable instead of treating its conflict as absent",
     async (sessionState) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         if (sessionState === "rebound") {
           await upsertSessionEntryCore(IDENTITY, {
             sessionId: "replacement-workspace-session",
@@ -206,6 +207,7 @@ describe("worker workspace recovery transcript reporting", () => {
 
   it("records historical recovery failures while preserving the live pending-result owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(REQUEST, { sessionId: REQUEST.sessionId, updatedAt: 1 });
       const workspacePath = state.statePath("recovery-workspace");
       await fs.mkdir(workspacePath, { recursive: true });
@@ -221,7 +223,7 @@ describe("worker workspace recovery transcript reporting", () => {
         reconcileFails: true,
         workspacePath,
       };
-      const harness = createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
+      const harness = await createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
       const active = await harness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
@@ -278,6 +280,7 @@ describe("worker workspace recovery transcript reporting", () => {
 
   it("persists bounded recovery failures and deduplicates identical consecutive attempts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
       const { reportFailure } = await createHandlers();
       const secret = [
@@ -317,6 +320,7 @@ describe("worker workspace recovery transcript reporting", () => {
 
   it("rejects a rebound session identity without touching its replacement transcript", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
       const { reportFailure } = await createHandlers();
       await upsertSessionEntryCore(IDENTITY, {
@@ -338,6 +342,7 @@ describe("worker workspace recovery transcript reporting", () => {
     "revalidates a rebound %s after waiting for the transcript writer",
     async (reboundKind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(IDENTITY, {
           sessionId: IDENTITY.sessionId,
           updatedAt: 1,
@@ -374,13 +379,14 @@ describe("worker workspace recovery transcript reporting", () => {
                   sessionTarget: {
                     ...IDENTITY,
                     storePath: (
-                      await loadSessionRuntime()
-                    ).resolveGatewaySessionStoreTargetWithStore({
-                      cfg: getRuntimeConfig(),
-                      key: IDENTITY.sessionKey,
-                      agentId: IDENTITY.agentId,
-                      clone: false,
-                    }).storePath,
+                      await (
+                        await loadSessionRuntime()
+                      ).resolveGatewaySessionStoreTargetInWorker({
+                        cfg: getRuntimeConfig(),
+                        key: IDENTITY.sessionKey,
+                        agentId: IDENTITY.agentId,
+                      })
+                    ).storePath,
                     expectedWriterRunId: "report-writer",
                   },
                   withTranscriptWrite: async (run) => await run(),

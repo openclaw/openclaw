@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { sessionsCleanupCommand } from "../commands/sessions-cleanup.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -418,8 +419,8 @@ describe("callGateway url resolution", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = "fixture-env-token";
       }
       await callGateway({
-        method: "chat.send",
-        params: { message: "observed destination" },
+        method: "sessions.patch",
+        params: { key: "agent:main:observed", label: "observed destination" },
         expectUrl: expected,
       });
       expect(lastClientOptions?.url).toBe(expected);
@@ -428,7 +429,7 @@ describe("callGateway url resolution", () => {
       );
 
       // The user's snapshot names the first endpoint; a later CLI invocation
-      // reloads configuration before sending its selected-session prompt.
+      // reloads configuration before applying its selected-session edit.
       if (source === "environment") {
         process.env.OPENCLAW_GATEWAY_URL = "wss://replacement.example/ws";
       } else {
@@ -442,9 +443,9 @@ describe("callGateway url resolution", () => {
       lastRequestOptions = null;
       await expect(
         callGateway({
-          method: "chat.send",
+          method: "sessions.patch",
           mode: GATEWAY_CLIENT_MODES.CLI,
-          params: { message: "must not retarget" },
+          params: { key: "agent:main:observed", label: "must not retarget" },
           expectUrl: expected,
         }),
       ).rejects.toThrow("Gateway destination changed");
@@ -1513,6 +1514,40 @@ describe("callGateway error details", () => {
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
+  it("lets delegated session cleanup finish beyond both passive-read deadlines", async () => {
+    setLocalLoopbackGatewayConfig();
+    setRuntimeConfigSnapshot(getRuntimeConfig());
+    helloMethods = ["sessions.cleanup"];
+    vi.useFakeTimers();
+    const requested = createDeferred();
+    const response = createDeferred<unknown>();
+    gatewayClientRequest = async () => {
+      requested.resolve();
+      return response.promise;
+    };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    let settled = false;
+    let failure: unknown;
+    const cleanup = sessionsCleanupCommand({ allAgents: true, json: true }, runtime).then(
+      () => {
+        settled = true;
+      },
+      (error: unknown) => {
+        settled = true;
+        failure = error;
+      },
+    );
+    await requested.promise;
+    await vi.advanceTimersByTimeAsync(31_000);
+    const settledBeforeResponse = settled;
+    const result = { allAgents: true, mode: "enforce", dryRun: false, stores: [] };
+    response.resolve(result);
+    await cleanup;
+    expect(settledBeforeResponse).toBe(false);
+    expect(failure).toBeUndefined();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(result);
+  });
+
   it("runs the signal abort hook on the active gateway connection before teardown", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -1582,6 +1617,10 @@ describe("callGateway error details", () => {
       setStop: (stop) => {
         gatewayClientStopAndWait = stop;
       },
+      setFeatures: (methods, capabilities) => {
+        helloMethods = methods;
+        helloCapabilities = capabilities;
+      },
       hello: () => lastClientOptions?.onHelloOk?.(makeStubGatewayHello()),
       close: (code, reason) => lastClientOptions?.onClose?.(code, reason),
     };
@@ -1617,28 +1656,6 @@ describe("callGateway error details", () => {
         timeoutMs: 10,
       }),
     ).rejects.toThrow("gateway remote mode misconfigured");
-  });
-
-  it.each([
-    {
-      method: "secrets.resolve",
-      requiredMethods: ["secrets.resolve"],
-      requiredCapabilities: undefined,
-      error:
-        /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
-    },
-    {
-      method: "gateway.restart.request",
-      requiredMethods: undefined,
-      requiredCapabilities: ["gateway-restart-target-safe-v1"],
-      error:
-        /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
-    },
-  ])("requires supported features before calling $method", async ({ error, ...options }) => {
-    setLocalLoopbackGatewayConfig();
-    helloMethods = ["health"];
-    helloCapabilities = [];
-    await expect(callGateway(options)).rejects.toThrow(error);
   });
 });
 

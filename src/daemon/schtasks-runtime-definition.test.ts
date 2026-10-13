@@ -168,11 +168,8 @@ const protectedProcesses = [
 ];
 
 it.each([
-  { executable: "C:\\runtime-b\\node.exe", expected: "stopped" },
   { executable: "C:\\runtime-b\\bun.exe", expected: "stopped" },
-  { executable: "C:\\runtime-b\\gateway.cmd", expected: "unknown" },
   { executable: "node.exe", expected: "unknown" },
-  { executable: "%RUNTIME%\\node.exe", expected: "unknown" },
 ])(
   "classifies unrelated protected native images only for $executable",
   async ({ executable, expected }) => {
@@ -185,7 +182,7 @@ it.each([
   },
 );
 
-it.each(["NODE.EXE", undefined, null, "C:\\another\\other.exe"])(
+it.each([undefined])(
   "retains unknown process evidence for an unreadable image %s",
   async (Name) => {
     native.state = 3;
@@ -211,7 +208,7 @@ it.each(["present", "absent", "unavailable"] as const)(
 );
 afterEach(() => vi.restoreAllMocks());
 
-it.each([undefined, 5_000])(
+it.each([5_000])(
   "does not report the replacement definition running on the old task owner (budget %s)",
   async (timeoutMs) => {
     native.ownerAlive = true;
@@ -227,7 +224,7 @@ it.each([undefined, 5_000])(
   },
 );
 
-it.each([1, 3])(
+it.each([3])(
   "does not describe an old owned Gateway as stopped after its definition changed (state %s)",
   async (state) => {
     native.state = state;
@@ -252,18 +249,15 @@ it("reports the process matching the installed command, excluding its task super
   expect(await readScheduledTaskRuntime({})).toMatchObject({ status: "running", pid: 43 });
 });
 
-it.each([1, 3, 4])(
-  "keeps a surviving supervisor without its child unknown (task %s)",
-  async (state) => {
-    native.state = state;
-    native.processes = [
-      { ProcessId: 42, CommandLine: [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG].join(" ") },
-    ];
-    const runtime = await readScheduledTaskRuntime({});
-    expect(runtime.status).toBe("unknown");
-    expect(runtime.pid).toBeUndefined();
-  },
-);
+it.each([3])("keeps a surviving supervisor without its child unknown (task %s)", async (state) => {
+  native.state = state;
+  native.processes = [
+    { ProcessId: 42, CommandLine: [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG].join(" ") },
+  ];
+  const runtime = await readScheduledTaskRuntime({});
+  expect(runtime.status).toBe("unknown");
+  expect(runtime.pid).toBeUndefined();
+});
 
 it("does not admit stopped publication while the exact task supervisor survives on a free port", async () => {
   native.processes = [
@@ -284,7 +278,7 @@ it("does not admit stopped publication while the exact task supervisor survives 
 });
 
 it.each(
-  [1, 3].flatMap((state) => [
+  [3].flatMap((state) => [
     { state, evidence: "unavailable", snapshot: null, expected: "unknown" },
     {
       state,

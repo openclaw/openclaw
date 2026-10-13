@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS skill_library_uploads (
 -- End profile-owned skill library.
 
 CREATE TABLE IF NOT EXISTS skill_workshop_changes (
+  cursor_id INTEGER NOT NULL,
   change_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   skill_name TEXT NOT NULL,
@@ -92,6 +93,9 @@ CREATE TABLE IF NOT EXISTS skill_workshop_changes (
   run_id TEXT,
   created_at_ms INTEGER NOT NULL
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
+  ON skill_workshop_changes(cursor_id);
 
 CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
   ON skill_workshop_changes(agent_id, created_at_ms);
@@ -224,6 +228,7 @@ CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
   ON execution_identity_contexts (run_id, created_at, execution_id);
 
 CREATE TABLE IF NOT EXISTS execution_decision_facts (
+  cursor_id INTEGER NOT NULL,
   receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
   context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
   execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
@@ -244,6 +249,9 @@ CREATE TABLE IF NOT EXISTS execution_decision_facts (
   receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
   UNIQUE (occurred_at, receipt_id)
 ) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS execution_decision_facts_cursor_id_idx
+  ON execution_decision_facts(cursor_id);
+
 CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
   ON execution_decision_facts (context_id, occurred_at, receipt_id);
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
@@ -363,6 +371,7 @@ CREATE TABLE IF NOT EXISTS exec_approvals_config (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS operator_approvals (
+  cursor_id INTEGER NOT NULL,
   approval_id TEXT NOT NULL PRIMARY KEY CHECK (
     length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
   ),
@@ -467,6 +476,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
     )
   )
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_cursor_id
+  ON operator_approvals(cursor_id);
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
   ON operator_approvals(status, expires_at_ms, approval_id);
@@ -926,6 +938,12 @@ CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS node_worker_launch_boots (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  boot_id TEXT CHECK (boot_id IS NULL OR length(boot_id) BETWEEN 1 AND 128)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   launch_id TEXT PRIMARY KEY,
   container_json TEXT
@@ -1143,6 +1161,8 @@ CREATE TABLE IF NOT EXISTS acp_sessions (
   agent TEXT NOT NULL,
   runtime_session_name TEXT NOT NULL,
   identity_json TEXT,
+  resume_agent_session_id TEXT,
+  resume_acpx_session_id TEXT,
   mode TEXT NOT NULL,
   runtime_options_json TEXT,
   cwd TEXT,
@@ -1159,12 +1179,10 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
   ON acp_sessions(agent, last_activity_at DESC, session_key);
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_agent
-  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),
-    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+  ON acp_sessions(resume_agent_session_id);
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_acpx
-  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),
-    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+  ON acp_sessions(resume_acpx_session_id);
 
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -1213,6 +1231,7 @@ CREATE TABLE IF NOT EXISTS agent_databases (
 CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   agent_id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL DEFAULT '',
+  phase TEXT,
   agent_dir TEXT NOT NULL,
   workspace_dir TEXT NOT NULL,
   sessions_dir TEXT NOT NULL,
@@ -1451,6 +1470,7 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_order
 -- One owner-native receipt is also the durable execution fence. Receipts
 -- survive job deletion so operators can distinguish a run from log inference.
 CREATE TABLE IF NOT EXISTS cron_run_receipts (
+  cursor_id INTEGER NOT NULL,
   receipt_id TEXT PRIMARY KEY,
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1471,6 +1491,9 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
     (status != 'running' AND finished_at_ms IS NOT NULL)
   )
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS cron_run_receipts_cursor_id_idx
+  ON cron_run_receipts(cursor_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
   ON cron_run_receipts(store_key, job_id)
@@ -1538,6 +1561,9 @@ CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   recovery_state TEXT,
   platform_send_started_at INTEGER,
   entry_json TEXT NOT NULL,
+  retention_id_prefix TEXT,
+  retention_max_age_ms INTEGER,
+  retention_max_entries INTEGER,
   enqueued_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   failed_at INTEGER,
@@ -1557,6 +1583,11 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_target
   ON delivery_queue_entries(queue_name, status, channel, target, enqueued_at, id)
   WHERE channel IS NOT NULL AND target IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_delivery_queue_bounded_retention
+  ON delivery_queue_entries(queue_name, retention_id_prefix, enqueued_at DESC, id DESC)
+  WHERE status IN ('completed', 'failed') AND recovery_state = 'completed_bounded'
+    AND retention_id_prefix IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_runs (
   task_id TEXT NOT NULL PRIMARY KEY,
@@ -1708,8 +1739,15 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
   provider_id TEXT NOT NULL,
   title TEXT,
   source_json TEXT NOT NULL,
+  source_account_id TEXT,
+  source_guild_id TEXT,
+  source_channel_id TEXT,
+  source_meeting_url TEXT,
+  source_thread_ts TEXT,
+  source_file_id TEXT,
   stopped_at TEXT,
   metadata_json TEXT,
+  metadata_agent_id TEXT,
   export_manifest_json TEXT NOT NULL DEFAULT '{}',
   export_pending_json TEXT NOT NULL DEFAULT '[]',
   next_utterance_seq INTEGER NOT NULL DEFAULT 0 CHECK (next_utterance_seq >= 0),
@@ -1729,6 +1767,17 @@ CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_slug
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_export_key
   ON meeting_transcript_sessions(export_key);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_source
+  ON meeting_transcript_sessions(provider_id, source_account_id, source_guild_id,
+    source_channel_id, source_meeting_url, source_thread_ts, source_file_id,
+    stopped_at DESC, started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_account
+  ON meeting_transcript_sessions(source_account_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_agent
+  ON meeting_transcript_sessions(metadata_agent_id);
 
 CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
   session_id TEXT NOT NULL,
@@ -1757,6 +1806,7 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_started_at TEXT NOT NULL,
   generated_at TEXT,
   summary_json TEXT,
+  overview TEXT,
   markdown TEXT,
   utterance_count INTEGER NOT NULL CHECK (utterance_count >= 0),
   PRIMARY KEY (session_id, session_started_at),

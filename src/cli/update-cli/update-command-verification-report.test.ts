@@ -78,8 +78,9 @@ it.each([undefined, "2026.9.2", "2026.9.4"])(
     expect(recorded.verification.versionMatch).toBe(
       gatewayVersion === undefined ? undefined : gatewayVersion === "2026.9.4",
     );
-    expect(renderUpdateRunReport(recorded).markdown.includes("version mismatch")).toBe(
-      gatewayVersion === "2026.9.2",
-    );
+    const report = renderUpdateRunReport(recorded).markdown;
+    expect(report.includes("version mismatch")).toBe(gatewayVersion === "2026.9.2");
+    expect(report).toContain("Gateway readiness was not verified; service status: running");
+    expect(report).toContain("openclaw gateway status --deep");
   },
 );

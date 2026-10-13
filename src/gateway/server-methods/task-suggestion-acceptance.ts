@@ -4,11 +4,6 @@ import {
   type TaskSuggestion,
   type TaskSuggestionsAcceptResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  withGatewaySessionEntry,
-} from "../session-utils-store.js";
 import {
   abandonTaskSuggestionAcceptance,
   cancelTaskSuggestionAcceptance,
@@ -78,25 +73,7 @@ async function rollbackSuggestedTaskSession(params: {
         );
       },
     });
-    const source = captureIncognitoSessionSource({
-      sessionKey: params.key,
-      agentId: params.agentId,
-    });
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return deletionConfirmed;
-    }
-    return (
-      deletionConfirmed &&
-      (source
-        ? await withGatewaySessionEntry(
-            params.key,
-            { agentId: params.agentId },
-            (session) => !session.entry,
-            params.options.context.getRuntimeConfig(),
-          )
-        : !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry)
-    );
+    return deletionConfirmed;
   } catch {
     return false;
   }

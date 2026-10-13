@@ -17,6 +17,13 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+Update checks, candidate rehearsal, activation Doctor, and verification inherit
+the managed Gateway's Node heap controls from its effective service command and
+`NODE_OPTIONS`. Command-line heap controls take precedence. An empty service
+`NODE_OPTIONS` preserves heap controls supplied by the invoking shell while still
+clearing inherited preload and debugger flags. This requires the fix in the
+installed updater; an older updater cannot inherit it from the candidate it stages.
+
 On Windows, update checks the Gateway Scheduled Task's principal and run level
 before staging or changing state. A per-user `LeastPrivilege` task for the current
 account can be updated from a non-elevated terminal, including a UAC-filtered
@@ -28,6 +35,9 @@ own 60-second cold-start limit, and each `schtasks` command has a 15-second limi
 a stalled operation names the check or command instead of using the update's full
 timeout.
 
+Service-definition refresh recognizes Windows account aliases that resolve to the
+same SID. A different or unresolved account remains protected from automatic repair.
+
 For a global npm installation, the manual recovery path is
 `npm i -g openclaw@<target> --allow-scripts=openclaw`, then
 `openclaw doctor --fix`, then `openclaw gateway restart`. Replace `<target>` with
@@ -36,6 +46,15 @@ if Task Scheduler denies access. OpenClaw prints this alternative; it does not
 run it automatically. Per-user Startup-folder installations do not require
 elevation for this check. An older installed updater keeps its previous behavior
 until replaced; use the elevated or manual path for that first upgrade.
+
+Installations owned by a system package manager skip OpenClaw-managed updates
+before npm staging or Gateway shutdown. If ownership inspection fails, the
+update continues with a warning; only a confirmed ownership match skips replacement. For pacman (including Arch-based
+distributions), update with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
+use the owning pkg or Ports deployment. Then restart the Gateway through its
+service owner.
+Older updaters must receive this fix through that system package manager first;
+a candidate cannot repair an updater that fails before staging it.
 
 Custom npm prefixes such as `~/.npm-global` are recognized from npm's configured
 prefix and the installed OpenClaw launcher. A prefix configured in `~/.npmrc`
@@ -138,6 +157,9 @@ Repair settles only native commands belonging to its Doctor. Another Doctor's
 retained command is recorded as foreign custody with its Doctor PID, without
 making the completed Doctor unsettled. Installation replacement remains blocked
 while any live command claim exists.
+If retaining a spawned command's custody fails, Doctor keeps its process identity
+and stops the command before settling its reservation. A reservation without a
+recorded identity still blocks recovery; repeating repair cannot prove it stopped.
 A verified rollback does not automatically start triage: the previous generation
 is running again, and the report keeps the failing check as the reason.
 An interactive update offers the diagnose/report menu with **Exit** selected by
@@ -147,12 +169,23 @@ not prompt after rollback.
 
 Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
 
+When another process holds the state database writer, the update driver gives
+its worker-backed phase and progress writes up to two minutes to acquire the
+writer. This extended wait ends when the transaction starts; Gateway and other
+callers retain the normal five-second budget.
+Progress-only receipts wait at most one second, then warn and continue
+without claiming a saved receipt. Required writes report actionable contention
+if their budget expires. This fix must be present in the installed updater to
+protect the next update it runs.
+
 Exit always waits for accepted state operations, pending database opens, and live
 worker references to settle. After settlement, retained-worker native close and
-thread termination have a ten-second grace period. Expiry records a warning,
-keeps the retained runtime for later cleanup, and preserves the command's exit
-status. This protection belongs to the installed updater: installing a release
-with the fix enables it for the next update that release performs.
+thread termination have a ten-second reporting grace period. Expiry records a
+warning and continues waiting for actual native retirement; it does not abandon
+workers or force process exit. The retained runtime stays owned until retirement
+settles, then remains available for later cleanup. The command's recorded outcome
+is preserved. This protection belongs to the installed updater: installing a
+release with the fix enables it for the next update that release performs.
 
 The executable CLI retains its shared-state and worker cleanup code before an
 update can replace those files. Older installed development builds can finish an
@@ -160,6 +193,11 @@ update successfully and then exit with `ERR_MODULE_NOT_FOUND` during CLI cleanup
 Check `openclaw update status` with the newly installed CLI to distinguish that
 exit failure from the recorded update outcome; the installed driver needs the fix
 before it performs its next update.
+
+Newer packages retain the published 2026.10.1 updater's cleanup entrypoints,
+including its original pending-disposer queue, so that first upgrade can finish
+normally. This compatibility covers the published package, not arbitrary
+development-build filenames.
 
 Updating from inside the installation keeps captured paths anchored to the
 invoking directory while the package is replaced. The updater keeps a valid
@@ -306,6 +344,16 @@ Candidate-authored additive startup config migrations require matching config
 audit evidence and preserved policy. Other config or state identity changes
 refuse completion.
 
+Load slows updates; it does not establish an activation failure. For deployments
+using the bundled managed-release controller, acceptance waits for agent database
+admission, critical startup sidecars, and a responsive main thread before running
+the isolated model marker. The configurable verification budget defaults to ten
+minutes. A marker dispatch timeout can retry the same idempotency key within that
+budget after the selected Gateway proves readiness, responsiveness, and unchanged
+process identity. Rollback acceptance uses the same patience. A crash, wrong build
+or identity, corruption, wrong marker reply, failed health checks, or readiness
+that never settles before the budget expires remains a real failure.
+
 Verified activation retires the operation record. A real activation failure may
 restore the sealed predecessor when the protected state remains compatible;
 rollback retains a resumable record. This slice does not rewind migrated
@@ -349,6 +397,15 @@ for adopted immutable installations. Gateway `update.run` still requires the
 root installation owner to run the CLI outside the Gateway service cgroup; it
 does not elevate chat requests. `update repair` directs immutable recovery to
 `update recover`.
+
+Before an immutable activation stops the serving Gateway, the updater prewarms
+the candidate's Node compile cache as the service account at its final release
+path. This imports the Gateway graph without starting a server. The existing
+build-ID cache namespace and disabled-cache setting still apply; a failed
+prewarm is advisory and ordinary cold startup remains available. Candidate
+rehearsal keeps its separate, cache-disabled environment. Mutable package
+updates do not prewarm: staging paths change during activation, and compiling
+again at the final path would add work during downtime.
 
 Immutable status and dry-run also explain migration coverage. JSON exposes
 `immutableCoverage` in status and `coverage` in dry-run. The report inventories
@@ -569,6 +626,44 @@ This handoff works only when the installed updater already supports it. An older
 updater that refuses before staging cannot use a newer candidate's judgment;
 follow the recovery guidance for that installed release first.
 
+## Runtime retention failures
+
+**Fix now:** `host-owned-plugin-link` means a dependency symlink reaches
+OpenClaw-owned files that the updater cannot safely retain as an independent
+plugin dependency. Retention protects the running updater and recovery workers
+when package replacement removes the old files. Do not skip this check.
+
+Inspect the link and target in the local failure output. Keep the source files
+and recovery backups. For a current installation, ask the plugin maintainer to
+replace the private host-file dependency with `openclaw/plugin-sdk/*` imports or
+a separately packaged dependency. If the link is unexpected, run
+`openclaw triage` with the same profile, service account, state, and configuration
+to diagnose its owner before moving or removing anything.
+
+Older installed updaters may instead encounter the historical package-backup or
+retired-workspace cases described above. The installed updater performs
+retention before replacement: selecting a corrected candidate cannot repair
+that first step. Only move an identified inactive historical backup link; do not
+move an active or unresolved update's backup or delete its source checkout.
+
+After repairing the link, retry the update. Use the report's verification and
+recovery results to determine whether the previous Gateway is still serving;
+a retention refusal alone does not establish service health or restoration.
+
+## Gateway recovery verification failures
+
+**Fix now:** a stopped service or failed readiness check means the update did not
+verify a serving Gateway. Check `openclaw gateway status --deep` using the same
+profile and account. The report identifies observed service status, version
+mismatches, readiness failures, and plugin or channel errors when available.
+A readiness deadline without those facts does not identify the startup cause.
+
+Keep recovery backups and inspect the restart log printed by the updater.
+Follow its recovery instructions; if it says restarting is unsafe, keep the
+Gateway stopped and run `openclaw triage` to repair the installation. Do not
+restore code alone after state migration. If the report says the Gateway is
+still starting, check its progress instead of repeatedly restarting it.
+
 ## Automation and SSH
 
 For an authorized update on another host, use the target installation's owning
@@ -578,7 +673,7 @@ account and a non-interactive SSH command:
 ssh -T user@gateway-host 'openclaw update --yes' </dev/null
 ```
 
-Ensure `openclaw` resolves to the intended installation in that account's SSH
+Check that `openclaw` resolves to the intended installation in that account's SSH
 environment. Add the existing global `--profile <name>` before `update` when
 targeting a named profile.
 
@@ -655,6 +750,15 @@ source checkouts remain untouched. Failed updates and rollbacks preserve those
 historical backups, and separately retained database snapshots keep their own
 recovery lifetime.
 
+Optional Doctor inspections that have matching lint checks can run after the
+restarted Gateway is ready. The target Doctor reports the checks it actually
+deferred; the updater runs those checks against the updated installation and
+current configuration. Older update parents or targets keep these inspections
+inside Doctor. If the target does not provide a usable report, the updater records
+an advisory rather than claiming that the post-restart inspections completed.
+On the first upgrade from an older updater, that retained parent can still report
+its own post-restart inspection warning even though the target ran checks inline.
+
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin
 installation and update work have no default deadline when `--timeout` is omitted;
@@ -727,6 +831,12 @@ updater can read shared state, target-release preflight also checks configured,
 retired, and registered custom agent stores and names every incompatible store
 before changing the installation or stopping the Gateway. State newer than the
 updater can read retains a single install-compatible-build or restore-backup refusal.
+
+During candidate validation, Doctor leaves bookkeeping-only version, wizard, and
+migration stamps out of the copied config so older updaters do not mistake them
+for required config repairs. Webhook completion without endpoint changes is
+recorded in the rehearsal state. Real config migrations still run; normal config
+writes after activation record the candidate's version and migration metadata.
 
 If database schema preflight cannot inspect the configured paths because the
 config is invalid, its refusal lists the config file and invalid fields. Run

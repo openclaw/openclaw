@@ -33,9 +33,9 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 
 const failures = vi.hoisted(() => ({
@@ -129,7 +129,6 @@ it("publishes history changes only after deletion while fresh reads observe sibl
   const completed: boolean[] = [];
   const reclaim = () =>
     runSqliteSessionReclamation({
-      forceInProcess: false,
       plan,
       onWorkerResult(result) {
         if (result.kind === "history-eviction") {

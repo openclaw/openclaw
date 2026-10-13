@@ -32,9 +32,9 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
 export async function reportGitHubPublicationTranscript(
   loadSessionRuntime: () => Promise<{
     resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
+    resolveGatewaySessionStoreTargetInWorker: typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
   }>,
-  coordinator: Pick<GitHubPublicationCoordinator, "markReported">,
+  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync">,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -55,11 +55,10 @@ export async function reportGitHubPublicationTranscript(
       }
     : await (async () => {
         const runtime = await loadSessionRuntime();
-        const target = runtime.resolveGatewaySessionStoreTargetWithStore({
+        const target = await runtime.resolveGatewaySessionStoreTargetInWorker({
           cfg: getRuntimeConfig(),
           key: params.sessionKey,
           agentId: params.agentId,
-          clone: false,
         });
         return {
           target,
@@ -108,5 +107,5 @@ export async function reportGitHubPublicationTranscript(
     throw new Error("GitHub publication transcript owner changed", { cause: appended.error });
   }
   claim?.assertCurrent();
-  coordinator.markReported(params.result.requestId);
+  await coordinator.markReportedAsync(params.result.requestId);
 }

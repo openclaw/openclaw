@@ -47,11 +47,6 @@ export type ControlUiCommittedPresentation = {
   terminalActivationReady?: boolean;
 };
 
-/** Renderer adapters settle their root, route outlet, and visible navigation. */
-export interface ControlUiReadinessShell extends HTMLElement {
-  settleReadiness(): Promise<ControlUiCommittedPresentation>;
-}
-
 /** The outlet owns retirement and whether its current destination has committed. */
 export interface ControlUiReadinessOutlet extends HTMLElement {
   readonly presentationSettled: boolean;
@@ -122,7 +117,11 @@ export class ControlUiReadiness {
     ];
     const window = this.root.ownerDocument.defaultView;
     if (window) {
-      window.openclawControlUi = this.hook;
+      Object.defineProperty(window, "openclawControlUi", {
+        configurable: true,
+        writable: true,
+        value: this.hook,
+      });
     }
     this.invalidate();
   }

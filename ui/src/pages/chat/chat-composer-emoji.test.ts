@@ -2,11 +2,18 @@ import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
-import { renderNewSessionComposer } from "../new-session/composer.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
+import { NewSessionModelControl } from "../new-session/model-control.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
@@ -45,18 +52,30 @@ beforeEach(() => {
 });
 
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
+  let native: ReturnType<typeof mountNewSessionComposer> | undefined;
+  let nativeOptions: NewSessionComposerOptions;
   fixtureDisposals.push(() => {
     retired = true;
-    render(nothing, container);
+    attachmentDraft.reset();
+    if (native) {
+      native.unmount();
+    } else {
+      render(nothing, container);
+    }
     container.remove();
   });
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
   const controller = new NewSessionComposerTextareaController();
+  const attachmentDraft = new NewSessionAttachmentDraft(
+    () => redraw(),
+    () => {},
+  );
+  const modelControl = new NewSessionModelControl(() => redraw());
   controllers.push(controller);
   const props = createComposerProps({
     canSend: !locked,
@@ -71,33 +90,36 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     if (retired) {
       return;
     }
-    render(
-      kind === "chat"
-        ? renderChatComposer({ ...props, draft })
-        : renderNewSessionComposer({
-            renderCritters: () => nothing,
-            attachments: [],
-            getAttachments: () => [],
-            canSubmit: true,
-            message: draft,
-            pendingAttachmentReads: 0,
-            readSignal: new AbortController().signal,
-            requiresModifier,
-            submitting: false,
-            messageLocked: locked,
-            textareaController: controller,
-            requestUpdate: redraw,
-            onAttachmentsChange: () => {},
-            onPendingReadsChange: () => {},
-            onInput: (next) => {
-              draft = next;
-              redraw();
-            },
-            onSubmit: send,
-            onBackgroundSubmit: backgroundSend,
-          }),
-      container,
-    );
+    if (kind === "chat") {
+      render(renderChatComposer({ ...props, draft }), container);
+    } else {
+      nativeOptions = {
+        agentId: "main",
+        context: undefined,
+        draftOwnerKey: "emoji",
+        attachmentDraft,
+        modelControl,
+        isCatalogTarget: true,
+        canSubmit: true,
+        message: draft,
+        requiresModifier,
+        submitting: false,
+        messageLocked: locked,
+        textareaController: controller,
+        requestUpdate: redraw,
+        onInput: (next) => {
+          draft = next;
+          redraw();
+        },
+        onSubmit: send,
+        onBackgroundSubmit: backgroundSend,
+      };
+      if (native) {
+        native.rerender();
+      } else {
+        native = mountNewSessionComposer(() => nativeOptions, container);
+      }
+    }
   }
   redraw();
   const textarea = container.querySelector("textarea")!;

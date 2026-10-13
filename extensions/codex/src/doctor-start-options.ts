@@ -71,7 +71,12 @@ export async function resolveCodexDoctorStartOptions(params: {
     candidates.push({ ...start, managedCommandOrder: "package-only" });
   }
   for (const candidate of candidates) {
-    const resolved = await resolveStartOptions(candidate, { pluginRoot: params.pluginRoot });
+    // Doctor verifies the shipped package every install falls back to, never a
+    // user-installed Codex, so update checks stay independent of PATH.
+    const resolved = await resolveStartOptions(candidate, {
+      pluginRoot: params.pluginRoot,
+      preferInstalled: false,
+    });
     if (!isDesktopCommand(resolved.command)) {
       return { status: "selected", start: resolved };
     }

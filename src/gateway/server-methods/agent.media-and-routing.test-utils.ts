@@ -127,7 +127,6 @@ describe("gateway agent handler", () => {
         sessionId: scenario.sessionId,
         sessionKey: scenario.sessionKey,
         storePath,
-        sessionEntry: failedEntryWithStaleActivity,
       });
     } else {
       expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
@@ -247,10 +246,10 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     }));
 
+    const store: Record<string, unknown> = {};
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {};
       const result = await updater(store);
-      capturedEntry = result as Record<string, unknown>;
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
       return result;
     });
 

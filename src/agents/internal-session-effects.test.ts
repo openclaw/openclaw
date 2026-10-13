@@ -144,41 +144,6 @@ describe("internal session effects", () => {
     );
   });
 
-  it("forks visible SQLite history into the hidden session", async () => {
-    const dir = tempDirs.make();
-    const storePath = path.join(dir, "sessions.json");
-    const source = {
-      agentId: "main",
-      sessionId: "visible-session",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    await upsertSessionEntryCore(source, { sessionId: source.sessionId, updatedAt: 1 });
-    await appendTranscriptMessage(source, {
-      cwd: dir,
-      message: { content: "stored", role: "assistant", timestamp: 2 },
-    });
-
-    const target = await prepareInternalSessionEffectsSession({
-      agentId: "main",
-      runId: "run-copy",
-      source,
-      storePath,
-    });
-    const events = await loadTranscriptEvents(target);
-
-    expect(events[0]).toMatchObject({ id: target.sessionId, type: "session" });
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        message: expect.objectContaining({ content: "stored", role: "assistant" }),
-        type: "message",
-      }),
-    );
-    expect(listSessionEntriesCore({ agentId: "main", storePath })).toEqual([
-      expect.objectContaining({ sessionKey: source.sessionKey }),
-    ]);
-  });
-
   it.each(["copy", "reopen"] as const)("requires the current owner during %s", async (phase) => {
     const dir = tempDirs.make();
     const storePath = path.join(dir, "sessions.json");

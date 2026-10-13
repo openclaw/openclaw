@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { resolveChannelAccount, resolvePluginDmPolicy } from "../channels/account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -231,7 +231,7 @@ export async function collectChannelSecurityFindingsCore(params: {
         severity: "critical",
         title: `${input.label} DMs are open`,
         detail: `${policyPath}="open" allows anyone to DM the bot.`,
-        remediation: `Use pairing/allowlist; if you really need open DMs, ensure ${allowFromKey} includes "*".`,
+        remediation: `Use pairing/allowlist; if you really need open DMs, check that ${allowFromKey} includes "*".`,
       });
       if (!hasWildcard) {
         findings.push({
@@ -294,7 +294,7 @@ export async function collectChannelSecurityFindingsCore(params: {
           title: `[secrets] ${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
           detail: diagnostic,
           remediation:
-            "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
+            "Make the referenced secrets available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
         });
       }
       if (!enabled || !configured) {
@@ -305,7 +305,8 @@ export async function collectChannelSecurityFindingsCore(params: {
         orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
-      const dmPolicy = plugin.security.resolveDmPolicy?.({
+      const dmPolicy = await resolvePluginDmPolicy({
+        plugin,
         cfg: params.cfg,
         accountId,
         account,

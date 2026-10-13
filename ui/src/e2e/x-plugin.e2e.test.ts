@@ -10,6 +10,7 @@ import {
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const pluginRoot = fileURLToPath(new URL("../../../extensions/x/", import.meta.url));
 const assets = new Map<string, Buffer>();
@@ -216,10 +217,12 @@ suite.define(() => {
         const retired = await gateway.deferNext("x.allowlist.list");
         await surface.getByRole("button", { name: "Refresh", exact: true }).click();
         await gateway.waitForRequest("x.allowlist.list", { after: retired });
-        await page.getByRole("link", { name: "Plugins", exact: true }).click();
+        const pages = await openSidebarPages(page);
+        await pages.getByRole("link", { name: "Plugins", exact: true }).click();
         await surface.waitFor({ state: "detached" });
         await gateway.resolveDeferred("x.allowlist.list", added);
-        await page.getByRole("link", { name: "X replies", exact: true }).click();
+        await openSidebarPages(page);
+        await pages.getByRole("link", { name: "X replies", exact: true }).click();
         await surface.getByText("@example_helper", { exact: true }).waitFor();
         expect(await surface.getByText("@example_new", { exact: true }).count()).toBe(0);
         expect(pageErrors).toEqual([]);

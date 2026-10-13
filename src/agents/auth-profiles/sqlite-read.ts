@@ -15,6 +15,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import {
   registerUserModelAuthProfileSecrets,
   type PersonalCatalogProfiles,
@@ -67,6 +68,10 @@ export function prepareAgentAuthProfileRowsRead(options: {
   agentId: string;
   env: NodeJS.ProcessEnv;
 }): {
+  identity: string | undefined;
+  captureCredentialAuthority: (
+    profileId: string,
+  ) => ReturnType<typeof captureAuthProfileCredentialAuthority> | undefined;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
   dispose: () => Promise<void>;
@@ -110,7 +115,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
     }
     captured.value.admission.assertCurrent();
     captured.value.maintenanceScope?.assertAdmission();
-    if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
+    // Captured absence stays empty; a first session may create the file without replacing a read source.
+    if (
+      identity?.key.startsWith("file:") &&
+      inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key
+    ) {
       throw new Error("Auth profile database file identity changed during its read");
     }
     // Cached rows still borrow this read's revocable authority through host composition.
@@ -198,7 +207,24 @@ export function prepareAgentAuthProfileRowsRead(options: {
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
-  return { read, assertCurrent, dispose };
+  return {
+    identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    captureCredentialAuthority(profileId) {
+      if (!captured.ok) {
+        throw captured.error;
+      }
+      return identity
+        ? captureAuthProfileCredentialAuthority(
+            captured.value,
+            { identity: `${identity.key}:${identity.birthtime ?? ""}`, databasePath },
+            profileId,
+          )
+        : undefined;
+    },
+    read,
+    assertCurrent,
+    dispose,
+  };
 }
 
 /** Shared auth reads reuse the canonical actor and never request a writable open. */
@@ -294,9 +320,6 @@ export async function readPersonalCatalogProfiles(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.catalog")) {
-    throw new Error(reply.ok ? "Unexpected personal model catalog reply" : reply.message);
-  }
   const result = reply?.catalog;
   for (const profile of Object.values(result?.profiles ?? {})) {
     registerUserModelAuthProfileSecrets(profile.credential);

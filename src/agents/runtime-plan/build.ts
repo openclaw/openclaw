@@ -209,6 +209,17 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     env: process.env,
     runtimeHandle: providerRuntimeHandleForPlugins,
   });
+  const systemPromptParams = <
+    Context extends Parameters<AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]>[0],
+  >(
+    context: Context,
+  ) => ({
+    provider: params.provider,
+    config,
+    workspaceDir: context.workspaceDir ?? params.workspaceDir,
+    runtimeHandle: providerRuntimeHandleForPlugins,
+    context: { ...context, config: asOpenClawConfig(context.config) },
+  });
 
   return {
     resolvedRef,
@@ -219,28 +230,10 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       modelId: params.modelId,
       textTransforms: providerTextTransforms,
       resolveSystemPromptContribution(context) {
-        return resolveProviderSystemPromptContribution({
-          provider: params.provider,
-          config,
-          workspaceDir: context.workspaceDir ?? params.workspaceDir,
-          runtimeHandle: providerRuntimeHandleForPlugins,
-          context: {
-            ...context,
-            config: asOpenClawConfig(context.config),
-          },
-        });
+        return resolveProviderSystemPromptContribution(systemPromptParams(context));
       },
       transformSystemPrompt(context) {
-        return transformProviderSystemPrompt({
-          provider: params.provider,
-          config,
-          workspaceDir: context.workspaceDir ?? params.workspaceDir,
-          runtimeHandle: providerRuntimeHandleForPlugins,
-          context: {
-            ...context,
-            config: asOpenClawConfig(context.config),
-          },
-        });
+        return transformProviderSystemPrompt(systemPromptParams(context));
       },
     },
     tools: {

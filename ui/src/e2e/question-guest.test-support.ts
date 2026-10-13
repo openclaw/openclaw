@@ -4,6 +4,7 @@ import { GatewayClientRequestError } from "../../../packages/gateway-client/src/
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-approval-authority.js";
@@ -48,6 +49,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: guestQuestionSessionKey },
     {

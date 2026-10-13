@@ -1,6 +1,8 @@
 /** Registers external handoff shutdown contracts in the shared run-loop fixture. */
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   expectRestartCloseCall,
@@ -19,7 +21,6 @@ export function registerExternalHandoffShutdownTests(
     restartGatewayProcessWithFreshPid,
     respawnGatewayProcessForUpdate,
     writeGatewayRestartHandoff,
-    prepareGatewayRestartHandoffRuntime,
     cancelShutdownHardExitWatchdog,
     gatewayLog,
     isGatewayWorkAdmissionClosed,
@@ -68,6 +69,7 @@ export function registerExternalHandoffShutdownTests(
           expectRestartCloseCall(close, restartDeferralTimeoutMs);
           expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
+          expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
         } finally {
           joined.resolve();
         }
@@ -77,7 +79,8 @@ export function registerExternalHandoffShutdownTests(
         expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
         expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
         expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalled();
+        // A settled rejection preserves failure status, not an orphaned watchdog.
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
       });
     },
   );
@@ -165,82 +168,61 @@ export function registerExternalHandoffShutdownTests(
     }
   });
 
-  it("prepares restart code before close and publishes the handoff only after close", async () => {
+  it("publishes the handoff after server close and before shared-state cleanup", async () => {
     const env = captureEnv(["OPENCLAW_SUPERVISOR_MODE"]);
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     const closed = createDeferredCore();
     const closeEntered = createDeferredCore();
-    const cleanup = createDeferredCore();
-    const preparation = { release: vi.fn(() => cleanup.promise) };
-    prepareGatewayRestartHandoffRuntime.mockReturnValueOnce(preparation);
+    const handoffEntered = createDeferredCore();
+    const releaseHandoff = createDeferredCore();
+    const sharedState = resolveGlobalMap<string, boolean>(
+      Symbol("restart-handoff-shared-state"),
+      "shared-state",
+    );
+    sharedState.set("live", true);
+    const writeHandoff = writeGatewayRestartHandoff.getMockImplementation()!;
+    writeGatewayRestartHandoff.mockImplementationOnce(async (...args) => {
+      handoffEntered.resolve();
+      await releaseHandoff.promise;
+      return writeHandoff(...args);
+    });
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
     try {
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { close, runtime, exited } = await createSignaledLoopHarness();
+        const { close, runtime, exited, loopPromise } = await createSignaledLoopHarness();
         close.mockImplementationOnce(async () => {
           closeEntered.resolve();
           await closed.promise;
         });
         captureSignal("SIGUSR2")();
-        await closeEntered.promise;
         try {
-          expect(prepareGatewayRestartHandoffRuntime).toHaveBeenCalledOnce();
-          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        } finally {
-          closed.resolve();
-        }
-        await waitForLoopCondition(
-          () => preparation.release.mock.calls.length > 0,
-          "restart preparation cleanup did not begin",
-        );
-        try {
-          expect(writeGatewayRestartHandoff).toHaveBeenCalledWith(
-            expect.objectContaining({ runtimePreparation: preparation }),
-            expect.any(Function),
+          await awaitGateBeforeSettlement(
+            closeEntered.promise,
+            loopPromise,
+            "Gateway exited before server close",
           );
+          expect(close).toHaveBeenCalledWith(expect.objectContaining({ retainSharedState: true }));
+          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
+          closed.resolve();
+          await awaitGateBeforeSettlement(
+            handoffEntered.promise,
+            loopPromise,
+            "Gateway exited before publishing its restart handoff",
+          );
+          expect(sharedState.get("live")).toBe(true);
           expect(runtime.exit).not.toHaveBeenCalled();
         } finally {
-          cleanup.resolve();
+          closed.resolve();
+          releaseHandoff.resolve();
+          await Promise.allSettled([loopPromise]);
         }
+        await loopPromise;
         await expect(exited).resolves.toBe(0);
+        expect(sharedState.size).toBe(0);
       });
     } finally {
       closed.resolve();
-      cleanup.resolve();
-      env.restore();
-    }
-  });
-
-  it("joins unused runtime preparation before resuming an in-process restart", async () => {
-    const env = captureEnv(["OPENCLAW_SUPERVISOR_MODE"]);
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    const cleanup = createDeferredCore();
-    const preparation = { release: vi.fn(() => cleanup.promise) };
-    prepareGatewayRestartHandoffRuntime.mockReturnValueOnce(preparation);
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "failed", detail: "fixture" });
-    try {
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { start, exited } = await createSignaledLoopHarness();
-        captureSignal("SIGUSR2")();
-        await waitForLoopCondition(
-          () => preparation.release.mock.calls.length > 0,
-          "unused preparation cleanup did not begin",
-        );
-        try {
-          expect(start).toHaveBeenCalledOnce();
-          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        } finally {
-          cleanup.resolve();
-        }
-        await waitForLoopCondition(
-          () => start.mock.calls.length === 2,
-          "restart did not resume after code preparation closed",
-        );
-        captureSignal("SIGINT")();
-        await expect(exited).resolves.toBe(0);
-      });
-    } finally {
-      cleanup.resolve();
+      releaseHandoff.resolve();
       env.restore();
     }
   });
@@ -256,9 +238,9 @@ export function registerExternalHandoffShutdownTests(
       await expect(exited).resolves.toBe(0);
       expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, expect.any(Object));
       expect(close).toHaveBeenCalledWith({
+        retainSharedState: true,
         reason: "gateway stopping",
         restartExpectedMs: null,
-        exitAfterClose: true,
       });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "external restart handoff refused: gateway terminal persistence is still pending",

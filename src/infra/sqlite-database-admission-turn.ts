@@ -12,13 +12,9 @@ import { inspectDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 type AdmissionTurn = {
   keys: ReadonlySet<string>;
-  predecessors: Set<AdmissionTurn>;
   completion: Promise<void>;
-  holding: boolean;
-  references: number;
-  releaseReference(): void;
 };
-type AdmissionTurnScope = { turns: readonly AdmissionTurn[]; active: boolean };
+type AdmissionTurnScope = { active: boolean };
 
 const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
@@ -30,7 +26,8 @@ const current = resolveGlobalSingleton(
 );
 
 function reserveAdmissionTurn(locations: string | readonly string[], families: readonly string[]) {
-  if (!canShareSqliteDatabaseAdmissions()) {
+  // Nested dispatch belongs to the outer turn; it must not queue behind its own callers.
+  if (current.getStore()?.active || !canShareSqliteDatabaseAdmissions()) {
     return undefined;
   }
   const keys = new Set(
@@ -61,87 +58,25 @@ function reserveAdmissionTurn(locations: string | readonly string[], families: r
   if (keys.size === 0) {
     return undefined;
   }
-  const scope = current.getStore();
-  const parents = scope?.active ? scope.turns.filter((turn) => turn.holding) : [];
-  const inherited = new Set(parents);
-  const ownedKeys = new Set(parents.flatMap((turn) => [...turn.keys]));
-  const ordered = [...keys].filter((key) => !ownedKeys.has(key)).toSorted();
-  const predecessors = new Set<AdmissionTurn>();
-  const waitsForParent = (turn: AdmissionTurn): boolean => {
-    const search = [turn];
-    const visited = new Set<AdmissionTurn>();
-    for (const candidate of search) {
-      if (inherited.has(candidate)) {
-        return true;
-      }
-      if (!visited.has(candidate)) {
-        visited.add(candidate);
-        search.push(...candidate.predecessors);
-      }
-    }
-    return false;
-  };
-  const search = ordered.flatMap((key) => pending.get(key) ?? []);
-  const visited = new Set<AdmissionTurn>();
-  for (const turn of search) {
-    if (visited.has(turn)) {
-      continue;
-    }
-    visited.add(turn);
-    if (inherited.has(turn)) {
-      continue;
-    }
-    if (waitsForParent(turn)) {
-      // A queued caller cannot stand between an active turn and its nested callback.
-      // Keep its other blockers, so parallel nested opens still validate each file once.
-      search.push(...turn.predecessors);
-    } else {
-      predecessors.add(turn);
-    }
-  }
+  const predecessors = new Set([...keys].flatMap((key) => pending.get(key) ?? []));
   const completion = createDeferredCore();
   const turn: AdmissionTurn = {
-    keys: new Set(ordered),
-    predecessors,
+    keys,
     completion: completion.promise,
-    holding: false,
-    references: 1,
-    releaseReference() {
-      if (--turn.references !== 0) {
-        return;
-      }
-      turn.holding = false;
-      for (const key of ordered) {
-        if (pending.get(key) === turn) {
-          pending.delete(key);
-        }
-      }
-      completion.resolve();
-      for (const parent of parents) {
-        parent.releaseReference();
-      }
-    },
   };
-  for (const parent of parents) {
-    parent.references += 1;
-  }
-  for (const key of ordered) {
+  for (const key of keys) {
     pending.set(key, turn);
   }
-  let released = false;
   const release = () => {
-    if (!released) {
-      released = true;
-      turn.releaseReference();
+    for (const key of turn.keys) {
+      if (pending.get(key) === turn) {
+        pending.delete(key);
+      }
     }
+    completion.resolve();
   };
-  const ready = Promise.all([...predecessors].map((predecessor) => predecessor.completion)).then(
-    () => {
-      turn.holding = true;
-      predecessors.clear();
-    },
-  );
-  return { ready, release, turns: [...parents, turn] };
+  const ready = Promise.all([...predecessors].map((predecessor) => predecessor.completion));
+  return { ready, release };
 }
 
 /** Only cold dispatch waits here; native getters never block the host on a worker's publication. */
@@ -164,7 +99,7 @@ export function runWithSqliteDatabaseAdmissionTurn<T>(
     return operation();
   }
   return turn.ready.then(() => {
-    const scope: AdmissionTurnScope = { turns: turn.turns, active: true };
+    const scope: AdmissionTurnScope = { active: true };
     return current.run(scope, async () => {
       try {
         return await operation();

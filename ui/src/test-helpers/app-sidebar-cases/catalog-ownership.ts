@@ -9,6 +9,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -43,7 +44,7 @@ describe("AppSidebar session catalog ownership", () => {
       page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
       sidebar.sessionData.sessionCatalogs = page.catalogs;
       sidebar.sessionData.requestSessionDataUpdate();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const header = () =>
         sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head');
       expect(header()).not.toBeNull();
@@ -122,7 +123,6 @@ describe("AppSidebar session catalog ownership", () => {
         expect(sidebar.textContent).toContain("Retired page");
         expect(sidebar.querySelector(".sidebar-session-catalog-new")).not.toBeNull();
         expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
-        expect(sidebar.sessionData.sessionCatalogRevisions.size).toBe(1);
 
         gateway.publish({ phase: "reconnecting", hello: null });
         await sidebar.updateComplete;
@@ -143,7 +143,6 @@ describe("AppSidebar session catalog ownership", () => {
         expect(sidebar.sessionData.sessionCatalogAgentId).toBeNull();
         expect(sidebar.sessionData.sessionCatalogs).toEqual([]);
         expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
-        expect(sidebar.sessionData.sessionCatalogRevisions.size).toBe(0);
         expect(sidebar.textContent).not.toContain("Retired session");
         expect(sidebar.textContent).not.toContain("Retired page");
         expect(sidebar.querySelector(".sidebar-session-catalog-new")).toBeNull();

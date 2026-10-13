@@ -1,7 +1,5 @@
-import { redactTranscriptText } from "../agents/transcript-redact-text.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.sqlite-events.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserMessage, readModelPromptProjection } from "./user-turn-transcript.message.js";
 import {
   normalizePersistedSteerTargetRunId,
@@ -49,7 +47,6 @@ export async function capturePersistedModelPromptProjection(params: {
   admission: UserTurnTranscriptAdmissionReceipt;
   message: PersistedUserTurnMessage;
   text: string;
-  config?: OpenClawConfig;
   assertCurrent: () => void;
   assertWritable: () => void;
   onCommitted: (
@@ -58,7 +55,7 @@ export async function capturePersistedModelPromptProjection(params: {
   ) => void;
 }): Promise<PersistedUserTurnMessage> {
   params.assertCurrent();
-  const text = redactTranscriptText(params.text, params.config);
+  const text = params.text;
   const requireMatchingProjection = (candidate: PersistedUserTurnMessage) => {
     const existing = readModelPromptProjection(candidate);
     if (existing !== undefined && existing !== text) {

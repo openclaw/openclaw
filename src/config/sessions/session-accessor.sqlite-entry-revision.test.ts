@@ -20,6 +20,10 @@ import {
   readSessionEntryCacheValidityToken,
   readSessionNodesGeneration,
 } from "./session-accessor.sqlite-entry-revision.js";
+import {
+  participantRecordsBySessionKey,
+  withSessionParticipantWriteSnapshot,
+} from "./session-accessor.sqlite-participant-projection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -44,14 +48,63 @@ function fixture(filename = ":memory:") {
 }
 
 describe("session entry revision facts", () => {
-  it("reuses unchanged generation reads across admitted operations", () => {
-    const { read } = fixture();
+  it("carries participant facts into an unchanged entry CAS and invalidates them on writes", () => {
+    const filename = path.join(tempDirs.make("participant-revision-"), "agent.sqlite");
+    const { db } = fixture(filename);
+    const sessionKey = "agent:main:revision";
+    db.prepare(
+      `INSERT INTO session_participants
+       (session_key, identity_namespace, actor_id, contribution_count)
+       VALUES (?, ?, 'participant', 1)`,
+    ).run(sessionKey, '{"type":"agent"}');
+    const peer = openNodeSqliteDatabase(filename);
+    databases.push(peer);
+    const read = () =>
+      participantRecordsBySessionKey(db, [sessionKey]).get(sessionKey)?.[0]?.contributionCount;
+    const sql = trackSqliteStatementExecutions(db, ["participants"], (statement) =>
+      /^select\b.*\bfrom "session_participants"/iu.test(statement) ? "participants" : null,
+    );
+    try {
+      expect(read()).toBe(1);
+      runSqliteImmediateTransactionSync(db, () => {
+        expect(withSessionParticipantWriteSnapshot(db, read)).toBe(1);
+        expect(sql.counts.participants).toBe(1);
+      });
+
+      peer.exec("UPDATE session_participants SET contribution_count = 2");
+      runSqliteImmediateTransactionSync(db, () => {
+        expect(withSessionParticipantWriteSnapshot(db, read)).toBe(2);
+      });
+      expect(read()).toBe(2);
+      expect(() =>
+        runSqliteImmediateTransactionSync(db, () => {
+          db.exec("UPDATE session_participants SET contribution_count = 3");
+          expect(withSessionParticipantWriteSnapshot(db, read)).toBe(3);
+          throw new Error("rollback participant change");
+        }),
+      ).toThrow("rollback participant change");
+      expect(read()).toBe(2);
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it("reads connection-owned generations without SQL after reads and row writes", () => {
+    const { db, read } = fixture();
     // The first read installs TEMP triggers; admit that schema before observing warm reads.
     expect(read()).toBe(0);
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(read()).toBe(0);
-      expect(read()).toBe(0);
+      db.exec("UPDATE session_nodes SET updated_at = 2");
+      const changed = read();
+      expect(changed).toBeGreaterThan(0);
+      expect(read()).toBe(changed);
+      runSqliteDeferredTransactionSync(db, () => {
+        expect(read()).toBe(changed);
+        expect(read()).toBe(changed);
+      });
+      expect(read()).toBe(changed);
       expect(observation.queries.filter((sql) => /\bdata_version\b/iu.test(sql))).toEqual([]);
       expect(
         observation.queries.filter((sql) =>
@@ -63,7 +116,7 @@ describe("session entry revision facts", () => {
     }
   });
 
-  it("observes raw entry and participant writes and discards rolled-back generations", () => {
+  it("invalidates entry and participant snapshots after writes and rollback", () => {
     const { db, read } = fixture();
     db.exec("UPDATE session_nodes SET updated_at = 2");
     const updated = read();
@@ -76,21 +129,34 @@ describe("session entry revision facts", () => {
         (session_key, identity_namespace, actor_id, contribution_count)
         VALUES ('agent:main:revision', 'test', 'actor', 1)`,
       ).run();
-      expect(read()).toBeGreaterThan(updated);
+      const uncommitted = read();
+      expect(uncommitted).toBeGreaterThan(updated);
       db.exec("ROLLBACK TO SAVEPOINT revision_change; RELEASE SAVEPOINT revision_change");
-      expect(read()).toBe(updated);
+      expect(read()).toBeGreaterThan(uncommitted);
       db.exec("UPDATE session_nodes SET updated_at = 3");
       committed = read();
       expect(committed).toBeGreaterThan(updated);
     });
     expect(read()).toBe(committed);
     db.exec("BEGIN; UPDATE session_nodes SET updated_at = 4");
-    expect(read()).toBeGreaterThan(committed);
+    const uncommitted = read();
+    expect(uncommitted).toBeGreaterThan(committed);
     db.exec("ROLLBACK");
-    expect(read()).toBe(committed);
+    const rolledBack = read();
+    expect(rolledBack).toBeGreaterThan(uncommitted);
+    expect(read()).toBe(rolledBack);
     db.exec("ALTER TABLE session_nodes ADD COLUMN revision_probe TEXT");
     admitSqliteSchema(db);
-    expect(read()).toBeGreaterThan(committed);
+    expect(read()).toBeGreaterThan(rolledBack);
+    const insideBatch: number[] = [];
+    db.function("capture_generation", () => {
+      insideBatch.push(read());
+      return null;
+    });
+    db.exec(`BEGIN; UPDATE session_nodes SET updated_at = 5;
+      SELECT capture_generation(); ROLLBACK; SELECT capture_generation();`);
+    expect(insideBatch[1]).toBeGreaterThan(insideBatch[0]!);
+    expect(read()).toBeGreaterThan(insideBatch[1]!);
   });
 
   it("observes sibling receipts while native reads retain their explicit snapshot", () => {
@@ -207,7 +273,7 @@ it("observes a sibling writer receipt before the next authority check", () => {
   expect(guard).toThrow("Prepared session entry facts are no longer current");
 });
 
-it("does not stamp an overlapping sibling commit onto previously read predicate facts", () => {
+it("checks the next predicate after a sibling commit overlaps a read", () => {
   const filename = path.join(tempDirs.make("session-revision-overlap-"), "agent.sqlite");
   const { database } = guardFixture(filename);
   database.exec("PRAGMA journal_mode = WAL");
@@ -228,6 +294,6 @@ it("does not stamp an overlapping sibling commit onto previously read predicate 
       return matches;
     },
   );
-  expect(guard).toThrow("Session entry facts changed during their mutation check");
+  expect(guard).not.toThrow();
   expect(guard).toThrow("Prepared session entry facts are no longer current");
 });

@@ -39,7 +39,6 @@ export function sessionMenuReasons(params: {
       session,
     });
   const renameReason = patchReason({ label: null }, true);
-  const pinReason = patchReason({ pinned: true }, true);
   const promotionReason = !session.sessionId?.trim()
     ? "Session lifecycle action requires a durable session identity."
     : patchReason({ sidebarRoot: true }, true);
@@ -91,7 +90,6 @@ export function sessionMenuReasons(params: {
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
   return {
-    ...(pinReason ? { "toggle-pin": pinReason } : {}),
     ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),

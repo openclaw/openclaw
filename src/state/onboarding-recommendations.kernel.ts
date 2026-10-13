@@ -5,6 +5,7 @@ import {
 } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import {
+  ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX,
   OnboardingRecommendationMatchesSchema,
   type OnboardingRecommendationsRecord,
   type PreparedOnboardingRecommendationOffer,
@@ -154,9 +155,13 @@ function recommendationOperation<Params, Result>(
   operation: (configKey: string, params: Params, options: OpenClawStateDatabaseOptions) => Result,
 ) {
   return (
-    { configKey, params }: { configKey: string; params: Params },
+    { workspaceKey, params }: { workspaceKey: string; params: Params },
     { open, stateOptions }: WorkerOperationContext,
-  ) => operation(configKey, params, { database: open(), ...stateOptions() });
+  ) =>
+    operation(`${ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX}${workspaceKey}`, params, {
+      database: open(),
+      ...stateOptions(),
+    });
 }
 
 export const onboardingRecommendationOperations = {
@@ -173,9 +178,13 @@ export const onboardingRecommendationOperations = {
     clearPendingOnboardingRecommendations,
   ),
   "onboardingRecommendations.clear": (
-    { configKey }: { configKey: string },
+    { workspaceKey }: { workspaceKey: string },
     { open, stateOptions },
-  ) => deleteConfigMachineState(configKey, { database: open(), ...stateOptions() }),
+  ) =>
+    deleteConfigMachineState(`${ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX}${workspaceKey}`, {
+      database: open(),
+      ...stateOptions(),
+    }),
 } satisfies WorkerOperationHandlers;
 
 export type OnboardingRecommendationWriteOperations = WorkerOperations<

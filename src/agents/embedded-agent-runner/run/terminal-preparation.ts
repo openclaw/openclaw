@@ -154,10 +154,12 @@ export function prepareEmbeddedRunTerminal(input: {
       : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-  const attemptFinalText = attempt.assistantTexts
-    .map((text) => sanitizeAssistantVisibleStreamText(text))
-    .findLast((text) => text.trim().length > 0)
-    ?.trim();
+  const attemptFinalText = answerAssistant
+    ? undefined
+    : attempt.assistantTexts
+        .map((text) => sanitizeAssistantVisibleStreamText(text))
+        .findLast((text) => text.trim().length > 0)
+        ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
     : undefined;
@@ -175,7 +177,7 @@ export function prepareEmbeddedRunTerminal(input: {
       successfulToolNames: resolveSuccessfulToolNames(attempt),
       assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
       sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
-      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef),
+      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef, runParams.config),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";

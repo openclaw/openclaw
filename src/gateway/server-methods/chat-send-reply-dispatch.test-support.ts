@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
-import { getRuntimeConfig } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.entry.js";
 import {
   appendTranscriptMessageSync,
@@ -25,6 +25,7 @@ export async function createReplyTranscriptFixture(
   sessionKey = "agent:main:receipt",
   retainSource = false,
 ) {
+  await captureRuntimeConfigAsyncReader()();
   const runId = "receipt-run";
   const scope = {
     agentId: "main",
@@ -94,7 +95,7 @@ export async function createReplyTranscriptFixture(
     : undefined;
   const qualified =
     loaded &&
-    prepareQualifiedSessionEntryTarget(
+    (await prepareQualifiedSessionEntryTarget(
       {
         ...loaded,
         requestedKey: sessionKey,
@@ -102,7 +103,7 @@ export async function createReplyTranscriptFixture(
         readSource: loaded.capturedReadSource,
       },
       loaded.capturedReadSources,
-    );
+    ));
   let current = true;
   const abortController = new AbortController();
   const dispatch = createChatSendReplyDispatch({
@@ -126,8 +127,7 @@ export async function createReplyTranscriptFixture(
       cfg: loaded?.cfg ?? {},
       ...(qualified
         ? {
-            sessionTarget: qualified.target,
-            assertSessionTargetCurrent: qualified.assertCurrent,
+            sessionTarget: qualified,
             capturedReadSources: loaded?.capturedReadSources,
           }
         : {}),
@@ -145,7 +145,9 @@ export async function createReplyTranscriptFixture(
     rewriteSync,
     dispatch,
     abortController,
-    release: () => qualified?.release(),
+    release: () => {
+      current = false;
+    },
     retire: () => {
       current = false;
     },

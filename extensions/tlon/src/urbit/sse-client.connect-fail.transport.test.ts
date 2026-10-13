@@ -154,6 +154,95 @@ describe("UrbitSSEClient real transport ownership", () => {
       await client.close();
     }
   });
+
+  it.for([
+    { ending: "LF", newline: "\n", dataLines: "single" },
+    { ending: "LF", newline: "\n", dataLines: "multiline" },
+    { ending: "CRLF", newline: "\r\n", dataLines: "single" },
+    { ending: "CRLF", newline: "\r\n", dataLines: "multiline" },
+    { ending: "CR", newline: "\r", dataLines: "single" },
+    { ending: "CR", newline: "\r", dataLines: "multiline" },
+  ])(
+    "delivers $dataLines data over $ending HTTP SSE framing",
+    async ({ newline, dataLines }, { signal }) => {
+      const sentinel = Promise.withResolvers<void>();
+      const streamClosed = Promise.withResolvers<void>();
+      const delivered: unknown[] = [];
+      const errors: string[] = [];
+      const requestBodies: unknown[] = [];
+      const requests: Array<{
+        method: string | undefined;
+        url: string | undefined;
+        cookie: string | undefined;
+      }> = [];
+      let streamSocket: import("node:net").Socket | undefined;
+      const data =
+        dataLines === "single"
+          ? ['data:{"id":1,"json":{"message":"delivered😀"}}']
+          : ['data: {"id":1,', 'data: "json":{"message":"delivered😀"}}'];
+      const event = ["id:21", ...data, "", ""].join(newline);
+      // The LF sentinel is valid even on the original parser, so missing delivery
+      // fails an assertion instead of waiting for a timeout or reconnect.
+      const wireBody = `${event}id:22\ndata:{"id":1,"json":{"marker":"sentinel"}}\n\n`;
+      const server = createServer((request, response) => {
+        requests.push({ method: request.method, url: request.url, cookie: request.headers.cookie });
+        if (request.method === "GET") {
+          streamSocket = request.socket;
+          streamSocket.once("close", () => streamClosed.resolve());
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.write(wireBody);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.once("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (body) {
+            requestBodies.push(JSON.parse(body));
+          }
+          response.writeHead(204).end();
+        });
+      });
+      const client = createClient(await listen(server), {
+        logger: { error: (message) => errors.push(message) },
+      });
+
+      try {
+        await client.subscribe({
+          app: "chat",
+          path: "/inbox",
+          event: (payload) => {
+            delivered.push(payload);
+            if (
+              typeof payload === "object" &&
+              payload !== null &&
+              "marker" in payload &&
+              payload.marker === "sentinel"
+            ) {
+              sentinel.resolve();
+            }
+          },
+        });
+        await client.connect();
+        await withinTest(sentinel.promise, signal);
+
+        expect(delivered).toEqual([{ message: "delivered😀" }, { marker: "sentinel" }]);
+        expect(errors).toEqual([]);
+        expect(requestBodies).toContainEqual([
+          expect.objectContaining({ action: "ack", "event-id": 21 }),
+        ]);
+        expect(requests.filter((request) => request.method === "GET")).toEqual([
+          { method: "GET", url: `/~/channel/${client.channelId}`, cookie: proofCookie },
+        ]);
+        expect(streamSocket?.destroyed).toBe(false);
+        await client.close();
+        await withinTest(streamClosed.promise, signal);
+        expect(client.streamRelease).toBeNull();
+      } finally {
+        await client.close();
+      }
+    },
+  );
 });
 
 async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY) {
@@ -274,6 +363,69 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
       await proof.client.close();
     }
   });
+
+  it.for(["stopReceiving", "close"] as const)(
+    "does not reopen the stream when %s runs during reauthentication",
+    async (stop, { signal }) => {
+      const proof = await startReconnectFixture(2);
+      const authenticating = Promise.withResolvers<void>();
+      const authenticated = Promise.withResolvers<void>();
+      proof.onReconnect.mockImplementation(async () => {
+        authenticating.resolve();
+        await authenticated.promise;
+        proof.client.updateCookie(proofCookie);
+      });
+      try {
+        await proof.client.connect();
+        const { reconnect } = await proof.pendingReconnect(signal);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await withinTest(authenticating.promise, signal);
+        await proof.client[stop]();
+        const requestsAfterStop = proof.requests.length;
+        authenticated.resolve();
+        await withinTest(reconnect, signal);
+
+        expect(proof.requests).toHaveLength(requestsAfterStop);
+        expect(proof.client.isConnected).toBe(false);
+        expect(proof.client.streamRelease).toBeNull();
+      } finally {
+        authenticated.resolve();
+        await proof.client.close();
+      }
+    },
+  );
+
+  it.for(["stream", "create"] as const)(
+    "does not resume a stopped reconnect after pending %s headers",
+    async (stage, { signal }) => {
+      const pending = Promise.withResolvers<import("node:http").ServerResponse>();
+      const requests: string[] = [];
+      const server = createServer((request, response) => {
+        requests.push(request.method ?? "GET");
+        if (stage === "create" && request.method === "GET") {
+          response.writeHead(404).end();
+        } else {
+          pending.resolve(response);
+        }
+      });
+      const client = createClient(await listen(server));
+      const reconnect = client.attemptReconnect();
+      try {
+        await vi.advanceTimersByTimeAsync(1_000);
+        const response = await withinTest(pending.promise, signal);
+        client.stopReceiving();
+        const requestsAfterStop = requests.length;
+        response.writeHead(204).end();
+        await withinTest(reconnect, signal);
+
+        expect(requests).toHaveLength(requestsAfterStop);
+        expect(client.isConnected).toBe(false);
+        expect(client.streamRelease).toBeNull();
+      } finally {
+        client.stopReceiving();
+      }
+    },
+  );
 
   it("still reconnects an uninterrupted authenticated SSE stream", async ({ signal }) => {
     const proof = await startReconnectFixture(2);

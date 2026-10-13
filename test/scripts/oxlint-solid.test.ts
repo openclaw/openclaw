@@ -47,6 +47,8 @@ it("enforces Solid 2 rules through the UI oxlint configuration", () => {
     [
       "solid(reactivity):warning",
       "solid(reactivity):warning",
+      "solid(reactivity):warning",
+      "solid(reactivity):warning",
       "solid(no-destructure):error",
       "solid(no-unknown-namespaces):error",
       "solid(removed-api):error",

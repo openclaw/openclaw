@@ -146,7 +146,7 @@ For Gateway runs, a resolved authenticated profile can make the invoker
 `present` and coverage `attribution-only`. Paired devices and shared credentials
 do not establish a person: without a durable profile the invoker stays absent,
 or `unknown` when authenticated user evidence promised a profile that could not
-be resolved. Session creation retains the live canonical durable profile id so
+be resolved. Session creation retains the live resolved durable profile id so
 profile linking does not orphan ownership, while run inspection consumes the
 immutable connection-time audit fact. Ordinary session provenance stores no
 display label. An optional bounded, secret-redacted label can be retained only
@@ -359,7 +359,7 @@ For one selected context, receipt paging starts with admission, then reads
 owner-native terminal approvals, merges outbound progress and terminal records,
 then reads generic facts and the cron lifecycle owner. The complete order is
 admission, approval, message, generic, then cron.
-The merge is deterministic across restart and rejects a cursor whose exact
+The merged order stays the same across restarts. A cursor is rejected when its exact
 owner row has expired. Approval and message selectors use the opaque
 `approval-decision:` and `message-decision:` namespaces minted from the same
 owner-query snapshot; raw receipt, resolution, and event identifiers never

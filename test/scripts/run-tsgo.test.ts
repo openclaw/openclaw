@@ -470,7 +470,7 @@ ${fixtureReceiptClientSource(receipts.endpoint)}
 for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 sendReceipt(${JSON.stringify(pidFile)}, "ready");
-${phase === "spawn" ? 'fs.writeSync(3, "R");' : ""}
+${phase === "spawn" ? 'fs.writeSync(Number(process.env.OPENCLAW_TEST_TSGO_READY_FD), "R");' : ""}
 setInterval(() => {}, 1000);
 `,
           );
@@ -489,7 +489,11 @@ childProcess.spawn = (...args) => {
   const ready = fs.openSync(${JSON.stringify(readyPipe)}, "r+");
   try {
     const options = args[2];
-    const child = spawn(args[0], args[1], { ...options, stdio: [...options.stdio, ready] });
+    const child = spawn(args[0], args[1], {
+      ...options,
+      env: { ...options.env, OPENCLAW_TEST_TSGO_READY_FD: String(options.stdio.length) },
+      stdio: [...options.stdio, ready],
+    });
     const receipt = Buffer.alloc(1);
     if (fs.readSync(ready, receipt) !== receipt.length) {
       throw new Error("compiler readiness pipe closed before ready");

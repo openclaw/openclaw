@@ -83,8 +83,8 @@ executor and remain bounded by the Code Mode execution and continuation limits.
 applies to interactive Code Mode and headless automation scripts.
 
 Every effective non-MCP tool is also installed as an async global function.
-The model-visible `exec` description includes a bounded, deterministic subset
-of final callable names, compact input hints, and trusted declared output hints.
+The run's Code Mode prompt includes a small set of final callable names
+selected by fixed rules, along with compact input hints and trusted declared output hints.
 Descriptions remain deferred so adversarial catalog prose cannot steer the
 model. When that index omits a tool, call `catalog.search(...)`; its results are
 callable functions.
@@ -293,7 +293,7 @@ an available session manager. Read `API.read("results.d.ts")` for the contract.
 
 For text file pages, `read(...)` returns file text in `content`; filename-resolution
 and pagination notices stay in the human-readable tool display, not the structured
-file data. Existing file redaction still applies. Check `kind` before parsing:
+file data. File text, including `.env` content, is not secret-masked. Check `kind` before parsing:
 `"truncated"` means more data is available at `continuation`. Read that next page
 with the same path and the returned `offset`, optional `cursor`, and optional
 `limit`. Join line continuations with `"\n"`; append cursor continuations directly.

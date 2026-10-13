@@ -175,13 +175,12 @@ export async function prepareAgentRunDispatch(
           }),
           isAbortable: () => isEmbeddedAgentRunAbortableForRunId(params.runId),
           onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(params.runId),
-          onQueueTimeout: (entry) => {
-            abortChatRunById(createChatAbortOps(params.context), {
+          onQueueTimeout: (entry) =>
+            void abortChatRunById(createChatAbortOps(params.context), {
               runId: params.runId,
               sessionKey: entry.sessionKey,
               stopReason: "timeout",
-            });
-          },
+            }),
           controlUiVisible,
           kind: "agent",
           lifecycleGeneration: params.lifecycleGeneration,
@@ -443,7 +442,16 @@ export async function prepareAgentRunDispatch(
   let subagentAdmission: Awaited<ReturnType<typeof prepareGatewaySubagentRun>>;
   try {
     subagentAdmission = await prepareGatewaySubagentRun({
-      ...params,
+      cfg: params.cfg,
+      client: params.client,
+      resolvedSessionKey: params.resolvedSessionKey,
+      activeSessionAgentId: params.activeSessionAgentId,
+      inputProvenance: params.inputProvenance,
+      request: params.request,
+      isOneShotModelRun: params.isOneShotModelRun,
+      runId: params.runId,
+      getAdmittedSessionId: params.getAdmittedSessionId,
+      context: params.context,
       onParentResumeAdopted: (entry) => {
         adoptedParentResume = entry;
       },
@@ -520,7 +528,6 @@ export async function prepareAgentRunDispatch(
     assertInputAdmissionCurrent?.();
     userTurn = await prepareAgentRunUserTurn({
       ...params,
-      onMediaRetained: params.onUserTurnMediaRetained,
       assertCurrent: () => {
         assertInputOwnerCurrent();
         activeRunAbort.controller.signal.throwIfAborted();
@@ -532,6 +539,11 @@ export async function prepareAgentRunDispatch(
       admittedSessionId: params.getAdmittedSessionId(),
       resolvedThreadId,
     });
+    if (userTurn.recorder) {
+      // Accepted input owns these media references before it enters the transcript.
+      // Later admission rejection must preserve the files retained by that custody.
+      params.onUserTurnMediaPersisted();
+    }
   } catch (err) {
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
@@ -560,7 +572,19 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    capturedOperator = await retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
+    capturedOperator = await retainGatewayOperatorRun({
+      ...params,
+      entry: activeRunAbort.entry,
+      abortSession: params.resolvedSessionKey
+        ? {
+            cfg: params.cfg,
+            storePath: params.lifecycleStorePath,
+            entry: params.sessionEntry,
+            canonicalKey: params.resolvedSessionKey,
+            agentId: params.activeSessionAgentId,
+          }
+        : undefined,
+    });
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;

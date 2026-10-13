@@ -4,17 +4,23 @@ import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
+  CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
   type ControlUiEnvironment,
+  type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 /** Anchors bundled assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlAssetHrefs(
@@ -54,7 +60,9 @@ export async function serveControlUiIndexHtml(
   sessionEntryPath?: string,
   isSessionEntryCurrent?: () => boolean,
   proxySessionEntry = false,
+  bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
     uiPath === "/chat" || uiPath.startsWith("/chat/")
@@ -70,6 +78,9 @@ export async function serveControlUiIndexHtml(
   // An empty base path is authoritative for Gateway resources even when the
   // router infers a namespace. Always emit it so resources stay root-mounted.
   const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
+  const bootstrapAttribute = bootstrapConfig
+    ? ` ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(bootstrapConfig))}"`
+    : "";
   const environmentAttributes = environment
     ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
     : "";
@@ -85,7 +96,8 @@ export async function serveControlUiIndexHtml(
       .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
       .replace(
         /<html\b/i,
-        `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
+        () =>
+          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -96,6 +108,9 @@ export async function serveControlUiIndexHtml(
       )
     : prepared;
   const hashes = computeInlineScriptHashes(document);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
   // Always set the document CSP here (the index carries inline scripts) so the
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
@@ -104,9 +119,13 @@ export async function serveControlUiIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      frameAncestors: ingress?.frameAncestors,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", sessionEntryPath ? "no-store" : "no-cache");
-  await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
+  res.setHeader(
+    "Cache-Control",
+    bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
+  );
+  await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent, sessionEntryPath);
 }

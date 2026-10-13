@@ -14,7 +14,6 @@ import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js"
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   getSqliteDatabaseSchemaRevision,
-  hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseSiblingWriteRevision,
 } from "./sqlite-database-admission.js";
@@ -35,6 +34,23 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 describe("admitted SQLite schema facts", () => {
   const { tempDirs, openDatabase, databases } = useSqliteSchemaTestFixture();
+
+  it("keeps read receipts stable for mutation words while tracking callback writes", () => {
+    const database = openDatabase();
+    const before = readSqliteDatabaseWriteRevision(database);
+    database
+      .prepare("SELECT 'openclaw.system-update', 'it''s DELETE', 1 AS [INSERT] /* REPLACE */")
+      .get();
+    expect(readSqliteDatabaseWriteRevision(database)).toBe(before);
+
+    database.function("mutate", () => {
+      database.exec("INSERT INTO original VALUES (9)");
+      return 9;
+    });
+    database.prepare("SELECT mutate()").get();
+    expect(readSqliteDatabaseWriteRevision(database)).not.toBe(before);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
+  });
 
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(
@@ -58,7 +74,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it("validates a physical file once across handles and close, and validates its replacement", () => {
+  it("shares validation across open handles and revalidates after final close or replacement", () => {
     const root = tempDirs.make("openclaw-schema-process-");
     const filename = path.join(root, "state.sqlite");
     const first = openDatabase(undefined, true, filename);
@@ -67,14 +83,21 @@ describe("admitted SQLite schema facts", () => {
       observation.queries.filter((sql) =>
         /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql),
       );
+    const validations = () => schemaReads().filter((sql) => /^PRAGMA user_version$/iu.test(sql));
     try {
       const second = openDatabase("", true, filename);
       expect(tableExists(second, "original")).toBe(true);
       second.close();
+      expect(tableExists(first, "original")).toBe(true);
+      expect(schemaReads()).toEqual([]);
       first.close();
       const reopened = openDatabase("", true, filename);
       expect(tableExists(reopened, "original")).toBe(true);
-      expect(schemaReads()).toEqual([]);
+      expect(validations()).toHaveLength(1);
+      const sibling = openDatabase("", true, filename);
+      expect(tableExists(sibling, "original")).toBe(true);
+      expect(validations()).toHaveLength(1);
+      sibling.close();
       reopened.close();
 
       const replacementPath = path.join(root, "replacement.sqlite");
@@ -85,12 +108,11 @@ describe("admitted SQLite schema facts", () => {
       const replaced = openDatabase("", true, filename);
       expect(tableExists(replaced, "replacement")).toBe(true);
       expect(tableExists(replaced, "original")).toBe(false);
-      expect(schemaReads().length).toBeGreaterThan(0);
-      const firstValidationCount = schemaReads().length;
+      expect(validations()).toHaveLength(2);
       replaced.close();
       const replacementReopened = openDatabase("", true, filename);
       expect(tableExists(replacementReopened, "replacement")).toBe(true);
-      expect(schemaReads()).toHaveLength(firstValidationCount);
+      expect(validations()).toHaveLength(3);
     } finally {
       observation.restore();
     }
@@ -317,9 +339,9 @@ describe("admitted SQLite schema facts", () => {
         expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
         expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
       });
-    read();
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
+      read();
       const insert = writer.prepare("INSERT INTO session_nodes VALUES (?)");
       for (let index = 0; index < 100; index += 1) {
         insert.run(index);
@@ -346,26 +368,32 @@ describe("admitted SQLite schema facts", () => {
     expect(tableExists(database, "original")).toBe(true);
   });
 
-  it("invalidates derived column facts when adopting a foreign schema publication", () => {
+  it("derives owner columns from admitted sibling schema publications without table-info reads", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
     const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
-    expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
-    const writer = openNodeSqliteDatabase(filename);
-    databases.push(writer);
-    writer.exec(`
-      ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_type TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_id TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_assigned_at INTEGER;
-    `);
-    const publisher = openDatabase("", true, filename);
-    const facts = getAdmittedSqliteSchemaFacts(publisher);
-    expect(facts).toBeDefined();
-    expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
-    expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
+      const writer = openNodeSqliteDatabase(filename);
+      databases.push(writer);
+      writer.exec(`
+        ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_type TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_id TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_assigned_at INTEGER;
+      `);
+      const publisher = openDatabase("", true, filename);
+      const facts = getAdmittedSqliteSchemaFacts(publisher);
+      expect(facts).toBeDefined();
+      expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
+      expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
+      expect(observation.queries.filter((sql) => /pragma_table_info/iu.test(sql))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
   });
-  it.each(["data_version", "schema_version", "user_version"])(
+  it.each(["data_version", "schema_version", "user_version", "encoding"])(
     "uses native freshness without consulting a table shadowing %s",
     (name) => {
       const database = openDatabase(
@@ -376,6 +404,8 @@ describe("admitted SQLite schema facts", () => {
         true,
       );
       expect(readSqliteDataVersion(database)).not.toBe(999);
+      expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(1);
+      expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
     },
   );
 
@@ -468,7 +498,7 @@ describe("admitted SQLite schema facts", () => {
       expect(before).toBeDefined();
       expect(revision()).toBe(before);
       writer.exec("BEGIN IMMEDIATE; INSERT INTO original VALUES (1)");
-      expect(revision()).toBeUndefined();
+      expect(revision()).toBe(before);
       expect(readSqliteDatabaseWriteRevision(writer)).toBeTypeOf("number");
       const sibling = readSqliteDatabaseSiblingWriteRevision(writer);
       writer.exec("COMMIT");
@@ -476,15 +506,16 @@ describe("admitted SQLite schema facts", () => {
       expect(revision()).not.toBe(before);
       expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
       const tracking = {
-        kind: "generation",
-        table: "local_status",
-        triggers: [],
-        advance: false,
+        kind: "transcript-index",
+        statusTable: "local_status",
+        pendingTable: "local_pending",
+        pendingIndex: "local_pending_state",
+        observedTables: [],
       } as const;
       installSqliteTempTrackingSchema(writer, tracking);
       const committed = revision();
       writer.exec(
-        'BEGIN; INSERT OR REPLACE INTO temp.local_status VALUES (1,1); UPDATE "temp".local_status SET generation=2; COMMIT',
+        'BEGIN; INSERT OR REPLACE INTO temp.local_status VALUES (1,1,0,0,NULL,0); UPDATE "temp".local_status SET sibling_write_revision=2; COMMIT',
       );
       expect(revision()).toBe(committed);
       writer.exec("BEGIN; INSERT INTO original VALUES (2); ROLLBACK");
@@ -501,9 +532,11 @@ describe("admitted SQLite schema facts", () => {
       insertSuffix.run();
       expect(revision()).not.toBe(beforeSuffix);
       expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }, { id: 8 }]);
-      const updateTracking = writer.prepare("UPDATE temp.local_status SET generation=3");
+      const updateTracking = writer.prepare(
+        "UPDATE temp.local_status SET sibling_write_revision=3",
+      );
       writer.exec(
-        "CREATE TEMP TRIGGER custom_tracking_write AFTER UPDATE ON local_status BEGIN INSERT INTO original VALUES (9); END",
+        "CREATE TEMP TRIGGER custom_tracking_write AFTER UPDATE ON local_status WHEN NEW.sibling_write_revision = 3 BEGIN INSERT INTO original VALUES (9); END",
       );
       installSqliteTempTrackingSchema(writer, tracking);
       const beforeTrigger = revision();
@@ -550,6 +583,9 @@ describe("admitted SQLite schema facts", () => {
           expect(read()).toEqual(["first"]);
           const reads = rowReads();
           writer.exec("UPDATE session_participants SET actor_id='second'");
+          expect(reader.prepare("SELECT actor_id FROM session_participants").get()?.actor_id).toBe(
+            "first",
+          );
           expect(read()).toEqual(["first"]);
           expect(rowReads()).toBe(reads);
           reader.exec("COMMIT; BEGIN");
@@ -619,9 +655,7 @@ describe("admitted SQLite schema facts", () => {
     });
     expect(tableExists(reader, "implicit_snapshot")).toBe(true);
     writer.exec("BEGIN; CREATE TABLE closed_rollback (id)");
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
     writer.close();
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
     expect(tableExists(reader, "closed_rollback")).toBe(false);
   });
 

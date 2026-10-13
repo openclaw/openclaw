@@ -43,7 +43,7 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   shouldSuppressAgentPromptPersistence,
@@ -134,7 +134,7 @@ export function recordAgentRunUserTurnParticipant(
 
 export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
-  onMediaRetained: () => void;
+  onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
@@ -177,18 +177,16 @@ export async function prepareAgentRunUserTurn(params: {
         sessionKey,
         claimId: execApprovalFollowupHandoffClaimId,
       });
-    let execApprovalFollowupRuntimeHandoff =
-      params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-        ? claimFollowup(params.resolvedSessionKey)
-        : undefined;
-    if (
-      !execApprovalFollowupRuntimeHandoff &&
-      params.canUseInternalRuntimeHandoff &&
-      params.execApprovalFollowupApprovalId &&
-      params.requestedSessionKeyRaw &&
-      params.requestedSessionKeyRaw !== params.resolvedSessionKey
-    ) {
-      execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
+    let execApprovalFollowupRuntimeHandoff: ReturnType<typeof claimFollowup>;
+    if (params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId) {
+      execApprovalFollowupRuntimeHandoff = claimFollowup(params.resolvedSessionKey);
+      if (
+        !execApprovalFollowupRuntimeHandoff &&
+        params.requestedSessionKeyRaw &&
+        params.requestedSessionKeyRaw !== params.resolvedSessionKey
+      ) {
+        execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
+      }
     }
     if (execApprovalFollowupRuntimeHandoff) {
       claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
@@ -288,11 +286,13 @@ export async function prepareAgentRunUserTurn(params: {
         trackInputCompletion: params.privateCompletion,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: () => {
-          params.assertCurrent();
-          const loaded = loadSessionEntry(params.resolvedSessionKey!, {
+        target: async () => {
+          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: params.cfgForAgent ?? params.cfg,
+            key: params.resolvedSessionKey!,
             agentId: params.activeSessionAgentId,
-            clone: false,
+            assertActive: params.assertCurrent,
+            excludeInternalEffects: true,
           });
           const latestEntry = loaded.entry;
           const loadedSessionId = latestEntry?.sessionId?.trim();
@@ -396,20 +396,20 @@ export async function prepareAgentRunUserTurn(params: {
       suppressPromptPersistence,
     };
   } catch (error) {
+    const mediaRetained = recorder !== undefined && retainsUserTurnTranscriptMedia(recorder);
+    if (mediaRetained) {
+      // This callback transfers parser cleanup ownership, not a public success fact.
+      // Retained input must keep its media even if later preparation or cleanup fails.
+      params.onUserTurnMediaPersisted();
+    }
     releaseExecApprovalFollowupRuntimeHandoff({
       handoffId: claimedExecApprovalFollowupHandoffId,
       claimId: execApprovalFollowupHandoffClaimId,
     });
-    if (!recorder || !retainsUserTurnTranscriptMedia(recorder)) {
+    if (!mediaRetained) {
       await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
     }
     throw error;
-  } finally {
-    // Transfer outer parser custody even when staging rejects after a possible
-    // commit, before the admission owner projects the error into an RPC response.
-    if (recorder && retainsUserTurnTranscriptMedia(recorder)) {
-      params.onMediaRetained();
-    }
   }
 }
 

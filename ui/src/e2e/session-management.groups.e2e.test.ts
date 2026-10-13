@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import type { CronJobsListResult } from "../api/types.ts";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  defaultControlUiFeatureMethods,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -162,6 +165,13 @@ suite.define(() => {
     };
     const page = await context.newPage();
     await page.clock.install();
+    await page.addInitScript((key) => {
+      const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...stored, railShortcuts: ["session:agent:main:release"] }),
+      );
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const gateway = await installMockGateway(page, {
       featureMethods: [...defaultControlUiFeatureMethods, "cron.list"],
       methodResponses: {
@@ -175,10 +185,7 @@ suite.define(() => {
               match: {},
               response: sessionsListResponse([
                 sessionRow("agent:main:main", "Main", baseTime),
-                sessionRow("agent:main:release", "Release planning", baseTime - 60_000, {
-                  pinned: true,
-                  pinnedAt: baseTime - 30_000,
-                }),
+                sessionRow("agent:main:release", "Release planning", baseTime - 60_000),
                 sessionRow("agent:main:migration", "Data migration", baseTime - 90_000, {
                   hasActiveRun: true,
                   status: "running",
@@ -209,13 +216,14 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      // Sidebar: pinned rows join the ordered page zone while staying out of Threads.
+      // A personal rail shortcut leaves its ordinary session row in recency order.
       const sidebarRows = page.locator(".sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       const pinnedZoneRow = page.locator(
-        '[data-sidebar-entry="session:agent:main:release"] .sidebar-recent-session',
+        '.sidebar-rail [data-sidebar-entry="session:agent:main:release"]',
       );
-      await expect.poll(() => pinnedZoneRow.textContent()).toContain("Release planning");
+      await pinnedZoneRow.getByRole("link", { name: "Release planning", exact: true }).waitFor();
+      expect(await pinnedZoneRow.locator(".sidebar-recent-session").count()).toBe(0);
       const groups = page.locator(".sidebar-recent-sessions__group");
       await expect.poll(() => groups.count()).toBe(1);
       await expect
@@ -230,7 +238,7 @@ suite.define(() => {
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
-      await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
+      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() =>
@@ -253,15 +261,15 @@ suite.define(() => {
 
       await sidebarRows.filter({ hasText: "Release planning" }).hover();
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      const patchesBeforeUnpin = (await gateway.getRequests("sessions.patch")).length;
       await sidebarReleasePin.click();
-      const pinPatch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:release" && params.pinned === false,
-      );
-      expect(requireRecord(pinPatch.params)).toMatchObject({
-        key: "agent:main:release",
-        pinned: false,
-      });
+      await expect.poll(() => pinnedZoneRow.count()).toBe(0);
+      await sidebarRows
+        .filter({ hasText: "Release planning" })
+        .getByRole("button", { name: "Pin session", exact: true })
+        .waitFor();
+      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(patchesBeforeUnpin);
 
       // Active rows can archive through the Gateway's stop-and-drain lifecycle,
       // while Delete keeps its separate active-run guard.
@@ -270,6 +278,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(false);
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);

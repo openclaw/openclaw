@@ -1,14 +1,31 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { prepareSessionEntryReplacementDatabase } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { createSessionActorFactory } from "../../../config/sessions/session-actor-durable.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
+import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
+  SessionTranscriptWriterClaimReboundError,
   type OwnedSessionTranscriptWriteContext,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import { captureSessionManagerIncognitoBinding } from "../../sessions/session-manager-incognito-scope.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
@@ -28,6 +45,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "sessionId"
     | "sessionKey"
     | "sessionManager"
+    | "sessionPersistence"
     | "sessionTarget"
     | "preparedSessionTarget"
   > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
@@ -80,23 +98,30 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     },
     input.runAbortController ? (reason) => input.runAbortController?.abort(reason) : undefined,
   );
-  const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
+  const transcriptLifecycle = createEmbeddedAttemptTranscriptLifecycle({
     runId: attempt.runId,
     sessionId: attempt.sessionId,
-  });
-  const transcriptLifecycle = {
-    ...lifecycle,
-    dispose: async () => {
+    onDrained: async () => {
       try {
-        await lifecycle.dispose();
+        await ownedTranscriptWriteContext.sessionActor?.actor.release();
       } finally {
-        generation?.release();
+        try {
+          await releaseIncognito?.();
+        } finally {
+          generation?.release();
+        }
       }
     },
-  };
+  });
+  let releaseIncognito: (() => Promise<void>) | undefined;
   const assertAdmittedActive = attempt.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
     : undefined;
+  const { writeContext: terminalWriter } = captureAgentRunTerminalPersistence(attempt.runId);
+  const assertTerminalCurrent = composeSessionSourceAssertion([
+    terminalWriter?.assertCurrent,
+    generation?.assertCurrent,
+  ]);
   const withTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>
     initialWriter
       ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
@@ -111,13 +136,126 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       [assertAdmittedActive, generation?.assertCurrent],
       (assertSources) => {
         attempt.abortSignal?.throwIfAborted();
+        preparedTarget?.assertCurrent();
         assertSources();
       },
     ),
     withTranscriptWrite,
+    withRestartAbortWrite: terminalWriter
+      ? async (write) => {
+          if (
+            !isAgentRunRestartAbortReason(attempt.abortSignal?.reason) &&
+            !isAgentRunRestartAbortReason(input.runAbortController?.signal.reason)
+          ) {
+            throw new Error("Interrupted transcript write requires a restart abort");
+          }
+          const fence = initialWriter?.committedFence ?? fencedSessionTarget;
+          // Settlement may append to an existing writer, never create an uncommitted session.
+          if (!fence.expectedWriterRunId || (initialWriter && !initialWriter.committedFence)) {
+            throw new SessionTranscriptWriterClaimReboundError();
+          }
+          return await transcriptLifecycle.withTranscriptWrite(() =>
+            terminalWriter.run(() =>
+              withOwnedSessionTranscriptWrites(
+                {
+                  ...ownedTranscriptWriteContext,
+                  sessionTarget: { ...fencedSessionTarget, ...fence },
+                  initialWriter: undefined,
+                  settledInitialWriter: initialWriter,
+                  sessionReader: undefined,
+                  assertCommitAllowed: assertTerminalCurrent,
+                  withTranscriptWrite: (operation) =>
+                    transcriptLifecycle.withTranscriptWrite(operation),
+                  withRestartAbortWrite: undefined,
+                },
+                write,
+              ),
+            ),
+          );
+        }
+      : undefined,
   };
-  externalAbortController.arm();
   try {
+    const assertCurrent = () => {
+      initialWriter?.assertActive();
+      ownedTranscriptWriteContext.assertCommitAllowed?.();
+    };
+    assertCurrent();
+    // Detached helpers keep their caller-owned transcript and never open durable storage.
+    if (attempt.sessionPersistence !== "detached") {
+      const reader = ownedTranscriptWriteContext.sessionReader;
+      if (reader) {
+        assertSessionEntryCohortScope(reader, fencedSessionTarget);
+      }
+      const options =
+        reader?.database ?? toDatabaseOptions(resolveSqliteReadScope(fencedSessionTarget));
+      const database = {
+        ...options,
+        env: Object.freeze({ ...(options.env ?? process.env) }),
+        path: resolveOpenClawAgentSqlitePath(options),
+      };
+      // Execution cancellation does not revoke the actor needed to record its outcome.
+      // Ordinary writes still pass assertCommitAllowed; terminal writes retain source and writer fences.
+      const assertActorCurrent = terminalWriter ? assertTerminalCurrent : assertCurrent;
+      const lifetime = { assertCurrent: assertActorCurrent, assertReadable: assertActorCurrent };
+      const incognito = captureSessionManagerIncognitoBinding(
+        fencedSessionTarget,
+        attempt.sessionManager,
+      );
+      if (incognito && "kind" in incognito) {
+        ownedTranscriptWriteContext.sessionActor = {
+          actor: await incognito.storage.acquire(sessionTarget.sessionKey, lifetime),
+          database: incognito.database,
+        };
+      } else if (incognito) {
+        const execution = await captureOpenClawAgentDatabaseExecution({
+          kind: "ephemeral",
+          agentId: incognito.actor.agentId,
+          env: database.env,
+          authority: lifetime,
+          existingOnly: true,
+        });
+        if (!execution) {
+          throw new Error("Attempt lost its captured incognito owner");
+        }
+        releaseIncognito = () => execution.release();
+        ownedTranscriptWriteContext.sessionActor = {
+          actor: await execution.sessionActors.acquire(
+            { database: incognito.actor.identity, sessionKey: sessionTarget.sessionKey },
+            lifetime,
+          ),
+          database,
+        };
+      } else if (!isIncognitoOpenClawAgentSqlitePath(database.path, database)) {
+        // Native incognito retains its existing transcript owner until the worker cutover.
+        let identity = readDatabasePathIdentitySync(database.path);
+        if (identity.key.startsWith("path:")) {
+          await prepareSessionEntryReplacementDatabase(database, assertCurrent);
+          assertCurrent();
+          identity = readDatabasePathIdentitySync(database.path);
+        }
+        const actor = await createSessionActorFactory(database).acquire(
+          {
+            database: {
+              kind: "file",
+              physicalIdentity: identity.key.slice("file:".length),
+              birthtime: identity.birthtime,
+              nativeLocation: identity.canonicalPath,
+            },
+            sessionKey: sessionTarget.sessionKey,
+          },
+          lifetime,
+        );
+        if ("kind" in actor) {
+          throw new Error("Durable session actor acquisition was declined");
+        }
+        ownedTranscriptWriteContext.sessionActor = {
+          actor,
+          database,
+        };
+      }
+    }
+    externalAbortController.arm();
     await externalAbortController.throwIfFiredAfterPrepCleanup();
     preparedTarget?.assertCurrent();
   } catch (error) {

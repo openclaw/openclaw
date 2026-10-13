@@ -1,20 +1,12 @@
-import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { icons } from "./icons.ts";
 import {
-  SessionMenuCommunication,
+  selectSessionCommunication,
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
 import { SessionDetailsController } from "./session-details-controller.ts";
-
-type SessionSettingsActionKind =
-  | "set-icon"
-  | "set-color"
-  | "assign-owner"
-  | SessionCommunicationMenuAction["kind"];
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -24,17 +16,7 @@ type SessionMenuSettingsOptions = {
       sessionId: string | null;
     };
     selectionCount: number;
-    actionDisabledReasons: Partial<Record<SessionSettingsActionKind, string>>;
   };
-  disabled: (kind: SessionSettingsActionKind) => boolean;
-  renderSubmenu: (
-    view: "settings" | "icon" | "assign-owner",
-    label: string,
-    icon: TemplateResult,
-    disabled?: boolean,
-    title?: string,
-    inline?: boolean,
-  ) => TemplateResult;
   runAction: (action: SessionCommunicationMenuAction) => void;
 };
 
@@ -42,16 +24,10 @@ type SessionMenuSettingsOptions = {
 export class SessionMenuSettings {
   private settingsActive = false;
   private readonly settingsDetails;
-  private communicationState() {
+  communicationState() {
     const state = this.options.readState();
     return { ...state, session: this.settingsDetails.row ?? state.session };
   }
-  private readonly communicationMenu = new SessionMenuCommunication({
-    readState: () => this.communicationState(),
-    disabled: () => this.options.disabled("set-communication"),
-    disabledReason: () => this.options.readState().actionDisabledReasons["set-communication"],
-    runAction: (action) => this.options.runAction(action),
-  });
 
   constructor(
     host: ReactiveControllerHost,
@@ -93,6 +69,10 @@ export class SessionMenuSettings {
     });
   }
 
+  get error(): string | null {
+    return this.settingsDetails.error;
+  }
+
   get communicationAvailable(): boolean {
     return Boolean(this.communicationState().session.effectiveCommunication);
   }
@@ -113,48 +93,6 @@ export class SessionMenuSettings {
       this.settingsDetails.synchronize();
       return true;
     }
-    return this.communicationMenu.handleSelect(value);
-  }
-
-  renderAction() {
-    return this.options.readState().selectionCount > 1
-      ? nothing
-      : this.options.renderSubmenu("settings", t("sessionsView.sessionSettings"), icons.settings);
-  }
-
-  render(inline: boolean): TemplateResult {
-    const state = this.options.readState();
-    return html`
-      ${this.options.renderSubmenu(
-        "icon",
-        t("sessionsView.setIconColorMenu"),
-        icons.palette,
-        this.options.disabled("set-icon") && this.options.disabled("set-color"),
-        state.actionDisabledReasons["set-icon"] ?? state.actionDisabledReasons["set-color"],
-        inline,
-      )}
-      ${this.options.renderSubmenu(
-        "assign-owner",
-        t("sessionsView.assignTo"),
-        icons.users,
-        this.options.disabled("assign-owner"),
-        state.actionDisabledReasons["assign-owner"],
-        inline,
-      )}
-      ${this.communicationMenu.renderActions(inline)}
-      ${
-        this.settingsDetails.error
-          ? html`<div slot=${inline ? nothing : "submenu"} class="session-menu__info" role="alert">
-                ${this.settingsDetails.error}
-              </div>
-              <wa-dropdown-item
-                slot=${inline ? nothing : "submenu"}
-                class="session-menu__item"
-                value="reload-settings"
-                ><span class="session-menu__text">${t("common.retry")}</span></wa-dropdown-item
-              >`
-          : nothing
-      }
-    `;
+    return selectSessionCommunication(value, this.options.runAction);
   }
 }

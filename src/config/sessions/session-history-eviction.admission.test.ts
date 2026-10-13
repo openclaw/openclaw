@@ -212,7 +212,7 @@ it.each([
       events.push("preparation-ready");
       expect(database.db.isTransaction).toBe(false);
       if (cold) {
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         invalidateOpenClawAgentDatabaseValidation(database.path);
         clearOpenClawAgentIntegrityVerification(database.path, testState.env);
         expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();

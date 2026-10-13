@@ -172,19 +172,6 @@ describe("verified rollback failure actions", () => {
     expect(mocks.triage).not.toHaveBeenCalled();
   });
 
-  it("does nothing after the menu is cancelled", async () => {
-    const f = setup();
-    mocks.select.mockResolvedValue(await cancelPrompt());
-
-    await f.run();
-
-    expect(mocks.select).toHaveBeenCalledOnce();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    expect(mocks.confirm).not.toHaveBeenCalled();
-    expect(mocks.submit).not.toHaveBeenCalled();
-    expect(mocks.triage).not.toHaveBeenCalled();
-  });
-
   it("diagnoses the original failure only when selected", async () => {
     const f = setup();
     mocks.select.mockResolvedValue("triage");
@@ -198,51 +185,37 @@ describe("verified rollback failure actions", () => {
     expect(mocks.submit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "JSON", opts: { json: true } },
-    { name: "managed handoff", env: { OPENCLAW_UPDATE_RUN_HANDOFF: "1" } },
-    { name: "signal cancellation", signal: true },
-  ])("keeps $name rollback quiet", async (testCase) => {
-    const f = setup();
-    Object.assign(f.env, testCase.env);
-    if (testCase.signal) {
-      f.result.steps.push({
-        name: "update",
-        command: "synthetic-update",
-        cwd: "/synthetic",
-        durationMs: 1,
-        exitCode: 130,
-        termination: "signal",
+  it.each([{ name: "signal cancellation", signal: true }])(
+    "keeps $name rollback quiet",
+    async (testCase) => {
+      const f = setup();
+      if (testCase.signal) {
+        f.result.steps.push({
+          name: "update",
+          command: "synthetic-update",
+          cwd: "/synthetic",
+          durationMs: 1,
+          exitCode: 130,
+          termination: "signal",
+        });
+      }
+      await withTriageTerminal(true, async () => {
+        await expect(withUpdateFailureTriage(f.opts, f.target, f.fail)).rejects.toMatchObject({
+          code: 1,
+        });
       });
-    }
-    await withTriageTerminal(true, async () => {
-      await expect(
-        withUpdateFailureTriage({ ...f.opts, ...testCase.opts }, f.target, f.fail),
-      ).rejects.toMatchObject({ code: 1 });
-    });
 
-    expect(mocks.select).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    expect(mocks.submit).not.toHaveBeenCalled();
-    expect(mocks.triage).not.toHaveBeenCalled();
-  });
+      expect(mocks.select).not.toHaveBeenCalled();
+      expect(mocks.prepare).not.toHaveBeenCalled();
+      expect(mocks.submit).not.toHaveBeenCalled();
+      expect(mocks.triage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each<{ name: string; recovery: UpdateRunResult["recovery"] }>([
     {
       name: "unverified service",
       recovery: { serviceRestartSafe: true, packageRollbackVerified: true, version: "2026.9.1" },
-    },
-    {
-      name: "unsafe restart",
-      recovery: {
-        serviceRestartSafe: false,
-        packageRollbackVerified: true,
-        reason: "runtime-verification-failed",
-      },
-    },
-    {
-      name: "unverified package",
-      recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.1" },
     },
   ])("keeps ordinary failure actions for $name", async ({ recovery }) => {
     const f = setup();

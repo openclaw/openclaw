@@ -22,6 +22,7 @@ export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   context!: ApplicationContext;
   @property({ type: Boolean }) compact = false;
+  @property({ attribute: false }) turnStartedAt?: number;
   @property({ attribute: false }) rows: readonly ChatSubagentActivity[] = [];
   @property({ attribute: false }) onOpenSubagent?: (key: string) => void;
   @property({ attribute: false }) onOpenSession?: (key: string) => void;
@@ -129,10 +130,24 @@ export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
       this.onOpenSubagent,
       this.onOpenSession,
       this.compact,
+      this.turnStartedAt,
     );
   }
 }
 
 if (!customElements.get("openclaw-chat-subagent-activity")) {
   customElements.define("openclaw-chat-subagent-activity", ChatSubagentActivityLive);
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-subagent-activity": HTMLAttributes<ChatSubagentActivityLive> &
+        Properties<ChatSubagentActivityLive> & {
+          "prop:rows"?: ChatSubagentActivityLive["rows"];
+          "prop:onOpenSubagent"?: ChatSubagentActivityLive["onOpenSubagent"];
+          "prop:onOpenSession"?: ChatSubagentActivityLive["onOpenSession"];
+        };
+    }
+  }
 }

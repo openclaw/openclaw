@@ -280,6 +280,23 @@ bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
 
+When reply dispatch consumes a thrown error after a partial reply or an adopted
+turn, its terminal `message.dispatch.completed` and `message.processed`
+diagnostics retain the failure outcome, identifiers, and timing. The extra
+free-form cause is omitted at the default `info` file level and less verbose
+levels, including from diagnostic subscribers and telemetry exports.
+
+To collect that cause in the events' `error` field, enable `diagnostics.enabled`
+and set the effective **file** `logging.level` to `debug` or `trace`. The existing
+`OPENCLAW_LOG_LEVEL` and `--log-level` overrides apply; `logging.consoleLevel` or
+`--verbose` alone do not enable it. Chat notices stay generic.
+
+The cause uses mandatory built-in credential redaction plus
+`logging.redactPatterns`, then is capped at 2,048 UTF-16 code units without
+splitting a surrogate pair. Redaction is not a guarantee that arbitrary private
+text is removed: debug causes can still contain provider or user content. Treat
+debug logs and telemetry as sensitive, and return to `info` after diagnosis.
+
 Responses output-identity conflicts record the event type, output position,
 expected and observed item types, and whether a tool call completed, without
 recording item IDs or response content. OpenClaw uses the existing bounded session
@@ -387,6 +404,24 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Chat-send startup
+
+The Gateway logs `slow chat send` when acknowledgement or startup takes at least
+one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
+agent execution starts. `replyInitialization` covers inbound dispatch through
+session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
+preparation belong to `preparation`, before the first model request.
+
+`detail.*` fields attribute those intervals using the existing reply and agent
+preparation spans, without enabling timeline file logging. They include session
+binding, cold transcript hydration, writer admission, snapshot reads, and commit,
+alongside workspace, Git baseline, hooks, and embedded preparation when used.
+`reply.session.writer` includes both queue waiting and `reply.session.initialize`;
+their difference indicates the writer wait. Parent and child spans overlap and
+must not be summed. Unfinished spans stop at the startup boundary; later model
+and tool latency does not extend them. Structured `chat.send.detail.*` phase
+events use the same durations when diagnostics are enabled.
 
 ### Embedded attempt preparation
 
@@ -742,7 +777,7 @@ Nested durations overlap their parent phases; do not add them to the parent tota
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
 import and registration timings.
 
-Desktop permission narrowing and canonical session checks remain on their required
+Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel
 maintenance, pairing diagnostics, and restored-subagent activation run after
 readiness. Retired plugin captures join the existing post-ready idle cleanup.
@@ -933,12 +968,12 @@ The object aggregates observations across the pruning pass:
   calls and their requested page counts. Requested pages are not confirmed
   reclaimed pages.
 - `queryMs` covers existing archive-presence, candidate, unpublished-name, and
-  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  freelist reads. `rowDeletionMs` covers the archive row-deletion
   transaction.
 - `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
-  existing file-removal outcomes. `removedFiles` counts successful canonical and
-  legacy removals. `missingFiles` counts canonical removal attempts that return
-  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  existing file-removal outcomes. `removedFiles` counts successful current-layout and
+  legacy removals. `missingFiles` counts current-layout removal attempts that return
+  `ENOENT`. Other current-layout failures and all unsuccessful legacy removals count
   under `failedRemovals`; the legacy count includes missing paths, non-files,
   and stat or removal failures.
 - `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
@@ -1015,6 +1050,20 @@ capturing raw prompt or response content:
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
 
+Completed llama.cpp and Ollama calls also report `providerProcessingMs` and
+`providerWaitEstimateMs` in model-call diagnostics, provider request timeline
+events, and Gateway stability snapshots and bundles. `openclaw gateway stability`
+shows these as `processing` and `wait~`, alongside total `wall` time.
+
+Processing is the server-reported prompt evaluation plus token generation time.
+Estimated wait is the nonnegative difference between wall time and processing:
+it includes backend queueing, model loading, transport, and terminal settlement
+overhead, so it is not an exact slot-wait measurement. Ollama's `load_duration`
+can include scheduling and is not counted as inference. These fields remain
+absent when final server timings are missing or invalid, including cancellations
+without final statistics. An aborted call does not prove the backend released
+its slot. No additional server polling is performed.
+
 Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
 session's previous request) and `promptTokens` when reported by the provider.
 `providerPrefix` compares final encoded request segments against the last request
@@ -1045,46 +1094,31 @@ to `"pretty"`.
 
 ### Redaction
 
-OpenClaw can redact sensitive tokens before they hit console output, file logs,
-OTLP log records, persisted session transcript text, or Control UI tool
-event payloads (tool start args, partial/final result payloads, derived
-exec output, and patch summaries):
+File logs store raw records with owner-only (`0600`) permissions. OpenClaw masks
+sensitive values when logs are read through `logs.tail` (CLI or Control UI),
+printed to the console, or exported through diagnostic/support bundles and
+OpenTelemetry. Direct file reads are raw: protect and review them before sharing.
+Log messages should contain IDs, sizes, and outcomes, never message text, prompts,
+tool arguments, or tool results. Config snapshots, audit output, and
+credential-bearing URLs and command-line options retain their credential masking.
 
-- Sensitive-value redaction is always enabled.
-- `logging.redactPatterns`: list of regex strings that replaces the default string list for log/transcript output. Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply, including when this list is copied or customized. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
+`logging.redactPatterns` replaces the default regex string list for logs and
+diagnostics. Built-in structural protections for form bodies, structured
+authorization headers, and bare AWS secret access keys always apply, including
+when this list is customized. Redaction is best-effort; review diagnostic
+exports before sharing them.
 
-File logs use JSONL; active session transcripts live in the
-[per-agent SQLite database](/reference/database-schemas#database-layout). Matching
-secret values are masked before the line or message is persisted. Redaction is best-effort:
-it applies to text-bearing message content and log strings, not every
-identifier or binary payload field.
+Tool arguments and results are not secret-masked. This includes model context,
+session transcripts, tool events and summaries in the Control UI, session-history
+and search results, and reads of `.env` files. Source such as
+`API_TOKEN = computeToken()` reaches the model unchanged. Existing size limits,
+media handling, and history visibility rules still apply.
 
-Transcript redaction does not replace the live arguments used to execute tools.
-Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
-so stored history can correlate with live tool events. This exemption applies
-only to protocol metadata; the same values in arguments, results, or nested
-payloads still pass through redaction.
-
-In the OpenClaw harness, finalized tool-result text is masked after middleware,
-before entering live model context. This also covers exec output and tool errors;
-it preserves media bytes and the original arguments used to execute tools.
-Redaction happens when the result is added, keeping later prompt replay stable.
-Model-visible tool-result text uses narrower assignment matching so source code
-remains intact. Registered secrets and explicit credential forms, including
-structured fields, authorization headers, URL credentials, and known token
-formats, remain masked. Direct reads of `.env` files apply
-broader assignment masking before their content becomes a tool result. Other
-config and source reads preserve opaque values; register actual secrets instead
-of relying on key-name matching. Bare source assignments such as
-`token = timeObserverToken` remain unchanged.
-
-The built-in defaults cover common API credentials and payment-credential field
-names such as card number, CVC/CVV, shared payment token, and payment credential
-when they appear as JSON fields, URL parameters, CLI flags, or assignments.
-
-OpenClaw also redacts safety-boundary payloads shown to UI clients, support
-bundles, diagnostics observers, approval prompts, or agent tools. Custom
-`logging.redactPatterns` can add project-specific patterns on those surfaces.
+Active session transcripts live in the
+[per-agent SQLite database](/reference/database-schemas#database-layout).
+They can contain credentials and other private data returned by tools or supplied
+in conversation. Protect access to the state directory and review transcripts
+before sharing them. Already-masked historical content cannot be reconstructed.
 
 ## Diagnostics and OpenTelemetry
 

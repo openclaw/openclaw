@@ -84,6 +84,19 @@ afterEach(() => {
 });
 
 describe("private Tailscale Serve claims", () => {
+  it("keeps stopped-daemon ingress closed and claims normally after the connection returns", async () => {
+    runExecMock.mockResolvedValueOnce({ stdout: '{"BackendState":"Stopped"}' });
+    await expect(claimTailscaleRoute("serve", 19000, 18789, vi.fn())).rejects.toMatchObject({
+      code: "gateway.tailscale_backend_stopped",
+    });
+    expect(forkMock).not.toHaveBeenCalled();
+    expect(runExecMock).toHaveBeenCalledTimes(1);
+    queueOwner();
+    const claim = await claimTailscaleRoute("serve", 19000, 18789, vi.fn());
+    expect(claim.isActive()).toBe(true);
+    await claim.stop();
+  });
+
   it("joins a cancelled Gateway claim even when readiness races shutdown", async () => {
     const pending = queueOwner({ ready: false });
     const controller = new AbortController();

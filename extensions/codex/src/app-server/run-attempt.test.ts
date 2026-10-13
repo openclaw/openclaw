@@ -59,6 +59,7 @@ import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   buildCodexAppServerConnectionFingerprint,
@@ -78,7 +79,6 @@ import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.te
 import { readCodexRateLimitsRevision, rememberCodexRateLimitsRead } from "./rate-limit-cache.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
 import {
-  advanceAttemptRetryBackoff,
   expectRetainedSuccessfulThread,
   observeAttemptProjectionReady,
   startClockControlledAttempt,
@@ -255,18 +255,20 @@ async function buildCodexTurnContextForTest(
     tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = buildThreadStartParams(params, {
-    cwd: workspaceDir,
-    dynamicTools,
-    appServer: resolveCodexAppServerRuntimeOptions({}),
-    developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
-    refreshableInstructions: [
-      workspaceBootstrapContext.personaInstructions,
-      workspaceBootstrapContext.memoryInstructions,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-  }).developerInstructions;
+  const threadDeveloperInstructions = (
+    await buildThreadStartParams(params, {
+      cwd: workspaceDir,
+      dynamicTools,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
+      refreshableInstructions: [
+        workspaceBootstrapContext.personaInstructions,
+        workspaceBootstrapContext.memoryInstructions,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    })
+  ).developerInstructions;
   assert(typeof threadDeveloperInstructions === "string");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
@@ -276,7 +278,7 @@ async function buildCodexTurnContextForTest(
     params.prompt,
     openClawPromptContext,
   );
-  const turnStartParams = buildTurnStartParams(params, {
+  const turnStartParams = await buildTurnStartParams(params, {
     threadId: "thread-1",
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
@@ -339,7 +341,9 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+    nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+  });
   const dynamicTools = await buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,
@@ -644,8 +648,7 @@ function installFailingThreadStartClient(onThreadStart: () => unknown) {
   return { retireSpy, state: { failedClient: client } };
 }
 
-async function runSharedClientRestartTest(
-  closeCount: number,
+async function runSettledFailureClientReplacementTest(
   options: { denyReplacementShell?: boolean; requests?: string[][] } = {},
 ) {
   const { sessionFile, workspaceDir } = createRunPaths();
@@ -684,15 +687,17 @@ async function runSharedClientRestartTest(
         return {};
       },
     });
+    if (startIndex === 0) {
+      const failedThread = threadStartResult("thread-existing");
+      wire.seed(
+        { ...failedThread, thread: { ...failedThread.thread, status: { type: "systemError" } } },
+        { loaded: true, subscribed: false },
+      );
+    }
     const nativeRequest = CodexAppServerClient.prototype.request.bind(wire.client);
     wire.request.mockImplementation((method, params, requestOptions) => {
       if (method !== "initialize") {
         methods.push(method);
-      }
-      // This retry scenario loses the transport before resume is written.
-      // Post-write loss remains indeterminate and is covered by the handoff owner.
-      if (method === "thread/resume" && startIndex < closeCount) {
-        wire.client.close();
       }
       return nativeRequest(method, params, requestOptions);
     });
@@ -716,7 +721,6 @@ async function runSharedClientRestartTest(
         config: {},
       }),
   );
-  advanceAttemptRetryBackoff();
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
@@ -943,7 +947,9 @@ describe("runCodexAppServerAttempt", () => {
       backendId: "codex-test-sandbox",
       workspaceAccess: "rw",
     } as never;
-    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
+      nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, { sandbox }),
+    });
     const dynamicTools = await buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
@@ -1055,7 +1061,12 @@ describe("runCodexAppServerAttempt", () => {
       const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
         params,
         sandbox as never,
-        { sandboxExecServerEnabled: true },
+        {
+          sandboxExecServerEnabled: true,
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox: sandbox as never,
+          }),
+        },
       );
       const dynamicTools = await buildDynamicTools({
         params,
@@ -1095,7 +1106,7 @@ describe("runCodexAppServerAttempt", () => {
         userMcpServersEnabled: nativeToolSurfaceEnabled,
         environmentSelection,
       });
-      const turnParams = buildTurnStartParams(params, {
+      const turnParams = await buildTurnStartParams(params, {
         threadId: "thread-1",
         cwd: environment.cwd,
         appServer,
@@ -2419,7 +2430,7 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).toContain("Inspect the completed tool evidence, then delegate analysis.");
       expect(inputText).toContain("[Subagent Task]");
       expect(inputText).not.toContain("private-input-fixture.txt");
-      expect(inputText).not.toContain("sk-1234567890abcdef");
+      expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
       if (preserve) {
         expect(inputText).toContain("COBALT-ORCHID-7429");
         expect(inputText).not.toContain("[content omitted]");
@@ -4462,16 +4473,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.authProfileId).toBe("openai:work");
     expect(savedBinding?.threadId).toBe("thread-1");
   });
-  it.each([2])("restarts after %i app-server closes during startup", async (closeCount) => {
-    const { result, requests, client } = await runSharedClientRestartTest(closeCount);
+  it("replaces a client whose settled failed thread cannot reload configuration", async () => {
+    const { result, requests, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ...Array.from({ length: closeCount }, () => [
-        "config/read",
-        "configRequirements/read",
-        "thread/read",
-        "thread/resume",
-      ]),
+      ["config/read", "configRequirements/read", "thread/read"],
       [
         "config/read",
         "configRequirements/read",
@@ -4486,10 +4492,10 @@ describe("runCodexAppServerAttempt", () => {
   it("rejects a replacement client whose managed policy disables the native shell", async () => {
     const requests: string[][] = [];
     await expect(
-      runSharedClientRestartTest(1, { denyReplacementShell: true, requests }),
+      runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read", "thread/resume"],
+      ["config/read", "configRequirements/read", "thread/read"],
       ["config/read", "configRequirements/read"],
     ]);
   });

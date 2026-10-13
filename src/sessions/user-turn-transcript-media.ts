@@ -1,18 +1,28 @@
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import { persistUserTurnTranscript } from "./user-turn-transcript.persistence.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
 } from "./user-turn-transcript.types.js";
 
-const uncertainPendingInputOwners = new WeakSet<UserTurnTranscriptRecorder>();
+const uncertainInputOwners = new WeakSet<UserTurnTranscriptRecorder>();
+
+function retainUncertainInputMedia(recorder: UserTurnTranscriptRecorder, error: unknown): never {
+  // Lost settlement can hide a committed input that references the media.
+  // Missing commit evidence does not give cleanup ownership of those bytes.
+  if (hasSqliteWorkerOutcomeUnknown(error)) {
+    uncertainInputOwners.add(recorder);
+  }
+  throw error;
+}
 
 export function retainsUserTurnTranscriptMedia(recorder: UserTurnTranscriptRecorder): boolean {
   return (
     recorder.hasPersisted() ||
     recorder.getPendingInputMessage?.() !== undefined ||
-    uncertainPendingInputOwners.has(recorder)
+    uncertainInputOwners.has(recorder)
   );
 }
 
@@ -26,11 +36,17 @@ export async function stageUserTurnPendingInput(
   try {
     return await stageSessionPendingInput({ ...target, ...runtimeTarget }, { ...options, config });
   } catch (error) {
-    // Lost settlement can hide a committed row that already references the
-    // media. No returned receipt is not proof that cleanup owns those bytes.
-    if (hasSqliteWorkerOutcomeUnknown(error)) {
-      uncertainPendingInputOwners.add(recorder);
-    }
-    throw error;
+    return retainUncertainInputMedia(recorder, error);
+  }
+}
+
+export async function persistUserTurnInput(
+  recorder: UserTurnTranscriptRecorder,
+  params: Parameters<typeof persistUserTurnTranscript>[0],
+): ReturnType<typeof persistUserTurnTranscript> {
+  try {
+    return await persistUserTurnTranscript(params);
+  } catch (error) {
+    return retainUncertainInputMedia(recorder, error);
   }
 }

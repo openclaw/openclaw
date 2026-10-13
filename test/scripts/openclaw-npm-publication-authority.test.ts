@@ -60,6 +60,7 @@ async function fixture(candidateTrap = false) {
   for (const file of [
     "scripts/openclaw-npm-publish.sh",
     "scripts/openclaw-npm-extended-stable-release.mjs",
+    "scripts/plugin-sdk-api-release-evidence.mjs",
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/lib/release-version.mjs",
   ]) {

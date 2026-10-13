@@ -7,6 +7,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   clearProviderPromptState,
@@ -104,6 +105,63 @@ describe("provider prompt state", () => {
     expect(JSON.stringify({ calls: recordEvent.mock.calls, state })).not.toContain(marker);
     expect(state.lastAttempt?.cachePrefix).toBeUndefined();
     clearProviderPromptState(runId);
+  });
+
+  it("records recovery attempts and final response metadata without leaking them to the next call", async () => {
+    const state = getProviderPromptState("wire-recovery");
+    const onResponse = vi.fn();
+    let recover = true;
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      state,
+      effectiveContextTokenBudget: 128_000,
+      streamFn: async (_model, _context, options) => {
+        const encode = prepareModelRequestBody(options);
+        for (const attempt of recover
+          ? (["initial", "continuation-rejected"] as const)
+          : (["initial"] as const)) {
+          responsesPromptObserver.get(options!)?.({
+            egress: "responses-sdk",
+            payloadVariant: attempt,
+            promptSource: "missing",
+            expectedChars: 0,
+            observedChars: 0,
+            matchesAssembledPrompt: false,
+          });
+          await encode({ input: [], stream: true });
+          await options?.onResponse?.(
+            {
+              status: attempt === "initial" ? 400 : 200,
+              headers: { "x-request-id": attempt, "openai-processing-ms": "private-value" },
+            },
+            model,
+          );
+        }
+        return createResultStream("stop");
+      },
+    });
+    await wrapped(model, { messages: [] }, { onResponse });
+    expect(state.lastAttempt?.wire).toMatchObject({
+      cacheKeyPresent: false,
+      previousResponseIdPresent: false,
+      attempts: 2,
+      retried: true,
+      egress: "responses-sdk",
+      payloadVariant: "continuation-rejected",
+      response: {
+        status: 200,
+        headers: { "x-request-id": hash("sha256", "continuation-rejected").slice(0, 16) },
+      },
+    });
+    expect(state.lastAttempt?.wire?.response?.headers).not.toHaveProperty("openai-processing-ms");
+    expect(onResponse).toHaveBeenCalledTimes(2);
+    recover = false;
+    await wrapped(model, { messages: [] });
+    expect(state.lastAttempt?.wire).toMatchObject({
+      attempts: 1,
+      retried: false,
+      payloadVariant: "initial",
+    });
+    clearProviderPromptState("wire-recovery");
   });
 
   it("observes the final replacement body and blocks its rejected replay before network send", async () => {

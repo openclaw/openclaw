@@ -71,11 +71,19 @@ identity checks. Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
+Unique display-name links use the same cached route resolution, including the
+`/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
 Exact conversation links also wait for the scoped cached roster before presenting
 their header. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets keep one loading surface while their board metadata and document
 arrive. Widget requests still require the current Gateway connection.
+
+Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
+routing roster retains its first page; the sidebar separately keeps its visible
+rows, pinned destinations, and selected view for display while connecting. The
+Pages view saves and restores its dashboard catalog without waiting for the
+inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
@@ -344,7 +352,9 @@ instead report missing attachments. Independent tabs do not share newly authored
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
-resolve that turn with its **Retry** or **Check delivery** action first.
+resolve that turn with its **Retry** or **Check delivery** action first. While disconnected, a
+notice above the composer says the initial message is unresolved; the composer still accepts
+queued messages.
 If the initial message is waiting for recovery, its chat shows a loading placeholder
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.
@@ -425,3 +435,12 @@ browser-stored credential. The login gate appears only after the initial connect
 Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
 pairing). Transient connection failures retry automatically; authentication failures explain
 what needs your input.
+
+## Reloading a session link
+
+Authenticated app documents carry the same presentation and capability config as
+`control-ui-config.json`, so the first render can use the configured assistant
+identity without waiting for the WebSocket. These documents use private, no-store
+caching. Public and unauthenticated documents carry no protected bootstrap data;
+the app starts its config request alongside connection startup. Reconnects and
+configuration-change events refresh the serving Gateway's config.

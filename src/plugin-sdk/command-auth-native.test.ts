@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   resolveStoredModelOverride,
   type CommandAuthorization,
 } from "./command-auth-native.js";
@@ -59,7 +60,7 @@ describe("plugin-sdk/command-auth-native", () => {
     ).toEqual({ provider: "example", model: "raw" });
   });
 
-  it("preserves the native authorization result contract", () => {
+  it("preserves the native authorization result contract", async () => {
     type PublishedAuthorization = {
       providerId?: ChannelId;
       ownerList: string[];
@@ -74,6 +75,9 @@ describe("plugin-sdk/command-auth-native", () => {
     expectTypeOf<
       ReturnType<typeof resolveCommandAuthorization>
     >().toEqualTypeOf<PublishedAuthorization>();
+    expectTypeOf<ReturnType<typeof resolveCommandAuthorizationAsync>>().toEqualTypeOf<
+      Promise<PublishedAuthorization>
+    >();
     const expected: PublishedAuthorization = {
       providerId: undefined,
       ownerList: ["owner"],
@@ -83,11 +87,13 @@ describe("plugin-sdk/command-auth-native", () => {
       from: undefined,
       to: undefined,
     };
-    const actual = resolveCommandAuthorization({
+    const params = {
       ctx: { Provider: "webchat", Surface: "webchat", SenderId: "guest" },
       cfg: { commands: { ownerAllowFrom: ["owner"] } },
       commandAuthorized: true,
-    });
+    };
+    const actual = resolveCommandAuthorization(params);
+    expect(await resolveCommandAuthorizationAsync(params)).toStrictEqual(expected);
     expect(actual).toStrictEqual(expected);
     expect(new Set(Reflect.ownKeys(actual))).toEqual(new Set(Reflect.ownKeys(expected)));
   });

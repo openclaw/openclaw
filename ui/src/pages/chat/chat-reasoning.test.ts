@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import {
   activeHistory,
@@ -121,7 +122,7 @@ function persistReasoning(
 
 it("shows thinking while generating and retains it through thinking-only history hydration", async () => {
   const state = stateWithRun();
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   thinking(state, "**Checking** the evidence.");
   show(container, state);
   expect(container.querySelector(".chat-thinking strong")?.textContent).toBe("Checking");
@@ -142,7 +143,7 @@ it.each([
   "hands reasoning to history once $order final (append $appended, display $displayed)",
   async ({ order, appended, displayed }) => {
     const state = stateWithRun();
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const text = "Checking the evidence carefully.";
     thinking(state, text);
     show(container, state);
@@ -151,7 +152,7 @@ it.each([
       persistReasoning(state, text, true, { appended, displayed });
       show(container, state);
       expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
-      expect(state.chatReasoning?.receipt?.persisted).toBe(true);
+      expect(state.chatReasoning?.items.at(-1)?.receipt?.persisted).toBe(true);
     }
     handleChatGatewayEvent(state, {
       state: "final",
@@ -162,7 +163,12 @@ it.each([
     });
     show(container, state);
     expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
-    expect(container.textContent?.match(/The answer is 42\./g)).toHaveLength(1);
+    expect(
+      container.querySelector(".chat-thread-inner")?.textContent?.match(/The answer is 42\./g),
+    ).toHaveLength(1);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "The answer is 42.",
+    );
     expect(state.chatReasoning).toBeNull();
     if (order === "after") {
       // An intervening older snapshot must retain the reducer-owned live final.
@@ -171,7 +177,12 @@ it.each([
       persistReasoning(state, text, false, { appended, displayed });
       show(container, state);
       expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
-      expect(container.textContent?.match(/The answer is 42\./g)).toHaveLength(1);
+      expect(
+        container.querySelector(".chat-thread-inner")?.textContent?.match(/The answer is 42\./g),
+      ).toHaveLength(1);
+      expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+        "The answer is 42.",
+      );
     }
     expect(state.chatMessages).toHaveLength(2);
   },
@@ -179,7 +190,7 @@ it.each([
 
 it("applies View and session visibility independently to live and saved reasoning", () => {
   const state = stateWithRun();
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   thinking(state, "Private synthetic reasoning.");
   for (const [mode, visible] of [
     ["on", true],
@@ -234,7 +245,7 @@ it("fences replay and sibling runs and retires preview on a new run or session r
   thinking(state, "Current reasoning.", 3);
   thinking(state, "Stale reasoning.", 2);
   thinking(state, "Sibling reasoning.", 4, "other-run");
-  expect(state.chatReasoning?.text).toBe("Current reasoning.");
+  expect(state.chatReasoning?.items.at(-1)?.text).toBe("Current reasoning.");
   adoptStartedChatRun(state, "new-run", 10);
   expect(state.chatReasoning).toBeNull();
   thinking(state, "New reasoning.", 1, "new-run");
@@ -244,7 +255,8 @@ it("fences replay and sibling runs and retires preview on a new run or session r
 
 it("updates reasoning deltas in the existing live slot without rebuilding loaded history", () => {
   const state = stateWithRun();
-  thinking(state, "First sentence.");
+  thinking(state, "Earlier tool reasoning.", 1, runId, "earlier");
+  thinking(state, "First sentence.", 2);
   const input = {
     paneId: "reasoning-cache",
     sessionKey: "main",
@@ -261,12 +273,12 @@ it("updates reasoning deltas in the existing live slot without rebuilding loaded
   const generation = getChatItemsGeneration(first);
   const options = { sessionKey: "main", runWorking: true, searchActive: false };
   const firstChain = projectTranscriptChain(first, options);
-  thinking(state, "First sentence. Second sentence.", 2);
+  thinking(state, "First sentence. Second sentence.", 3);
   const second = buildCachedChatItems({ ...input, reasoning: state.chatReasoning });
   expect(second).toBe(first);
   expect(getChatItemsGeneration(second)).toBe(generation);
   expect(projectTranscriptChain(second, options).continuations).toBe(firstChain.continuations);
-  expect(second.find((item) => item.kind === "stream")).toMatchObject({
+  expect(second.find((item) => item.kind === "stream" && item.isStreaming)).toMatchObject({
     thinking: "First sentence. Second sentence.",
   });
 });
@@ -292,7 +304,7 @@ it("does not attach foreground thinking to another session's final with the same
     seq: 2,
     message: { role: "assistant", content: [{ type: "text", text: "Other session answer." }] },
   });
-  expect(state.chatReasoning?.text).toBe("Foreground private reasoning.");
+  expect(state.chatReasoning?.items.at(-1)?.text).toBe("Foreground private reasoning.");
   const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, {
     sessionKey: "other-session",
   });
@@ -307,7 +319,7 @@ it("accepts pre-acknowledgment reasoning but retires it when the authoritative s
     { id: "pending", text: "Puzzle", createdAt: 1, sendState: "sending", sendRunId: runId },
   ];
   thinking(state, "Before acknowledgment.");
-  expect(state.chatReasoning?.text).toBe("Before acknowledgment.");
+  expect(state.chatReasoning?.items.at(-1)?.text).toBe("Before acknowledgment.");
   adoptStartedChatRun(state, runId, 2);
   state.chatQueue = [];
   reconcileChatRunFromSessionRow(state, {
@@ -324,9 +336,12 @@ it("accepts pre-acknowledgment reasoning but retires it when the authoritative s
 
 it("does not let an earlier receipt consume equal reasoning from the next assistant occurrence", () => {
   const state = stateWithRun();
+  const container = createComposerContainer();
   const text = "Checking the same evidence.";
   thinking(state, text, 1, runId, "earlier");
   thinking(state, text, 2, runId, "later");
+  show(container, state);
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
   handleAgentEvent(state, {
     runId,
     seq: 3,
@@ -355,8 +370,12 @@ it("does not let an earlier receipt consume equal reasoning from the next assist
     true,
     { kind: "live", activeRunId: runId },
   );
-  expect(state.chatReasoning).toMatchObject({ itemId: "later", text });
-  expect(state.chatReasoning?.receipt?.messageId).toBeUndefined();
+  expect(state.chatReasoning?.items.at(-1)).toMatchObject({ itemId: "later", text });
+  expect(state.chatReasoning?.items.at(-1)?.receipt?.messageId).toBeUndefined();
+  for (const mode of ["on", "stream"] as const) {
+    show(container, state, mode);
+    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
+  }
 });
 
 it("does not attach known-committed pre-tool reasoning to a later final answer", () => {
@@ -387,7 +406,7 @@ it("does not attach known-committed pre-tool reasoning to a later final answer",
 
 it("removes a worker's explicitly cleared reasoning before the final answer", () => {
   const state = stateWithRun();
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   thinking(state, "A discarded draft.");
   show(container, state);
   expect(container.querySelector(".chat-thinking")).not.toBeNull();
@@ -399,6 +418,27 @@ it("removes a worker's explicitly cleared reasoning before the final answer", ()
     sessionKey: "main",
     runId,
     seq: 3,
+    message: { role: "assistant", content: [{ type: "text", text: "The final answer." }] },
+  });
+  expect(state.chatMessages.map(extractThinkingCached).filter(Boolean)).toEqual([]);
+});
+
+it("clears only the worker's current occurrence without adopting an earlier tool thought as the final", () => {
+  const state = stateWithRun();
+  const container = createComposerContainer();
+  thinking(state, "Keep the earlier tool reasoning.", 1, runId, "earlier");
+  thinking(state, "Discard the current draft.", 2, runId, "later");
+  thinking(state, "", 3, runId, "later");
+  show(container, state);
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  expect(container.querySelector(".chat-thinking")?.textContent).toContain(
+    "Keep the earlier tool reasoning.",
+  );
+  handleChatGatewayEvent(state, {
+    state: "final",
+    sessionKey: "main",
+    runId,
+    seq: 4,
     message: { role: "assistant", content: [{ type: "text", text: "The final answer." }] },
   });
   expect(state.chatMessages.map(extractThinkingCached).filter(Boolean)).toEqual([]);
@@ -440,12 +480,12 @@ it("uses the producer run in the receipt when Gateway remaps the live client run
     true,
     { kind: "live", activeRunId: runId },
   );
-  expect(state.chatReasoning?.receipt).toEqual({
+  expect(state.chatReasoning?.items.at(-1)?.receipt).toEqual({
     runId: "source-run",
     messageId: "source-answer",
     persisted: true,
   });
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   show(container, state);
   expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
 });

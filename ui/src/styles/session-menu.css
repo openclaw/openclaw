@@ -187,12 +187,19 @@ wa-dropdown-item.people-menu__submenu::part(submenu) {
   overscroll-behavior: contain;
 }
 
-wa-dropdown-item.session-menu__settings::part(submenu) {
+wa-dropdown-item.session-menu__advanced::part(submenu) {
   width: min(340px, calc(100vw - 24px));
 }
 
 .session-menu__communication {
   padding: 2px 8px;
+}
+
+.session-menu__communication-heading {
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .session-menu__communication-row {

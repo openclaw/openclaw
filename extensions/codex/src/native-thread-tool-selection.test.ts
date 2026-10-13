@@ -28,7 +28,6 @@ const sharedClients = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
   createIsolatedCodexAppServerClient: vi.fn(),
-  isCodexAppServerStartSelectionChangedError: () => false,
 }));
 
 vi.mock("./app-server/shared-client.js", () => sharedClients);
@@ -88,6 +87,7 @@ describe("native Codex thread selection", () => {
           config = { ...config };
         }
         await upsertSessionEntry({ ...identity, storePath, entry: session });
+        await options.assertCurrentAsync?.();
         options.assertCurrent!();
         return dispatch();
       });

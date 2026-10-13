@@ -69,6 +69,14 @@ plugin entry:
 openclaw plugins disable workboard
 ```
 
+## Storage recovery
+
+If a SQLite worker fails, Workboard reopens its store through the database worker
+owner on the next call, after native cleanup finishes. An operation already in
+flight can still report a failure or an unknown write outcome; Workboard does not
+replay that operation. A Gateway restart is not needed once the underlying storage
+problem is resolved. Updates require no configuration or data migration.
+
 ## Board appearance
 
 While Workboard is open, its sidebar entry expands to show both Cards and
@@ -292,11 +300,11 @@ notification kinds are ignored until both surfaces support them. They are never
 rewritten into another valid state.
 
 The open Workboard tab updates from `plugin.workboard.changed` invalidations. Each
-event contains only a store epoch and revision. The UI then rereads canonical
+event contains only a store epoch and revision. The UI then rereads stored
 cards through the normal `operator.read` RPC. Multiple revisions coalesce into
 one follow-up read. Workboard defers that read while a card is being dragged,
 edited, or written, then resumes after the local interaction finishes. A
-reconnect always performs a canonical reload. There is no routine full-card
+reconnect always performs a reload from the store. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
 
 The Gateway shares one immutable `workboard.cards.list` payload per normalized
@@ -310,7 +318,7 @@ shape is unchanged.
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit
-board id belong to the canonical `default` board. Each board has a canonical
+board id belong to the primary `default` board. Each board has a primary
 `/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
 sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
 compatibility alias and redirects to that page while preserving other query
@@ -482,7 +490,7 @@ status are never selected for worker starts (they can still be affected by the
 data side of dispatch: stale-claim cleanup, dependency promotion, timeout
 cleanup).
 
-Session keys are deterministic per board/card, so repeated dispatches route
+Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
 
 - Assigned cards: `agent:<agentId>:subagent:workboard-<boardId>-<cardId>`
@@ -595,7 +603,7 @@ finishing a model attempt does not move a card into `review` or `blocked` while
 its run is still active. A bounded session sweep runs once per minute to reconcile
 terminal, active, idle, missing, and stale session state. Each store mutation emits
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
-the canonical card instead of writing its own lifecycle projection.
+the stored card instead of writing its own lifecycle projection.
 
 Incognito sessions remain absent from session discovery. Explicitly linked
 Incognito cards use authorized exact-session metadata reads, without derived
@@ -721,8 +729,9 @@ its connections.
 
 Workboard instances invalidate cached card lists and board revisions using the
 physical database's in-process writer receipts, including commits through sibling
-instances. Card-list reuse and publication are bracketed by that receipt; an
-unsettled receipt leaves the read uncached. Change notifications use owner publications;
+instances. Card-list reuse checks that receipt; an unsettled receipt leaves the
+read uncached. A read overlapping a mutation can return its older snapshot; the
+next request observes the writer receipt and reloads it. Change notifications use owner publications;
 there is no timer polling SQLite for writes from other processes. If a worker
 reply fails after a possible commit, the owner discards cached facts and rereads
 them on the next use without replaying the mutation.

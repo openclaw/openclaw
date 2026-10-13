@@ -1,0 +1,45 @@
+export const TRANSCRIPT_NAVIGATION_KEYS = [
+  "type",
+  "id",
+  "parentId",
+  "targetId",
+  "appendParentId",
+  "appendMode",
+] as const;
+
+export const MODEL_CONTEXT_NAVIGATION_KEYS = [
+  ...TRANSCRIPT_NAVIGATION_KEYS,
+  "timestamp",
+  "version",
+  "cwd",
+  "firstKeptEntryId",
+  "reason",
+  "tokensBefore",
+  "thinkingLevel",
+  "provider",
+  "modelId",
+  "fromId",
+  "customType",
+  "display",
+  "label",
+  "name",
+] as const;
+
+export const MODEL_MESSAGE_NAVIGATION_KEYS = [
+  "role",
+  "provider",
+  "model",
+  "timestamp",
+  "excludeFromContext",
+  "toolCallId",
+  "toolUseId",
+  "tool_call_id",
+  "tool_use_id",
+  "callId",
+  "call_id",
+  "toolName",
+  "isError",
+  "stopReason",
+  "customType",
+  "display",
+] as const;

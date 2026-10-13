@@ -1,6 +1,7 @@
 // Ui tests cover ui script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
@@ -27,6 +28,9 @@ import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const procSafeRoot = fs.realpathSync(
+  path.dirname(createRequire(import.meta.url).resolve("@openclaw/proc-safe/package.json")),
+);
 const fixtureLifetime = createFixtureLifetime();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -67,6 +71,10 @@ function copyUiFixture(root: string): void {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(file, destination);
   }
+  const nativeModules = path.join(root, "node_modules", "@openclaw");
+  fs.mkdirSync(nativeModules, { recursive: true });
+  // Resolve native optional dependencies from their installed package owner.
+  fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
 }
 

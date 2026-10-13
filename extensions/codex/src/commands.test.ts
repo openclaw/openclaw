@@ -44,6 +44,8 @@ import {
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
   mockArg,
+  mutatingCodexRequestMethods,
+  oauthProfile,
   readDiagnosticsConfirmationToken,
   requestParams,
   runCommand,
@@ -66,17 +68,6 @@ function publicConversationBinding(data?: Record<string, unknown>) {
     conversationId: "conversation",
     boundAt: 1,
     ...(data ? { data } : {}),
-  };
-}
-
-function oauthProfile(email: string, now: number) {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "access-token",
-    refresh: "refresh-token",
-    expires: now + 60 * 60 * 1000,
-    email,
   };
 }
 
@@ -567,9 +558,7 @@ describe("codex command", () => {
         expect(result.text).toContain("controlled by its parent");
         expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
         expect(release).not.toHaveBeenCalled();
-        const mutations = request.mock.calls
-          .map(([method]) => method)
-          .filter((method) => method !== "thread/read");
+        const mutations = mutatingCodexRequestMethods(request.mock.calls);
         expect(mutations).toEqual(
           knownBeforeResume
             ? []
@@ -654,14 +643,14 @@ describe("codex command", () => {
             codexControlRequest,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: (bindingIdentity) => {
+              readAsync: async (bindingIdentity) => {
                 if (resumeAccepted) {
                   if (failure === "read") {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   elapsedClock.mockReturnValue(1_001);
                 }
-                return testCodexAppServerBindingStore.read(bindingIdentity);
+                return await testCodexAppServerBindingStore.readAsync(bindingIdentity);
               },
             },
           },
@@ -958,7 +947,7 @@ describe("codex command", () => {
       const result = await runCommand("resume thread-active-resume", { codexControlRequest });
 
       expect(result.text).toContain("lost its native subscription owner");
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(mutatingCodexRequestMethods(request.mock.calls)).toEqual(["thread/resume"]);
       expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true);
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         threadId: existingThreadId,
@@ -2578,7 +2567,11 @@ describe("codex command", () => {
       return { ok: true as const, value: { threadId: "thread-race" } };
     });
     const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      bindingStore: {
+        ...testCodexAppServerBindingStore,
+        read: readBinding,
+        readAsync: async () => readBinding(),
+      },
       safeCodexControlRequest,
     });
 
@@ -3148,10 +3141,8 @@ describe("codex command", () => {
           },
         });
         release.resolve();
-        expect((await command).text).toContain(
-          args === "permissions default"
-            ? "Codex session execution policy changed"
-            : "Codex session generation is no longer current",
+        expect((await command).text).toMatch(
+          /Codex session (generation is no longer current|execution policy changed)/,
         );
         expect(writes).toBe(0);
       } finally {

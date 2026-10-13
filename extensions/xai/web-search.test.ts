@@ -13,8 +13,10 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const providerAuthMocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
-  listUsableProviderAuthProfileIds: vi.fn(() => ({ agentDir: "", profileIds: [] as string[] })),
+  listUsableProviderAuthProfileIdsAsync: vi.fn(async () => ({
+    agentDir: "",
+    profileIds: [] as string[],
+  })),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
@@ -25,8 +27,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
   return {
     ...original,
-    ensureAuthProfileStore: providerAuthMocks.ensureAuthProfileStore,
-    listUsableProviderAuthProfileIds: providerAuthMocks.listUsableProviderAuthProfileIds,
+    listUsableProviderAuthProfileIdsAsync: providerAuthMocks.listUsableProviderAuthProfileIdsAsync,
   };
 });
 
@@ -205,9 +206,8 @@ function expectCatalogEntry(
 
 afterEach(() => {
   vi.restoreAllMocks();
-  providerAuthMocks.ensureAuthProfileStore.mockReset();
-  providerAuthMocks.listUsableProviderAuthProfileIds.mockReset();
-  providerAuthMocks.listUsableProviderAuthProfileIds.mockReturnValue({
+  providerAuthMocks.listUsableProviderAuthProfileIdsAsync.mockReset();
+  providerAuthMocks.listUsableProviderAuthProfileIdsAsync.mockResolvedValue({
     agentDir: "",
     profileIds: [],
   });
@@ -305,27 +305,9 @@ describe("xai web search config resolution", () => {
       .mockResolvedValueOnce(profileAuth("expired-oauth-token"))
       .mockResolvedValueOnce(profileAuth("expired-oauth-token"))
       .mockResolvedValueOnce(profileAuth("xai-profile-api-key", "api-key", "xai:key"));
-    providerAuthMocks.listUsableProviderAuthProfileIds.mockReturnValue({
+    providerAuthMocks.listUsableProviderAuthProfileIdsAsync.mockResolvedValue({
       agentDir: "/tmp/openclaw-xai-main-agent",
-      profileIds: ["xai:default", "xai:key"],
-    });
-    providerAuthMocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      active: "xai:default",
-      profiles: {
-        "xai:default": {
-          provider: "xai",
-          type: "oauth",
-          access: "expired-oauth-token",
-          refresh: "refresh-oauth-token",
-          expires: Date.now() + 3_600_000,
-        },
-        "xai:key": {
-          provider: "xai",
-          type: "api_key",
-          keyRef: { source: "env", id: "XAI_API_KEY" },
-        },
-      },
+      profileIds: ["xai:key"],
     });
     const mockFetch = vi
       .fn()

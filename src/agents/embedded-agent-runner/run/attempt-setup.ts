@@ -33,16 +33,14 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import {
-  getEmbeddedSessionPromptState,
-  type ToolResultPromptProjectionState,
-} from "../session-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -60,7 +58,7 @@ import {
   createEmbeddedRunStageSummaryEmitter,
   logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
-import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
+import { hydratePromptMediaMessages } from "./images.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { checkMidTurnPrecheck } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -314,9 +312,9 @@ export function installEmbeddedAttemptContextGuards(input: {
     contextWindowTokens: contextTokenBudget,
   });
 
-  const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
-    activeSession.agent,
-    {
+  const previousContextTransform = activeSession.agent.transformContext;
+  activeSession.agent.transformContext = async (messages, signal) => {
+    const hydrated = await hydratePromptMediaMessages(messages, {
       workspaceDir: input.effectiveWorkspace,
       agentWorkspaceDir: attempt.workspaceDir,
       model: attempt.model,
@@ -331,23 +329,10 @@ export function installEmbeddedAttemptContextGuards(input: {
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
-    },
-    (pruned) => {
-      const promptState = getEmbeddedSessionPromptState(attempt.sessionId);
-      const keys = new Set(
-        [...pruned].map(([index, message]) => `${index}:${message.role}:${message.timestamp}`),
-      );
-      if ([...keys].some((key) => !promptState.prunedImageMessages?.has(key))) {
-        declarePromptHistoryRewrite({ ...attempt, reason: "imageCleanup" });
-      }
-      promptState.prunedImageMessages = keys;
-    },
-  );
-  const previousComputerFrameTransform = activeSession.agent.transformContext;
-  activeSession.agent.transformContext = async (messages, signal) => {
-    const modelContext = previousComputerFrameTransform
-      ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
-      : messages;
+    });
+    const modelContext = previousContextTransform
+      ? await previousContextTransform.call(activeSession.agent, hydrated, signal)
+      : hydrated;
     invalidateComputerFrameIfMissing({
       contextEpoch: input.computerContextEpoch,
       messages: modelContext,
@@ -360,7 +345,12 @@ export function installEmbeddedAttemptContextGuards(input: {
     checkMidTurnPrecheck: (
       request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
     ) => {
-      if (attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true) {
+      // Compaction ownership does not waive host admission at the provider boundary.
+      if (
+        activeSession[agentSessionDeferThresholdCompaction] ||
+        (!activeContextEngine?.info.ownsCompaction &&
+          attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true)
+      ) {
         return;
       }
       checkMidTurnPrecheck({
@@ -384,8 +374,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       lastCacheTouchAt = startedAt;
     },
     remove: () => {
-      activeSession.agent.transformContext = previousComputerFrameTransform;
-      removeHistoryImagePruneContextTransform();
+      activeSession.agent.transformContext = previousContextTransform;
       removeToolResultGuard();
       removeContextEngineLoopHook?.();
       activeSession.agent.transformContext = previousCacheTtlTransform;

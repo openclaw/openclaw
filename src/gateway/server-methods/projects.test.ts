@@ -12,12 +12,16 @@ import {
 } from "../../config/runtime-snapshot.js";
 import * as combinedStoreRead from "../../config/sessions/combined-store-gateway-read.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -655,8 +659,84 @@ test("registered projects.list serves fresh observed metadata without broad read
   }
 });
 
+test.each(["unrelated creation", "activity", "visibility", "replacement"])(
+  "projects.list revalidates contributing sessions after %s during discovery",
+  async (change) => {
+    await withProjectState(async (state) => {
+      const profile = ensureProfileForEmail("projects-churn@example.test");
+      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      setRuntimeConfigSnapshot(cfg);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "agent:main:listed-project" },
+        {
+          sessionId: "listed-project",
+          updatedAt: 1,
+          execCwd: "/projects/listed",
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        },
+      );
+      const stop = onSessionIdentityMutation(bumpGatewayAccessRevision);
+      resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
+        if (change === "unrelated creation") {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: "agent:main:unrelated" },
+            { sessionId: "unrelated", updatedAt: 2, execCwd: "/projects/unrelated" },
+          );
+        } else {
+          await patchSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:listed-project" },
+            () =>
+              change === "visibility"
+                ? { visibility: "draft" }
+                : change === "replacement"
+                  ? { sessionId: "replacement" }
+                  : { updatedAt: 2, title: "Active session" },
+          );
+        }
+        return {
+          checkoutRoot: checkoutPath,
+          repoRoot: checkoutPath,
+          originUrl: "",
+          fingerprint: checkoutPath,
+        };
+      });
+      try {
+        const result = await invokeProjectMethod(
+          "projects.list",
+          { includeObserved: true },
+          cfg,
+          ["operator.write"],
+          profile.id,
+        );
+        if (change !== "unrelated creation" && change !== "activity") {
+          expect(result).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: expect.stringContaining("Project access changed"),
+            },
+          });
+          expect(result?.payload).toBeUndefined();
+          return;
+        }
+        expect(result).toMatchObject({
+          ok: true,
+          payload: {
+            recents: [{ kind: "folder", folder: "/projects/listed" }],
+            observedProjects: [
+              { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
+            ],
+          },
+        });
+      } finally {
+        stop();
+      }
+    });
+  },
+);
+
 test.each(["write scope", "session access", "registry access", "probe access"])(
-  "projects.list rechecks %s after preparation",
+  "projects.list rechecks scopes and tolerates unrelated %s invalidation",
   async (change) => {
     const state = await createOpenClawTestState({
       layout: "state-only",
@@ -724,13 +804,9 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       );
       if (change !== "write scope") {
         expect(result).toMatchObject({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: expect.stringContaining("Project access changed"),
-          },
+          ok: true,
+          payload: { recents: [{ kind: "folder", folder: "/private/project" }] },
         });
-        expect(result?.payload).toBeUndefined();
         return;
       }
       expect(result).toEqual({

@@ -118,6 +118,7 @@ export async function tryDispatchAcpReplyCore(
     shouldSendFullToolDetails: () => Promise<boolean>;
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+    onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     recordProcessed: InboundMessageAuditTerminalRecorder["note"];
@@ -369,6 +370,7 @@ export async function tryDispatchAcpReplyCore(
     sessionId: transcriptSessionId,
     runId: auditRunId,
     onAgentRunStart: params.onAgentRunStart,
+    onPreparedAgentRunStart: params.onPreparedAgentRunStart,
     getResult: () => ({ assistantTranscript, terminalOutcome }),
   });
   await input.withCurrent(() => {});
@@ -592,13 +594,6 @@ export async function tryDispatchAcpReplyCore(
       return { queuedFinal: false, counts };
     }
 
-    emitAuditStart();
-    try {
-      await delivery.startReplyLifecycle();
-    } catch (error) {
-      logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
-    }
-
     admittedRunContext = await prepareChannelRunAdmission({
       cfg: params.cfg,
       runId: requestId,
@@ -626,6 +621,13 @@ export async function tryDispatchAcpReplyCore(
     // ACP can act before its terminal transcript arrives. Consume accepted input
     // before submission while leaving final assistant/outcome persistence below.
     await persistInput?.();
+    // Start publications clear prior lifecycle facts; settle input before they can race its guard.
+    emitAuditStart();
+    try {
+      await delivery.startReplyLifecycle();
+    } catch (error) {
+      logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
+    }
     await assertPreparedConversationBindingRouteCurrent(params.ctx);
     const turnInput: Parameters<typeof acpManager.runTurn>[0] = {
       admittedRunContext,

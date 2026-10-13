@@ -50,7 +50,8 @@ const testStateDir = await vi.hoisted(async () => {
   return await realpath(await mkdtemp(join(tmpdir(), "openclaw-migrate-command-test-")));
 });
 
-vi.mock("../config/paths.js", () => ({
+vi.mock("../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/paths.js")>()),
   resolveStateDir: () => testStateDir,
 }));
 
