@@ -1314,7 +1314,7 @@ describe("CI changed Node test plan", () => {
     const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
     expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
       target,
-      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+      "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-node-test-plan.test.ts",
       "test/scripts/test-projects-build-admission.test.ts",
     ]);
@@ -1323,7 +1323,7 @@ describe("CI changed Node test plan", () => {
     const groups = fallbackGroups(shards ?? []);
     expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual([
       target,
-      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+      "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-node-test-plan.test.ts",
     ]);
     const qaOwners = shards?.filter((shard) =>
