@@ -75,16 +75,21 @@ listeners only — including any in-process plugin subscribed through
 diagnostic projection.
 
 The fingerprint identifies the loaded skill bundle, not the exact bytes a
-particular delivery served: it is computed once at delivery preparation per
-loaded bundle (through the same bundle digest that backs resource delivery
-integrity) and every `skill.used` emission looks that retained field up. It
-is operator telemetry only — the fingerprint is never served to the model,
-and whether a delivery's served bytes exactly match the loaded bundle is
-delivery integrity's existing behavior, not this attribute's concern. A
+particular delivery served: it is created when directory skills are discovered
+— once per loaded version per bundle directory, through the same bundle digest
+that backs resource delivery integrity — stamped on the loaded entry, and
+every `skill.used` emission looks that retained field up. Worker
+materialization, the node session route, the remote transfer adapter, and
+library pins keep their own integrity-derived identities, and a skill that
+already carries a fingerprint is never re-hashed. It is operator telemetry
+only — the fingerprint is never served to the model, and whether a delivery's
+served bytes exactly match the loaded bundle is delivery integrity's existing
+behavior, not this attribute's concern. A
 disclosed staleness race follows from that contract: an edit to a skill's
 source files after its bundle loaded is picked up by the skill watcher
 (`skills.load.watch`, on by default) within seconds, the reload recomputes
-the revision, and materialization is revision-keyed, so later deliveries carry
+the revision, and discovery restamps from the reloaded tree, so later spans
+carry
 the new fingerprint — but spans emitted between the edit and its reload
 carry the previously loaded bundle's fingerprint, and an active delivery
 keeps its generation's identity for the turn. Routes that run without a
