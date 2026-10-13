@@ -151,7 +151,7 @@ describe("safeRemoveAttachmentsDir", () => {
     await expect(
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),
     ).resolves.toBe(true);
-    await expect(fs.access(siblingDir)).resolves.toBeUndefined();
+    await fs.access(siblingDir);
 
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
