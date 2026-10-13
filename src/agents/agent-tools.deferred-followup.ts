@@ -41,6 +41,12 @@ const TOOL_FOLLOWUPS = [
     "Collector runs require explicit collection instead.",
     "Collector runs require agents_wait instead.",
   ],
+  [
+    "nodes",
+    "exec",
+    "fs.listDir returns sub-directories only)",
+    "fs.listDir returns sub-directories only; use the exec tool with host=node to list files)",
+  ],
 ] as const;
 
 function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<string>): string {
