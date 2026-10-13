@@ -249,7 +249,11 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
     });
   });
 
-  test.each(["after rejection", "during handshake"] as const)(
+  test.each([
+    "after rejection",
+    "before final authority read",
+    "after final authority read",
+  ] as const)(
     "approves device pairing and the first capability surface when SSH finishes %s",
     async (timing) => {
       await attemptWithSshVerify({
@@ -266,40 +270,56 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
           };
           probeMock.mockImplementation(() => probe.promise);
           const readPairing = devicePairing.listDevicePairing;
+          const readPaired = devicePairing.getPairedDevice;
           const reread =
-            timing === "during handshake"
-              ? vi.spyOn(devicePairing, "listDevicePairing").mockImplementationOnce(async () => {
-                  const pendingSnapshot = await readPairing();
-                  // Let the real SSH approval commit after the pending snapshot,
-                  // before the handshake revalidates current device authority.
-                  probe.resolve(matched);
-                  const result = await work.waitForApprovalResult();
-                  expect(result?.status).toBe("approved");
-                  return pendingSnapshot;
-                })
-              : undefined;
+            timing === "before final authority read"
+              ? vi
+                  .spyOn(devicePairing, "getPairedDevice")
+                  .mockImplementationOnce(readPaired)
+                  .mockImplementationOnce(async (deviceId, baseDir) => {
+                    probe.resolve(matched);
+                    const result = await work.waitForApprovalResult();
+                    expect(result?.status).toBe("approved");
+                    return readPaired(deviceId, baseDir);
+                  })
+              : timing === "after final authority read"
+                ? vi.spyOn(devicePairing, "listDevicePairing").mockImplementationOnce(async () => {
+                    const pendingSnapshot = await readPairing();
+                    // Since c86edb99b3d, recovery runs after the final authority read.
+                    // An approval here must wait for the next connection.
+                    probe.resolve(matched);
+                    const result = await work.waitForApprovalResult();
+                    expect(result?.status).toBe("approved");
+                    return pendingSnapshot;
+                  })
+                : undefined;
           let bodyFailure: { error: unknown } | undefined;
           try {
             const first = await connectNode();
             expect(probeMock).toHaveBeenCalledOnce();
-            if (timing === "after rejection") {
-              expect(first.ok).toBe(false);
+            if (timing === "before final authority read") {
+              expect(reread).toHaveBeenCalledWith(loaded.identity.deviceId);
+              expect(first).toMatchObject({ ok: true, payload: { type: "hello-ok" } });
+            } else {
+              if (timing === "after final authority read") {
+                expect(reread).toHaveBeenCalledOnce();
+              }
+              expect(first).toMatchObject({ ok: false, error: { code: "NOT_PAIRED" } });
               const details = first.error?.details as PairingRequiredDetails | undefined;
               expect(details?.recommendedNextStep).toBe("wait_then_retry");
               expect(details?.pauseReconnect).toBe(false);
-              expect(await devicePairing.getPairedDevice(loaded.identity.deviceId)).toBeNull();
-              expect((await devicePairing.listDevicePairing()).pending).toEqual(
-                expect.arrayContaining([
-                  expect.objectContaining({
-                    deviceId: loaded.identity.deviceId,
-                    publicKey: loaded.publicKey,
-                  }),
-                ]),
-              );
-              probe.resolve(matched);
-            } else {
-              expect(reread).toHaveBeenCalledOnce();
-              expect(first).toMatchObject({ ok: true, payload: { type: "hello-ok" } });
+              if (timing === "after rejection") {
+                expect(await devicePairing.getPairedDevice(loaded.identity.deviceId)).toBeNull();
+                expect((await devicePairing.listDevicePairing()).pending).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({
+                      deviceId: loaded.identity.deviceId,
+                      publicKey: loaded.publicKey,
+                    }),
+                  ]),
+                );
+                probe.resolve(matched);
+              }
             }
             const result = await work.waitForApprovalResult();
             expect(result?.status).toBe("approved");
