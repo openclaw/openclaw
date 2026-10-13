@@ -12,8 +12,14 @@ const hoisted = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./outbound.js", () => ({ sendClickClackText: hoisted.sendText }));
-vi.mock("./questions.js", () => ({ deliverClickClackQuestionPrompt: hoisted.deliverQuestion }));
+vi.mock("./outbound.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./outbound.js")>()),
+  sendClickClackText: hoisted.sendText,
+}));
+vi.mock("./questions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./questions.js")>()),
+  deliverClickClackQuestionPrompt: hoisted.deliverQuestion,
+}));
 
 const account = {
   accountId: "default",

@@ -54,7 +54,8 @@ vi.mock("./inbound.js", () => ({
   handleClickClackInbound: mocks.handleClickClackInbound,
 }));
 
-vi.mock("./questions.js", () => ({
+vi.mock("./questions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./questions.js")>()),
   forwardClickClackQuestionAnswer: mocks.forwardClickClackQuestionAnswer,
   reconcileClickClackQuestions: mocks.reconcileClickClackQuestions,
 }));

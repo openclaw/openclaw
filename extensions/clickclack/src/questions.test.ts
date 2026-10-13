@@ -37,8 +37,14 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
     },
   };
 });
-vi.mock("./outbound.js", () => ({ sendClickClackQuestionMessage: hoisted.sendQuestionMessage }));
-vi.mock("./access.js", () => ({ resolveClickClackInboundAccess: hoisted.access }));
+vi.mock("./outbound.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./outbound.js")>()),
+  sendClickClackQuestionMessage: hoisted.sendQuestionMessage,
+}));
+vi.mock("./access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./access.js")>()),
+  resolveClickClackInboundAccess: hoisted.access,
+}));
 vi.mock("./http-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-client.js")>()),
   createClickClackClient: () => hoisted.client,
