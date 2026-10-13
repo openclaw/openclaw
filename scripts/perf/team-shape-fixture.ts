@@ -182,7 +182,7 @@ Transcript MiB is logical text before compression; actual database sizes are rep
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       env,
       stdio: "inherit",
-      requireProcessTreeExit: true,
+      requireProcessTreeExit: process.platform !== "win32",
     });
     process.exitCode = typeof result === "number" ? result : 1;
   }
