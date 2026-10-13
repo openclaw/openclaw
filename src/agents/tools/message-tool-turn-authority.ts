@@ -11,7 +11,7 @@ import {
 } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 
-/** Keep discovery and execution bound to the same private turn identity. */
+/** Resolve execution authority from the private turn identity. */
 export function createMessageToolTurnAuthority(params: {
   token?: string;
   agentId?: string;
@@ -81,7 +81,6 @@ export function createMessageToolTurnAuthority(params: {
       };
     },
     isScheduledRun: Boolean(scheduled),
-    hasCurrentPromptReaction: Boolean(lookup && resolveCurrentPromptReaction(lookup)),
     scheduledAccountScope:
       policy?.mode === "account" && (origin?.kind === "local" || channels.length > 0)
         ? {

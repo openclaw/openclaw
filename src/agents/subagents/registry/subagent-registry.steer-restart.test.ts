@@ -15,6 +15,11 @@ import {
   vi,
 } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import * as gatewayCallRuntime from "../../../gateway/call.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -214,6 +219,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot(getRuntimeConfig());
     vi.useRealTimers();
     for (const key of Object.keys(sessionStore)) {
       delete sessionStore[key];
@@ -377,6 +383,7 @@ describe("subagent registry steer restarts", () => {
     lifecycleHandler = undefined;
     removeInternalSessionEffectsSessionMock.mockClear();
     await mod.resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
   });
 
   it("honors persisted steer suppression and only announces the replacement run", async () => {

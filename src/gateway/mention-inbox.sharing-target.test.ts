@@ -2,6 +2,7 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -127,7 +128,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
   },
 );
 
-it("refreshes 50 connected mention views without rereading unchanged session targets", async () => {
+it("refreshes 50 connected mention views after session and viewer changes", async () => {
   const cfg: OpenClawConfig = {};
   await withMentionInbox(
     async (f) => {
@@ -196,7 +197,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       await f.setSession({ visibility: "draft" });
       exactRowReads = 0;
       await emit();
-      expect(exactRowReads).toBe(1);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
 
@@ -204,7 +205,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       exactRowReads = 0;
       f.broadcast.mockClear();
       await emit(SESSION_KEY);
-      expect(exactRowReads).toBe(1);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
         "Renamed conversation",
@@ -221,10 +222,11 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
 
       // Keyless invalidation also covers in-place runtime configuration updates.
       cfg.session = { store: alternateStorePath };
+      setRuntimeConfigSnapshot(cfg);
       exactRowReads = 0;
       f.broadcast.mockClear();
       await f.inbox.invalidateAsync();
-      expect(exactRowReads).toBe(1);
+      expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(49);
       expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
         "Alternate conversation",

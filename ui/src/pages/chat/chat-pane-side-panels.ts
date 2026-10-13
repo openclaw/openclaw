@@ -170,10 +170,9 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     await this.updateComplete;
     const region = this.renderRoot.querySelector("openclaw-chat-sidebar-region");
     await region?.updateComplete;
-    const tab = region?.parentElement?.querySelector<HTMLElementTagNameMap["wa-tab"]>(
-      '[data-region-header="side"] wa-tab[active]',
+    const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
+      '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
     );
-    await tab?.updateComplete;
     if (
       this.isConnected &&
       state &&

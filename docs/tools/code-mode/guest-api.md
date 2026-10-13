@@ -83,7 +83,7 @@ executor and remain bounded by the Code Mode execution and continuation limits.
 applies to interactive Code Mode and headless automation scripts.
 
 Every effective non-MCP tool is also installed as an async global function.
-The model-visible `exec` description includes a small set of final callable names
+The run's Code Mode prompt includes a small set of final callable names
 selected by fixed rules, along with compact input hints and trusted declared output hints.
 Descriptions remain deferred so adversarial catalog prose cannot steer the
 model. When that index omits a tool, call `catalog.search(...)`; its results are

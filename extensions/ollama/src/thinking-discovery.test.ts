@@ -58,9 +58,18 @@ function mockOllama(modelId: string, thinking: unknown) {
     metadata,
     requests,
     chatBodies,
-    async discover(api: "ollama" | "openai-completions" = "ollama"): Promise<ProviderRuntimeModel> {
+    async discover(
+      api: "ollama" | "openai-completions" = "ollama",
+      configuredModel?: Parameters<typeof toDynamicOllamaModel>[0]["model"],
+    ): Promise<ProviderRuntimeModel> {
       const result = await ollamaProviderDiscovery.catalog.run({
-        config: { models: { providers: { ollama: { baseUrl, api, models: [] } } } },
+        config: {
+          models: {
+            providers: {
+              ollama: { baseUrl, api, models: configuredModel ? [configuredModel] : [] },
+            },
+          },
+        },
         agentDir: "/unused",
         env: { OLLAMA_API_KEY: "ollama-local" },
         resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
@@ -71,7 +80,10 @@ function mockOllama(modelId: string, thinking: unknown) {
         result && "provider" in result ? result.provider : undefined,
         "discovered provider",
       );
-      const model = expectDefined(provider.models[0], "discovered thinking model");
+      const model = expectDefined(
+        provider.models[0] ?? configuredModel,
+        "discovered or configured thinking model",
+      );
       return toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model });
     },
   };
@@ -108,6 +120,32 @@ function profileFor(model: ProviderRuntimeModel) {
 }
 
 describe("Ollama discovered thinking contracts", () => {
+  it("keeps manual model settings while discovering the mandatory native thinking format", async () => {
+    const fixture = mockOllama("manual-mandatory-thinking:latest", {
+      values: [true],
+      default: true,
+    });
+    const model = await fixture.discover("ollama", {
+      id: "manual-mandatory-thinking:latest",
+      name: "Manual thinking model",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 2048,
+      compat: { supportsTools: false },
+    });
+    expect(model).toMatchObject({
+      name: "Manual thinking model",
+      contextWindow: 8192,
+      maxTokens: 2048,
+      compat: { supportsTools: false },
+    });
+    await sendThinking(model, "off");
+    await sendThinking(model, "high");
+    expect(fixture.chatBodies.map((body) => body.think)).toEqual([true, true]);
+  });
+
   it("keeps native boolean mappings off the legacy OpenAI-compatible transport", async () => {
     const fixture = mockOllama("thinking-openai-compatible:latest", { values: [false, true] });
     const model = await fixture.discover("openai-completions");

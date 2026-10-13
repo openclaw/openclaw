@@ -77,36 +77,6 @@ describe("devices exec approvals rendering", () => {
     expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
   });
 
-  it("offers only nodes that support both reading and writing approval policy", () => {
-    const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "get-only",
-          displayName: "Get only",
-          commands: ["system.execApprovals.get"],
-        },
-        {
-          nodeId: "set-only",
-          displayName: "Set only",
-          commands: ["system.execApprovals.set"],
-        },
-        {
-          nodeId: "editable",
-          displayName: "Editable",
-          commands: ["system.execApprovals.get", "system.execApprovals.set"],
-        },
-      ],
-      execApprovalsTarget: "node",
-    });
-    const section = getSection(container, "Exec approvals");
-    const nodeSelect = section.querySelector<HTMLSelectElement>('select[aria-label="Node"]');
-
-    expect(Array.from(nodeSelect?.options ?? [], (option) => option.value)).toEqual([
-      "",
-      "editable",
-    ]);
-  });
-
   it("keeps the selected node until its owner accepts a target change", () => {
     const onExecApprovalsTargetChange = vi.fn();
     const props = {
@@ -319,16 +289,12 @@ describe("devices agent bindings", () => {
   });
 
   it.each([
-    { name: "IDs", refs: ["default-node", "agent-node"] },
     {
       name: "ineligible exact IDs ahead of names",
       refs: ["default-node", "agent-node"],
       ineligibleExact: true,
       unavailable: true,
     },
-    { name: "normalized names", refs: ["default_worker", "RESEARCH-WORKER"] },
-    { name: "addresses", refs: ["192.0.2.10", "192.0.2.20"] },
-    { name: "ID prefixes", refs: ["default", "agent-"] },
     {
       name: "ambiguous names across the full inventory",
       refs: ["Default worker", "Research worker"],

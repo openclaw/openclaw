@@ -62,7 +62,7 @@ import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -662,7 +662,12 @@ export const sendHandlers: GatewayRequestHandlers = {
             }
           }
           if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
-            const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+            const { canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg,
+              key: outboundSessionKey,
+              assertActive: commitAgentRuntimeAuthority,
+              excludeInternalEffects: true,
+            });
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
               canonicalKey,
               entry,

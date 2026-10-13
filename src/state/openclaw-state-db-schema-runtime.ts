@@ -108,10 +108,6 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
-        const includeAgentDeletionJournal =
-          tableExists(db, "agent_deletion_journal") ||
-          hasPreJournalStateSchema(db) ||
-          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertNoLegacyStateRuntimeRepair(db, pathname);
           assertStateDatabaseIntegrityOnce(db, pathname);
@@ -133,6 +129,10 @@ export function ensureOpenClawStateRuntimeSchema(
             : [];
         }
 
+        const includeAgentDeletionJournal =
+          tableExists(db, "agent_deletion_journal") ||
+          hasPreJournalStateSchema(db) ||
+          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         // Older schemas still need atomic content transforms before retiring their columns.
         openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
         // Automatic preparation enters without the physical opener's integrity preflight.

@@ -17,7 +17,10 @@ import {
 import { replaceSessionOwnerInTransaction } from "../config/sessions/session-accessor.sqlite-owner.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import {
+  readStoredCanonicalSessionMainKey,
+  setCanonicalSqliteSessionMainKey,
+} from "../config/sessions/session-canonical-key.js";
 import { preserveCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
@@ -27,6 +30,8 @@ import {
   projectExistingAgentDatabaseTargets,
   resolveTargetSqliteOptions,
 } from "../infra/session-sqlite-migration-readers.js";
+import { normalizeMainKey } from "../routing/session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -128,7 +133,12 @@ function hydrateCanonicalSessionCandidates(
   const byStore = new Map<string, CanonicalSessionCandidateFact[]>();
   for (const fact of facts) {
     const key = `${fact.agentId}\0${fact.storePath}`;
-    byStore.set(key, [...(byStore.get(key) ?? []), fact]);
+    const grouped = byStore.get(key);
+    if (grouped) {
+      grouped.push(fact);
+    } else {
+      byStore.set(key, [fact]);
+    }
   }
   for (const group of byStore.values()) {
     const first = group[0]!;
@@ -514,10 +524,14 @@ export async function repairCanonicalSessionKeys(params: {
   let repairedGroups = 0;
   if (params.apply) {
     for (const store of stores) {
-      setCanonicalSqliteSessionMainKey(
-        openOpenClawAgentDatabase(resolveTargetSqliteOptions(store, env)),
-        params.cfg.session?.mainKey,
-      );
+      const options = resolveTargetSqliteOptions(store, env);
+      const stored = withOpenClawAgentDatabaseReadOnly(readStoredCanonicalSessionMainKey, options);
+      if (!stored.found || stored.value !== normalizeMainKey(params.cfg.session?.mainKey)) {
+        setCanonicalSqliteSessionMainKey(
+          openOpenClawAgentDatabase(options),
+          params.cfg.session?.mainKey,
+        );
+      }
     }
   }
   let repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);

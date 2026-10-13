@@ -3,7 +3,7 @@ import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
@@ -128,10 +128,11 @@ function appendSessionUsage(
 
 it("refreshes registered usage.cost without decoding unchanged date partitions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
+    setRuntimeConfigSnapshot(config);
     const preload = state.path("observe-usage-decode.cjs");
     const observations = await observeUsageDecoding(preload, state.path("usage-decode.jsonl"));
     await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
-      const config = getRuntimeConfig();
       const timestamp = Date.parse("2026-09-18T12:00:00Z");
       const sessions = Array.from({ length: 4 }, (_, index) => ({
         agentId: "main",

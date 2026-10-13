@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   patchSessionEntryCore,
@@ -36,6 +37,7 @@ it("counts caller-visible conversations once through direct and delegated work b
     const context = requestContext({
       agents: { entries: { main: {}, work: {} } },
     });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const client = identifiedClient(ada);
     const seed = (name: string, agentId = "main", fields: Partial<SessionEntry> = {}) => {
       const sessionKey = "agent:" + agentId + ":" + name;
@@ -43,7 +45,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       const { owner, participants, ...entry } = fields;
       replaceSessionEntrySync(scope, {
         sessionId: name,
-        updatedAt: 100,
+        updatedAt: Date.now(),
         visibility: "shared",
         createdActor: actor(ada),
         ...entry,
@@ -282,6 +284,8 @@ it("counts caller-visible conversations once through direct and delegated work b
 
 it("keeps the owner summary complete beyond the people facet cap and resolves merged owners", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const profiles = Array.from(
       { length: 61 },
       (_, i) => ensureProfileForEmail("count-owner-" + i + "@example.test").id,
@@ -297,7 +301,6 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
         },
       );
     }
-    const context = requestContext({ agents: { entries: { main: {} } } });
     const client = identifiedClient(profiles[1]!);
     const request = { includeOwnerSessionCounts: true, includePeople: true, limit: 1 };
     const counts = profiles.map((profileId) => ({ profileId, open: 1, running: 0 }));

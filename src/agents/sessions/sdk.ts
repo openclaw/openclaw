@@ -215,7 +215,6 @@ export async function createAgentSession(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
-  assertInitialSessionCurrent();
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {

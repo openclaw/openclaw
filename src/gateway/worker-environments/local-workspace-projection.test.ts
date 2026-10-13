@@ -10,6 +10,10 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -74,6 +78,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
   vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
   vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  setRuntimeConfigSnapshot({});
   const repo = path.join(root, "source");
   const checkout = path.join(root, "canonical");
   await fs.mkdir(repo);
@@ -133,6 +138,7 @@ afterEach(async () => {
   if (process.env.OPENCLAW_STATE_DIR !== stateRoot) {
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
   }
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });

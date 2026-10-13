@@ -7,12 +7,12 @@ import {
   shortenHomePath,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
   emitMemoryCoreSidecarNotice,
@@ -172,7 +172,7 @@ export async function runMemorySearch(
 
 export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
   try {
-    const cfg = getRuntimeConfig({ skipPluginValidation: true });
+    const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     const agentId = resolveMemoryAgent(cfg, opts.agent);
     const slotOwner = resolveForeignMemorySlotOwner(cfg);
     if (slotOwner) {

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -50,6 +51,7 @@ describe("native verbose menu status", () => {
       },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     await replaceSessionEntry(
       { agentId: "other", sessionKey: session.sessionKey },
       { sessionId: "other-session", updatedAt: 1, verboseLevel: "on" },

@@ -4,6 +4,10 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
@@ -39,6 +43,7 @@ async function admittedAttempt(
   runId = "run-1",
   overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
 ): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
+  setRuntimeConfigSnapshot(overrides.config ?? {}, overrides.config);
   const admission = prepareAgentRunAdmission({
     cfg: {},
     facts: {
@@ -103,6 +108,7 @@ afterEach(() => {
     admission.close();
   }
   resetAgentRunRegistryForTest();
+  clearRuntimeConfigSnapshot();
 });
 beforeEach(() => {
   mockRunBefore.mockClear();

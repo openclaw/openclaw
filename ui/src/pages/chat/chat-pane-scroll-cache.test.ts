@@ -12,9 +12,10 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
+let flushFrames: ReturnType<typeof stubAnimationFrames>;
 beforeEach(() => {
   installTranscriptDomMocks();
-  stubAnimationFrames();
+  flushFrames = stubAnimationFrames();
 });
 afterEach(resetTranscriptTestDom);
 
@@ -40,6 +41,8 @@ async function mountSession(paneId: string, sessionKey: string) {
   });
   props.transcript.hostUpdated();
   await Promise.resolve();
+  flush();
+  flushFrames();
   flush();
   return {
     thread,

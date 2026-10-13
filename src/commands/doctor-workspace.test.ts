@@ -96,7 +96,7 @@ describe("root memory repair", () => {
     const archives = await fs.readdir(repairDir);
     expect(archives).toHaveLength(1);
     const archivePath = path.join(repairDir, archives[0]!, "memory.md");
-    await expect(fs.access(archivePath)).resolves.toBeUndefined();
+    await fs.access(archivePath);
     return archivePath;
   }
 

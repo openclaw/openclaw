@@ -9,7 +9,7 @@ import { modelKey } from "../../agents/model-ref-shared.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
@@ -54,7 +54,7 @@ export async function modelsListCommand(
   }
   const provider = rawProvider ? normalizeProviderId(rawProvider) : undefined;
   // Gateway selection needs connection config, not local provider credentials or plugins.
-  const cfg = getRuntimeConfig({ skipPluginValidation: true });
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const params: ModelsListParams = {
     ...(opts.agent?.trim() ? { agentId: opts.agent.trim() } : {}),
     view: opts.all || provider ? "all" : "default",

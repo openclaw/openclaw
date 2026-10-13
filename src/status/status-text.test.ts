@@ -5,6 +5,10 @@ import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
@@ -143,9 +147,23 @@ describe("buildStatusText channel features", () => {
 
 describe("buildStatusText global subagent scope", () => {
   beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
-  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+  afterEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
+  });
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
+    const cfg: StatusTextParams["cfg"] = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          research: {},
+          ops: {},
+        },
+      },
+      session: { scope: "global" },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["research", "ops"]) {
       seedSubagentRunForReadTest({
         runId: `status-global-${agentId}`,
@@ -162,16 +180,7 @@ describe("buildStatusText global subagent scope", () => {
     }
 
     const text = await renderTelegramStatus({
-      cfg: {
-        agents: {
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: {
-            research: {},
-            ops: {},
-          },
-        },
-        session: { scope: "global" },
-      },
+      cfg,
       sessionEntry: { sessionId: "global-status", updatedAt: 0 },
       sessionKey: "global",
       agentId: "research",

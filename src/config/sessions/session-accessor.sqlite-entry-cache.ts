@@ -59,7 +59,6 @@ export {
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 export {
-  assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
   publishSessionEntryPlaceholderInsertion,
   publishSessionEntryWorkerMetadataInvalidation,
@@ -468,7 +467,7 @@ export function publishSessionEntryCacheParticipantUpdate(
       database,
       sessionKey,
       database.agentId,
-      { kind: "participants" },
+      { kind: "participants", projectionChanged: false },
       { kind: "marker", sharingChange: "unchanged" },
     );
     return;

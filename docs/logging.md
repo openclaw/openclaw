@@ -1050,6 +1050,20 @@ capturing raw prompt or response content:
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
 
+Completed llama.cpp and Ollama calls also report `providerProcessingMs` and
+`providerWaitEstimateMs` in model-call diagnostics, provider request timeline
+events, and Gateway stability snapshots and bundles. `openclaw gateway stability`
+shows these as `processing` and `wait~`, alongside total `wall` time.
+
+Processing is the server-reported prompt evaluation plus token generation time.
+Estimated wait is the nonnegative difference between wall time and processing:
+it includes backend queueing, model loading, transport, and terminal settlement
+overhead, so it is not an exact slot-wait measurement. Ollama's `load_duration`
+can include scheduling and is not counted as inference. These fields remain
+absent when final server timings are missing or invalid, including cancellations
+without final statistics. An aborted call does not prove the backend released
+its slot. No additional server polling is performed.
+
 Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
 session's previous request) and `promptTokens` when reported by the provider.
 `providerPrefix` compares final encoded request segments against the last request
@@ -1080,8 +1094,12 @@ to `"pretty"`.
 
 ### Redaction
 
-OpenClaw masks sensitive values in console output, file logs, diagnostic and
-support exports, and OpenTelemetry output. Config snapshots, audit output, and
+File logs store raw records with owner-only (`0600`) permissions. OpenClaw masks
+sensitive values when logs are read through `logs.tail` (CLI or Control UI),
+printed to the console, or exported through diagnostic/support bundles and
+OpenTelemetry. Direct file reads are raw: protect and review them before sharing.
+Log messages should contain IDs, sizes, and outcomes, never message text, prompts,
+tool arguments, or tool results. Config snapshots, audit output, and
 credential-bearing URLs and command-line options retain their credential masking.
 
 `logging.redactPatterns` replaces the default regex string list for logs and

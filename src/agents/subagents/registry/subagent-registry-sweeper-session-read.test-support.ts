@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -155,7 +156,7 @@ export function registerSubagentSweepRetainedAuthorityTests(
               cleanupCompletedAt: now,
               execution: { suppressSessionEffects: true },
             });
-            await expect(fs.access(attachmentDir)).resolves.toBeUndefined();
+            await fs.access(attachmentDir);
           }
           vi.setSystemTime(now + 2);
           await harness.sweeper.sweepOnce();
@@ -173,7 +174,7 @@ export function registerSubagentSweepRetainedAuthorityTests(
               fs.readFile(path.join(attachmentDir, "artifact.txt"), "utf8"),
             ).resolves.toBe("retained child artifact");
           }
-          await expect(fs.access(siblingDir)).resolves.toBeUndefined();
+          await fs.access(siblingDir);
         } finally {
           await harness.sweeper.reset();
         }
@@ -222,6 +223,9 @@ export function registerSubagentSweeperSessionReadTests(ignoreRecovery: () => vo
       .mocked(loadSubagentSessionEntry)
       .withImplementation(actual.loadSubagentSessionEntry, async () => {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          setRuntimeConfigSnapshot({
+            session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+          });
           ignoreRecovery();
           const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness({});
           replaceSessionEntrySync(
@@ -294,6 +298,9 @@ export function registerSubagentSweeperSessionReadTests(ignoreRecovery: () => vo
       .mocked(loadSubagentSessionEntry)
       .withImplementation(actual.loadSubagentSessionEntry, async () => {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          setRuntimeConfigSnapshot({
+            session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+          });
           ignoreRecovery();
           const { entry, runs, completeSubagentRunWithRecovery, sweeper } = createHarness({});
           const scope = {

@@ -341,6 +341,10 @@ it.each([
     };
     target.context.workerSessionPlacementService = {
       getMany: () => new Map([[before.sessionId, placement]]),
+      prepareSessionPlacement: async () => ({
+        current: () => placement,
+        release: () => {},
+      }),
     };
   }
   await expect(target.execute({ model: "fixture/native" })).rejects.toThrow(message);

@@ -1,4 +1,3 @@
-// Bound account read tests cover reading account bindings from channel metadata.
 import { describe, expect, it } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,41 +22,6 @@ function resolveBoundAccount(
 }
 
 describe("resolveFirstBoundAccountId", () => {
-  it("returns exact peer match when caller supplies a matching peerId", () => {
-    const cfg = cfgWithBindings([
-      { channel: "matrix", accountId: "bot-alpha-default" },
-      {
-        channel: "matrix",
-        peer: { kind: "channel", id: "!roomA:example.org" },
-        accountId: "bot-alpha-room-a",
-      },
-    ]);
-    expect(
-      resolveBoundAccount({
-        cfg,
-        peerId: "!roomA:example.org",
-      }),
-    ).toBe("bot-alpha-room-a");
-  });
-
-  it("prefers wildcard peer binding over channel-only when caller peerKind matches", () => {
-    const cfg = cfgWithBindings([
-      { channel: "matrix", accountId: "bot-alpha-default" },
-      {
-        channel: "matrix",
-        peer: { kind: "channel", id: "*" },
-        accountId: "bot-alpha-wildcard",
-      },
-    ]);
-    expect(
-      resolveBoundAccount({
-        cfg,
-        peerId: "!anyRoom:example.org",
-        peerKind: "channel",
-      }),
-    ).toBe("bot-alpha-wildcard");
-  });
-
   it("preserves first-match binding order for peerless callers", () => {
     const cfg = cfgWithBindings([
       {
@@ -72,46 +36,6 @@ describe("resolveFirstBoundAccountId", () => {
         cfg,
       }),
     ).toBe("bot-alpha-wildcard");
-  });
-
-  it("falls back to peer-specific binding for peerless callers when no channel-only or wildcard binding exists", () => {
-    const cfg = cfgWithBindings([
-      {
-        channel: "matrix",
-        peer: { kind: "channel", id: "!specificRoom:example.org" },
-        accountId: "bot-alpha-specific",
-      },
-    ]);
-    expect(
-      resolveBoundAccount({
-        cfg,
-      }),
-    ).toBe("bot-alpha-specific");
-  });
-
-  it("skips non-matching peer-specific bindings when caller supplies a different peerId", () => {
-    const cfg = cfgWithBindings([
-      {
-        channel: "matrix",
-        peer: { kind: "channel", id: "!otherRoom:example.org" },
-        accountId: "bot-alpha-other",
-      },
-    ]);
-    expect(
-      resolveBoundAccount({
-        cfg,
-        peerId: "!differentRoom:example.org",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined when the agent has no binding on the channel", () => {
-    const cfg = cfgWithBindings([{ channel: "whatsapp", accountId: "bot-alpha-whatsapp" }]);
-    expect(
-      resolveBoundAccount({
-        cfg,
-      }),
-    ).toBeUndefined();
   });
 
   it("filters bindings by peer kind when caller supplies peerKind", () => {

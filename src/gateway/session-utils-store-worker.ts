@@ -1,8 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
-import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -10,7 +8,6 @@ import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
 } from "../config/sessions/session-entry-read-runtime.types.js";
-import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
@@ -26,11 +23,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import type { NativeErrorResponse } from "../infra/native-error-response-schema.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
@@ -71,19 +65,12 @@ type GatewaySessionStoreReadPlan = {
   selectPrepared: (
     reads: readonly PreparedSessionEntryWorkerRead[],
   ) => GatewaySessionStoreTargetWithStore;
-  readLegacy: () => GatewaySessionStoreTargetWithStore;
-  retainNative: () => {
-    readCurrent: () => GatewaySessionStoreTargetWithStore;
-    release: () => void;
-  };
 };
 
 export type GatewaySessionEntryReadPlan = {
   reads: readonly SessionEntryWorkerRead[];
   assertCurrent: () => void;
   selectPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => SessionEntry | undefined;
-  readLegacy: () => SessionEntry | undefined;
-  retainNative: () => { readCurrent: () => SessionEntry | undefined; release: () => void };
 };
 
 /** Acquire the ordered lookup's data while its discovery and physical readers remain current. */
@@ -94,8 +81,10 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
   projection?: SessionEntryReadScope["projection"];
+  preserveQualifiedAddress?: boolean;
+  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void;
 }): Promise<GatewaySessionStoreTargetWithStore> {
-  const prepared = await prepareGatewaySessionStoreReadInWorker(params);
+  const prepared = await prepareGatewaySessionStoreReadInWorker(params, false, params.onSelected);
   params.assertActive?.();
   return prepared.target;
 }
@@ -110,18 +99,19 @@ async function prepareGatewaySessionStoreReadInWorker(
     cfg: params.cfg,
     sessionKey: params.key,
     agentId: params.agentId,
+    preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   // Ephemeral databases belong to the process and cannot be opened by a worker.
   if (isIncognitoSessionKey(canonicalKey)) {
-    return {
-      target: resolveGatewaySessionStoreTargetWithStore({
-        ...params,
-        agentId,
-        readOnly: true,
-        projection: params.projection ?? "list",
-        exactRead: true,
-      }),
-    };
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      ...params,
+      agentId,
+      readOnly: true,
+      projection: params.projection ?? "list",
+      exactRead: true,
+    });
+    onSelected?.(target);
+    return { target };
   }
   const parsedAgent = parseAgentSessionKey(params.key)?.agentId;
   const { candidates, ...inventory } = prepareSessionStoreTargetInventory(
@@ -164,6 +154,7 @@ async function prepareGatewaySessionStoreReadInWorker(
       env: inventory.env,
       targetDiscoveryCache,
       projection: params.projection,
+      preserveQualifiedAddress: params.preserveQualifiedAddress,
     };
     const prepareReads = async <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => {
       assertCurrent();
@@ -218,17 +209,18 @@ async function prepareGatewaySessionStoreReadInWorker(
         { ordered: onSelected !== undefined },
       );
     };
-    const selected = retainPlan
-      ? await prepareGatewaySessionStoreTargetReadPlan(lookup, prepareReads, onSelected)
-      : {
-          target: await prepareGatewaySessionStoreTargetReadOnly(lookup, prepareReads),
-          plan: undefined,
-        };
+    const selected =
+      retainPlan || onSelected
+        ? await prepareGatewaySessionStoreTargetReadPlan(lookup, prepareReads, onSelected)
+        : {
+            target: await prepareGatewaySessionStoreTargetReadOnly(lookup, prepareReads),
+            plan: undefined,
+          };
     assertCurrent();
     return selected;
   }, params.assertActive);
   params.assertActive?.();
-  if (!prepared.plan) {
+  if (!retainPlan || !prepared.plan) {
     return { target: prepared.target };
   }
   const assertCurrent = () => {
@@ -323,111 +315,6 @@ async function prepareGatewaySessionStoreReadInWorker(
             assertCurrent: read.assertCurrent,
           })),
         );
-      },
-      readLegacy() {
-        assertCurrent();
-        return select(
-          reads.map(({ input, source, expectedSource }) => {
-            let capturedReadSource: CapturedSessionEntryReadSource | undefined;
-            const entries = loadExactSessionEntryCandidates({
-              readOnly: true,
-              readSource: source,
-              expectedSource,
-              sessionKeys: input.sessionKeys ?? [],
-              env: inventory.env,
-              onReadSource: (current) => {
-                capturedReadSource = current;
-              },
-            });
-            return { entries, source, capturedReadSource, assertCurrent };
-          }),
-        );
-      },
-      retainNative() {
-        assertCurrent();
-        let active = true;
-        const releases: Array<() => void> = [];
-        const release = () => {
-          if (!active) {
-            return;
-          }
-          active = false;
-          const errors: unknown[] = [];
-          for (const close of releases.toReversed()) {
-            try {
-              close();
-            } catch (error) {
-              errors.push(error);
-            }
-          }
-          throwSqliteLifecycleErrors(errors, "Prepared session lookup release failed");
-        };
-        try {
-          // Acquire every physical source before a worker grant; final reads only
-          // use retained handles and the original ordered selection owner.
-          const retained = reads.map(({ input, source, expectedSource }) => {
-            const opened = retainOpenClawAgentDatabaseReadOnly({
-              agentId: source.agentId,
-              path: source.path,
-              env: inventory.env,
-            });
-            if (opened.found) {
-              releases.push(opened.claim.release);
-            } else if (expectedSource || opened.reason !== "database-missing") {
-              throw new Error("Prepared session lookup source is unavailable");
-            }
-            const assertSourceCurrent = () => {
-              assertCurrent();
-              if (opened.found) {
-                opened.claim.assertCurrent();
-                if (expectedSource) {
-                  assertCapturedSessionEntryReadSource(expectedSource, opened.database);
-                }
-              }
-            };
-            assertSourceCurrent();
-            return () => {
-              assertSourceCurrent();
-              const physical = opened.found
-                ? readOpenClawAgentDatabaseIdentity(opened.database)
-                : undefined;
-              const entries = opened.found
-                ? (input.sessionKeys ?? []).flatMap((sessionKey) => {
-                    const entry = readExactSessionEntryRow(
-                      opened.database,
-                      sessionKey,
-                      "full",
-                      "canonical",
-                    )?.entry;
-                    return entry ? [{ sessionKey, entry }] : [];
-                  })
-                : [];
-              assertSourceCurrent();
-              return {
-                entries,
-                source,
-                capturedReadSource: physical && {
-                  ...source,
-                  databaseIdentity: physical.identity,
-                  databaseBirthtime: physical.birthtime,
-                },
-                assertCurrent: assertSourceCurrent,
-              };
-            };
-          });
-          return {
-            readCurrent() {
-              if (!active) {
-                throw new Error("Prepared session lookup retention is no longer active");
-              }
-              return select(retained.map((read) => read()));
-            },
-            release,
-          };
-        } catch (error) {
-          release();
-          throw error;
-        }
       },
     },
   };
@@ -538,14 +425,6 @@ export async function prepareGatewaySessionEntryReadOnlyInWorker(
       reads: readPlan.reads,
       assertCurrent: readPlan.assertCurrent,
       selectPrepared: (reads) => select(readPlan.selectPrepared(reads))?.entry,
-      readLegacy: () => select(readPlan.readLegacy())?.entry,
-      retainNative() {
-        const retained = readPlan.retainNative();
-        return {
-          readCurrent: () => select(retained.readCurrent())?.entry,
-          release: retained.release,
-        };
-      },
     },
   };
 }

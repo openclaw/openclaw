@@ -1,11 +1,12 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "./channel-config-metadata.js";
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
-import type { OpenClawConfig } from "./config.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
@@ -30,14 +31,22 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   return buildRuntimeConfigSchemaFromRegistry(registry, config);
 }
 
-export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
-  const snapshot = await readConfigFileSnapshot({ observe: false });
+export async function readBestEffortRuntimeConfigSchema(prepared?: {
+  snapshot: ConfigFileSnapshot;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<ConfigSchemaResponse> {
+  const snapshot = prepared?.snapshot ?? (await readConfigFileSnapshot({ observe: false }));
   const config = snapshot.valid
     ? snapshot.sourceConfig
     : { agents: { entries: { main: {} } }, plugins: { enabled: true } };
-  const registry = resolveConfigWidePluginManifestRegistry({ config, env: process.env });
+  const registry =
+    (snapshot.valid ? prepared?.pluginMetadataSnapshot?.manifestRegistry : undefined) ??
+    resolveConfigWidePluginManifestRegistry({ config, env: process.env });
+  if (snapshot.valid) {
+    return buildRuntimeConfigSchemaFromRegistry(registry, config);
+  }
   return buildConfigSchemaCore({
-    plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
+    plugins: [],
     channels: collectChannelSchemaMetadataCore(
       registry,
       resolveChannelSchemaSelection(registry, config),

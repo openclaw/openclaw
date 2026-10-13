@@ -267,8 +267,10 @@ describe("Crabbox prepared image demand and custody", () => {
   it.each([60_000])(
     "shares the release deadline after predecessor deletion consumes %s ms",
     async (elapsed) => {
+      let monotonicMs = 0;
+      const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
       const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
       const preparation = createPreparation("reserve", now);
       let captures = 0;
       const { provider, calls } = createWarmProvider(({ argv }) => {
@@ -280,7 +282,7 @@ describe("Crabbox prepared image demand and custody", () => {
           );
         }
         if (argv[2] === "delete" && argv[3] === CHECKPOINT_ID) {
-          clock.mockReturnValue(now + elapsed);
+          monotonicMs += elapsed;
         }
         return undefined;
       });
@@ -289,34 +291,39 @@ describe("Crabbox prepared image demand and custody", () => {
         "release-budget-source",
         projectOptions([], new AbortController(), preparation).options,
       );
-      await destroyAndWait(provider, { leaseId: source.leaseId, profile: PROFILE });
-      const current = projectOptions([], new AbortController(), {
-        ...preparation,
-        key: "e".repeat(64),
-        purpose: "session",
-      });
-      current.options.beginNodeEnrollment.mockRejectedValueOnce(
-        new Error("enrollment admission failed"),
-      );
-      await expect(
-        provider.provision(PROFILE, "release-budget-session", current.options),
-      ).rejects.toThrow("enrollment admission failed");
-      const deletions = calls.filter(({ argv }) => argv[2] === "delete");
-      expect(deletions[0]?.argv[3]).toBe(CHECKPOINT_ID);
-      expect(deletions[0]?.options.timeoutMs).toBe(60_000);
-      if (elapsed < 60_000) {
-        expect(deletions[1]?.argv[3]).toBe("chk_unactivated");
-        expect(deletions[1]?.options.timeoutMs).toBe(60_000 - elapsed);
-        expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
-      } else {
-        expect(deletions).toHaveLength(1);
-        expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
-          allocations: {},
-          lastDemandAtMs: null,
-          retirement: { checkpointId: "chk_unactivated" },
+      try {
+        await destroyAndWait(provider, { leaseId: source.leaseId, profile: PROFILE });
+        const current = projectOptions([], new AbortController(), {
+          ...preparation,
+          key: "e".repeat(64),
+          purpose: "session",
         });
-        await maintain(provider);
-        expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+        current.options.beginNodeEnrollment.mockRejectedValueOnce(
+          new Error("enrollment admission failed"),
+        );
+        await expect(
+          provider.provision(PROFILE, "release-budget-session", current.options),
+        ).rejects.toThrow("enrollment admission failed");
+        const deletions = calls.filter(({ argv }) => argv[2] === "delete");
+        expect(deletions[0]?.argv[3]).toBe(CHECKPOINT_ID);
+        expect(deletions[0]?.options.timeoutMs).toBe(60_000);
+        if (elapsed < 60_000) {
+          expect(deletions[1]?.argv[3]).toBe("chk_unactivated");
+          expect(deletions[1]?.options.timeoutMs).toBe(60_000 - elapsed);
+          expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+        } else {
+          expect(deletions).toHaveLength(1);
+          expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+            allocations: {},
+            lastDemandAtMs: null,
+            retirement: { checkpointId: "chk_unactivated" },
+          });
+          await maintain(provider);
+          expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+        }
+      } finally {
+        performanceNowSpy.mockRestore();
+        dateNowSpy.mockRestore();
       }
     },
   );

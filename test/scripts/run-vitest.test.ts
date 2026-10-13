@@ -401,7 +401,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
           },
         },
       );
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
       expect(result.stderr).toContain(
         "Install dependencies before running scripts/run-vitest.mjs:",
       );
@@ -709,8 +709,9 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
   posixIt.for([
     { timeout: false, exitCode: 0, expectedCode: 0, nativeBun: false },
+    { timeout: true, exitCode: 1, expectedCode: 2, nativeBun: false },
     { timeout: true, exitCode: null, expectedCode: null, nativeBun: false },
-    { timeout: true, exitCode: 0, expectedCode: 1, nativeBun: true },
+    { timeout: true, exitCode: 0, expectedCode: 2, nativeBun: true },
   ])(
     "settles descendants (timeout=$timeout, child=$exitCode, native=$nativeBun)",
     async (row, context) => {

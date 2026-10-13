@@ -149,6 +149,10 @@ of tool and session policy.
 
 Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh canonical state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
 
+For [dashboards](/web/dashboards), revocation prevents new writes from being
+admitted. A dashboard write already in progress when access is revoked may still
+complete; revocation does not retract its saved widget or layout.
+
 </Accordion>
 
 ## Cold storage

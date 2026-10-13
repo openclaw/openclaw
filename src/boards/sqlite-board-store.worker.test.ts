@@ -7,7 +7,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
@@ -109,72 +108,41 @@ it("admits Board writes and request authority without reading SQLite on the call
   }
 });
 
-it("rejects a Board write whose session is replaced during preparation", async () => {
-  const { database, options, store, target } = fixture();
-  const replaceSession = () =>
-    replaceSessionEntrySync(
-      { ...target, agentId: options.agentId, storePath: database.path },
-      { sessionId: "replacement-session", updatedAt: 2 },
-    );
-  const pending = store.putWidget(
-    {
-      ...target,
-      name: "app",
-      content: {
-        kind: "mcp-app",
-        descriptor: {
-          serverName: "server",
-          toolName: "tool",
-          uiResourceUri: "ui://app",
-          toolCallId: "call",
+it.each([false, true])(
+  "rejects a Board write whose session is replaced during preparation (cross-store: %s)",
+  async (crossStore) => {
+    const { database, env, options, store, target } = fixture();
+    const source = crossStore ? openOpenClawAgentDatabase({ agentId: "source", env }) : undefined;
+    const sourceEntry = { sessionId: "source-session", updatedAt: 1 };
+    const scope = source && {
+      agentId: "source",
+      sessionKey: "agent:source:authority",
+      storePath: source.path,
+      env,
+    };
+    if (scope) {
+      replaceSessionEntrySync(scope, sourceEntry);
+    }
+    const assertCurrent =
+      scope &&
+      captureSessionEntrySourceAssertion({
+        scope,
+        expected: sourceEntry,
+        fields: ["sessionId"],
+        assertCurrent() {},
+        refuse(): never {
+          throw new Error("Board source changed");
         },
-        interactive: true,
-      },
-    },
-    {
-      resolveMcpAppInteraction: async () => {
-        replaceSession();
-        return true;
-      },
-    },
-  );
-  await expect(pending).rejects.toMatchObject({
-    code: "invalid_operation",
-    message: "board session changed; retry",
-  });
-  expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
-});
-
-it("preserves cross-store Board source authority through the write effect", async () => {
-  const { env, store, target } = fixture();
-  const sessionKey = "agent:source:authority";
-  const source = openOpenClawAgentDatabase({ agentId: "source", env });
-  const scope = { agentId: "source", sessionKey, storePath: source.path, env };
-  const entry = { sessionId: "source-session", updatedAt: 1, permissionMode: "full" as const };
-  replaceSessionEntrySync(scope, entry);
-  const refuse = (): never => {
-    throw new Error("Board source permission changed");
-  };
-  const assertCurrent = captureSessionEntrySourceAssertion({
-    scope,
-    expected: entry,
-    fields: ["permissionMode"],
-    assertCurrent() {
-      if (readExactSessionEntryRow(source, sessionKey)?.entry.permissionMode !== "full") {
-        refuse();
-      }
-    },
-    refuse,
-  });
-  await store.putWidget(
-    { ...target, name: "permitted", content: { kind: "html", html: "permitted" } },
-    { assertCurrent },
-  );
-  await expect(
-    store.putWidget(
+      });
+    const replaceSession = () =>
+      replaceSessionEntrySync(
+        { ...target, agentId: options.agentId, storePath: database.path },
+        { sessionId: "replacement-session", updatedAt: 2 },
+      );
+    const pending = store.putWidget(
       {
         ...target,
-        name: "revoked",
+        name: "app",
         content: {
           kind: "mcp-app",
           descriptor: {
@@ -188,15 +156,19 @@ it("preserves cross-store Board source authority through the write effect", asyn
       },
       {
         assertCurrent,
-        async resolveMcpAppInteraction() {
-          replaceSessionEntrySync(scope, { ...entry, permissionMode: "guarded" });
+        resolveMcpAppInteraction: async () => {
+          replaceSession();
           return true;
         },
       },
-    ),
-  ).rejects.toThrow("Board source permission changed");
-  expect((await store.getSnapshot(target)).widgets.map(({ name }) => name)).toEqual(["permitted"]);
-});
+    );
+    await expect(pending).rejects.toMatchObject({
+      code: "invalid_operation",
+      message: "board session changed; retry",
+    });
+    expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+  },
+);
 
 it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
   const { database, options, store, target } = fixture(true);

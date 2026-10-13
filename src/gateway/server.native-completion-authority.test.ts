@@ -538,7 +538,7 @@ describe("native completion final-effect authority", () => {
         await session.abort();
         await Promise.allSettled([delivery, steering, prompt]);
         unsubscribe();
-        prepared.deferredLifecycleOwner?.discard();
+        await prepared.deferredLifecycleOwner?.discard();
         prepared.subscription.unsubscribe();
         embeddedRuns.clearActiveEmbeddedRun(
           completion.sessionScope.sessionId,

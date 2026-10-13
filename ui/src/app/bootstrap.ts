@@ -34,7 +34,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import type { ShellRouteState } from "./app-host-route-state.ts";
+import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { AssistantDock } from "./assistant-dock.ts";
 import { readBootRecord } from "./boot-record.ts";
@@ -70,6 +70,7 @@ import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadGatewaySessionSelection,
@@ -149,6 +150,8 @@ export function bootstrapApplication(): ApplicationRuntime {
   // Focus documents render before the shell; starting the application router
   // would rewrite their reserved presentation route into an ordinary page.
   const startsApplicationRouter = documentMode === null && focusLocation === null;
+  // The live grant determines the person; a previous relay visitor's credential cannot warm-admit it.
+  const ownsWarmBoot = startsApplicationRouter && !isRemoteControlUiIngress();
   const firstRunDefaultLanding =
     startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
@@ -159,7 +162,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
-      ownsWarmBoot: startsApplicationRouter,
+      ownsWarmBoot,
       resourceBasePath,
       getModelCatalogTarget: (gatewayUrl) =>
         resolveBootstrapModelCatalogTarget(history.location(), basePath, gatewayUrl),
@@ -186,7 +189,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
   const bootRecord =
-    startsApplicationRouter && !hasPendingGateway
+    ownsWarmBoot && !hasPendingGateway
       ? readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
           if (startup.pendingBootstrapToken || startup.password) {
             return null;
@@ -207,7 +210,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey);
   }
-  const stopWarmBootConnection = startsApplicationRouter
+  const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {
         warmBoot = false;
       })
@@ -302,7 +305,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     bootRecord,
     connectionBootstrap,
   });
-  const bootRecordPersistence = startsApplicationRouter
+  const bootRecordPersistence = ownsWarmBoot
     ? subscribeBootRecordPersistence({ gateway, agents, sessions }, bootRecord)
     : undefined;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
@@ -335,22 +338,26 @@ export function bootstrapApplication(): ApplicationRuntime {
     shouldOpenExternally,
     signal: startupLifecycle.signal,
     canPresentBrowserPanel: () => {
-      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
-        "openclaw-app-shell",
+      const shell = document.querySelector("openclaw-app-shell");
+      return (
+        shell?.isConnected === true &&
+        !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
       );
-      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
     },
-    onNativeUpdateDeclined: () => {
-      const snapshot = overlays.snapshot;
-      const campaign = snapshot.updateSchedule?.campaign;
-      const busy =
-        snapshot.updateRunning ||
-        snapshot.updateReconciliationPending ||
-        campaign?.state === "applying";
-      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
-        void overlays.runUpdate();
-      }
-    },
+    prepareNativeUpdateFallback: () => ({
+      isCurrent: overlays.captureUpdateTarget(),
+      run: () => {
+        const snapshot = overlays.snapshot;
+        const campaign = snapshot.updateSchedule?.campaign;
+        const busy =
+          snapshot.updateRunning ||
+          snapshot.updateReconciliationPending ||
+          campaign?.state === "applying";
+        if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+          void overlays.runUpdate();
+        }
+      },
+    }),
     shouldOpenInControlUiBrowser: () =>
       loadSettings().openLinksInControlUiBrowser === true &&
       isBrowserPanelAvailable(gateway.snapshot) &&

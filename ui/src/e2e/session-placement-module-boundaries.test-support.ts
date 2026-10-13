@@ -6,6 +6,7 @@ import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-
 import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -564,16 +565,11 @@ export function defineSessionPlacementModuleBoundaryTests(
         expect(childReads.length).toBeLessThanOrEqual(transitions.length + 1);
         await navigateToControlUiSession(page, "agent:cloud:neutral-e2e");
         await expect.poll(() => page.url()).toContain("neutral-e2e");
-        await page.evaluate((pathname) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: {
-              context: {
-                navigate: (routeId: string, options: { pathname: string }) => void;
-              };
-            };
-          };
-          app.runtime?.context.navigate("chat", { pathname });
-        }, controlUiSessionPath(sessionKey));
+        await evaluateControlUiContext(
+          page,
+          (application, pathname) => application.navigate("chat", { pathname }),
+          controlUiSessionPath(sessionKey),
+        );
         await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
         await pollLocatorText(startupStatus).toContain("Starting…");
         expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);

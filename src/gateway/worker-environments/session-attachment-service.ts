@@ -1,8 +1,5 @@
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import {
-  resolveSessionEntryAccessTarget,
-  type SessionIdentityMutation,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -11,6 +8,7 @@ import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import { prepareWorkerEnvironmentAttachmentSession } from "./session-attachment-session.js";
 import type {
   WorkerEnvironmentAttachment,
   WorkerEnvironmentAttachmentRecord,
@@ -51,6 +49,35 @@ export function createWorkerEnvironmentSessionAttachments(
   const creations = new Map<string, Set<AbortController>>();
   const closingAttachments = new Map<string, number>();
   const cleanups = new KeyedAsyncQueue();
+  const sessionFacts = new Map<
+    string,
+    {
+      identity: WorkerEnvironmentSessionIdentity;
+      current: Awaited<ReturnType<typeof prepareWorkerEnvironmentAttachmentSession>>;
+    }
+  >();
+  const releaseSessionFacts = (sessionId: string) => {
+    sessionFacts.get(sessionId)?.current.release();
+    sessionFacts.delete(sessionId);
+  };
+  const prepareSession = async (identity: WorkerEnvironmentSessionIdentity) => {
+    const current = await prepareWorkerEnvironmentAttachmentSession(identity, options);
+    return { identity, current };
+  };
+  const retainSessionFacts = (prepared: NonNullable<ReturnType<typeof sessionFacts.get>>) => {
+    releaseSessionFacts(prepared.identity.sessionId);
+    sessionFacts.set(prepared.identity.sessionId, prepared);
+  };
+  const matchesSession = (
+    prepared: NonNullable<ReturnType<typeof sessionFacts.get>>,
+    identity: WorkerEnvironmentSessionIdentity,
+  ) =>
+    prepared.identity.agentId === identity.agentId &&
+    prepared.identity.sessionKey === identity.sessionKey &&
+    prepared.current.isCurrent() &&
+    prepared.current.entry?.sessionId === identity.sessionId &&
+    prepared.current.entry.incognito !== true &&
+    prepared.current.entry.lifecycleRevision === identity.sessionLifecycleRevision;
   // Runtime retry budgets reset on restart; the durable lease remains owned throughout.
   const cleanupRetries = new Map<
     string,
@@ -152,16 +179,8 @@ export function createWorkerEnvironmentSessionAttachments(
       }
     });
   const currentSession = (identity: WorkerEnvironmentSessionIdentity) => {
-    const target = resolveSessionEntryAccessTarget({
-      cfg: options.getConfig(),
-      agentId: identity.agentId,
-      sessionKey: identity.sessionKey,
-    });
-    return (
-      target.entry?.sessionId === identity.sessionId &&
-      target.entry.incognito !== true &&
-      target.entry.lifecycleRevision === identity.sessionLifecycleRevision
-    );
+    const prepared = sessionFacts.get(identity.sessionId);
+    return Boolean(prepared && matchesSession(prepared, identity));
   };
   const project = (
     record: WorkerEnvironmentAttachmentRecord | undefined,
@@ -248,6 +267,7 @@ export function createWorkerEnvironmentSessionAttachments(
           throw new Error("Conversation environment target changed");
         }
       });
+      releaseSessionFacts(sessionId);
       for (const creation of creations.get(sessionId) ?? []) {
         if (creation !== keepCreation) {
           creation.abort(new Error("Conversation environment was stopped"));
@@ -284,6 +304,9 @@ export function createWorkerEnvironmentSessionAttachments(
       };
     },
     cancelSessionAttachmentCreations() {
+      for (const sessionId of sessionFacts.keys()) {
+        releaseSessionFacts(sessionId);
+      }
       for (const pending of creations.values()) {
         for (const creation of pending) {
           creation.abort(new Error("Worker environment service is stopping"));
@@ -329,8 +352,12 @@ export function createWorkerEnvironmentSessionAttachments(
         const signal = callerSignal
           ? AbortSignal.any([callerSignal, creation.signal])
           : creation.signal;
+        let prepared: Awaited<ReturnType<typeof prepareSession>> | undefined;
+        let retained = false;
         try {
-          const session = resolveSessionEntryAccessTarget({ cfg: options.getConfig(), ...input });
+          const selected = await prepareSession(input);
+          prepared = selected;
+          const session = selected.current;
           const request = {
             ...input,
             sessionLifecycleRevision:
@@ -339,14 +366,18 @@ export function createWorkerEnvironmentSessionAttachments(
           const assertCurrent = () => {
             signal?.throwIfAborted();
             authorize();
-            if (options.isStopping() || !currentSession(request)) {
+            if (options.isStopping() || !matchesSession(selected, request)) {
               throw new Error("Conversation environment requester is no longer current");
             }
           };
           assertCurrent();
           let attachment = store.getSessionAttachmentRecord(request.sessionId);
           let environment = attachment && store.get(attachment.environmentId);
-          if (attachment && attachment.closedAtMs === null && !currentSession(attachment)) {
+          if (
+            attachment &&
+            attachment.closedAtMs === null &&
+            !matchesSession(prepared, attachment)
+          ) {
             await close(request.sessionId, assertCurrent, attachment.environmentId, creation);
             assertCurrent();
             attachment = store.getSessionAttachmentRecord(request.sessionId);
@@ -492,12 +523,17 @@ export function createWorkerEnvironmentSessionAttachments(
           if (result.state !== "ready" && result.state !== "idle") {
             throw new Error(result.lastError || `Conversation environment is ${result.state}`);
           }
+          retainSessionFacts({ ...prepared, identity: request });
+          retained = true;
           return {
             attachment: { ...current, ownerEpoch: result.ownerEpoch },
             environment: result,
             reused,
           };
         } finally {
+          if (!retained) {
+            prepared?.current.release();
+          }
           pending.delete(creation);
           if (pending.size === 0 && creations.get(sessionId) === pending) {
             creations.delete(sessionId);
@@ -532,7 +568,23 @@ export function createWorkerEnvironmentSessionAttachments(
         }
         const environment = store.get(record.environmentId);
         if (!environment || environment.state === "destroyed" || environment.state === "failed") {
+          releaseSessionFacts(record.sessionId);
           continue;
+        }
+        if (!currentSession(record)) {
+          try {
+            const prepared = await prepareSession(record);
+            if (options.isStopping()) {
+              prepared.current.release();
+              return;
+            }
+            retainSessionFacts(prepared);
+          } catch (error) {
+            options.warn(
+              `Conversation environment session read failed: ${boundedWorkerError(error)}`,
+            );
+            continue;
+          }
         }
         const sessionCurrent = currentSession(record);
         const active =

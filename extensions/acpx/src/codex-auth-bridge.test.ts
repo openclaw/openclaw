@@ -134,13 +134,13 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(chmodSpy).toHaveBeenCalledWith(generatedClaude.wrapperPath, 0o755);
     expectWrapperCommand(resolved.agents.codex, generatedCodex.wrapperPath);
     expectWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
-    await expect(fs.access(generatedCodex.wrapperPath)).resolves.toBeUndefined();
-    await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
+    await fs.access(generatedCodex.wrapperPath);
+    await fs.access(generatedClaude.wrapperPath);
   });
 
   it.each([
     { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.1" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.86.0" },
   ] as const)(
     "launches $agent after its captured adapter is removed",
     async ({ agent, packageName, version }) => {

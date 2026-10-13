@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  getSubagentDepthFromSessionStore,
+  getSubagentDepthFromSessionStoreInWorker,
+} from "./subagent-depth.js";
 import { createSessionCapabilityLookup } from "./subagent-session-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -81,7 +84,7 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     );
 
-    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+    const depth = await getSubagentDepthFromSessionStoreInWorker("subagent:flat", {
       cfg: {
         session: {
           store: storeTemplate,
@@ -112,7 +115,7 @@ describe("getSubagentDepthFromSessionStore", () => {
       session: { scope: "global", store: storePath },
     } satisfies OpenClawConfig;
 
-    expect(getSubagentDepthFromSessionStore("global", { cfg })).toBe(2);
+    expect(await getSubagentDepthFromSessionStoreInWorker("global", { cfg })).toBe(2);
   });
 
   it("resolves a cross-agent parent outside the supplied child store", async () => {
@@ -132,7 +135,7 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     );
 
-    const depth = getSubagentDepthFromSessionStore("agent:work:dashboard:child", {
+    const depth = await getSubagentDepthFromSessionStoreInWorker("agent:work:dashboard:child", {
       cfg: { session: { store: storeTemplate } },
       store: createSessionCapabilityLookup({
         "agent:work:dashboard:child": {
@@ -168,7 +171,7 @@ describe("getSubagentDepthFromSessionStore", () => {
     );
 
     expect(
-      getSubagentDepthFromSessionStore(childKey, {
+      await getSubagentDepthFromSessionStoreInWorker(childKey, {
         cfg: {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
           session: { store: storePath },

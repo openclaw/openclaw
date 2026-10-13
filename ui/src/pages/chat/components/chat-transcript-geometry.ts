@@ -121,10 +121,10 @@ export function initialTranscriptRect() {
   };
 }
 
-export function measureConnectedTranscriptRows(
+export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-): boolean {
+): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
     !scrollElement ||
@@ -132,7 +132,7 @@ export function measureConnectedTranscriptRows(
     !rect?.width ||
     !rect.height
   ) {
-    return false;
+    return null;
   }
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
@@ -144,14 +144,16 @@ export function measureConnectedTranscriptRows(
     const height = Number.parseFloat(getComputedStyle(row).height);
     measurements.push({ index, height: Number.isFinite(height) ? height : row.offsetHeight });
   }
-  let changed = false;
-  for (const { index, height } of measurements) {
-    const key = virtualizer.options.getItemKey(index);
-    const previousSize = virtualizer.itemSizeCache.get(key);
-    virtualizer.resizeItem(index, height);
-    changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
-  }
-  return changed;
+  return () => {
+    let changed = false;
+    for (const { index, height } of measurements) {
+      const key = virtualizer.options.getItemKey(index);
+      const previousSize = virtualizer.itemSizeCache.get(key);
+      virtualizer.resizeItem(index, height);
+      changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
+    }
+    return changed;
+  };
 }
 
 export function measureTranscriptRow(

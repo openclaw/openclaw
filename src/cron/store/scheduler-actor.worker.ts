@@ -422,6 +422,15 @@ export function runCronSchedulerInWorker(
     elapsedWallMs - elapsedMonotonicMs > MIN_REFIRE_GAP_MS;
   const result = emptyResult();
   collectChanges(result, settleCronStartupBatchInWorker(database, input.storeKey, nowMs));
+  // This synchronous worker command owns all intervening writes. Fold their
+  // postimages into the loaded rows before selecting maintenance and the next wake.
+  const jobs = new Map(readJobs(database, input.storeKey).map((job) => [job.id, job]));
+  const currentJobs = () => {
+    for (const job of result.jobs) {
+      jobs.set(job.id, job);
+    }
+    return [...jobs.values()];
+  };
   if (
     snapshot.config.cronEnabled &&
     (command.type === "cron.schedulerRefresh" ||
@@ -442,7 +451,7 @@ export function runCronSchedulerInWorker(
       candidates = catchup.immediate;
       overflow = catchup.overflow;
     } else if (command.type !== "cron.schedulerRefresh") {
-      candidates = readJobs(database, input.storeKey).filter(
+      candidates = currentJobs().filter(
         (job) =>
           !waitsForStartupBatch(actor, job) &&
           isRunnableJob({ job, nowMs, activeInProcess: false }),
@@ -516,11 +525,7 @@ export function runCronSchedulerInWorker(
       repairFutureCronNextRunAtMs: command.type !== "cron.schedulerRefresh" && elapsedWallMs >= 0,
       ...(command.type === "cron.schedulerRefresh" ? command.input.options : undefined),
     };
-    if (
-      readJobs(database, input.storeKey).some((job) =>
-        needsCronTimerMaintenance(job, nowMs, options),
-      )
-    ) {
+    if (currentJobs().some((job) => needsCronTimerMaintenance(job, nowMs, options))) {
       collectChanges(
         result,
         scheduleUnownedCronJobsInWorker(database, {
@@ -532,13 +537,7 @@ export function runCronSchedulerInWorker(
     }
   }
   result.jobs = [...new Map(result.jobs.map((job) => [job.id, job])).values()];
-  result.nextWakeAtMs = armActor(
-    input.storeKey,
-    actor,
-    snapshot,
-    readJobs(database, input.storeKey),
-    nowMs,
-  );
+  result.nextWakeAtMs = armActor(input.storeKey, actor, snapshot, currentJobs(), nowMs);
   if (command.type !== "cron.schedulerRefresh") {
     actor.lastWallMs = nowMs;
     actor.lastMonotonicMs = monotonicMs;

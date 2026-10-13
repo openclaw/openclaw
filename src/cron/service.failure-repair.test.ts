@@ -97,6 +97,7 @@ describe("CronService failure repair", () => {
         expect(brief).toMatch(/<untrusted-text[^>]*>[\s\S]*temporary upstream error/u);
         expect(cron.getJob(job.id)?.state.failureAlertIncident?.repair).toBeDefined();
 
+        vi.setSystemTime(Date.now() + 1);
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledOnce();
         expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
@@ -123,6 +124,186 @@ describe("CronService failure repair", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
       },
     );
+  });
+
+  it("counts failures while repair is pending without alerting", async () => {
+    await withRepair(async ({ cron, runCronFailureRepair, sendCronFailureAlert, addJob }) => {
+      const repair = Promise.withResolvers<void>();
+      runCronFailureRepair.mockReturnValueOnce(repair.promise);
+      const job = await addJob("pending repair", owned);
+      await cron.run(job.id, "force");
+      await cron.run(job.id, "force");
+
+      vi.setSystemTime(Date.now() + 1);
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+      expect(await cron.readJob(job.id)).toMatchObject({
+        state: {
+          consecutiveErrors: 3,
+          failureAlertIncident: { repair: { deadlineAtMs: expect.any(Number) } },
+        },
+      });
+      expect(runCronFailureRepair).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each(["before", "at"] as const)(
+    "does not alert for a failed run started %s repair settlement",
+    async (ordering) => {
+      await withRepair(
+        async ({
+          cron,
+          runCronFailureRepair,
+          runIsolatedAgentJob,
+          sendCronFailureAlert,
+          addJob,
+        }) => {
+          const repair = Promise.withResolvers<void>();
+          runCronFailureRepair.mockReturnValueOnce(repair.promise);
+          const job = await addJob("overlapping repair", owned);
+          await cron.run(job.id, "force");
+          await cron.run(job.id, "force");
+
+          const started = Promise.withResolvers<void>();
+          const result = Promise.withResolvers<{ status: "error"; error: string }>();
+          runIsolatedAgentJob.mockImplementationOnce(async () => {
+            started.resolve();
+            return result.promise;
+          });
+          vi.setSystemTime(Date.now() + 1_000);
+          const runAtMs = Date.now();
+          const settledAtMs = runAtMs + (ordering === "before" ? 1_000 : 0);
+          const run = cron.run(job.id, "force");
+          try {
+            await started.promise;
+            vi.setSystemTime(settledAtMs);
+            repair.resolve();
+            await Promise.resolve();
+            await cron.readJob(job.id);
+            vi.setSystemTime(settledAtMs + 1_000);
+          } finally {
+            result.resolve({ status: "error", error: "temporary upstream error" });
+            await run;
+          }
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+          expect(await cron.readJob(job.id)).toMatchObject({
+            state: { consecutiveErrors: 3, failureAlertIncident: { repair: { settledAtMs } } },
+          });
+          expect(runCronFailureRepair).toHaveBeenCalledOnce();
+        },
+      );
+    },
+  );
+
+  it("alerts exactly once for failures started after repair settlement and names the repair", async () => {
+    await withRepair(async ({ cron, runCronFailureRepair, sendCronFailureAlert, addJob }) => {
+      const repair = Promise.withResolvers<void>();
+      runCronFailureRepair.mockReturnValueOnce(repair.promise);
+      const job = await addJob("settled repair", owned);
+      await cron.run(job.id, "force");
+      await cron.run(job.id, "force");
+
+      vi.setSystemTime(Date.now() + 1_000);
+      const settledAtMs = Date.now();
+      repair.resolve();
+      await Promise.resolve();
+      expect(await cron.readJob(job.id)).toMatchObject({
+        state: { failureAlertIncident: { repair: { settledAtMs } } },
+      });
+      vi.setSystemTime(settledAtMs + 1);
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
+
+      vi.setSystemTime(Date.now() + 1);
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      expect(runCronFailureRepair).toHaveBeenCalledOnce();
+      expect(await cron.readJob(job.id)).toMatchObject({
+        state: {
+          consecutiveErrors: 4,
+          failureAlertIncident: { repair: { settledAtMs, alerted: true } },
+        },
+      });
+    });
+  });
+
+  it("alerts on the first post-deadline failure when repair never settles", async () => {
+    await withRepair(async ({ cron, runCronFailureRepair, sendCronFailureAlert, addJob }) => {
+      const repair = Promise.withResolvers<void>();
+      runCronFailureRepair.mockReturnValueOnce(repair.promise);
+      const job = await addJob("stalled repair", owned);
+      await cron.run(job.id, "force");
+      await cron.run(job.id, "force");
+      const pending = (await cron.readJob(job.id))?.state.failureAlertIncident?.repair;
+      expect(pending?.deadlineAtMs).toEqual(expect.any(Number));
+      if (pending?.deadlineAtMs === undefined) {
+        throw new Error("expected a persisted repair deadline");
+      }
+      expect(pending.deadlineAtMs).toBeGreaterThan(pending.atMs);
+      expect(pending.settledAtMs).toBeUndefined();
+
+      vi.setSystemTime(pending.deadlineAtMs - 1);
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+      vi.setSystemTime(pending.deadlineAtMs + 1);
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
+      expect(runCronFailureRepair).toHaveBeenCalledOnce();
+      expect(await cron.readJob(job.id)).toMatchObject({
+        state: { consecutiveErrors: 4, failureAlertIncident: { repair: { alerted: true } } },
+      });
+    });
+  });
+
+  it("silently clears a pending repair after success and ignores its late settlement", async () => {
+    await withRepair(
+      async ({ cron, runCronFailureRepair, runIsolatedAgentJob, sendCronFailureAlert, addJob }) => {
+        const repair = Promise.withResolvers<void>();
+        runCronFailureRepair.mockReturnValueOnce(repair.promise);
+        const job = await addJob("recovered repair", owned);
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+
+        runIsolatedAgentJob.mockResolvedValueOnce({ status: "ok", delivered: true });
+        await cron.run(job.id, "force");
+        expect((await cron.readJob(job.id))?.state).toMatchObject({ consecutiveErrors: 0 });
+        expect((await cron.readJob(job.id))?.state.failureAlertIncident).toBeUndefined();
+        vi.setSystemTime(Date.now() + 1_000);
+        repair.resolve();
+        await Promise.resolve();
+        expect((await cron.readJob(job.id))?.state.failureAlertIncident).toBeUndefined();
+        expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        expect(runCronFailureRepair).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
+  it("alerts on the next failure for a persisted pre-upgrade repair with only atMs", async () => {
+    await withRepair(async ({ cron, runCronFailureRepair, sendCronFailureAlert, addJob }) => {
+      const atMs = Date.now();
+      const job = await addJob("legacy repair", {
+        ...owned,
+        state: {
+          consecutiveErrors: 2,
+          lastFailureAlertAtMs: atMs,
+          failureAlertIncident: { scope: "run", repair: { atMs } },
+        },
+      });
+      expect((await cron.readJob(job.id))?.state.failureAlertIncident?.repair).toEqual({ atMs });
+
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
+      expect(runCronFailureRepair).not.toHaveBeenCalled();
+      expect(await cron.readJob(job.id)).toMatchObject({
+        state: {
+          consecutiveErrors: 3,
+          failureAlertIncident: { repair: { atMs, alerted: true } },
+        },
+      });
+    });
   });
 
   it.each(["operator cancellation", "restart retirement"] as const)(
@@ -539,18 +720,29 @@ describe("CronService failure repair", () => {
     });
   });
 
-  it("alerts on the next failure when the repair request fails", async () => {
+  it("waits for the repair deadline after a request rejection without known completion", async () => {
     await withRepair(async ({ cron, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
-      runCronFailureRepair.mockRejectedValueOnce(new Error("owner session deleted"));
+      runCronFailureRepair.mockRejectedValueOnce(new Error("repair observation timed out"));
       const job = await addJob("lost sync", owned);
       await cron.run(job.id, "force");
       await cron.run(job.id, "force");
       expect(runCronFailureRepair).toHaveBeenCalledOnce();
       expect(sendCronFailureAlert).not.toHaveBeenCalled();
 
+      const pending = (await cron.readJob(job.id))?.state.failureAlertIncident?.repair;
+      expect(pending?.settledAtMs).toBeUndefined();
+      if (pending?.deadlineAtMs === undefined) {
+        throw new Error("expected a persisted repair deadline");
+      }
+      vi.setSystemTime(pending.deadlineAtMs - 1);
+      await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+      vi.setSystemTime(pending.deadlineAtMs + 1);
       await cron.run(job.id, "force");
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expectAlertTextContaining(sendCronFailureAlert, "automatic repair was requested");
+      expect(runCronFailureRepair).toHaveBeenCalledOnce();
     });
   });
 

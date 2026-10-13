@@ -160,6 +160,8 @@ describe("extension relay host-local secret", () => {
       fs.chmodSync(secretPath, 0o644);
       const replacement = path.join(stateDir, "replacement");
       fs.writeFileSync(replacement, "b2".repeat(32), { mode: 0o644 });
+      // Creation modes are masked by umask; the replacement must start broad.
+      fs.chmodSync(replacement, 0o644);
       const inspected = fs.lstatSync(secretPath);
       vi.spyOn(fs, "lstatSync").mockImplementationOnce(() => {
         fs.renameSync(secretPath, path.join(stateDir, "original"));

@@ -1,4 +1,3 @@
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   runOpenClawAgentWorkerWrite,
@@ -20,6 +19,7 @@ import {
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export { ConversationDeliveryInputError, ConversationDeliveryMissingError };
 export type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
@@ -143,21 +143,10 @@ function writeConversationDelivery(
     try {
       const result = await runOpenClawAgentWorkerWrite(options, () =>
         execution.runExisting(
-          {
+          createSessionWorkerExecutionSource(
             assertCurrent,
-            createAdmission(binding) {
-              return () => ({
-                nativeLocations: binding.nativeLocations,
-                admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                  binding.authorize(request);
-                  assertCurrent();
-                  if (!grant()) {
-                    throw new Error("Conversation delivery authority expired");
-                  }
-                }, binding.attachment),
-              });
-            },
-          },
+            "Conversation delivery authority expired",
+          ),
           (worker) => worker.execute({ type, input: captured }),
         ),
       );

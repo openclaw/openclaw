@@ -87,6 +87,19 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 | `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                   | Startup-phase monitoring and update verification. |
 | `/ready`, `/readyz`     | Startup sidecars have settled, the Gateway is not draining, required agent databases have no confirmed failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
+The HTTP listener opens before the initial session projection is complete. During
+that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
+pending. Other HTTP requests and WebSocket upgrades wait for the complete
+projection before authentication and routing; they never see a partial roster.
+Discovery and remote-skill setup run alongside projection preparation. Readiness
+also waits for the reply and WebSocket connection modules to load, so immediate
+connections and first turns reuse the prepared runtime.
+Update verification still waits for startup completion before checking readiness.
+
+These probe paths stay at the server root even when `gateway.controlUi.basePath`
+is set. A UI base path such as `/health` does not turn its child routes into
+probes: they still wait for initialization and retain their normal authentication.
+
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
 A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
@@ -130,9 +143,13 @@ resources requires the reported repair or retry before it can restart. See
 
 Detailed readiness can include the latest completed `eventLoop` diagnostic
 snapshot. The sampler owns observation windows; health reads do not reset a
-pending measurement. Native event-loop delay sampling runs at 20 ms resolution;
-the Gateway publishes completed observations once per second, without waking a
-JavaScript callback for every delay sample. Long blocking callbacks remain part
+pending measurement. During active work, degradation, or diagnostic sample
+export, native event-loop delay sampling runs at 20 ms resolution and the Gateway
+publishes completed observations once per second. A healthy idle Gateway publishes
+every ten seconds and pauses the native histogram. Idle windows still track
+blocking callbacks and overdue sampling deadlines; `delayP99Ms` is zero while the
+histogram is paused. Work or an exporter becoming active restores full sampling
+at the next idle deadline, within ten seconds. Long blocking callbacks remain part
 of the observation even when they delay the publisher. No snapshot is available
 until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,

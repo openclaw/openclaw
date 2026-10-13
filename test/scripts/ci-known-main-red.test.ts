@@ -4,6 +4,10 @@ import {
   createMainFailureClassifier,
 } from "../../scripts/ci-known-main-red.mjs";
 import { reportPrFailures } from "../../scripts/ci-pr-failure-report.mjs";
+import {
+  extractNodeFailedTests,
+  parseNodeFailureReport,
+} from "../../scripts/lib/ci-node-test-evidence.mjs";
 
 const repository = "openclaw/openclaw";
 const headSha = "a".repeat(40);
@@ -764,5 +768,39 @@ describe("known hourly main failures", () => {
         ),
       }),
     ).toBe(false);
+  });
+});
+
+describe("loose CI failure discovery", () => {
+  it("extracts project labels, ANSI, multiple shards and repeated names", () => {
+    const log = [
+      `2026-10-12T08:00:00Z [shard:gateway] \u001b[31m FAIL \u001b[0m gateway-server (gateway-server-parallel) ${file} > native session > denies`,
+      `2026-10-12T08:00:01Z [shard:other] FAIL ${file} > native session > denies`,
+      `2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
+    ].join("\n");
+    expect(extractNodeFailedTests(log)).toEqual([
+      { file, tests: ["native session > denies"] },
+      { file: "test/second.test.ts", tests: ["fails too"] },
+    ]);
+    expect(parseNodeFailureReport(log, false)).toEqual([]);
+  });
+
+  it("reruns whole files for suite and unhandled failures without leaking across shards", () => {
+    const log = [
+      `[shard:a] FAIL ${file} > named failure`,
+      "[shard:a] ⎯ Failed Suites 1 ⎯",
+      `[shard:a] FAIL gateway (parallel) ${file} [ ${file} ]`,
+      "[shard:b] Unhandled Rejection",
+      "[shard:b] This error originated in test/unhandled.test.ts test file.",
+      "[shard:c] FAIL test/named.test.ts > still named",
+      "[shard:c] FAIL ../../outside.test.ts > ignore",
+      "[shard:c] PASS test/pass.test.ts > ignore",
+    ].join("\n");
+    expect(extractNodeFailedTests(log)).toEqual([
+      { file, tests: [] },
+      { file: "test/named.test.ts", tests: ["still named"] },
+      { file: "test/unhandled.test.ts", tests: [] },
+    ]);
+    expect(parseNodeFailureReport(log, false)).toEqual([]);
   });
 });

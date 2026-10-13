@@ -23,6 +23,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sessionSharePlugin from "../../extensions/session-share/index.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -78,6 +79,7 @@ function commandFixture(groups: string[] = ["Team"]) {
   const config: OpenClawConfig = {
     plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
   };
+  setRuntimeConfigSnapshot(config);
   const runtime = createPluginRuntime();
   runtime.config.current = () => config;
   const commands = registerSessionShare(runtime, config).commands;
@@ -705,6 +707,7 @@ describe("session-share node commands", () => {
     "refuses a replaced physical source during %s identity preparation",
     async (operation) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fixture = commandFixture();
         const profile = ensureProfileForEmail("physical@example.test");
         const scope = { agentId: "main", sessionKey: "agent:main:physical", sessionId: "physical" };
         await upsertSessionEntryCore(scope, {
@@ -734,7 +737,6 @@ describe("session-share node commands", () => {
             return result;
           },
         );
-        const fixture = commandFixture();
         const pending = operation === "list" ? fixture.list() : fixture.read(scope.sessionKey);
         try {
           await Promise.race([
@@ -756,6 +758,7 @@ describe("session-share node commands", () => {
 
   it("reads real newest-first transcript rows with portable sender and revokes moved sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = commandFixture();
       const profile = ensureProfileForEmail("source@example.test");
       const scope = { agentId: "main", sessionKey: "agent:main:shared", sessionId: "shared" };
       await upsertSessionEntryCore(scope, {
@@ -782,7 +785,6 @@ describe("session-share node commands", () => {
           timestamp: 2,
         },
       });
-      const fixture = commandFixture();
       const first = await fixture.read(scope.sessionKey, { limit: 1 });
       expect(first.items).toEqual([
         expect.objectContaining({ type: "agentMessage", text: "Shared answer" }),

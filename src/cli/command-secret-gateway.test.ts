@@ -225,7 +225,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     );
     vi.mocked(collectRuntimeConfigAssignments).mockImplementation(
       params.collectConfigAssignments ??
-        (({ context }) => {
+        (async ({ context }) => {
           context.assignments.push({ path: params.path } as never);
         }),
     );
@@ -264,7 +264,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           unresolved: [],
         }) as never,
     );
-    vi.mocked(collectRuntimeConfigAssignments).mockImplementation(({ context }) => {
+    vi.mocked(collectRuntimeConfigAssignments).mockImplementation(async ({ context }) => {
       context.assignments.push(
         { path: "channels.discord.accounts.ops.token" } as never,
         { path: "channels.discord.accounts.chat.token" } as never,

@@ -9,15 +9,18 @@ import { z } from "zod";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
+import { SqliteWorkerBroker } from "../infra/sqlite-worker-broker.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -34,6 +37,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import type { SharedStateWalFixtureOperations } from "./openclaw-state-worker-wal.test-support.js";
 import { createSqliteWorkerBackend } from "./openclaw-state.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -90,6 +94,94 @@ function sqliteBytes(databasePath: string) {
     }),
   );
 }
+
+it.each(["maintenance", "ordinary"] as const)(
+  "suspends shared-worker ticks only while maintenance clients retain the actor (%s opener)",
+  async (firstOwner) => {
+    const root = tempDirs.make("state-worker-wal-tick-");
+    const databasePath = path.join(root, "state", "openclaw.sqlite");
+    const context = { environment: { ...process.env, OPENCLAW_STATE_DIR: root } };
+    const broker = new SqliteWorkerBroker();
+    const firstMaintenance = createOpenClawDatabaseMaintenanceScope();
+    const secondMaintenance = createOpenClawDatabaseMaintenanceScope();
+    const open = async (maintenance?: typeof firstMaintenance) => {
+      const store = await broker.open<SharedStateWalFixtureOperations>(
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sharedStateWalFixture),
+          databasePath,
+          input: undefined,
+        },
+        context,
+        undefined,
+        { maintenanceScope: maintenance },
+      );
+      if (!store) {
+        throw new Error("Shared-state WAL fixture did not open");
+      }
+      maintenance?.own(store, "shared-resources", () => store.close());
+      return store;
+    };
+    try {
+      const first = await open(firstOwner === "maintenance" ? firstMaintenance : undefined);
+      const second = await open(firstOwner === "maintenance" ? undefined : firstMaintenance);
+      const ordinary = firstOwner === "ordinary" ? first : second;
+      const maintained = firstOwner === "maintenance" ? first : second;
+      const overlapping = await open(secondMaintenance);
+      const actor = broker.getActorIdentity(ordinary);
+      expect(broker.getActorIdentity(maintained)).toBe(actor);
+      expect(broker.getActorIdentity(overlapping)).toBe(actor);
+
+      const before = await ordinary.execute({ type: "fixture.seed", input: undefined });
+      const heldTick = await ordinary.execute({ type: "fixture.tick", input: undefined });
+      expect(heldTick).toEqual(before);
+      expect(heldTick.checkpoints).toBe(0);
+
+      let grants = 0;
+      await firstMaintenance.run(() =>
+        broker.runOperation(
+          maintained,
+          (worker) =>
+            worker.execute({
+              type: "database.walMaintenance",
+              input: { maxPages: 0, checkpointMode: "PASSIVE" },
+            }),
+          context,
+          undefined,
+          () => ({
+            nativeLocations: [databasePath],
+            admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+              if (grant()) {
+                grants++;
+              }
+            }),
+          }),
+        ),
+      );
+      const admitted = await ordinary.execute({ type: "fixture.snapshot", input: undefined });
+      expect(admitted.actor).toBe(before.actor);
+      expect(admitted.digest).not.toBe(before.digest);
+      expect(admitted.checkpoints).toBeGreaterThan(0);
+      expect(grants).toBeGreaterThan(0);
+
+      const pending = await ordinary.execute({ type: "fixture.seed", input: undefined });
+      await firstMaintenance.close();
+      expect(await ordinary.execute({ type: "fixture.tick", input: undefined })).toEqual(pending);
+      await secondMaintenance.close();
+      const resumed = await ordinary.execute({ type: "fixture.tick", input: undefined });
+      expect(broker.getActorIdentity(ordinary)).toBe(actor);
+      expect(resumed.actor).toBe(pending.actor);
+      expect(resumed.digest).not.toBe(pending.digest);
+      expect(resumed.checkpoints).toBeGreaterThan(0);
+    } finally {
+      try {
+        await firstMaintenance.close();
+        await secondMaintenance.close();
+      } finally {
+        await broker.close();
+      }
+    }
+  },
+);
 
 it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async ({
   signal,
@@ -549,6 +641,8 @@ it("cancels queued periodic maintenance during synchronous close without replayi
     )
     .run("maintenance-close", "preserved", "{}", 1);
   const { observations, stop } = observeCheckpoints(database.path);
+  const prepare = vi.spyOn(database.db, "prepare");
+  const exec = vi.spyOn(database.db, "exec");
   const periodicWork: Promise<unknown>[] = [];
   try {
     periodicWork.push(Promise.resolve(periodic()));
@@ -557,10 +651,12 @@ it("cancels queued periodic maintenance during synchronous close without replayi
     const closed = closeOpenClawStateDatabaseByPath(database.path);
     expect(closed).toBe(true);
     expect(database.db.isOpen).toBe(false);
-    expect(observations).toEqual(["complete"]);
+    expect(observations).toEqual([]);
     periodicWork.push(Promise.resolve(periodic()));
     await Promise.all(periodicWork);
-    expect(observations).toEqual(["complete"]);
+    expect(observations).toEqual([]);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
     const reopened = openOpenClawStateDatabase({ path: database.path });
     expect(
       reopened.db
@@ -568,12 +664,55 @@ it("cancels queued periodic maintenance during synchronous close without replayi
         .all("maintenance-close"),
     ).toEqual([{ event_key: "preserved" }]);
   } finally {
+    prepare.mockRestore();
+    exec.mockRestore();
     stop();
     try {
       await closeOpenClawStateDatabaseByPathAsync(database.path);
     } finally {
       await Promise.all(periodicWork);
     }
+  }
+});
+
+it("checkpoints committed worker writes before retiring the host without host SQL", async () => {
+  const root = tempDirs.make("state-wal-worker-shutdown-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const store = createPluginStateKeyedStore<string>("fixture-plugin", {
+    namespace: "worker-shutdown",
+    maxEntries: 1,
+    env,
+  });
+  await store.register("retained", "initial");
+  const database = openOpenClawStateDatabase({ env });
+  await store.register("retained", "final");
+  const prepare = vi.spyOn(database.db, "prepare");
+  const exec = vi.spyOn(database.db, "exec");
+  const nativeClose = database.db.close.bind(database.db);
+  let walBytesAtHostClose: number | undefined;
+  const close = vi.spyOn(database.db, "close").mockImplementation(() => {
+    walBytesAtHostClose = fs.statSync(`${database.path}-wal`).size;
+    nativeClose();
+  });
+  try {
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+    expect(walBytesAtHostClose).toBe(0);
+  } finally {
+    prepare.mockRestore();
+    exec.mockRestore();
+    close.mockRestore();
+  }
+  const reopened = new DatabaseSync(database.path, { readOnly: true });
+  try {
+    expect(
+      reopened
+        .prepare("SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'")
+        .get(),
+    ).toEqual({ value_json: '"final"' });
+  } finally {
+    reopened.close();
   }
 });
 

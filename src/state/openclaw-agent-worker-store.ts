@@ -47,7 +47,10 @@ import type {
   AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabasePreparationExecution,
+} from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -370,6 +373,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       source: AgentDatabaseRequestExecutionSource,
     ) => Promise<T>,
     signal?: AbortSignal,
+    prepare = false,
   ): Promise<T> => {
     if (revoked) {
       return Promise.reject(
@@ -381,7 +385,9 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       assertCurrent();
       assertHeld();
     };
-    const execution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
+    const execution = prepare
+      ? captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity)
+      : captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent: assert,
       createAdmission(binding) {
@@ -495,6 +501,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
         () => {},
         (execution, source) => execution.prepare(source, prepareOptions?.signal),
         prepareOptions?.signal,
+        true,
       );
     },
     execute(command, assertCurrent, commandOptions) {
