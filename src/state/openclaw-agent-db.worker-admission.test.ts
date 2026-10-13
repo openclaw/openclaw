@@ -787,7 +787,7 @@ it("publishes owner revocation before a host grant and rolls back the native wri
   const execution = captureOpenClawAgentDatabaseExecution(options);
   await execution.prepare(executionAuthoritySource(() => {}));
   let authority: SqliteWorkerExecutionAuthority | undefined;
-  let closing: Promise<void> | undefined;
+  let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
   const requestSource = executionAuthoritySource(
     (_request, captured) => (authority = captured),
     (request) => {
