@@ -3,6 +3,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
+import { resolveGatewayDeviceAuthRoute } from "../../gateway/connection-details.js";
 import { probeGateway } from "../../gateway/probe.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import {
@@ -102,11 +103,34 @@ export async function runGatewayStatusProbePass(params: {
   // targets to start after Bonjour finishes.
   const tunnel = tunnelFirst || (sshTarget && !sshTunnelError ? await tryStartTunnel() : null);
 
+  const configuredTarget = params.baseTargets.find((target) => target.kind === "configRemote");
+  const configuredRoute = configuredTarget
+    ? resolveGatewayDeviceAuthRoute({
+        config: params.cfg,
+        url: configuredTarget.url,
+        remote: true,
+        configuredRemote: true,
+      }).sshTunnel
+    : undefined;
+  // TLS identity belongs to the configured endpoint and selected SSH route,
+  // not the forwarding listener or a different explicit/discovered SSH target.
+  const sshTlsUrl =
+    configuredTarget?.url.startsWith("wss://") &&
+    configuredRoute?.target === params.sshRouteTarget?.trim() &&
+    configuredRoute?.remotePort === params.remotePort
+      ? configuredTarget.url
+      : undefined;
+  const tunnelUrl = new URL(sshTlsUrl ?? `ws://127.0.0.1:${params.remotePort}`);
+  if (tunnel) {
+    tunnelUrl.hostname = "127.0.0.1";
+    tunnelUrl.port = String(tunnel.localPort);
+  }
+
   const tunnelTarget: GatewayStatusTarget | null = tunnel
     ? {
         id: "sshTunnel",
         kind: "sshTunnel",
-        url: `ws://127.0.0.1:${tunnel.localPort}`,
+        url: sshTlsUrl ? tunnelUrl.href : `ws://127.0.0.1:${tunnel.localPort}`,
         active: true,
         tunnel: {
           kind: "ssh",
@@ -130,7 +154,7 @@ export async function runGatewayStatusProbePass(params: {
           password: readStringValue(params.opts.password),
         });
         const probe = await probeGateway({
-          url: target.url,
+          url: target.kind === "sshTunnel" ? (sshTlsUrl ?? target.url) : target.url,
           config: params.cfg,
           configuredRemote: target.kind === "configRemote",
           // The same selected route owns both token lookup and the live tunnel.
