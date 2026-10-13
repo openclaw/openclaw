@@ -21,8 +21,8 @@ import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
+import { ChatQuickActionItem, type HeaderMenuQuickAction } from "./chat-quick-action.tsx";
 import {
   canManageChatSessionSharing,
   ChatSessionSharing,
@@ -36,22 +36,7 @@ export type HeaderMenuAction =
   | { kind: "stop-cloud-worker" }
   | { kind: "plugin"; id: string };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
-export type HeaderMenuQuickAction = {
-  id: string;
-  label: string;
-  icon: LegacyTemplateResult;
-  description?: string;
-  variant?: "danger";
-} & (
-  | { kind: "status" }
-  | {
-      kind?: "action";
-      active?: boolean;
-      badge?: number;
-      disabled?: boolean;
-      onActivate: () => void;
-    }
-);
+export type { HeaderMenuQuickAction } from "./chat-quick-action.tsx";
 
 type CompactMenuView = CompactSessionMenuView | "panels" | "layout" | "sharing" | "view";
 type HeaderMenuProps = {
@@ -97,6 +82,12 @@ const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
   "compact:open-sharing": "sharing",
   "compact:open-view": "view",
 };
+
+const VIEW_SETTINGS = [
+  ["reasoning", "chatShowThinking", "chat.view.reasoning", false],
+  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true],
+  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
+] as const;
 
 function ChatHeaderSessionMenuContent(
   props: HeaderMenuProps,
@@ -188,14 +179,9 @@ function ChatHeaderSessionMenuContent(
         return;
       }
       const setting = value.slice("view:".length);
-      if (setting === "reasoning") {
-        props.onSettingsChange({ chatShowThinking: !props.settings.chatShowThinking });
-      } else if (setting === "tool-calls") {
-        props.onSettingsChange({ chatShowToolCalls: !props.settings.chatShowToolCalls });
-      } else if (setting === "commentary") {
-        props.onSettingsChange({
-          chatPersistCommentary: props.settings.chatPersistCommentary === false,
-        });
+      const option = VIEW_SETTINGS.find(([id]) => id === setting);
+      if (option) {
+        props.onSettingsChange({ [option[1]]: props.settings[option[1]] === false });
       } else if (
         setting === "speech-bubbles" &&
         props.bubbleModeEnabled &&
@@ -237,49 +223,13 @@ function ChatHeaderSessionMenuContent(
     inline?: boolean;
   }) => (
     <For each={input.entries}>
-      {(action) => {
-        const label = (
-          <span class="session-menu__text">
-            {action.label}
-            {action.description ? (
-              <span class="session-menu__description">{action.description}</span>
-            ) : undefined}
-          </span>
-        );
-        return action.kind === "status" ? (
-          <div
-            slot={input.inline ? undefined : "submenu"}
-            class="session-menu__status"
-            data-menu-status={action.id}
-            role="note"
-          >
-            <span class="session-menu__check" aria-hidden="true">
-              <LitContent value={action.icon} />
-            </span>
-            {label}
-          </div>
-        ) : (
-          <wa-dropdown-item
-            slot={input.inline ? undefined : "submenu"}
-            class="session-menu__item"
-            value={`quick:${input.group}:${action.id}`}
-            type={action.active === undefined ? undefined : "checkbox"}
-            prop:checked={action.active ?? false}
-            prop:disabled={action.disabled}
-            variant={action.variant}
-          >
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">
-              <LitContent value={action.icon} />
-            </span>
-            {label}
-            {typeof action.badge === "number" && action.badge > 0 ? (
-              <span slot="details" class="session-menu__sub">
-                {action.badge}
-              </span>
-            ) : undefined}
-          </wa-dropdown-item>
-        );
-      }}
+      {(action) => (
+        <ChatQuickActionItem
+          action={action}
+          slot={input.inline ? undefined : "submenu"}
+          value={`quick:${input.group}:${action.id}`}
+        />
+      )}
     </For>
   );
   const ViewOption = (input: {
@@ -302,24 +252,20 @@ function ChatHeaderSessionMenuContent(
   );
   const ViewOptions = (input: { inline?: boolean }) => (
     <>
-      <ViewOption
-        inline={input.inline}
-        value="reasoning"
-        label={t("chat.view.reasoning")}
-        checked={props.onboarding ? false : props.settings.chatShowThinking}
-      />
-      <ViewOption
-        inline={input.inline}
-        value="tool-calls"
-        label={t("chat.view.toolCalls")}
-        checked={props.onboarding ? true : props.settings.chatShowToolCalls}
-      />
-      <ViewOption
-        inline={input.inline}
-        value="commentary"
-        label={t("chat.view.commentary")}
-        checked={props.settings.chatPersistCommentary !== false}
-      />
+      <For each={VIEW_SETTINGS}>
+        {([value, key, label, onboarding]) => (
+          <ViewOption
+            inline={input.inline}
+            value={value}
+            label={t(label)}
+            checked={
+              props.onboarding && onboarding !== undefined
+                ? onboarding
+                : props.settings[key] !== false
+            }
+          />
+        )}
+      </For>
       {props.bubbleModeEnabled ? (
         <ViewOption
           inline={input.inline}

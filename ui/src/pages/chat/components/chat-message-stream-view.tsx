@@ -159,16 +159,7 @@ export function StreamPartView(props: {
 }) {
   const stream = () => (props.part.kind === "stream" ? props.part : undefined);
   return (
-    <Show
-      when={stream()}
-      fallback={
-        <NonstreamPart
-          part={props.part}
-          options={props.options}
-          presentation={props.presentation}
-        />
-      }
-    >
+    <Show when={stream()} fallback={<NonstreamPart {...props} />}>
       <StreamingMessage part={stream} options={props.options} />
     </Show>
   );
