@@ -6,11 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
-  writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
 import { createDoctorNoCowToolFixture } from "./doctor-sqlite-nocow.test-support.js";
 
@@ -23,7 +24,7 @@ vi.mock("../infra/sqlite-wal-filesystem.js", async (importOriginal) => ({
   isSqlitePathOnBtrfs: vi.fn(() => true),
   setSqliteDirectoryNoCow: vi.fn(),
 }));
-// Isolate the identity guards: satisfy the later-update gate so cleanup reaches them.
+// Supply only the later-update gate; backup, rewrite, and retirement use their real owners.
 vi.mock("./update-capture-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-capture-cleanup.js")>()),
   readCompletedUpdateHistory: () => ({
@@ -36,6 +37,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 let shared: string;
 let env: NodeJS.ProcessEnv;
+let fixture: ReturnType<typeof createDoctorNoCowToolFixture>;
 
 function seedDatabase(databasePath: string) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -48,120 +50,122 @@ function seedDatabase(databasePath: string) {
   }
 }
 
-function findBackup() {
-  return fs
-    .readdirSync(path.dirname(shared))
-    .filter((name) => name.startsWith(`${path.basename(shared)}.pre-startup-migration-`))
-    .map((name) => path.join(path.dirname(shared), name))[0]!;
-}
-
 function readTarget() {
   return readSessionSqliteMigrationManifest(listSessionSqliteMigrationManifestPaths(env)[0]!)!
     .targets[0]!;
 }
 
-/** Record a verified pre-migration backup and mark the run finished, as a completed update would. */
 async function prepareCompletedBackup() {
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent: () => {},
   });
   try {
-    await maintenance.run(() =>
-      backupDoctorMigrationDatabases({
+    await maintenance.run(async () => {
+      await backupDoctorMigrationDatabases({
         env,
         pendingDatabasePaths: [shared],
         databasePaths: [shared],
-      }),
-    );
-    const manifestPath = listSessionSqliteMigrationManifestPaths(env)[0]!;
-    const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
-    for (const target of manifest.targets) {
-      target.validationBeforeArchive = "passed";
-    }
-    manifest.completedAt = new Date(Date.now() - 600_000).toISOString();
-    writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+      });
+      completeDoctorMigrationBackups(env, [shared]);
+    });
   } finally {
     await maintenance.close();
   }
+  return readTarget().plannedMoves[0]!.archivePath;
 }
 
-describe("Doctor NOCOW recovery-identity reconciliation", () => {
+function rewrite() {
+  return repairDoctorSqliteNoCow({ paths: [shared], stateDir: root, env, assertCurrent: () => {} });
+}
+
+function retire() {
+  return retireSessionSqliteRecovery({
+    env,
+    preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
+    readConfig: async () => ({}),
+    confirm: async () => true,
+  });
+}
+
+describe("Doctor NOCOW recovery identities", () => {
   beforeEach(() => {
-    root = tempDirs.make("openclaw-nocow-recovery-", "/tmp");
+    root = tempDirs.make("openclaw-nocow-recovery-");
     shared = path.join(root, "state", "openclaw.sqlite");
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
     seedDatabase(shared);
-    createDoctorNoCowToolFixture(root);
+    fixture = createDoctorNoCowToolFixture(root);
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
-  it("keeps a recorded recovery original retirable after a NOCOW rewrite", async () => {
-    await prepareCompletedBackup();
-    const backupPath = findBackup();
+  it("retires a recorded recovery original after a NOCOW rewrite without changing live data", async () => {
+    const backupPath = await prepareCompletedBackup();
+    const original = fs.readFileSync(backupPath);
     const recorded = readTarget().plannedMoves[0]!.artifact!.identity;
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env });
-    expect(preview.artifacts.find((item) => item.path === backupPath)).toMatchObject({
-      outcome: "candidate",
-      reason: "producer-verified-original",
-    });
+    expect((await rewrite()).warnings).toEqual([]);
+    expect(String(fs.lstatSync(backupPath, { bigint: true }).ino)).not.toBe(recorded.ino);
+    expect(fs.readFileSync(backupPath)).toEqual(original);
 
-    // Documented maintenance step: `openclaw doctor --fix` rewrites the store with NOCOW.
-    const result = await repairDoctorSqliteNoCow({
-      paths: [shared],
-      stateDir: root,
-      env,
-      assertCurrent: () => {},
+    const result = await retire();
+    expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+      outcome: "removed",
+      reason: "rollback-original-retired",
     });
-    expect([...result.changes, ...result.warnings].join("\n")).toContain(
-      "Rewrote SQLite store directory with NOCOW",
-    );
-
-    // Doctor re-records the relocated identity, so the original stays an eligible candidate.
-    const rewritten = readTarget();
-    const liveBackup = fs.lstatSync(backupPath, { bigint: true });
-    expect(String(liveBackup.ino)).not.toBe(recorded.ino);
-    expect(rewritten.plannedMoves[0]!.artifact!.identity).toMatchObject({
-      dev: String(liveBackup.dev),
-      ino: String(liveBackup.ino),
-      mtimeNs: String(liveBackup.mtimeNs),
-      sha256: recorded.sha256,
-    });
-    expect(rewritten.databaseIdentity).toEqual({
-      dev: String(fs.lstatSync(shared, { bigint: true }).dev),
-      ino: String(fs.lstatSync(shared, { bigint: true }).ino),
-    });
-
-    const after = inspectSessionSqliteRecovery({ cfg: {}, env });
-    expect(after.artifacts.find((item) => item.path === backupPath)).toMatchObject({
-      outcome: "candidate",
-      reason: "producer-verified-original",
-    });
+    expect(fs.existsSync(backupPath)).toBe(false);
+    const database = new DatabaseSync(shared, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT value FROM preserved").get()?.value).toBe("before migration");
+    } finally {
+      database.close();
+    }
   });
 
-  it("does not rebind a destination database that was replaced before the rewrite", async () => {
-    await prepareCompletedBackup();
-    const recordedDestination = readTarget().databaseIdentity;
-
-    // Replace the recorded database with a different valid database before the NOCOW rewrite.
-    const replacement = path.join(root, "replacement.sqlite");
-    seedDatabase(replacement);
-    fs.renameSync(replacement, shared);
-    expect(String(fs.lstatSync(shared, { bigint: true }).ino)).not.toBe(recordedDestination!.ino);
-
-    const result = await repairDoctorSqliteNoCow({
-      paths: [shared],
-      stateDir: root,
-      env,
-      assertCurrent: () => {},
-    });
-    const notes = [...result.changes, ...result.warnings].join("\n");
-    expect(notes).toContain("Rewrote SQLite store directory with NOCOW");
-    expect(notes).toContain("not the recorded destination");
-    // The destination binding stays with the verified generation, so cleanup still rejects it.
-    expect(readTarget().databaseIdentity).toEqual(recordedDestination);
-  });
+  it.each(["destination", "backup", "backup metadata", "copied bytes"])(
+    "keeps the original protected after changing %s",
+    async (change) => {
+      const backupPath = await prepareCompletedBackup();
+      const recorded = readTarget();
+      const original = fs.readFileSync(backupPath);
+      if (change === "destination" || change === "backup") {
+        const replacedPath = change === "destination" ? shared : backupPath;
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.copyFileSync(replacedPath, replacement);
+        fs.renameSync(replacement, replacedPath);
+      } else if (change === "backup metadata") {
+        const touched = new Date("2030-01-01T00:00:00Z");
+        fs.utimesSync(backupPath, touched, touched);
+      } else {
+        fixture.beforeExchange = () => {
+          const staging = fs
+            .readdirSync(root)
+            .find((name) => name.startsWith("state.nocow-backup-"))!;
+          const copied = Buffer.from(original);
+          copied[copied.length - 1] = copied[copied.length - 1]! ^ 1;
+          fs.writeFileSync(path.join(root, staging, path.basename(backupPath)), copied);
+        };
+      }
+      const rewritten = await rewrite();
+      expect(rewritten.changes).toHaveLength(1);
+      expect(rewritten.warnings.join("\n")).toContain("left unchanged");
+      if (change === "destination") {
+        expect(readTarget().databaseIdentity).toEqual(recorded.databaseIdentity);
+      } else {
+        expect(readTarget().plannedMoves[0]!.artifact!.identity).toEqual(
+          recorded.plannedMoves[0]!.artifact!.identity,
+        );
+      }
+      const result = await retire();
+      expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+        outcome: "blocked",
+        reason:
+          change === "destination"
+            ? "destination-verification-failed"
+            : "artifact-metadata-changed",
+      });
+      expect(fs.existsSync(backupPath)).toBe(true);
+    },
+  );
 });

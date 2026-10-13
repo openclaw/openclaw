@@ -1,6 +1,8 @@
-/** Re-record recovery-artifact identities that Doctor's verified NOCOW rewrite relocated. */
 import fs from "node:fs";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import {
+  readMigrationArtifactIdentity,
+  type MigrationArtifact,
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   canonicalMigrationFilePath,
   listSessionSqliteMigrationManifestPaths,
@@ -8,39 +10,58 @@ import {
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 
-/**
- * The NOCOW rewrite replaces every store file with a byte-for-byte copy in a fresh directory,
- * so the inode and mtime recorded in the migration manifest no longer match the live file.
- * Doctor owns both the rewrite and the manifest, so after a verified rewrite it re-records the
- * new identity for the recovery originals and destination databases it relocated.
- *
- * A record is refreshed only when the file being rewritten is the exact generation the manifest
- * recorded: its pre-exchange device/inode must still equal the recorded identity. This keeps the
- * destination binding intact — a valid database that merely replaced the recorded pathname is not
- * adopted. For a recovery original the rewrite's own copy is additionally required to carry the
- * recorded content (`size` and `sha256`); a destination database relies on the rewrite's verified
- * WAL-aware snapshot and integrity check. Anything that cannot be proven is left untouched and
- * reported, so cleanup stays conservative rather than weakened.
- */
+/** Transfer existing recovery evidence only across Doctor's verified offline rewrite. */
 export function reconcileNoCowRecoveryIdentities(params: {
   env: NodeJS.ProcessEnv;
-  previousIdentities: ReadonlyMap<string, Pick<fs.BigIntStats, "dev" | "ino">>;
+  previousIdentities: ReadonlyMap<string, fs.BigIntStats>;
   assertCurrent: () => void;
 }): string[] {
-  const previous = new Map<string, { dev: string; ino: string }>();
-  for (const [pathname, stat] of params.previousIdentities) {
-    previous.set(canonicalMigrationFilePath(pathname), {
-      dev: String(stat.dev),
-      ino: String(stat.ino),
-    });
-  }
-  if (previous.size === 0) {
-    return [];
-  }
+  const previous = new Map(
+    [...params.previousIdentities].map(([pathname, stat]) => [
+      canonicalMigrationFilePath(pathname),
+      stat,
+    ]),
+  );
   const warnings: string[] = [];
-  const matchesRecordedGeneration = (pathname: string, dev: string, ino: string) => {
-    const pre = previous.get(canonicalMigrationFilePath(pathname));
-    return pre !== undefined && pre.dev === dev && pre.ino === ino;
+  const refresh = (
+    pathname: string,
+    identity: { dev: string; ino: string },
+    artifact?: MigrationArtifact,
+  ): boolean => {
+    const before = previous.get(canonicalMigrationFilePath(pathname));
+    if (!before || (artifact && artifact.disposal.state !== "retained")) {
+      return false;
+    }
+    try {
+      if (String(before.dev) !== identity.dev || String(before.ino) !== identity.ino) {
+        throw new Error("rewritten file is not the recorded generation");
+      }
+      params.assertCurrent();
+      const next = fs.lstatSync(pathname, { bigint: true });
+      if (!next.isFile() || next.nlink !== 1n) {
+        throw new Error("rewritten file is not an unaliased regular file");
+      }
+      if (artifact) {
+        const copied = readMigrationArtifactIdentity(pathname);
+        if (
+          String(before.mtimeNs) !== artifact.identity.mtimeNs ||
+          Number(before.size) !== artifact.identity.size ||
+          copied.size !== artifact.identity.size ||
+          copied.sha256 !== artifact.identity.sha256
+        ) {
+          throw new Error("rewritten copy does not match the recorded original");
+        }
+        artifact.identity = copied;
+      } else {
+        // The destination may have migrated in place; bind its generation, not its old bytes.
+        identity.dev = String(next.dev);
+        identity.ino = String(next.ino);
+      }
+      return true;
+    } catch (error) {
+      warnings.push(`NOCOW recovery identity left unchanged for ${pathname}: ${String(error)}`);
+      return false;
+    }
   };
   for (const manifestPath of listSessionSqliteMigrationManifestPaths(params.env)) {
     const manifest = readSessionSqliteMigrationManifest(manifestPath);
@@ -50,61 +71,12 @@ export function reconcileNoCowRecoveryIdentities(params: {
     let changed = false;
     for (const target of manifest.targets) {
       for (const move of [...target.completedMoves, ...target.plannedMoves]) {
-        const artifact = move.artifact;
-        if (!artifact || !previous.has(canonicalMigrationFilePath(move.archivePath))) {
-          continue;
-        }
-        if (
-          !matchesRecordedGeneration(move.archivePath, artifact.identity.dev, artifact.identity.ino)
-        ) {
-          warnings.push(
-            `NOCOW recovery identity left unchanged for ${move.archivePath}: the rewritten file is not the recorded generation`,
-          );
-          continue;
-        }
-        try {
-          params.assertCurrent();
-          const next = readMigrationArtifactIdentity(move.archivePath);
-          if (next.size !== artifact.identity.size || next.sha256 !== artifact.identity.sha256) {
-            throw new Error("rewritten copy no longer matches the recorded content");
-          }
-          artifact.identity = {
-            ...artifact.identity,
-            dev: next.dev,
-            ino: next.ino,
-            mtimeNs: next.mtimeNs,
-          };
-          changed = true;
-        } catch (error) {
-          warnings.push(
-            `NOCOW recovery identity left unchanged for ${move.archivePath}: ${String(error)}`,
-          );
+        if (move.artifact) {
+          changed = refresh(move.archivePath, move.artifact.identity, move.artifact) || changed;
         }
       }
-      const databaseIdentity = target.databaseIdentity;
-      if (!databaseIdentity || !previous.has(canonicalMigrationFilePath(target.sqlitePath))) {
-        continue;
-      }
-      if (
-        !matchesRecordedGeneration(target.sqlitePath, databaseIdentity.dev, databaseIdentity.ino)
-      ) {
-        warnings.push(
-          `NOCOW destination identity left unchanged for ${target.sqlitePath}: the rewritten database is not the recorded destination`,
-        );
-        continue;
-      }
-      try {
-        params.assertCurrent();
-        const next = fs.lstatSync(target.sqlitePath, { bigint: true });
-        if (!next.isFile() || next.nlink !== 1n) {
-          throw new Error("rewritten database is not an unaliased regular file");
-        }
-        target.databaseIdentity = { dev: String(next.dev), ino: String(next.ino) };
-        changed = true;
-      } catch (error) {
-        warnings.push(
-          `NOCOW destination identity left unchanged for ${target.sqlitePath}: ${String(error)}`,
-        );
+      if (target.databaseIdentity) {
+        changed = refresh(target.sqlitePath, target.databaseIdentity) || changed;
       }
     }
     if (changed) {
