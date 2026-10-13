@@ -187,6 +187,13 @@ recover_review_transition() {
   local journal=.local/review-transition.json
   [ -e "$journal" ] || return 0
 
+  # A correction continuation retires metadata only. It must not enter the
+  # baseline transition's source/index restoration or branch movement path.
+  if [ "$(jq -r .mode "$journal")" = correction ]; then
+    recover_correction_continuation "$pr"
+    return $?
+  fi
+
   local fields source target mode branch PREP_TRANSITION_FACTS
   fields=$(jq -er --argjson pr "$pr" '
     select(type == "object" and

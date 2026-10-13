@@ -32,7 +32,7 @@ const hash = (bytes, write = false) =>
 
 // Empty resolution files are valid blobs. Read the opened regular descriptor once;
 // Git receives those bytes without filters, pathname rereads or text normalization.
-function readRegular(path) {
+export function readRegular(path) {
   const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     const before = fs.fstatSync(fd);
@@ -574,7 +574,7 @@ function atomicWrite(path, bytes) {
   fs.renameSync(pending, path);
 }
 
-function requireOperationOwner(pr, root, lockRef, lockOid) {
+export function requireOperationOwner(pr, root, lockRef, lockOid) {
   if (lockRef !== `refs/openclaw/pr-operation-locks/${pr}` || !oidPattern.test(lockOid)) {
     throw new Error("Missing baseline transition operation owner.");
   }
@@ -589,7 +589,7 @@ function requireOperationOwner(pr, root, lockRef, lockOid) {
   ]);
 }
 
-function requireCheckout(source, anchor, branch, cwd, gitDir) {
+export function requireCheckout(source, anchor, branch, cwd, gitDir) {
   if (
     fs.realpathSync(".") !== cwd ||
     text("rev-parse", "--absolute-git-dir") !== gitDir ||
