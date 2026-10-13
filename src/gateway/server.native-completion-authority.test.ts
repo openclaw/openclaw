@@ -25,6 +25,7 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -205,9 +206,9 @@ describe("native completion final-effect authority", () => {
             result.type === "return" ? [result.value] : [],
           ),
         );
-      const stage = sessionAccessor.stageSessionPendingInput;
+      const stage = pendingInputs.stageSessionPendingInput;
       const stageSpy = vi
-        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .spyOn(pendingInputs, "stageSessionPendingInput")
         .mockImplementation(async (...args) => {
           const index = pair.runs.findIndex(
             (run) =>
@@ -328,9 +329,9 @@ describe("native completion final-effect authority", () => {
             result.type === "return" ? [result.value] : [],
           ),
         );
-      const stage = sessionAccessor.stageSessionPendingInput;
+      const stage = pendingInputs.stageSessionPendingInput;
       const stageSpy = vi
-        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .spyOn(pendingInputs, "stageSessionPendingInput")
         .mockImplementationOnce(async (...args) => {
           entered.resolve();
           // Hold before acquiring the writer so a requester replacement can commit.

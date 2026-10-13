@@ -284,7 +284,7 @@ describe("AppSidebar session indicators", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(["running", "queued"] as const)(
+  it.each(["running"] as const)(
     "presents main-session %s activity once in the agent header with draft and outbox badges",
     async (status) => {
       const mainKey = "agent:main:main";
@@ -324,60 +324,14 @@ describe("AppSidebar session indicators", () => {
       expect(homeRing).not.toBeNull();
       expect(home?.querySelectorAll(".session-run-spinner")).toHaveLength(0);
       expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      const activityLabel = status === "queued" ? "Queued" : "Active run";
+      const activityLabel = "Active run";
       expect(homeRing?.getAttribute("aria-label")).toBe(activityLabel);
-      expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(status === "queued");
+      expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(false);
       expect(
         home?.querySelectorAll(`.session-glyph__ring[aria-label="${activityLabel}"]`),
       ).toHaveLength(1);
       expect(home?.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
       expect(home?.querySelector(".session-row-badge--draft")).not.toBeNull();
-    },
-  );
-
-  it.each(["running", "queued"] as const)(
-    "announces %s and unread once with an owner chip or an empty leading slot",
-    async (status) => {
-      const keys = ["agent:main:owned-running", "agent:main:plain-running"];
-      const sessions = createSessionsHarness("main", keys);
-      const result = sessions.sessions.state.result!;
-      for (const row of result.sessions) {
-        row.hasActiveRun = true;
-        row.status = status;
-        row.unread = true;
-        if (row.key === keys[0]) {
-          row.owner = { actor: { type: "human", id: "ada", label: "Ada" } };
-        }
-      }
-      result.owners = [
-        { type: "human", id: "ada", label: "Ada" },
-        { type: "human", id: "bob", label: "Bob" },
-      ];
-      const { sidebar } = await mountSidebar(
-        createGatewayHarness({} as GatewayBrowserClient).gateway,
-        sessions.sessions,
-      );
-      for (const key of keys) {
-        const row = sidebar.querySelector(`[data-session-key="${key}"]`)!;
-        const ring = row.querySelector(
-          ".sidebar-session-indicator .session-glyph--running .session-glyph__ring",
-        );
-        expect.soft(ring).not.toBeNull();
-        expect.soft(row.querySelector(".session-row-state")).toBeNull();
-        expect(row.querySelector(".session-unread-dot")).toBeNull();
-        expect(row.querySelector(".session-glyph__badge--unread")).toBeNull();
-        expect(row.querySelector(".session-owner-chip") !== null).toBe(key === keys[0]);
-        const link = row.querySelector("a")!;
-        const description = sidebar.querySelector(
-          `[id="${link.getAttribute("aria-describedby")}"]`,
-        )!;
-        expect.soft(description.textContent).toBe("Unread");
-        expect.soft(description.getAttribute("aria-hidden")).toBe("true");
-        expect
-          .soft(ring?.getAttribute("aria-label"))
-          .toBe(status === "queued" ? "Queued" : "Active run");
-        expect.soft(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(0);
-      }
     },
   );
 

@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
@@ -25,7 +26,8 @@ export function inferSignalStatus(signal: FailoverSignal): number | undefined {
   if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
     return signal.status;
   }
-  return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
+  const message = stripErrorPrefix(signal.message?.trim() ?? "");
+  return extractLeadingHttpStatus(message)?.code ?? extractProviderWrappedHttpStatus(message)?.code;
 }
 function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): boolean {
   const trimmed = raw?.trim();

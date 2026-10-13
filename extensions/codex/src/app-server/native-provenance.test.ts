@@ -6,8 +6,11 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assistantMessage,
   createParams,
@@ -105,6 +108,7 @@ async function runProvenanceTurn(
 }
 
 setupRunAttemptTestHooks();
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("native Codex provenance", () => {
   it("sends stable sender provenance through an active context-engine projection", async () => {

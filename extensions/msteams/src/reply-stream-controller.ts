@@ -168,6 +168,14 @@ export function createTeamsReplyStreamController(params: {
     channelData: params.feedbackLoopEnabled ? { feedbackLoopEnabled: true } : {},
   });
 
+  const queueFinalReplacement = (activeStream: NonNullable<typeof stream>, text: string) => {
+    const activity = finalStreamActivity(text);
+    replacementTextAwaitingAcknowledgement = { text: activity.text!, logicalText: text };
+    activeStream.emit(activity);
+    queuedFinalActivity = activity;
+    emittedText = text;
+  };
+
   const deferredReplacementLogicalContent = (): string | undefined => {
     const content = deferredReplacementEntries
       .map((entry) => entry.payload.text)
@@ -335,14 +343,7 @@ export function createTeamsReplyStreamController(params: {
         deferredReplacementEntries.push({ kind: "replacement", payload });
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         try {
-          const activity = finalStreamActivity(payload.text);
-          replacementTextAwaitingAcknowledgement = {
-            text: activity.text!,
-            logicalText: payload.text,
-          };
-          stream.emit(activity);
-          queuedFinalActivity = activity;
-          emittedText = payload.text;
+          queueFinalReplacement(stream, payload.text);
           tokensEmitted = false;
           // Replacement delivery owns all later payloads until close() proves
           // that Teams accepted the replacement or did not receive a Stop.
@@ -414,15 +415,8 @@ export function createTeamsReplyStreamController(params: {
             kind: "replacement",
             payload: pendingFinalPayload,
           });
-          const activity = finalStreamActivity(pendingFinalPayload.text);
-          replacementTextAwaitingAcknowledgement = {
-            text: activity.text!,
-            logicalText: pendingFinalPayload.text,
-          };
           logicalContent = deferredReplacementLogicalContent();
-          stream.emit(activity);
-          queuedFinalActivity = activity;
-          emittedText = pendingFinalPayload.text;
+          queueFinalReplacement(stream, pendingFinalPayload.text);
         }
         logicalContent ??= replacementSettlementPending
           ? deferredReplacementLogicalContent()

@@ -26,6 +26,7 @@ import * as transcriptReaders from "./session-transcript-execution-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import * as contextWorker from "./session-transcript-read-worker-runtime.js";
+import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
@@ -501,3 +502,64 @@ it("refuses a copied replacement with identical context version after scanning",
     }
   });
 });
+
+it.each(["worker", "native"] as const)(
+  "reads actual %s admission and completed-turn receipts through either store locator",
+  async (mode) => {
+    await withOpenClawTestState({ label: `context-anchor-locators-${mode}` }, async (state) => {
+      const originalPath = state.statePath("transcript.sqlite");
+      const aliasDirectory = state.path("database-alias");
+      await fs.symlink(
+        path.dirname(originalPath),
+        aliasDirectory,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const aliasPath = path.join(aliasDirectory, path.basename(originalPath));
+      for (const writeAlias of [false, true]) {
+        const target = {
+          agentId: "main",
+          sessionId: `anchor-locator-${writeAlias}`,
+          sessionKey: `agent:main:anchor-locator-${writeAlias}`,
+          storePath: writeAlias ? aliasPath : originalPath,
+        };
+        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const manager =
+          mode === "worker" ? await SessionManager.openAsync(target) : SessionManager.open(target);
+        const earlier = { role: "user" as const, content: "earlier", timestamp: 1 };
+        const current = { role: "user" as const, content: "current", timestamp: 2 };
+        if (mode === "worker") {
+          await manager.appendMessageAsync(earlier);
+        } else {
+          manager.appendMessage(earlier);
+          await waitForSessionTranscriptProjection(target);
+        }
+        const receipt =
+          mode === "worker"
+            ? await manager.appendMessageWithTranscriptAnchorAsync(current)
+            : manager.appendMessageWithTranscriptAnchor(current);
+        if (!receipt.anchor) {
+          throw new Error("Missing actual append receipt anchor");
+        }
+        for (const storePath of [originalPath, aliasPath]) {
+          const readTarget = { ...target, storePath };
+          const admitted = await SessionManager.openModelContextAsync(readTarget, {
+            admission: { ...receipt.anchor, role: "user", logicalTurnId: target.sessionId },
+          });
+          expect(admitted.buildSessionContext().messages).toEqual([earlier]);
+          const completed = await SessionManager.openModelContextAsync(readTarget, {
+            through: receipt.anchor,
+          });
+          expect(completed.buildSessionContext().messages).toEqual([earlier, current]);
+        }
+        if (mode === "native") {
+          expect(receipt.anchor.storePath).toBe(target.storePath);
+        }
+        const native = SessionManager.openModelContext(
+          { ...target, storePath: receipt.anchor.storePath },
+          { through: receipt.anchor },
+        );
+        expect(native.buildSessionContext().messages).toEqual([earlier, current]);
+      }
+    });
+  },
+);

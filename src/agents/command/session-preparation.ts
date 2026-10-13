@@ -49,10 +49,13 @@ export function prepareCommandSessionRecoveryEntry(
       ...params,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
-  const directOperatorSource =
-    !sourceOptions.sourceRunId &&
+  const operatorSource =
     entry.restartRecoveryDeliveryRunId !== runId &&
-    (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")
+    ((!sourceOptions.sourceRunId &&
+      (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")) ||
+      (sourceOptions.sourceRunId === runId &&
+        opts.inputProvenance?.kind === "inter_session" &&
+        opts.inputProvenance.sourceTool === "subagent_settle"))
       ? createRestartRecoveryOperatorSource({
           authority: opts.operatorAuthority,
           entry: { ...entry, sessionId },
@@ -90,11 +93,11 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
-        ...(directOperatorSource
+        ...(operatorSource
           ? {
-              operatorSource: directOperatorSource,
+              operatorSource,
               sourceRunId: runId,
-              sourceIngress: directOperatorSource.snapshot.sourceIngress,
+              sourceIngress: sourceOptions.sourceIngress ?? operatorSource.snapshot.sourceIngress,
             }
           : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,
@@ -178,7 +181,7 @@ export async function prepareEmbeddedSessionState(params: {
   ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
   const nodeSkillsEligibility = await resolveNodeExecEligibilityAsync({
     cfg: params.cfg,
-    sessionEntry,
+    sessionEntry: sessionEntry ?? null,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });

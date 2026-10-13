@@ -129,7 +129,7 @@ it.each([".gitattributes", ".codex/config.toml", ".CODEX/config.toml"])(
     const ready = vi.fn(async () => {});
     expect((await create(ready)).code).toBe(0);
     expect(ready).not.toHaveBeenCalled();
-    await expect(fs.access(path.join(destination, "src/main.ts"))).resolves.toBeUndefined();
+    await fs.access(path.join(destination, "src/main.ts"));
   },
 );
 

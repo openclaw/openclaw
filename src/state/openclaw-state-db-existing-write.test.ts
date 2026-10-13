@@ -2,9 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -71,6 +75,36 @@ function readSchemaMarkers(database: DatabaseSync) {
 }
 
 describe("retained existing-state writer", () => {
+  it("initializes an existing additive subset without repeating DDL on its warm table", () => {
+    const options = fixture(true);
+    const queries: Array<{ query: string; database?: DatabaseSync }> = [];
+    const sql = observeHostDataSql((query, database) => queries.push({ query, database }));
+    let writer: DatabaseSync | undefined;
+    try {
+      runExistingOpenClawStateWriteTransaction(
+        ({ db }) => {
+          writer = db;
+          db.prepare("INSERT INTO records VALUES (?, ?)").run(1, "warm subset");
+        },
+        options,
+        {
+          ...contract,
+          schemaSql: recordSchema.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
+          initializeAdditiveSchema: true,
+        },
+      );
+      expect(readValues(options.path)).toEqual([{ value: "warm subset" }]);
+      expect(
+        queries.filter(
+          ({ query, database }) =>
+            database === writer && classifySqliteMutation(query, "batch").mainSchemaChange,
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+
   it("refuses invalid and restricted repair admission before acquiring schema maintenance", () => {
     const options = fixture();
     const repairContract = { ...contract, recoverTaskDeliveryOrphans: true as const };

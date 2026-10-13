@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -81,11 +81,12 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
         ...params,
         sessionStore: {
           ...Object.fromEntries(
-            listSessionEntriesReadOnly({
-              agentId: params.agentId,
-              storePath: params.storePath,
-              projection: "list",
-            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+            (
+              await readSessionEntrySummariesInWorker({
+                agentId: params.agentId,
+                storePath: params.storePath,
+              })
+            ).map(({ sessionKey, entry }) => [sessionKey, entry]),
           ),
           ...params.sessionStore,
         },

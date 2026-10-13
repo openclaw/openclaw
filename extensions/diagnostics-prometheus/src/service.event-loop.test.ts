@@ -347,3 +347,75 @@ it("exports worker queue and service populations without adding series per reque
     metrics.stop();
   }
 });
+
+it("exports completed SQLite request phases without inventing missing or invalid intervals", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "worker.request" as const,
+    kind: "sqlite_writer" as const,
+    requestClass: "transcripts",
+    phase: "completed" as const,
+    queueDepth: 0,
+    durationMs: 28_000,
+    timing: {
+      dispatched: 1_000,
+      posted: 2_000,
+      postFinished: 9_000,
+      received: 4_000,
+      inputReady: 7_000,
+      executeStarted: 11_000,
+      executeFinished: 16_000,
+      serialized: 17_000,
+      replied: 22_000,
+      replyReceived: 29_000,
+    },
+  };
+  try {
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    metrics.record({ ...event, phase: "queued", durationMs: undefined });
+    metrics.record({ ...event, phase: "started", durationMs: undefined });
+    expect(metrics.render()).not.toContain("openclaw_worker_request_phase_seconds");
+    metrics.record(event);
+    metrics.record({
+      ...event,
+      durationMs: undefined,
+      timing: {
+        dispatched: 1,
+        posted: 1,
+        received: 0,
+        inputReady: Number.NaN,
+        executeStarted: Number.POSITIVE_INFINITY,
+        replied: 2,
+      },
+    });
+    metrics.record({ ...event, durationMs: undefined, timing: undefined });
+    const rendered = metrics.render();
+    for (const [phase, seconds, count] of [
+      ["dispatch", 1, 2],
+      ["delivery", 2, 1],
+      ["input", 3, 1],
+      ["prepare", 4, 1],
+      ["execute", 5, 1],
+      ["result", 6, 1],
+      ["reply", 7, 1],
+    ] as const) {
+      const labels = `{kind="sqlite_writer",phase="${phase}",request_class="transcripts"}`;
+      expect(rendered).toContain(`openclaw_worker_request_phase_seconds_sum${labels} ${seconds}\n`);
+      expect(rendered).toContain(`openclaw_worker_request_phase_seconds_count${labels} ${count}\n`);
+    }
+    expect(rendered).toContain(
+      'openclaw_worker_request_seconds_sum{kind="sqlite_writer",request_class="transcripts"} 28\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_worker_request_phase_seconds_bucket{kind="sqlite_writer",le="0.005",phase="dispatch",request_class="transcripts"} 1\n',
+    );
+    expect(
+      rendered
+        .split("\n")
+        .filter((line) => line.startsWith("openclaw_worker_request_phase_seconds_count")),
+    ).toHaveLength(7);
+  } finally {
+    metrics.stop();
+  }
+});

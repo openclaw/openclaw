@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot as clearFixtureRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot as setFixtureRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -278,6 +282,7 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
     },
   };
   setRuntimeConfigSnapshot(config, config);
+  setFixtureRuntimeConfigSnapshot(config, config);
   const memory = loadMemory(registryHost(), config);
   try {
     // A transient manager exposes the shared prototype without scheduling startup work.
@@ -327,7 +332,10 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
   } finally {
     await memory.instance.dispose();
     vi.restoreAllMocks();
-    await state.cleanup().finally(clearRuntimeConfigSnapshot);
+    await state.cleanup().finally(() => {
+      clearRuntimeConfigSnapshot();
+      clearFixtureRuntimeConfigSnapshot();
+    });
   }
 });
 
@@ -536,6 +544,7 @@ it.for([false, true])(
         const agentId = reason;
         const cfg = config(agentId, reason);
         setRuntimeConfigSnapshot(cfg, cfg);
+        setFixtureRuntimeConfigSnapshot(cfg, cfg);
         const workspace = path.join(state.workspaceDir, agentId);
         await fs.mkdir(workspace, { recursive: true });
         await fs.writeFile(
@@ -559,17 +568,19 @@ it.for([false, true])(
         managers.add(opened.manager);
         const rawManager =
           getPluginOriginalValue(opened.manager, current.instance) ?? opened.manager;
-        if (reason === "session-delta") {
+        if (reason === "session-startup-catchup" || reason === "session-delta") {
           const startupWork = startupCompletions.get(rawManager);
           assert(startupWork, "Constructor must own startup discovery");
-          awaitingStage = "session-delta: empty startup completion";
+          awaitingStage = `${reason}: startup discovery`;
           await withinTest(startupWork, signal);
-          awaitingStage = "session-delta: publish transcript update";
-          await inTurn(async () => {
-            const target = await seedSession(agentId);
-            await publishSessionTranscriptUpdateByIdentity(target);
-          });
-          await vi.advanceTimersByTimeAsync(5_000);
+          if (reason === "session-delta") {
+            awaitingStage = "session-delta: publish transcript update";
+            await inTurn(async () => {
+              const target = await seedSession(agentId);
+              await publishSessionTranscriptUpdateByIdentity(target);
+            });
+          }
+          await vi.advanceTimersByTimeAsync(30_000);
         } else if (reason === "watch") {
           const subscription = watchedWorkspace?.subscriptions.at(-1);
           assert(subscription, "Memory manager must subscribe to its workspace host");
@@ -621,7 +632,10 @@ it.for([false, true])(
         instances.toReversed().map(async (instance) => await instance.dispose()),
       );
       const cleaned = await Promise.allSettled([
-        state.cleanup().finally(clearRuntimeConfigSnapshot),
+        state.cleanup().finally(() => {
+          clearRuntimeConfigSnapshot();
+          clearFixtureRuntimeConfigSnapshot();
+        }),
       ]);
       signal.removeEventListener("abort", reportInterruptedStage);
       errors.push(

@@ -50,7 +50,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-66 plugins
+67 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -123,6 +123,8 @@ Each entry lists the package, distribution route, and description.
 - **[lmstudio](/plugins/reference/lmstudio)** (`@openclaw/lmstudio-provider`) - included in OpenClaw. Adds LM Studio model provider support to OpenClaw.
 
 - **[logbook](/plugins/reference/logbook)** (`@openclaw/logbook`) - included in OpenClaw. Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.
+
+- **[mcp-relay](/plugins/reference/mcp-relay)** (`@openclaw/mcp-relay`) - included in OpenClaw. Connect remote MCP clients to your OpenClaw Gateway.
 
 - **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
@@ -250,7 +252,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - npm or ClawHub: `clawhub:@openclaw/fireworks-provider`. Adds Fireworks model provider support to OpenClaw.
 
-- **[fish-audio-speech](/plugins/reference/fish-audio-speech)** (`@openclaw/fish-audio-speech`) - npm or ClawHub: `clawhub:@openclaw/fish-audio-speech`. Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
+- **[fish-audio-speech](/plugins/reference/fish-audio-speech)** (`@openclaw/fish-audio-speech`) - npm or ClawHub: `clawhub:@openclaw/fish-audio-speech`. Fish Audio hosted text-to-speech with streaming, voice notes, and telephony output.
 
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm or ClawHub: `clawhub:@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 

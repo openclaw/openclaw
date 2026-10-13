@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -83,12 +83,7 @@ async function expectCommittedConfig(
 ) {
   await expect
     .poll(() =>
-      page.evaluate(() => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context: ApplicationContext } }
-        >("openclaw-app");
-        return app?.runtime?.context.runtimeConfig.state.configSnapshot;
-      }),
+      evaluateControlUiContext(page, (context) => context.runtimeConfig.state.configSnapshot),
     )
     .toMatchObject({ config: committed.config, hash: committed.hash });
 }

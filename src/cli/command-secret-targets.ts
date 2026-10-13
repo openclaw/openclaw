@@ -148,7 +148,7 @@ function resolveWebProviders(
 // Registry entries use wildcard path patterns; command inputs often identify one concrete config path.
 function targetIdsForConfigPath(path: string): string[] {
   const pathSegments = parseConcreteConfigPathTokens(path);
-  return listSecretTargetRegistryEntries()
+  return listSecretTargetRegistryEntries({ configPath: pathSegments })
     .filter((entry) => matchPathTokens(pathSegments, compileTargetRegistryEntry(entry).pathTokens))
     .map((entry) => entry.id)
     .toSorted();

@@ -14,7 +14,6 @@ import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-p
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
-import { prepareAgentDeletionPathFence } from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -172,7 +171,7 @@ describe("agent deletion journal initialization", () => {
         }
         expect(() => operation.next()).toThrow(
           history === "deleted-during-integrity"
-            ? "Agent deletion journal changed"
+            ? "OpenClaw agent database is unavailable while agent main is deleted."
             : "Agent deletion journal missing",
         );
       } else {
@@ -435,8 +434,6 @@ describe("agent deletion journal initialization", () => {
 
     const opened = openOpenClawAgentDatabase({ agentId: "new", path: newPath, env });
     expect(opened.path).toBe(newPath);
-    const fence = prepareAgentDeletionPathFence({ agentId: "new", path: newPath }, { env });
-    expect(fence).toMatchObject({ journal: "unknown", entries: [] });
     expect(fs.readFileSync(retained)).toEqual(bytes);
     expect(
       openOpenClawStateDatabase({ env })

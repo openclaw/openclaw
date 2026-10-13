@@ -9,6 +9,11 @@ import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-
 import { parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
+type PluginConfigTargetScope = {
+  pluginIds: readonly string[];
+  includeChannelContracts?: boolean;
+};
+
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
@@ -198,27 +203,66 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
   throwOnLoadError?: boolean;
+  pluginConfig?: PluginConfigTargetScope;
+  configuredOnly?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
     ...(params.config !== undefined ? { config: params.config } : {}),
     env: params.env,
     allowWorkspaceScopedCurrent: true,
+    ...(params.pluginConfig?.pluginIds ? { pluginIds: params.pluginConfig.pluginIds } : {}),
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  return buildSecretTargetRegistryFromPlugins(plugins, params);
+  return buildSecretTargetRegistryFromPlugins(plugins, {
+    throwOnLoadError: params.throwOnLoadError,
+    pluginConfig: params.pluginConfig,
+    ...(params.configuredOnly ? { config: params.config ?? {} } : {}),
+  });
 }
 
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
-  options?: { throwOnLoadError?: boolean },
+  options?: {
+    throwOnLoadError?: boolean;
+    /** Selected owners' manifest targets, optionally including their channel contracts. */
+    pluginConfig?: PluginConfigTargetScope;
+    /** Restrict discovery to subtrees present in this config, including disabled owners. */
+    config?: OpenClawConfig;
+  },
 ): SecretTargetRegistryEntry[] {
-  const channelPlugins = plugins.filter(
+  const pluginConfigIds = options?.pluginConfig?.pluginIds
+    ? new Set(options.pluginConfig.pluginIds)
+    : options?.config
+      ? new Set(Object.keys(options.config.plugins?.entries ?? {}))
+      : null;
+  const configPlugins = pluginConfigIds
+    ? plugins.filter((record) => pluginConfigIds.has(record.id))
+    : plugins;
+  const channelIds = options?.config ? new Set(Object.keys(options.config.channels ?? {})) : null;
+  const channelPlugins = (
+    options?.pluginConfig
+      ? options.pluginConfig.includeChannelContracts
+        ? configPlugins
+        : []
+      : plugins
+  ).filter(
     (record) =>
-      record.channels.length > 0 ||
-      Object.keys(record.channelConfigs ?? {}).length > 0 ||
-      Boolean(record.channelCatalogMeta?.id) ||
-      Boolean(record.packageChannel?.id),
+      (!channelIds ||
+        // Shipped channel contracts may also declare their own plugin config secrets.
+        pluginConfigIds?.has(record.id) ||
+        (channelIds.size > 0 &&
+          // External contracts can have multiple owners and cover more than one channel.
+          // Only bundled contracts have a complete, channel-local artifact lookup.
+          (record.origin !== "bundled" ||
+            record.channels.some((id) => channelIds.has(id)) ||
+            Object.keys(record.channelConfigs ?? {}).some((id) => channelIds.has(id)) ||
+            channelIds.has(record.channelCatalogMeta?.id ?? "") ||
+            channelIds.has(record.packageChannel?.id ?? "")))) &&
+      (record.channels.length > 0 ||
+        Object.keys(record.channelConfigs ?? {}).length > 0 ||
+        Boolean(record.channelCatalogMeta?.id) ||
+        Boolean(record.packageChannel?.id)),
   );
   // Installed/workspace plugins own secret targets exactly like bundled ones
   // (#104320: the Exa split moved web providers out of bundled origin and their
@@ -227,11 +271,14 @@ export function buildSecretTargetRegistryFromPlugins(
   // secretInput paths — so a non-bundled origin cannot widen target paths
   // beyond its own declared contracts.
   const entries = [
-    ...CORE_SECRET_TARGET_REGISTRY,
-    ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
-    ...listPluginConfigSecretTargetRegistryEntries(plugins),
+    ...(options?.pluginConfig ? [] : CORE_SECRET_TARGET_REGISTRY),
+    ...listPluginWebProviderSecretTargetRegistryEntries(configPlugins),
+    ...listPluginConfigSecretTargetRegistryEntries(configPlugins),
     ...listChannelSecretTargetRegistryEntries(channelPlugins, options?.throwOnLoadError),
-    ...listOfficialExternalChannelSecretTargetRegistryEntries(),
+    // Catalog fallbacks are constructed under channels, never plugin config.
+    ...(options?.pluginConfig || channelIds?.size === 0
+      ? []
+      : listOfficialExternalChannelSecretTargetRegistryEntries()),
   ];
   const seen = new Set<string>();
   return entries.filter((entry) => {
@@ -249,11 +296,13 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
-/** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
+/** Returns the full registry, configured subtrees, or selected plugin owners' targets. */
 export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
+  pluginConfig?: PluginConfigTargetScope;
+  configuredOnly?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
     // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
@@ -266,12 +315,14 @@ export function getSecretTargetRegistry(params?: {
       throwOnLoadError: true,
     });
   }
-  if (params?.config) {
+  if (params?.config || params?.pluginConfig) {
     // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
     // request so one config cannot poison discovery for a later config in the same process.
     return loadSecretTargetRegistryFromPluginMetadata({
       config: params.config,
       env: params.env ?? process.env,
+      pluginConfig: params.pluginConfig,
+      configuredOnly: params.configuredOnly,
     });
   }
   cachedSecretTargetRegistry ??= loadSecretTargetRegistryFromPluginMetadata({

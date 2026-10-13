@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  onTestFinished,
   afterAll,
   afterEach,
   beforeAll,
@@ -142,6 +143,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       agentId: "main",
       sessionLoadOptions: { agentId: "main" },
     });
+    onTestFinished(scope.release);
     const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
       ...scope,
       payloads: params.payloads,

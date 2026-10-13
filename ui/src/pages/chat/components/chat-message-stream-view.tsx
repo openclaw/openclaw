@@ -71,6 +71,7 @@ type StreamMessageOptions = Pick<
   | "githubRepo"
   | "githubRepositories"
   | "onOpenWorkspaceFile"
+  | "onPermissionRetry"
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
@@ -84,6 +85,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
+  retryAt?: number;
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
@@ -137,7 +139,7 @@ export function UnplacedSubagentWait(props: {
     {
       kind: "reading-indicator",
       key: `waiting-subagents:${props.sessionKey}`,
-      startedAt: props.wait.startedAt ?? 0,
+      startedAt: props.wait.startedAt,
       waitingOn: "subagents",
     },
   ]);
@@ -159,16 +161,7 @@ export function StreamPartView(props: {
 }) {
   const stream = () => (props.part.kind === "stream" ? props.part : undefined);
   return (
-    <Show
-      when={stream()}
-      fallback={
-        <NonstreamPart
-          part={props.part}
-          options={props.options}
-          presentation={props.presentation}
-        />
-      }
-    >
+    <Show when={stream()} fallback={<NonstreamPart {...props} />}>
       <StreamingMessage part={stream} options={props.options} />
     </Show>
   );
@@ -193,6 +186,7 @@ function NonstreamPart(props: {
         subagentActivity: props.options.subagentActivity,
         onOpenSubagents: props.options.onOpenSubagents,
         startupLabel: props.options.startupLabel,
+        retryAt: props.options.retryAt,
         outputTokens: props.options.runOutputTokens,
         presentation: props.presentation,
       });

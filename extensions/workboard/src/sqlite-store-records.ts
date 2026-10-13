@@ -16,8 +16,10 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
+import { normalizeLaunchState } from "./store-normalizers.js";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {
@@ -356,6 +358,14 @@ function readMetadata(
   const protocol = workerProtocolRow(db, cardId, preloaded);
   // SAFETY: insertCard serializes WorkboardMetadata.automation unchanged.
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
+  if (isRecord(automation)) {
+    const launch = normalizeLaunchState(automation.launch);
+    if (launch) {
+      automation.launch = launch;
+    } else {
+      delete automation.launch;
+    }
+  }
   // SAFETY: insertCard serializes WorkboardMetadata.claim unchanged.
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.stale unchanged.

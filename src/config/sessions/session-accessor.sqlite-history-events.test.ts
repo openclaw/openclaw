@@ -8,11 +8,11 @@ import {
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
+import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
 import {
   readTranscriptDisplayDelta,
   readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventPage,
-} from "./session-accessor.sqlite-history-events.js";
+} from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
   readSessionTranscriptHistoryEventCount,
@@ -55,6 +55,13 @@ describe("SQLite transcript history events", () => {
   const scope = useHistoryEventScope();
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
   it("reads fresh generations and rows across empty and populated sessions", async () => {
     const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };

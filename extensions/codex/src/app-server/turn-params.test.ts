@@ -245,7 +245,7 @@ describe("buildTurnStartParams source-delivery context", () => {
     );
     const values = turns.map((turn) => turn.additionalContext?.openclaw_source_delivery?.value);
     expect(values[0]).toContain("OpenClaw delivers your final response automatically");
-    expect(values[0]).toContain("sending a message doesn’t end your task");
+    expect(values[0]).toContain("is your complete reply");
     expect(values[0]).toContain("Commentary is optional progress and may be hidden");
     expect(values[0]).toContain("`message(action=send, final=false)`");
     expect(values[0]).toContain("deliver every still-pending answer");

@@ -125,15 +125,19 @@ export function memoryPublicationHeader(
     return fields;
   }
   // Retained rows travel in the bounded transfer, never the header.
-  const { retained = [], ...header } = fields;
-  return { ...header, delta: retained.length > 0 };
+  const { retained: _retained, removedIds, ...header } = fields;
+  return { ...header, delta: removedIds !== undefined };
 }
 
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    // The kernel validates every retained row before it writes the first new row.
+    if (replacement.source === "sessions") {
+      for (const removedId of replacement.removedIds ?? []) {
+        yield { removedId };
+      }
+    }
     const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
     for (const chunk of retained) {
       yield {
@@ -170,6 +174,27 @@ export function memoryPublicationInline(replacement: MemorySourceIndexReplacemen
     return undefined;
   }
   return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+}
+
+/** A group shares one bounded worker request and one native transaction. */
+export function memoryPublicationGroup(replacements: readonly MemorySourceIndexReplacement[]) {
+  const sources = [];
+  let bytes = 0;
+  for (const replacement of replacements) {
+    const source = memoryPublicationInline(replacement);
+    if (!source) {
+      return undefined;
+    }
+    bytes += JSON.stringify(source.header).length * 2;
+    for (const fragment of source.fragments) {
+      bytes += Math.max(Buffer.byteLength(fragment.json), fragment.json.length * 2) + 128;
+    }
+    if (bytes > BATCH_BYTES) {
+      return undefined;
+    }
+    sources.push(source);
+  }
+  return sources;
 }
 
 export function* memoryEmbeddingCacheBatches(

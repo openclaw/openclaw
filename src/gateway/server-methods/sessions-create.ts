@@ -44,13 +44,13 @@ import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
   resolveSessionCreateInitialTurn,
+  validateSessionCreateInitialMentions,
   isFreshChatSendStarted,
 } from "./session-create-initial-turn.js";
 import {
@@ -267,38 +267,18 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
       // Mention validation and later creation must use the same real child target.
       sessionKey ??= buildDashboardSessionKey(explicitlyRequestedAgent.agentId);
-      const normalization = normalizeChatSendRequest({
-        params: {
-          sessionKey,
-          message: message ?? "",
-          mentions: p.mentions,
-          idempotencyKey: initialRunId,
-        },
+      const mentionError = await validateSessionCreateInitialMentions({
         client,
+        context,
+        agentId: explicitlyRequestedAgent.agentId,
+        sessionKey,
+        message,
+        mentions: p.mentions,
+        visibility: p.visibility,
+        runId: initialRunId,
       });
-      const normalized = normalization instanceof Promise ? await normalization : normalization;
-      if (!normalized.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
-        return;
-      }
-      const eligible = context.mentionInbox?.validateRecipients(
-        client,
-        {
-          agentId: explicitlyRequestedAgent.agentId,
-          ...(p.visibility ? { visibility: p.visibility } : {}),
-        },
-        p.mentions.map((mention) => mention.profileId),
-      );
-      if (!eligible?.ok) {
-        respond(
-          false,
-          undefined,
-          eligible?.error ??
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "Human mentions are unavailable; reconnect and retry.",
-            ),
-        );
+      if (mentionError) {
+        respond(false, undefined, mentionError);
         return;
       }
     }
@@ -380,7 +360,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
-      sessionKey ??= buildDashboardSessionKey(sessionAgentId);
+      // Mention validation and later creation must use the same real child target.
+      sessionKey ??= buildDashboardSessionKey(sessionAgentId, { incognito: p.incognito });
     }
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
@@ -443,7 +424,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           preservesUnspecifiedKey = true;
         }
       }
-      targetKey ??= buildDashboardSessionKey(agentId);
+      targetKey ??= buildDashboardSessionKey(agentId, { incognito: p.incognito });
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
         key: targetKey,
@@ -574,6 +555,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
       },
       commitGuard,
+      bindSharingCreation: (operation) =>
+        sessionMutationAuthorization?.bindCreation?.(p, operation),
+      followSharingRegistration: sessionMutationAuthorization?.followRegistration,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
@@ -587,6 +571,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionKey: committed.key,
           storePath: committed.storePath,
           sessionId: committed.entry.sessionId,
+          entry: committed.entry,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
         if ((hasInitialTurn || requiredProfile) && requestAuthority.family === "worker") {
@@ -604,6 +589,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           prepare: context.workerPlacementDispatchService?.withRequiredSession,
           session,
           assertCurrent: assertSessionCreateCurrent,
+          retainDispatch: sessionMutationAuthorization?.retain,
           signal,
         });
         await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);

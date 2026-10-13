@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."user_profile_emails" (
+CREATE TABLE "user_profile_emails" (
   "email" text COLLATE "C" NOT NULL,
   "profile_id" text COLLATE "C" NOT NULL,
   "binding_id" text COLLATE "C",
@@ -12,7 +8,7 @@ CREATE TABLE "openclaw_state"."user_profile_emails" (
   PRIMARY KEY ("email")
 );
 
-CREATE TABLE "openclaw_state"."user_profile_identities" (
+CREATE TABLE "user_profile_identities" (
   "provider" text COLLATE "C" NOT NULL,
   "subject" text COLLATE "C" NOT NULL,
   "profile_id" text COLLATE "C" NOT NULL,
@@ -23,7 +19,7 @@ CREATE TABLE "openclaw_state"."user_profile_identities" (
   PRIMARY KEY ("provider", "subject")
 );
 
-CREATE TABLE "openclaw_state"."user_profiles" (
+CREATE TABLE "user_profiles" (
   "id" text COLLATE "C" NOT NULL,
   "display_name" text COLLATE "C",
   "primary_github_account_id" bigint,
@@ -37,10 +33,8 @@ CREATE TABLE "openclaw_state"."user_profiles" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX "idx_user_profile_emails_profile_id" ON "openclaw_state"."user_profile_emails" (("profile_id") ASC NULLS FIRST);
+CREATE INDEX "idx_user_profile_emails_profile_id" ON "user_profile_emails" (("profile_id") ASC NULLS FIRST);
 
-CREATE UNIQUE INDEX "idx_user_profile_identities_authorization" ON "openclaw_state"."user_profile_identities" (("authorization_id") ASC NULLS FIRST);
+CREATE UNIQUE INDEX "idx_user_profile_identities_authorization" ON "user_profile_identities" (("authorization_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_user_profile_identities_profile_id" ON "openclaw_state"."user_profile_identities" (("profile_id") ASC NULLS FIRST);
-
-COMMIT;
+CREATE INDEX "idx_user_profile_identities_profile_id" ON "user_profile_identities" (("profile_id") ASC NULLS FIRST);

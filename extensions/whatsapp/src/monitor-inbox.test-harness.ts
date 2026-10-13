@@ -418,6 +418,7 @@ export function installWebMonitorInboxUnitTestHooks() {
       state: {
         resolveStateDir: pluginRuntimeMocks.stateDir,
         openKeyedStore: pluginRuntimeMocks.openKeyedStore,
+        openKeyedStoreV2: pluginRuntimeMocks.openKeyedStore,
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
         ) => createChannelIngressQueueForTests({ ...options, channelId: "whatsapp" }),

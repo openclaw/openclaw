@@ -15,6 +15,7 @@ import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wa
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+import { reconcileNoCowRecoveryIdentities } from "./doctor-sqlite-nocow-recovery-identity.js";
 
 const TOOL_TIMEOUT_MS = 2_000;
 const FUSER_MAX_PATHS = 2_000;
@@ -223,6 +224,7 @@ function readStoreEntries(directory: string): fs.Dirent[] {
 export async function repairDoctorSqliteNoCow(params: {
   paths: readonly string[];
   stateDir: string;
+  env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
 }): Promise<MigrationMessages> {
   const help = spawnSync("mv", ["--help"], { encoding: "utf8", timeout: TOOL_TIMEOUT_MS });
@@ -432,6 +434,21 @@ export async function repairDoctorSqliteNoCow(params: {
         await syncDirectory(path.dirname(directory)),
         "SQLite NOCOW store parent",
       );
+      // Keep recovery-manifest identities truthful for the originals this rewrite relocated.
+      // Bookkeeping only: a failure leaves cleanup conservative and never unsettles the store.
+      try {
+        result.warnings.push(
+          ...reconcileNoCowRecoveryIdentities({
+            env: params.env,
+            previousIdentities: inventory,
+            assertCurrent: params.assertCurrent,
+          }),
+        );
+      } catch (error) {
+        result.warnings.push(
+          `NOCOW recovery-identity reconciliation failed for ${directory}: ${String(error)}`,
+        );
+      }
       result.changes.push(
         `Rewrote SQLite store directory with NOCOW: ${directory}. Original retained at ${backup}; verified WAL-aware snapshots at ${snapshotRoot}.`,
       );

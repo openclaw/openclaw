@@ -28,7 +28,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import "./app-host.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
@@ -52,7 +52,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
   const request = current().request.mockImplementation(async (method) =>
     method === "models.authStatus" ? { ts: Date.now(), providers: [] } : { models: [] },
   );
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
       config: createShellConfigFixture(),
@@ -193,7 +193,7 @@ it.each([
     const invalidateSessions = vi.spyOn(state.sessions, "invalidate").mockImplementation(() => {});
     const messages = state.chatMessages;
     const queue = state.chatQueue;
-    const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+    const shell = createShellOwner() as unknown as ChatMetadataShell;
     shell.runtime = {
       context: {
         config: createShellConfigFixture(),
@@ -271,7 +271,7 @@ it("retires chat metadata through config.changed and the Gateway close callback"
       refresh: vi.fn(async () => null),
     },
   } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = { context };
 
   beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
@@ -325,7 +325,7 @@ it.each([
       refresh: vi.fn(async () => null),
     },
   } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = { context };
   const read = () =>
     kind === "auth"
@@ -407,7 +407,7 @@ it("retires an unmounted session catalog on session changes without evicting dra
   const otherAgent = { agentId: "writer", sessionKey: "main" };
   const otherSession = { agentId: "main", sessionKey: "agent:main:other" };
   const draft = { agentId: "main" };
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
       config: createShellConfigFixture(),
@@ -474,7 +474,7 @@ describe("session command metadata events", () => {
       );
       const selected = states[0];
       assert.ok(selected);
-      const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+      const shell = createShellOwner() as unknown as ChatMetadataShell;
       shell.runtime = {
         context: {
           config: createShellConfigFixture(),

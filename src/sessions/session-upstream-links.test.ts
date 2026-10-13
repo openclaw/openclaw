@@ -4,6 +4,7 @@ import { constants, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { createNativeSessionInitializationOwner } from "../agents/harness/native-session/initialization.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
@@ -15,6 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createSessionInitialization } from "./session-initialization.js";
 import { registerSessionStateWatch } from "./session-state-events.js";
 import {
   captureSessionUpstreamLinkReadSource,
@@ -222,6 +224,93 @@ describe("session upstream links", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "initializes and rolls back only its own link without caller-thread SQL (replaced: %s)",
+    async (replaced) => {
+      const database = createDatabaseOptions();
+      const input = {
+        sessionKey: "agent:main:adopted:initialization",
+        agentId: "main",
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "created",
+        upstreamKind: "codex-app-server" as const,
+        upstreamRef: { threadId: "created" },
+        marker: null,
+      };
+      const identity = { sessionId: "created" };
+      const bindingStore = {};
+      const cleanup = vi.fn(async () => {});
+      const owner = createNativeSessionInitializationOwner({
+        validateBinding: (binding: string) => binding,
+        writeBinding: async () => true,
+        errors: {
+          linkChanged: "link changed",
+          bindingChanged: "binding changed",
+          linkWriteFailed: "link write failed",
+          ownerChanged: "owner changed",
+        },
+      });
+      const host = createSessionInitialization(
+        { storePath: "unused", sessionKey: input.sessionKey, sessionId: identity.sessionId },
+        () => {},
+        { config: {}, agentId: input.agentId, entry: { ...identity, updatedAt: 1 } },
+      );
+      const sql = observeMainThreadSql();
+      try {
+        const initialization = owner.prepare({
+          initialization: host.handle,
+          bindingStore,
+          identity,
+          prepareCleanup: () => cleanup,
+        });
+        await initialization.linkAsync(input);
+        const readSource = captureSessionUpstreamLinkReadSource(
+          captureOpenClawStateWorkerContext(database),
+        );
+        expect(
+          await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId),
+        ).toMatchObject(input);
+        if (replaced) {
+          await upsertSessionUpstreamLinkAsync({ ...input, threadId: "replacement" }, database);
+        }
+        await host.rollback(async () => {
+          const rollback = owner.getRollback(
+            bindingStore,
+            { initialization: host.handle },
+            identity,
+            undefined,
+          );
+          expect(rollback).toBeTypeOf("function");
+          if (!rollback) {
+            throw new Error("Missing initialization rollback");
+          }
+          if (replaced) {
+            await expect(rollback()).rejects.toThrow("link changed");
+          } else {
+            await rollback();
+          }
+        });
+        const current = await prepareSessionUpstreamLink(
+          readSource,
+          input.sessionKey,
+          input.agentId,
+        );
+        if (replaced) {
+          expect(current).toMatchObject({ threadId: "replacement" });
+          expect(cleanup).not.toHaveBeenCalled();
+        } else {
+          expect(current).toBeUndefined();
+          expect(cleanup).toHaveBeenCalledOnce();
+        }
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+        host.close();
+      }
+    },
+  );
 
   it("observes source changes and rejects stale initialization", async () => {
     const database = createDatabaseOptions();

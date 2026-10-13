@@ -23,7 +23,6 @@ import type {
 } from "./session-actor-contract.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
-import type { SessionEntryPatchReduction } from "./session-entry-patch.types.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
@@ -133,7 +132,7 @@ function createFixture() {
       }
       return value;
     },
-    patchEntry(input: SessionEntryPatchReduction) {
+    patchEntry(input: Parameters<typeof commitSessionEntryPatch>[0]) {
       return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
         commitSessionEntryPatch(input, context),
       );

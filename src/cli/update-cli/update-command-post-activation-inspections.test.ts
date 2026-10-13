@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 
@@ -47,6 +51,48 @@ process.exitCode = 1;
     exitCode: 1,
     advisory: { message: expect.stringContaining("did not run every deferred inspection") },
   });
+});
+
+it("keeps the version change but flags inspections a missing post-swap module left unrun", async () => {
+  const root = tempDirs.make("doctor-missing-module-");
+  await fs.mkdir(path.join(root, "dist"));
+  // The replaced package no longer has a chunk this run expected.
+  await fs.writeFile(
+    path.join(root, "dist/index.js"),
+    `process.stderr.write("Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'dist/doctor-health-contributions-old.mjs'\\n");
+process.exitCode = 13;
+`,
+  );
+  const observed = await runPostActivationInspections({
+    root,
+    gatewayReady: true,
+    nodeRunner: process.execPath,
+    result: {
+      status: "ok",
+      mode: "npm",
+      durationMs: 0,
+      after: { version: "2026.10.6" },
+      before: { version: "2026.10.5" },
+      steps: [
+        {
+          name: "openclaw doctor",
+          command: "doctor --fix",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 0,
+          deferredInspectionCheckIds: ["core/doctor/command-owner"],
+        },
+      ],
+    },
+  });
+  expect(observed.status).toBe("ok");
+  const report = renderUpdateRunReport(updateRunReportInputFromResult(observed));
+  expect(report.headline).toBe(
+    "✅ OpenClaw updated to 2026.10.6 (from 2026.10.5); 1 warning needs attention.",
+  );
+  expect(report.lines[0]).toMatch(
+    /^Warning: Deferred Doctor inspections did not complete after restart \(.*ERR_MODULE_NOT_FOUND.*\)\. Run `openclaw doctor --lint --severity-min info`/s,
+  );
 });
 
 it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selectors })))(

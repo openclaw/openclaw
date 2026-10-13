@@ -10,7 +10,7 @@ import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
@@ -20,13 +20,14 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import {
   createSessionRolloverSpawnLineage,
   SESSION_ROLLOVER_LINEAGE_CASES,
 } from "../../config/sessions/session-lineage.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../../gateway/session-utils-store.js";
 import {
   testing as sessionBindingTesting,
@@ -48,11 +49,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -124,6 +121,13 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
 }));
+
+// Keep the fixture caller visible when a nested database admission fails.
+const previousStackTraceLimit = Error.stackTraceLimit;
+Error.stackTraceLimit = 64;
+afterAll(() => {
+  Error.stackTraceLimit = previousStackTraceLimit;
+});
 
 const suiteRoot = useSessionStoreTempDirs(afterAll, "openclaw-session-suite-").make();
 let suiteCase = 0;
@@ -393,8 +397,7 @@ describe("initSessionState guarded initialization", () => {
           storePath,
         });
       } finally {
-        await closeOpenClawAgentDatabasesAsync(stateDir);
-        closeOpenClawAgentDatabasesForTest(stateDir);
+        memorySessionActorOwners.closeDatabase({ agentId, path: storePath });
       }
     });
   });
@@ -693,7 +696,7 @@ describe("initSessionState thread forking", () => {
         loadSessionEntry({ storePath, sessionKey: threadSessionKey })?.nativeRuntimeConsent,
       ).toBeUndefined();
       expect(
-        resolveSandboxRuntimeStatus({
+        resolvePreparedSandboxRuntimeStatus({
           cfg,
           sessionKey: threadSessionKey,
           preparedSessionEntry: result.sessionEntry,
@@ -1333,7 +1336,7 @@ describe("initSessionState RawBody", () => {
       expect(stored.permissionMode).toBe("full");
       expect(stored.nativeRuntimeConsent).toBeUndefined();
       expect(
-        resolveSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
+        resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
       ).toMatchObject({ sandboxed: required, sandboxRequired: required });
     },
   );
@@ -1386,7 +1389,7 @@ describe("initSessionState RawBody", () => {
     // entry against its live worktree.
     const placement = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: {
-        resolveGatewaySessionStoreTargetWithStore,
+        resolveGatewaySessionStoreTargetInWorker,
         resolveCanonicalSessionEntryFromStoreKeys,
         managedWorktrees: {
           findLiveByOwner: async (_kind, ownerId) => ({

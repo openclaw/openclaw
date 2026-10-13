@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { definedFields } from "../../../record-fields.js";
-import { normalizeAutomation } from "./metadata-contract-normalization.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -40,6 +39,51 @@ function tolerantArray<T>(schema: z.ZodType<T>) {
 function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
   return z.object(shape).transform(definedFields);
 }
+
+const automationNumberSchema = z
+  .custom<number>((value) => typeof value === "number")
+  .optional()
+  .catch(undefined);
+const automationStringsSchema = tolerantArray(z.string().refine((value) => value.trim() !== ""));
+const automationSchema = sparseObject({
+  tenant: optionalStringSchema,
+  boardId: optionalStringSchema,
+  createdByCardId: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
+  skills: automationStringsSchema,
+  createdCardIds: automationStringsSchema,
+  workspace: sparseObject({
+    kind: z.enum(["scratch", "dir", "worktree"]),
+    path: optionalStringSchema,
+    branch: optionalStringSchema,
+    sourcePath: optionalStringSchema,
+    sourceBranch: optionalStringSchema,
+  })
+    .optional()
+    .catch(undefined),
+  workspaceAccess: z
+    .union([
+      z.object({ unrestricted: z.literal(true) }),
+      z.object({
+        unrestricted: z.literal(false),
+        roots: z
+          .array(z.unknown())
+          .transform((roots) => roots.filter((root): root is string => typeof root === "string")),
+        writable: z.boolean(),
+      }),
+    ])
+    .optional()
+    .catch(undefined),
+  maxRuntimeSeconds: automationNumberSchema,
+  maxRetries: automationNumberSchema,
+  scheduledAt: automationNumberSchema,
+  summary: optionalStringSchema,
+  dispatchCount: automationNumberSchema,
+  lastDispatchAt: automationNumberSchema,
+})
+  .transform((value) => (Object.keys(value).length ? value : undefined))
+  .optional()
+  .catch(undefined);
 
 const diagnosticActionSchema = z.object({
   kind: z.enum(["claim", "unblock", "promote", "reclaim", "reassign", "add_proof", "open_session"]),
@@ -217,7 +261,7 @@ const workboardMetadataSchema = z
     attachments: tolerantArray(attachmentSchema),
     workerLogs: tolerantArray(workerLogSchema),
     workerProtocol: workerProtocolSchema,
-    automation: z.unknown().transform(normalizeAutomation).optional(),
+    automation: automationSchema,
     claim: claimSchema,
     diagnostics: tolerantArray(diagnosticSchema),
     notifications: tolerantArray(notificationSchema),

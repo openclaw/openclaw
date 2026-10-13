@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { buildSessionsYieldContextMessage } from "../agents/sessions-yield-context.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
@@ -24,7 +25,6 @@ import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -36,6 +36,7 @@ import { prepareSessionTranscriptHydration } from "../config/sessions/session-tr
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
 import { normalizeRawDeltaLimits } from "../config/sessions/session-transcript-raw-cursor.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { recordAssistantManagedMediaUrls } from "../config/sessions/transcript-assistant-delivery.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -416,21 +417,19 @@ export async function appendAssistantMirrorMessageByIdentity(
   let message = createAssistantMirrorMessage({
     ...(params.deliveryMirror !== undefined ? { deliveryMirror: params.deliveryMirror } : {}),
     ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
+    mediaUrls: params.mediaUrls,
     text,
   });
   const sourceRunId = params.sourceRunId;
   const scope = bindSessionTranscriptStoreScope(params, params.config);
-  const memory = getSessionActorStorageBinding(scope);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(scope);
   return await withTranscriptWriteSequence(scope, async (locked) => {
+    const memory = getSessionActorStorageBinding(scope);
     params.signal?.throwIfAborted();
     const currentEntry = memory
       ? memory.actor.snapshot(memory.authority)?.entry
       : await readSessionEntryReadOnlyInWorker(
           scope,
           () => {
-            binding?.actor.assertCurrent();
-            binding?.admissionSignal?.throwIfAborted();
             params.signal?.throwIfAborted();
           },
           undefined,
@@ -458,6 +457,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     if (params.deliveryMirror?.kind === "channel-final" && params.idempotencyKey) {
       const key = params.idempotencyKey.trim();
       const facts = await locked.readMessageFacts({ idempotencyKeys: [key], sourceRunId });
+      const authored = createAssistantMirrorMessage({ text: params.text ?? "" });
       let sourceAssistantMessageId: string | undefined;
       if (facts.existingIdempotencyKeys.has(key)) {
         // Keep the writer's original correlation while normal append still checks the payload.
@@ -469,12 +469,12 @@ export async function appendAssistantMirrorMessageByIdentity(
       } else if (sourceRunId) {
         sourceAssistantMessageId = findEquivalentAssistantMessageInRun(
           facts.sourceEvents ?? [],
-          message,
+          authored,
           sourceRunId,
         );
       } else {
         let events: readonly SessionTranscriptEvent[];
-        if (binding) {
+        if (memory) {
           events = selectVisibleTranscriptEvents(await locked.readEvents());
         } else {
           try {
@@ -496,7 +496,7 @@ export async function appendAssistantMirrorMessageByIdentity(
             events = selectVisibleTranscriptEvents(await locked.readEvents());
           }
         }
-        sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(events, message, true);
+        sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(events, authored, true);
       }
       const correlatedMessage = {
         ...message,
@@ -684,22 +684,17 @@ export async function withSessionTranscriptWrite<T>(
 function createAssistantMirrorMessage(params: {
   deliveryMirror?: SessionTranscriptDeliveryMirror;
   idempotencyKey?: string;
+  mediaUrls?: string[];
   text: string;
 }): SessionTranscriptAssistantMessage {
-  return {
+  const message: SessionTranscriptAssistantMessage = {
     role: "assistant",
+    openclawDelivery: { mediaUrls: [] },
     content: [{ type: "text", text: params.text }],
     api: "openai-responses",
     provider: "openclaw",
     model: "delivery-mirror",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
@@ -717,6 +712,7 @@ function createAssistantMirrorMessage(params: {
         }
       : {}),
   };
+  return recordAssistantManagedMediaUrls(message, params.mediaUrls);
 }
 
 function projectVisibleMessageEntry(entry: {

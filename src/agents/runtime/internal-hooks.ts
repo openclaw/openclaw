@@ -8,7 +8,6 @@ export {
   attachInternalToolResultProvenance,
   copyInternalToolExecutionPreparer,
   copyInternalToolResultState,
-  getInternalToolResultContentSource,
   getInternalToolResultProvenance,
   getInternalToolExecutionPreparer,
   getInternalToolTurnCompletion,

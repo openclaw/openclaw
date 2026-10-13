@@ -168,7 +168,6 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (actor) {
       return (actor.snapshot(readAuthority) ?? (await actor.read(readAuthority))).entry;
     }
-    // Native incognito retains the existing reader and its captured source.
     return readSessionEntryInWorker(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       assertReadCurrent,

@@ -15,7 +15,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import {
   buildConversationToolPolicyPipelineSteps,
   resolveConversationToolPolicies,
@@ -35,10 +35,7 @@ import {
 } from "../../agents/tools-effective-mcp-inventory.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { logDebug, logWarn } from "../../logger.js";
@@ -60,7 +57,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TrustedToolsEffectiveContext = NonNullable<
-  ReturnType<typeof resolveTrustedToolsEffectiveContext>
+  Awaited<ReturnType<typeof resolveTrustedToolsEffectiveContext>>
 >;
 
 const TOOLS_EFFECTIVE_FRESH_TTL_MS = 10_000;
@@ -432,7 +429,7 @@ async function projectMcpCatalog(params: {
   }
 }
 
-function resolveTrustedToolsEffectiveContext(
+async function resolveTrustedToolsEffectiveContext(
   params: {
     sessionKey: string;
     requestedAgentId?: string;
@@ -514,7 +511,7 @@ function resolveTrustedToolsEffectiveContext(
   };
   return {
     ...context,
-    capabilityProfile: resolveConversationCapabilityProfile({
+    capabilityProfile: await prepareConversationCapabilityProfile({
       config: context.cfg,
       sessionKey: context.sessionKey,
       preparedSessionEntry: { sessionKey: canonicalKey, entry: loaded.entry },
@@ -561,7 +558,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         >,
         assertSourceCurrent: () => void,
       ) => {
-        const trustedContext = resolveTrustedToolsEffectiveContext(
+        const trustedContext = await resolveTrustedToolsEffectiveContext(
           {
             sessionKey: params.sessionKey,
             requestedAgentId: sessionOwner.agentId,
@@ -578,18 +575,24 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         respond(true, inventory, undefined);
       };
       try {
-        const binding = captureIncognitoSessionSource({
-          agentId: sessionOwner.agentId,
-          sessionKey: params.sessionKey,
-        });
-        if (binding) {
-          await withIncognitoSessionEntry(
-            binding,
-            params.sessionKey,
-            authority.assertCurrent,
-            (entry, assertCurrent) =>
-              consume({ cfg, canonicalKey: params.sessionKey, entry }, assertCurrent),
-          );
+        const memory = captureSessionEntryMetadataRead(
+          {
+            agentId: sessionOwner.agentId,
+            sessionKey: params.sessionKey,
+          },
+          authority.assertCurrent,
+        );
+        if (memory) {
+          const entry = memory.readCurrent();
+          await consume({ cfg, canonicalKey: params.sessionKey, entry }, () => {
+            const current = memory.readCurrent();
+            if (
+              current?.sessionId !== entry?.sessionId ||
+              current?.lifecycleRevision !== entry?.lifecycleRevision
+            ) {
+              throw new Error("Session changed while resolving effective tools");
+            }
+          });
         } else {
           await withGatewaySessionEntryReadOnly(
             {

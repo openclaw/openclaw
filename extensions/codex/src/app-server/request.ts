@@ -76,38 +76,42 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   try {
     const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
     const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
-    if (sandboxGuard.block) {
-      throw new Error(sandboxGuard.block);
+    try {
+      if (sandboxGuard.block) {
+        throw new Error(sandboxGuard.block);
+      }
+      const timeoutMs = params.timeoutMs ?? 60_000;
+      const method = params.method;
+      const requestParams = params.requestParams;
+      const attemptWaiterFinished =
+        method === "thread/list" ? params.controlObservation?.attemptWaiterFinished : undefined;
+      const options = {
+        timeoutMs,
+        signal: params.signal,
+        withCurrent: async (write: () => void) => {
+          await params.assertCurrentAsync?.();
+          await sandboxGuard.assertCurrent();
+          if (params.withCurrent) {
+            await params.withCurrent(write);
+          } else {
+            write();
+          }
+        },
+        assertCurrent: () => {
+          params.assertCurrent?.();
+        },
+        ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
+      };
+      phase = "client-request";
+      observeControl(params.controlObservation, phase);
+      return await withTimeout(
+        params.client.request<T>(method, requestParams, options),
+        timeoutMs,
+        `codex app-server ${params.method} timed out`,
+      );
+    } finally {
+      sandboxGuard.release();
     }
-    const timeoutMs = params.timeoutMs ?? 60_000;
-    const method = params.method;
-    const requestParams = params.requestParams;
-    const attemptWaiterFinished =
-      method === "thread/list" ? params.controlObservation?.attemptWaiterFinished : undefined;
-    const options = {
-      timeoutMs,
-      signal: params.signal,
-      withCurrent: async (write: () => void) => {
-        await params.assertCurrentAsync?.();
-        await sandboxGuard.assertCurrent();
-        if (params.withCurrent) {
-          await params.withCurrent(write);
-        } else {
-          write();
-        }
-      },
-      assertCurrent: () => {
-        params.assertCurrent?.();
-      },
-      ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-    };
-    phase = "client-request";
-    observeControl(params.controlObservation, phase);
-    return await withTimeout(
-      params.client.request<T>(method, requestParams, options),
-      timeoutMs,
-      `codex app-server ${params.method} timed out`,
-    );
   } catch (error) {
     observeControl(params.controlObservation, phase, { error });
     throw error;
@@ -157,17 +161,21 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   observeControl(params.controlObservation, "prepare");
   const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
   const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
-  if (sandboxGuard.block) {
-    throw new Error(sandboxGuard.block);
+  try {
+    if (sandboxGuard.block) {
+      throw new Error(sandboxGuard.block);
+    }
+    return await withCodexAppServerJsonClient(
+      {
+        ...params,
+        timeoutMessage: `codex app-server ${params.method} timed out`,
+      },
+      async (request) =>
+        await request<T>({ method: params.method, requestParams: params.requestParams }),
+    );
+  } finally {
+    sandboxGuard.release();
   }
-  return await withCodexAppServerJsonClient(
-    {
-      ...params,
-      timeoutMessage: `codex app-server ${params.method} timed out`,
-    },
-    async (request) =>
-      await request<T>({ method: params.method, requestParams: params.requestParams }),
-  );
 }
 
 export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
@@ -383,46 +391,50 @@ export async function withCodexAppServerJsonClient<T>(
               agentId: params.agentId,
               storePath: params.storePath,
             });
-            if (sandboxGuard.block) {
-              throw new CodexAppServerScopedRequestRejectedError(sandboxGuard.block);
-            }
-            assertCurrent();
-            const method = request.method;
-            const requestParams = request.requestParams;
-            const attemptWaiterFinished =
-              method === "thread/list"
-                ? params.controlObservation?.attemptWaiterFinished
-                : undefined;
-            const requestOptions = {
-              timeoutMs: remainingTimeoutMs(),
-              signal: timeoutController.signal,
-              ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-              ...(params.catalogPreview
-                ? {
-                    catalogPreview: true as const,
-                    catalogPreviewCache: params.catalogPreviewCache,
-                    catalogRows: params.catalogRows,
-                  }
-                : {}),
-              assertCurrent: () => {
-                assertCurrent();
-                request.assertCurrent?.();
-              },
-              withCurrent: async (write: () => void) => {
-                await params.assertCurrentAsync?.();
-                await request.assertCurrentAsync?.();
-                await sandboxGuard.assertCurrent();
-                assertCurrent();
-                request.assertCurrent?.();
-                write();
-              },
-            };
-            setPhase("client-request");
-            const settled = timeoutDiagnostics?.request(method);
             try {
-              return await client.request<R>(method, requestParams, requestOptions);
+              if (sandboxGuard.block) {
+                throw new CodexAppServerScopedRequestRejectedError(sandboxGuard.block);
+              }
+              assertCurrent();
+              const method = request.method;
+              const requestParams = request.requestParams;
+              const attemptWaiterFinished =
+                method === "thread/list"
+                  ? params.controlObservation?.attemptWaiterFinished
+                  : undefined;
+              const requestOptions = {
+                timeoutMs: remainingTimeoutMs(),
+                signal: timeoutController.signal,
+                ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
+                ...(params.catalogPreview
+                  ? {
+                      catalogPreview: true as const,
+                      catalogPreviewCache: params.catalogPreviewCache,
+                      catalogRows: params.catalogRows,
+                    }
+                  : {}),
+                assertCurrent: () => {
+                  assertCurrent();
+                  request.assertCurrent?.();
+                },
+                withCurrent: async (write: () => void) => {
+                  await params.assertCurrentAsync?.();
+                  await request.assertCurrentAsync?.();
+                  await sandboxGuard.assertCurrent();
+                  assertCurrent();
+                  request.assertCurrent?.();
+                  write();
+                },
+              };
+              setPhase("client-request");
+              const settled = timeoutDiagnostics?.request(method);
+              try {
+                return await client.request<R>(method, requestParams, requestOptions);
+              } finally {
+                settled?.();
+              }
             } finally {
-              settled?.();
+              sandboxGuard.release();
             }
           };
           return await run(scopedRequest, client, {

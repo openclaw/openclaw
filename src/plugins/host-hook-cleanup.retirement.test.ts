@@ -20,6 +20,7 @@ import {
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
+import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin retirement session-store ownership", () => {
@@ -43,7 +44,7 @@ describe("plugin retirement session-store ownership", () => {
     });
   });
 
-  it.each(["replace", "direct", "clear-command", "explicit"] as const)(
+  it.each(["replace", "direct", "clear-command", "explicit", "registry-context"] as const)(
     "keeps the retiring configuration across admitted work (%s)",
     async (mode) => {
       await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
@@ -72,6 +73,18 @@ describe("plugin retirement session-store ownership", () => {
         const registry = createEmptyPluginRegistry();
         const record = createPluginRecord({ id: "fixture" });
         registry.plugins.push(record);
+        if (mode === "registry-context") {
+          setPluginRuntimeLoadContext(registry, {
+            rawConfig: cfg,
+            config: cfg,
+            activationSourceConfig: cfg,
+            autoEnabledReasons: {},
+            workspaceDir: undefined,
+            env: process.env,
+            logger: { info() {}, warn() {}, error() {} },
+          });
+          clearRuntimeConfigSnapshot();
+        }
         const instance = new PluginInstance(record.id, { record, registry });
         setActivePluginRegistry(registry);
         const release = createDeferredCore();

@@ -8,6 +8,11 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
@@ -50,28 +55,35 @@ type MoveSourceCompletion = {
 const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);
 
 // Placement reads feed the resident session projection; do not repeat DDL/PRAGMA per row.
-const ensuredMoveSchemaHandles = new WeakSet<DatabaseSync>();
-
-function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
-  if (ensuredMoveSchemaHandles.has(db)) {
-    return;
-  }
-  // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
-  db.exec(
+const ensuredMoveSchemaHandles = new WeakMap<DatabaseSync, SqliteSchemaFacts>();
+const installWorkerPlacementMoveSchema = createSqliteSchemaEnsurer(
+  () =>
     getOpenClawStateFeatureSchemaSql("worker_session_placement_moves", {
       errorMessage: "Worker placement move schema marker is missing",
     }),
-  );
+  { tables: ["worker_session_placement_moves"] },
+);
+
+function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
+  const facts = getAdmittedSqliteSchemaFacts(db);
+  if (facts && ensuredMoveSchemaHandles.get(db) === facts) {
+    return;
+  }
+  installWorkerPlacementMoveSchema(db);
   // Databases that created this table before the column shipped upgrade in place;
   // the column is bare and nullable, so old readers stay compatible.
   ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
   ensureColumn(db, "worker_session_placement_moves", "target_os TEXT");
   ensureColumn(db, "worker_session_placement_moves", "abandon_source INTEGER");
-  ensuredMoveSchemaHandles.add(db);
+  const initialized = getAdmittedSqliteSchemaFacts(db);
+  if (initialized) {
+    ensuredMoveSchemaHandles.set(db, initialized);
+  }
 }
 
 function ensureExistingWorkerPlacementMoveSchema(db: DatabaseSync): boolean {
-  if (ensuredMoveSchemaHandles.has(db)) {
+  const facts = getAdmittedSqliteSchemaFacts(db);
+  if (facts && ensuredMoveSchemaHandles.get(db) === facts) {
     return true;
   }
   // Reads stay lazy: never create the optional table from a read path.

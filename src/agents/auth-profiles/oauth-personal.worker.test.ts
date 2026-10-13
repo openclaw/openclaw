@@ -3,21 +3,34 @@ import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerRequest,
 } from "../../infra/sqlite-worker-contract.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
-import { prepareUserModelAccountAuthority } from "../../state/user-model-account-operations.js";
+import { withPersonalCredentialPublication } from "../../state/user-model-account-authority.js";
+import {
+  clearUserProfileAuthLinkAsync,
+  connectUserModelAccountAsync,
+  prepareUserModelAccountAuthority,
+} from "../../state/user-model-account-operations.js";
 import {
   connectUserModelAccount,
   updateUserModelAuthProfile,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
+import { mergeCanonicalUserProfiles } from "../../state/user-profile-writes.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   withCanonicalAuthProfileCredentialObserver,
@@ -65,6 +78,192 @@ function fixture() {
     },
   };
 }
+
+async function prepareCredentialReader(profileId: string) {
+  return expectDefined(
+    await withPersonalAuthProfileStore(profileId, async (owner) => {
+      await owner.read();
+      return owner.readCurrentCredential;
+    }),
+    "prepared personal credential reader",
+  );
+}
+
+async function expectPreparedFetchRevoked(
+  readCurrent: () => unknown,
+  mutateDuringDns: () => Promise<unknown>,
+) {
+  const fetchImpl = vi.fn(async () => new Response("ok"));
+  const beforeRequest = vi.fn(() => {
+    readCurrent();
+  });
+  await expect(
+    fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      capture: false,
+      fetchImpl,
+      lookupFn: async () => {
+        await mutateDuringDns();
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+      beforeRequest,
+    }),
+  ).rejects.toThrow("Personal model account authority is unavailable");
+  expect(beforeRequest).toHaveBeenCalledOnce();
+  expect(fetchImpl).not.toHaveBeenCalled();
+}
+
+it("retains a personal credential pin across unlink without SQL or worker requests at use", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { owner, profileId, credential } = fixture();
+    const readCurrent = await prepareCredentialReader(profileId);
+    await clearUserProfileAuthLinkAsync({
+      profileId: owner.id,
+      provider: credential.provider,
+      assertCurrent() {},
+    });
+    const sql = observeMainThreadSql();
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      expect(readCurrent()).toEqual(credential);
+      sql.expectIdle();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      sql.restore();
+      requests.mockRestore();
+    }
+  });
+});
+
+it("retires an already prepared credential when reconnect keeps the same ID and token bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { owner, profileId, credential } = fixture();
+    const readCurrent = await prepareCredentialReader(profileId);
+    await expectPreparedFetchRevoked(readCurrent, async () => {
+      const connected = await connectUserModelAccountAsync({
+        ownerProfileId: owner.id,
+        credential,
+        matchesCredential: () => true,
+        assertCurrent() {},
+      });
+      expect(connected.authProfileId).toBe(profileId);
+    });
+    expect(readCurrent).toThrow("Personal model account authority is unavailable");
+    const readReconnected = await prepareCredentialReader(profileId);
+    expect(readReconnected()).toEqual(credential);
+    expect(readCurrent).toThrow("Personal model account authority is unavailable");
+  });
+});
+
+it.each(["commit", "rollback"] as const)(
+  "denies personal credential use during refresh and publishes only the %s outcome",
+  async (outcome) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { profileId, credential, replacement } = fixture();
+      const readCurrent = await prepareCredentialReader(profileId);
+      let admissions = 0;
+      const refused = new Error("Synthetic final credential write refusal");
+      const update = withPersonalAuthProfileStore(profileId, (owner) =>
+        owner.update(
+          (store) => {
+            store.profiles[profileId] = replacement;
+            return true;
+          },
+          () => {
+            admissions++;
+            expect(readCurrent).toThrow("Personal model account authority is unavailable");
+            if (outcome === "rollback" && admissions === 2) {
+              throw refused;
+            }
+          },
+        ),
+      );
+      if (outcome === "rollback") {
+        await expect(update).rejects.toThrow(refused.message);
+      } else {
+        await expect(update).resolves.toMatchObject({ profiles: { [profileId]: replacement } });
+      }
+      expect(admissions).toBe(2);
+      expect(readCurrent()).toEqual(outcome === "commit" ? replacement : credential);
+    });
+  },
+);
+
+it("keeps credentials unavailable until every overlapping admission has settled", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { profileId, credential } = fixture();
+    const readCurrent = await prepareCredentialReader(profileId);
+    const context = captureOpenClawStateWorkerContext();
+    const createAdmission = withPersonalCredentialPublication(
+      createSqliteWorkerWriteAdmission(() => {}, [context.admission.databasePath]),
+      context,
+    );
+    const first = createDeferredCore<SqliteWorkerOperationSettlement>();
+    const second = createDeferredCore<SqliteWorkerOperationSettlement>();
+    const admissions = [
+      createAdmission({ settled: first.promise }).admission,
+      createAdmission({ settled: second.promise }).admission,
+    ];
+    try {
+      expect(readCurrent).toThrow("Personal model account authority is unavailable");
+      first.resolve({ kind: "not-entered", error: new Error("Synthetic admission refusal") });
+      await first.promise;
+      expect(readCurrent).toThrow("Personal model account authority is unavailable");
+      second.resolve({ kind: "completed" });
+      await second.promise;
+      expect(readCurrent()).toEqual(credential);
+    } finally {
+      first.resolve({ kind: "completed" });
+      second.resolve({ kind: "completed" });
+      for (const admission of admissions) {
+        admission.finish();
+      }
+    }
+  });
+});
+
+it("retires source and flattened-alias credentials when merge transfers identical bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { owner, profileId, credential } = fixture();
+    const target = ensureProfileForEmail("personal-merge-target@example.test");
+    const successor = ensureProfileForEmail("personal-merge-successor@example.test");
+    const readSource = await prepareCredentialReader(profileId);
+    await expectPreparedFetchRevoked(readSource, () =>
+      mergeCanonicalUserProfiles(owner.id, target.id),
+    );
+    expect(readSource).toThrow("Personal model account authority is unavailable");
+    const readTransferred = await prepareCredentialReader(profileId);
+    expect(readTransferred()).toEqual(credential);
+    await mergeCanonicalUserProfiles(target.id, successor.id);
+    expect(readTransferred).toThrow("Personal model account authority is unavailable");
+    expect((await prepareCredentialReader(profileId))()).toEqual(credential);
+    expect(readSource).toThrow("Personal model account authority is unavailable");
+  });
+});
+
+it("does not install a cold credential read after reconnect has retired its authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { owner, profileId, credential } = fixture();
+    let reconnect = true;
+    probe.command(workerStore, async (command, executeOptions, scope) => {
+      const result = await scope.execute(command, executeOptions);
+      if (command.type === "authProfiles.personal" && reconnect) {
+        reconnect = false;
+        await connectUserModelAccountAsync({
+          ownerProfileId: owner.id,
+          credential,
+          matchesCredential: () => true,
+          assertCurrent() {},
+        });
+      }
+      return result;
+    });
+    await expect(prepareCredentialReader(profileId)).rejects.toThrow(
+      "Personal model account authority is unavailable",
+    );
+    expect((await prepareCredentialReader(profileId))()).toEqual(credential);
+  });
+});
 
 it("does not disclose a personal API key when its worker read is canceled", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -377,9 +576,93 @@ it.each(["conflict", "unknown"] as const)(
   },
 );
 
+it("denies credential use after native commit until the owner receives its receipt", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { profileId, replacement } = fixture();
+    const readCurrent = await prepareCredentialReader(profileId);
+    const observe = operationAdmission.observeSqliteWorkerCommittedFacts;
+    let heldReceipt = false;
+    vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+      (admission, publish) =>
+        observe(admission, (receipt) => {
+          if (isRecord(receipt.facts) && receipt.facts.personalCredentials) {
+            heldReceipt = true;
+            expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+            const sql = observeMainThreadSql();
+            const requests = vi.spyOn(Worker.prototype, "postMessage");
+            try {
+              expect(readCurrent).toThrow("Personal model account authority is unavailable");
+              sql.expectIdle();
+              expect(requests).not.toHaveBeenCalled();
+            } finally {
+              sql.restore();
+              requests.mockRestore();
+            }
+          }
+          publish(receipt);
+        }),
+    );
+    await withPersonalAuthProfileStore(profileId, (owner) =>
+      owner.update((store) => {
+        store.profiles[profileId] = replacement;
+        return true;
+      }),
+    );
+    expect(heldReceipt).toBe(true);
+    expect(readCurrent()).toEqual(replacement);
+  });
+});
+
+it("denies a retained credential after worker death without a commit acknowledgment", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { profileId, replacement } = fixture();
+    const readCurrent = await prepareCredentialReader(profileId);
+    let target: { worker: Worker } | undefined;
+    let terminated: Promise<number> | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
+    const post = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: SqliteWorkerRequest,
+      transferList,
+    ) {
+      if (request.type === "execute") {
+        const command: unknown = deserialize(request.input);
+        if (isRecord(command) && command.type === "authProfiles.personalReplace") {
+          target = { worker: this };
+        }
+      }
+      return post.call(this, request, transferList);
+    });
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (target && request.stage === "commit") {
+        expect(readCurrent).toThrow("Personal model account authority is unavailable");
+        terminated = target.worker.terminate();
+        return;
+      }
+      admit(request, grant);
+    });
+    try {
+      const failure = await withPersonalAuthProfileStore(profileId, (owner) =>
+        owner.update((store) => {
+          store.profiles[profileId] = replacement;
+          return true;
+        }),
+      ).catch((error: unknown) => error);
+      expect(terminated).toBeDefined();
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      expect(readCurrent).toThrow("Personal model account authority is unavailable");
+      await expect(prepareCredentialReader(profileId)).rejects.toThrow();
+    } finally {
+      await terminated;
+    }
+  });
+});
+
 it("publishes only the exact acknowledged personal postimage when its result frame is lost", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { profileId, replacement } = fixture();
+    const readCurrent = await prepareCredentialReader(profileId);
     const acknowledged = { ...replacement };
     let target: { worker: Worker; id: number } | undefined;
     let terminated: Promise<number> | undefined;
@@ -437,6 +720,7 @@ it("publishes only the exact acknowledged personal postimage when its result fra
       await terminated;
       expect(attempts).toBe(1);
       expect(readUserModelAuthProfile(profileId)?.credential).toEqual(acknowledged);
+      expect(readCurrent()).toEqual(acknowledged);
     } finally {
       await terminated;
     }

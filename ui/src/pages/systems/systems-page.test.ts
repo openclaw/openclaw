@@ -446,6 +446,8 @@ describe("Systems workspace", () => {
   );
 
   it("sorts and filters the machine inventory without replacing the selected machine", async () => {
+    // Open menus need frame boundaries instead of the sidebar fixture's recursive microtasks.
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const environments: EnvironmentSummary[] = [
       host,
       { ...offline, id: "node:delta", label: "Delta laptop" },
@@ -477,9 +479,15 @@ describe("Systems workspace", () => {
     const counts = () => names(".systems-group__count");
     const choose = async (value: string) => {
       const menu = sidebar.querySelector(".systems-filter-menu");
-      const item = menu?.querySelector(`wa-dropdown-item[value="${value}"]`);
+      const trigger = menu?.querySelector<HTMLButtonElement>(".oc-menu-trigger");
+      expect(trigger).toBeTruthy();
+      trigger!.click();
+      await waitForSolid(() => expect(trigger!.getAttribute("aria-expanded")).toBe("true"));
+      vi.advanceTimersToNextFrame();
+      const item = menu?.querySelector<HTMLButtonElement>(`.oc-menu-item[data-value="${value}"]`);
       expect(item).toBeTruthy();
-      menu!.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
+      item!.click();
+      vi.advanceTimersToNextFrame();
       await sidebar.updateComplete;
       await page.updateComplete;
     };

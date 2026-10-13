@@ -114,7 +114,7 @@ async function createTalkRealtimeRelaySession(
       chatAbortControllers: request.context.chatAbortControllers ?? new Map(),
     },
     cfg,
-    sessionTarget: prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
+    sessionTarget: await prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
   });
   activeRelaySessions.set(session.relaySessionId, connId);
   return session;
@@ -988,7 +988,7 @@ describe("talk realtime gateway relay", () => {
           providerConfig: {},
           instructions: "brief",
           tools: [],
-          sessionTarget: prepareTalkSessionTarget(runtimeConfig, sessionKey),
+          sessionTarget: await prepareTalkSessionTarget(runtimeConfig, sessionKey),
         });
         activeRelaySessions.set(session.relaySessionId, "conn-owner-pin");
         runtimeConfig = createRelayAgentConfig("ops");

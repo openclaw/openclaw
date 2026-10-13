@@ -8,6 +8,7 @@ import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
@@ -310,7 +311,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       await build({
         ...config,
         entry: { [name]: source },
-        outputOptions: { codeSplitting: false },
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
       });
     }
     reportPhase("standalone workers compiled");

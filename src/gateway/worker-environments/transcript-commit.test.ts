@@ -22,12 +22,14 @@ import {
   upsertSessionEntryCore,
   withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -148,7 +150,20 @@ describe("worker transcript commit application", () => {
     }
   });
 
-  it("commits through an alias of the admitted transcript database", async () => {
+  it("commits through an admitted database alias without invalidating retained tool policy", async () => {
+    const entry = loadSessionEntry(sessionTarget);
+    const databasePath = resolveOpenClawAgentSqlitePath(
+      toDatabaseOptions(resolveSqliteTranscriptScope(sessionTarget)),
+    );
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: readDatabasePathIdentitySync(databasePath).key,
+      sessionKey: SESSION_KEY,
+      entry,
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId &&
+        before?.lifecycleRevision === after?.lifecycleRevision &&
+        before?.sandboxMode === after?.sandboxMode,
+    });
     const aliasRoot = `${root}-alias`;
     await fs.symlink(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
     try {
@@ -182,6 +197,7 @@ describe("worker transcript commit application", () => {
       if (!outcome.ok) {
         throw new Error(`expected aliased transcript commit, received ${outcome.reason}`);
       }
+      expect(retained.isCurrent()).toBe(true);
       expect((await SessionManager.openAsync(sessionTarget)).getEntries()).toEqual([
         expect.objectContaining({
           id: outcome.result.newLeafId,
@@ -192,6 +208,7 @@ describe("worker transcript commit application", () => {
         }),
       ]);
     } finally {
+      retained.release();
       await fs.rm(aliasRoot, { force: true });
     }
   });
@@ -299,6 +316,7 @@ describe("worker transcript commit application", () => {
 
   it("admits an overlapping agent input without invalidating the active worker transcript", async () => {
     setRuntimeConfigSnapshot(cfg);
+    const onUserTurnMediaPersisted = vi.fn();
     const admit = (runId: string, text: string) =>
       prepareAgentRunUserTurn({
         assertCurrent: () => {},
@@ -314,12 +332,14 @@ describe("worker transcript commit application", () => {
         effectiveTranscriptInputText: text,
         images: [],
         offloadedRefs: [],
+        onUserTurnMediaPersisted,
         runId,
         client: null,
         context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
       });
 
     const first = await admit(IDENTITY.runId!, "First input");
+    expect(onUserTurnMediaPersisted).not.toHaveBeenCalled();
     const firstUser = await (first.recorder?.withPendingInput
       ? first.recorder.withPendingInput(() => first.recorder!.persistApproved())
       : first.recorder?.persistApproved());
@@ -330,6 +350,7 @@ describe("worker transcript commit application", () => {
     // Admission happens before the next turn can take the session lane. It must
     // not move the active worker's base while that worker is still producing output.
     const second = await admit("next-worker-run", "Second input");
+    expect(onUserTurnMediaPersisted).not.toHaveBeenCalled();
     const completed = await committer.commit({
       ...ADMITTED_OWNER,
       request: createRequest({

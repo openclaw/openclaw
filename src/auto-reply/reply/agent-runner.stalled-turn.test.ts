@@ -39,6 +39,8 @@ import { expireStaleReplyOperation } from "./reply-run-registry.state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 const mocks = vi.hoisted(() => ({
   executeAgentTurn: vi.fn(),
   preflight: vi.fn(async (_params: { abortSignal: AbortSignal }) => undefined),
@@ -196,6 +198,7 @@ function createQueuedRequest(from: { senderId: string; to: string }): FollowupRu
 
 describe("runReplyAgent stalled turn continuation", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     replyRunTesting.resetReplyRunRegistry();
     clearFollowupQueue(queueKey);
     clearFollowupDrainCallback(queueKey);

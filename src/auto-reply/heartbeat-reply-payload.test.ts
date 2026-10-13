@@ -1,5 +1,6 @@
 // Heartbeat reply payload selector tests.
 import { describe, expect, it } from "vitest";
+import { classifyHeartbeatAgentOutcome } from "../infra/heartbeat-delivery-normalization.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
@@ -8,6 +9,30 @@ import { setReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyPayload } from "./types.js";
 
 describe("resolveHeartbeatReplyPayload", () => {
+  it.each(["Spoken heartbeat.", "   "])(
+    "selects and classifies speech-only heartbeat content: %j",
+    (text) => {
+      const payload = setReplyPayloadMetadata({ text: "" }, { tts: { tagged: true, text } });
+      const selected = resolveHeartbeatReplyPayload([
+        payload,
+        { text: "private", isReasoning: true },
+      ]);
+      expect(selected).toBe(text.trim() ? payload : undefined);
+      const outcome = classifyHeartbeatAgentOutcome({
+        agentRun: { agentRunFailed: false, replyPayload: selected },
+        useHeartbeatFailureCopy: false,
+        hasRelayableExecCompletion: false,
+        suppressUnmarkedSourceReplies: false,
+        responsePrefix: undefined,
+        ackMaxChars: 300,
+      });
+      expect(outcome).toMatchObject(
+        text.trim()
+          ? { kind: "delivery", replyPayload: payload, normalized: { text: "" } }
+          : { kind: "ack", eventStatus: "ok-empty" },
+      );
+    },
+  );
   it("returns a single non-array payload unchanged", () => {
     const payload: ReplyPayload = { text: "HEARTBEAT_OK" };
     expect(resolveHeartbeatReplyPayload(payload)).toBe(payload);

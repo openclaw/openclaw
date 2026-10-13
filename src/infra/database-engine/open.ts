@@ -5,12 +5,12 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { DatabaseEngineInput } from "./config.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
+import { admitPostgresPhysicalFacts } from "./physical-facts.js";
 
 type EngineAdmission =
   | { engine: "sqlite" }
@@ -44,16 +44,33 @@ const admissionKey: SqliteDatabaseAdmissionKey<EngineAdmission> = {
   },
 };
 
-function refusePostgresAnchor(db: DatabaseSync): void {
+export function readEngineAnchor(
+  db: DatabaseSync,
+  projection: "schema" | "identity" = "identity",
+  requireTable = false,
+) {
   try {
-    const anchor = db.prepare("SELECT schema FROM openclaw_engine_anchor LIMIT 1").get();
-    throw new Error(
-      `This store lives in PostgreSQL schema ${String(anchor?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
-    );
+    return projection === "schema"
+      ? [db.prepare("SELECT schema FROM openclaw_engine_anchor LIMIT 1").get()]
+      : db.prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor").all();
   } catch (error) {
-    if (!(error instanceof Error) || error.message !== "no such table: openclaw_engine_anchor") {
+    if (
+      requireTable ||
+      !(error instanceof Error) ||
+      error.message !== "no such table: openclaw_engine_anchor"
+    ) {
       throw error;
     }
+    return undefined;
+  }
+}
+
+function refusePostgresAnchor(db: DatabaseSync): void {
+  const rows = readEngineAnchor(db, "schema");
+  if (rows) {
+    throw new Error(
+      `This store lives in PostgreSQL schema ${String(rows[0]?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
+    );
   }
 }
 
@@ -64,6 +81,7 @@ export function openEngineStore(ref: {
   input?: DatabaseEngineInput;
   openSqlite: () => void;
   prepareAnchor: () => void;
+  inspectSqlite: () => { hasExistingData: boolean; hasEngineAnchor: boolean };
 }): EngineConnection {
   const { anchor, schema } = ref;
   observeConnection(anchor);
@@ -93,23 +111,19 @@ export function openEngineStore(ref: {
     known?.engine === "postgres"
       ? known
       : runSqliteImmediateTransactionSync(anchor, () => {
-          admitSqliteSchema(anchor);
-          if (
-            [...(getAdmittedSqliteSchemaFacts(anchor)?.tables ?? [])].some((name) =>
-              name.startsWith(`${schema.id}_`),
-            )
-          ) {
+          const inspection = ref.inspectSqlite();
+          if (inspection.hasExistingData) {
             throw new Error(
               `Existing SQLite ${schema.id} data cannot switch engines; wait for the database port tool.`,
             );
           }
-          anchor.exec(
-            "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
-          );
-          const rows = anchor
-            .prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor")
-            .all();
-          if (rows.length > 1) {
+          if (!inspection.hasEngineAnchor) {
+            anchor.exec(
+              "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
+            );
+          }
+          const rows = readEngineAnchor(anchor, "identity", true) ?? [];
+          if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
             throw new Error(
               "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
             );
@@ -161,13 +175,23 @@ export function openEngineStore(ref: {
           }
         }
       });
+    } else if (known.engine === "postgres" && known.version !== schema.version) {
+      adapter.schema.migrate(store, known.version);
+    }
+    admitPostgresPhysicalFacts({
+      anchor,
+      db,
+      namespace: identity.namespace,
+      storeId: identity.storeId,
+      store: schema.id,
+      version: schema.version,
+    });
+    if (!known) {
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,
         version: schema.version,
       });
-    } else if (known.engine === "postgres" && known.version !== schema.version) {
-      adapter.schema.migrate(store, known.version);
     }
     return db;
   } catch (error) {

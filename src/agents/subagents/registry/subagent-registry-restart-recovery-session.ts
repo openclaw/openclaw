@@ -42,6 +42,7 @@ export async function loadSubagentRecoverySession(params: {
   sessionEntry: InternalSessionEntry | undefined;
   currentRead: ReturnType<typeof captureSessionEntryCurrentRead>;
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
+  replacementReason?: string;
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
   if (resolveSubagentChildAuthority(params.entry).status === "mismatch") {
@@ -67,8 +68,10 @@ export async function loadSubagentRecoverySession(params: {
     },
   );
   const authority = resolveSubagentChildAuthority(params.entry, sessionEntry);
+  // A replacement session cannot own effects for the retained task, but the
+  // registry can still settle that task and notify its original requester.
   if (authority.status === "mismatch") {
-    throw new Error(authority.error);
+    return { agentId, storePath, sessionEntry, currentRead, replacementReason: authority.error };
   }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
   if (

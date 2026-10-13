@@ -506,22 +506,32 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     const version = fileOperationVersion;
-    let onLatest: (
-      latest: Awaited<ReturnType<NonNullable<FileSidebarContent["edit"]>["fetchLatest"]>>,
-    ) => void | Promise<void>;
-    if (action === "reload") {
-      fileSaving = true;
-      fileReloading = true;
+    const localContent = currentFileText();
+    fileSaving = true;
+    fileReloading = action === "reload";
+    if (fileReloading) {
       fileEditor?.setEditable(false);
-      onLatest = (latest) => {
+    }
+    invalidate();
+    trackFileOperation(
+      content.edit.fetchLatest().then(async (latest) => {
         if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
           return;
         }
         if (!latest) {
           fileSaveNotice = {
             kind: "error",
-            message: t("chat.detailPanel.reloadFailed"),
+            message: t(
+              action === "reload"
+                ? "chat.detailPanel.reloadFailed"
+                : "chat.detailPanel.overwriteLoadFailed",
+            ),
           };
+          return;
+        }
+        if (action === "overwrite") {
+          // Overwrite uses the local text captured at the user's click, not the fetched text.
+          await saveFileContent(content, localContent, latest.hash, version);
           return;
         }
         fileEditor?.setContent(latest.content);
@@ -531,35 +541,16 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
         // A reload can bring back content that no longer qualifies for edit
         // mode (e.g. the agent rewrote the file with mixed line endings);
         // drop the edit capability instead of letting a save corrupt it.
-        if (!latest.editable && visibleContent?.kind === "file") {
+        if (!latest.editable) {
           setFileDraft(visibleContent, null);
           fileEditing = false;
           fileDirty = false;
           const { edit: _removed, ...readOnly } = visibleContent;
           visibleContent = readOnly;
         }
-      };
-    } else {
-      // Overwrite deliberately replaces whatever is on disk (even content that
-      // would fail the edit gates) with the local editor text the user chose.
-      const localContent = currentFileText();
-      fileSaving = true;
-      onLatest = async (latest) => {
-        if (version !== fileOperationVersion) {
-          return;
-        }
-        if (!latest) {
-          fileSaveNotice = {
-            kind: "error",
-            message: t("chat.detailPanel.overwriteLoadFailed"),
-          };
-          return;
-        }
-        await saveFileContent(content, localContent, latest.hash, version);
-      };
-    }
-    invalidate();
-    trackFileOperation(content.edit.fetchLatest().then(onLatest), version);
+      }),
+      version,
+    );
   }
 
   function trackFileOperation(operation: Promise<unknown>, version: number) {

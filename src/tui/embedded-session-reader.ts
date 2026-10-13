@@ -13,7 +13,6 @@ import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
-import type { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiBackend } from "./tui-backend.js";
 
@@ -49,7 +48,7 @@ export function readEmbeddedHistorySessionInfo(
 }
 
 export async function readEmbeddedPrivateHistorySessionInfo(
-  selected: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  selected: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
   entry: SessionEntry,
 ) {
   const { cfg, agentId, canonicalKey, storePath, store, readSource } = selected;
@@ -76,7 +75,6 @@ export async function readEmbeddedPrivateHistorySessionInfo(
     agentId,
     modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
     lightweightListRow: true,
-    skipTranscriptUsageFallback: true,
   });
 }
 

@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."agent_provenance" (
+CREATE TABLE "agent_provenance" (
   "agent_id" text COLLATE "C" NOT NULL,
   "created_via" text COLLATE "C" NOT NULL,
   "creator_agent_id" text COLLATE "C",
@@ -12,5 +8,3 @@ CREATE TABLE "openclaw_state"."agent_provenance" (
   PRIMARY KEY ("agent_id"),
   CHECK (("created_via" IN ('operator', 'agent', 'claw')))
 );
-
-COMMIT;

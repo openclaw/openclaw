@@ -79,6 +79,7 @@ import {
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import {
@@ -669,6 +670,7 @@ describe("session accessor seam", () => {
   );
 
   it("rejects a default-store transcript turn when the session id rotates mid-append", async () => {
+    setRuntimeConfigSnapshot({});
     // Caller omits storePath; resolveTranscriptTurnTarget derives the default
     // store. The guarded path must still apply so rotation is visible.
     const stateDir = path.join(tempDir, "state-rotate-default");
@@ -1055,6 +1057,7 @@ describe("session accessor seam", () => {
           "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
         )
         .run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt }), updatedAt);
+      markCanonicalSessionValidationPending(database, [sessionKey]);
       closeOpenClawAgentDatabasesForTest();
     };
     for (const [storedKey, canonicalKey] of [

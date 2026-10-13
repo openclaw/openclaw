@@ -28,6 +28,67 @@ it("matches wildcard filters without exponential backtracking", () => {
   expect(filterSessionsByQuery(sessions, "key:*jobX??").sessions).toEqual([]);
 });
 
+it("keeps incomplete table totals unknown beyond the page and scopes completeness to selected days", () => {
+  const complete = {
+    ...createEmptyCostUsageTotals(),
+    input: 40,
+    inputCost: 1,
+    totalTokens: 40,
+    totalCost: 1,
+  };
+  const interrupted = {
+    ...createEmptyCostUsageTotals(),
+    input: 75,
+    inputCost: 2,
+    totalTokens: 75,
+    totalCost: 2,
+    usageReport: { state: "unavailable" as const },
+    activityDates: ["2026-05-14", "2026-05-15"],
+    dailyBreakdown: [
+      { ...complete, date: "2026-05-14", tokens: 40, cost: 1 },
+      {
+        ...createEmptyCostUsageTotals(),
+        date: "2026-05-15",
+        tokens: 0,
+        cost: 0,
+        usageReport: { state: "unavailable" as const },
+      },
+    ],
+  };
+  const rows = [
+    { key: "complete", updatedAt: 2, usage: complete },
+    { key: "interrupted", updatedAt: 1, usage: interrupted },
+  ];
+  const all = buildUsageOverview({
+    rows,
+    options: { limit: 1 },
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  });
+  expect(all.sessions.map((row) => row.key)).toEqual(["complete"]);
+  expect(all.totals.usageReport).toEqual({ state: "unavailable" });
+  expect(all.overview.tableTotals).toEqual({
+    tokens: 115,
+    cost: 3,
+    errors: 0,
+    usageReport: { state: "unavailable" },
+  });
+  const selected = buildUsageOverview({
+    rows: [rows[1]!],
+    options: { selectedDays: ["2026-05-14"] },
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  });
+  expect(selected.overview.usageReport).toEqual({ state: "unavailable" });
+  expect(selected.totals.usageReport).toBeUndefined();
+  expect(selected.overview.tableTotals).toEqual({ tokens: 40, cost: 1, errors: 0 });
+  expect(selected.sessions[0]?.usage).toMatchObject({
+    input: 40,
+    inputCost: 1,
+    totalTokens: 40,
+    totalCost: 1,
+  });
+  expect(selected.sessions[0]?.usage?.usageReport).toBeUndefined();
+});
+
 describe("overview calendar and elapsed allocation", () => {
   it.each([
     {

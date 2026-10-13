@@ -531,7 +531,7 @@ export const OpenClawSchemaShape = {
            * sit outside the configured source root.
            */
           allowSymlinkTargets: z.array(z.string()).optional(),
-          /** Watch skill folders for changes and refresh the skills snapshot. */
+          /** Enable passive skill rescans; explicit changes and startup still refresh immediately. */
           watch: z.boolean().optional(),
         })
         .optional(),

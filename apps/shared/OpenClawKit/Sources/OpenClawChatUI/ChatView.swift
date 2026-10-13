@@ -713,7 +713,8 @@ extension OpenClawChatView {
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
                 runIdentity: self.viewModel.workingIndicatorIdentity,
-                outputTokens: self.viewModel.liveRunOutputTokens)
+                outputTokens: self.viewModel.liveRunOutputTokens,
+                status: self.viewModel.runStartupStatus)
                 .equatable()
         }
 

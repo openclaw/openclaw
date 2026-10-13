@@ -440,12 +440,20 @@ export function createCronRunContinuationSession(params: {
   };
   const owns = (entry: SessionEntry | undefined) =>
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
+  let sealed = false;
+  let persistedSnapshot: { source: SessionEntry; continuation: typeof continuation } | undefined;
   const persist = async (
     create: boolean,
     phase: "running" | "ready",
     basePersisted = false,
     assertCommitAllowed?: () => void,
   ) => {
+    if (sealed) {
+      if (phase === "ready") {
+        return;
+      }
+      throw new CronSessionLifecycleClaimError(params.runSessionKey);
+    }
     const source = structuredClone(params.cronSession.sessionEntry);
     delete source.createdVia;
     delete source.createdActor;
@@ -454,6 +462,10 @@ export function createCronRunContinuationSession(params: {
     // chain and fork ancestry describe the cron root, not this :run: node.
     delete source.previousSessionId;
     delete source.forkSource;
+    const snapshot = { source, continuation: structuredClone(continuation) };
+    if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
+      return;
+    }
     let persisted = false;
     let alreadySealed = false;
     await params.persistSessionEntry({
@@ -505,6 +517,10 @@ export function createCronRunContinuationSession(params: {
     if (!persisted && !alreadySealed) {
       throw new CronSessionLifecycleClaimError(params.runSessionKey);
     }
+    // Only acknowledged writes advance the snapshot. After handoff the cron
+    // owner has no further writes, including its unconditional final cleanup.
+    persistedSnapshot = snapshot;
+    sealed = phase === "ready";
   };
   return {
     initialize: async () => await persist(true, "running"),

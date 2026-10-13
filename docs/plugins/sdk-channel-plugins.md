@@ -39,6 +39,11 @@ shared `message` tool. Your plugin owns:
   channel: its current channel, or the only configured channel. A `message`
   tool send to another channel does not get that channel's rules, and external
   ACP agents do not receive it. Keep all formatting rules in this one hook.
+- **Message guidance** - `agentPrompt.messageToolHints` supplies account-scoped
+  instructions. Set `agentPrompt.customInlineButtonHint: true` when the channel
+  owns inline-button guidance; core then omits its generic callback example and
+  capability-configuration hint. Return no button instructions when the account
+  has buttons disabled. The flag defaults to `false`.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -69,7 +74,7 @@ forked, retargeted, and descendant sessions do not qualify. The intent cannot
 be serialized for future turns or transport fallback. This does not grant
 creator/admin authority or change Team collaboration permissions. Consumers
 of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
-a canonical URL alone is not proof of anonymous access.
+a normalized URL alone is not proof of anonymous access.
 
 The host awaits `onVisibleWorkSessions(sessions, creation)` for fresh visible
 children before their first turn starts, so a channel can persist session-scoped
@@ -311,7 +316,7 @@ when initialization must finish before the child runs.
     });
     ```
 
-    For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
+    For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
@@ -737,7 +742,7 @@ remains supported for older plugins and hosts, with no removal version scheduled
 Keep its return type strictly `boolean`: older hosts treat a returned promise as
 truthy rather than awaiting it. Hosts predating the async companion ignore the new
 field and use only the synchronous callback. An async-only alias therefore cannot
-prove equivalence on those hosts; exact canonical target matching still works.
+prove equivalence on those hosts; exact normalized target matching still works.
 
 Verified official installed plugins can delegate supported conversation, metadata, and attachment
 reads to provider-owned access checks. Channel-origin requests need server-owned
@@ -967,7 +972,7 @@ the plugin does not grant additional authority to an existing job.
 </CardGroup>
 
 <Note>
-Some bundled helper seams still exist for bundled-plugin maintenance and
+Some bundled helper interfaces still exist for bundled-plugin maintenance and
 compatibility. They are not the recommended pattern for new channel plugins;
 prefer the generic channel/setup/reply/runtime subpaths from the common SDK
 surface unless you are maintaining that bundled plugin family directly.

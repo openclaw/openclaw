@@ -194,6 +194,20 @@ function buildFallbackStepFields(
 export function logModelFallbackDecision(
   params: ModelFallbackDecisionParams,
 ): ModelFallbackStepFields | undefined {
+  const explainedAttempt =
+    params.decision === "candidate_succeeded"
+      ? params.previousAttempts?.find(
+          (attempt) =>
+            attempt.reason === "context_overflow" || attempt.reason === "model_not_found",
+        )
+      : undefined;
+  if (explainedAttempt) {
+    const reason =
+      explainedAttempt.reason === "context_overflow" ? "exceeded its context window" : "not found";
+    decisionLog.warn(
+      `Model "${sanitizeForLog(formatModelRef(explainedAttempt))}" ${reason}. Fell back to "${sanitizeForLog(formatModelRef(params.candidate))}".`,
+    );
+  }
   const nextText = params.nextCandidate
     ? `${sanitizeForLog(params.nextCandidate.provider)}/${sanitizeForLog(params.nextCandidate.model)}`
     : "none";

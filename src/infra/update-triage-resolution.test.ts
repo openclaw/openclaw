@@ -3,7 +3,7 @@ import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-hea
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
-import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
+import { readDeferredPluginMigrationsAsync } from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
@@ -35,7 +35,7 @@ vi.mock("./package-json.js", () => ({ readPackageVersion: vi.fn() }));
 vi.mock("./package-update-activation.js", () => ({ assertNoPendingPackageActivation: vi.fn() }));
 vi.mock("./deferred-plugin-migrations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrations: vi.fn(),
+  readDeferredPluginMigrationsAsync: vi.fn(),
 }));
 vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: vi.fn() }));
 vi.mock("./update-global.js", () => ({ collectInstalledGlobalPackageErrors: vi.fn() }));
@@ -161,7 +161,7 @@ const successfulTurn = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(readDeferredPluginMigrations).mockReturnValue([]);
+  vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([]);
   validateDoctor.mockResolvedValue({
     ok: true,
     score: 0,
@@ -267,7 +267,7 @@ describe("saved update failure resolution", () => {
       },
     ];
     vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-      vi.mocked(readDeferredPluginMigrations).mockReturnValue(pending);
+      vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(pending);
       return true;
     });
     const result = await validate(failure(), {
@@ -282,7 +282,7 @@ describe("saved update failure resolution", () => {
   });
 
   it("preserves the caller's post-core convergence context in pending migration guidance", async () => {
-    vi.mocked(readDeferredPluginMigrations).mockReturnValue(
+    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(
       ["first", "second"].map((pluginId) => ({
         pluginId,
         reason: "Package repair deferred.",
@@ -306,7 +306,7 @@ describe("saved update failure resolution", () => {
       'If this warning remains afterward, run "openclaw update repair"',
     );
     expect(result.stopReason).toBe(result.summary);
-    expect(readDeferredPluginMigrations).toHaveBeenCalledWith({ env });
+    expect(readDeferredPluginMigrationsAsync).toHaveBeenCalledWith({ env });
     expect(validateDoctor).not.toHaveBeenCalled();
   });
 
@@ -347,27 +347,29 @@ describe("saved update failure resolution", () => {
       ok: true,
     });
   });
-  it.each(["restart-unhealthy", "update-recovery-pending"])(
-    "requires a later verified updater outcome for %s",
-    async (reason) => {
-      failedRun.reason = reason;
-      const savedFailure = failure(reason);
-      const successfulRun = latestRun;
-      latestRun = failedRun;
-      expect(await validate(savedFailure)).toMatchObject({
-        ok: false,
-        summary: expect.stringContaining("Next step:"),
-      });
-      expect(failedRun.status).toBe("failed");
-      expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
+  it.each([
+    "restart-unhealthy",
+    "update-recovery-pending",
+    "package-recovery-permissions-unsafe",
+    "managed-handoff-lease-identity-changed",
+  ])("requires a later verified updater outcome for %s", async (reason) => {
+    failedRun.reason = reason;
+    const savedFailure = failure(reason);
+    const successfulRun = latestRun;
+    latestRun = failedRun;
+    expect(await validate(savedFailure)).toMatchObject({
+      ok: false,
+      summary: expect.stringContaining("Next step:"),
+    });
+    expect(failedRun.status).toBe("failed");
+    expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
 
-      latestRun = successfulRun;
-      expect(await validate(savedFailure)).toMatchObject({ ok: true });
+    latestRun = successfulRun;
+    expect(await validate(savedFailure)).toMatchObject({ ok: true });
 
-      vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
-      expect(await validate(savedFailure)).toMatchObject({ ok: false });
-    },
-  );
+    vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
+    expect(await validate(savedFailure)).toMatchObject({ ok: false });
+  });
 
   it("does not invent a target for an error-only artifact", async () => {
     expect(await validate({ error: "Update failed" })).toEqual({

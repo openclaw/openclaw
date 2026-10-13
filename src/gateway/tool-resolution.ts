@@ -13,7 +13,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
-import { resolveExecDefaultsAsync } from "../agents/exec-defaults.js";
+import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
@@ -22,7 +22,7 @@ import {
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
@@ -58,6 +58,7 @@ import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -201,7 +202,7 @@ export async function resolveGatewayScopedTools(
   } = configuredToolPolicies;
   const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const senderId = params.channelContext?.sender?.id;
-  const requesterPolicies = resolveGatewayRequesterToolPolicies(params, {
+  const requesterPolicies = await resolveGatewayRequesterToolPolicies(params, {
     runtimePolicySessionKey,
     policyAgentId,
     nodeExecSurface,
@@ -212,7 +213,7 @@ export async function resolveGatewayScopedTools(
     requesterPolicies.inheritedToolPolicySource === "sender"
       ? params.sessionPermissionPolicy
       : undefined;
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: sessionAgentId,
@@ -431,14 +432,20 @@ export async function resolveGatewayScopedTools(
   assertCurrent();
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
-      ? await resolveExecDefaultsAsync({
-          cfg: params.cfg,
-          sessionEntry: params.execSession,
-          execOverrides: params.execOverrides,
-          agentId: policyAgentId,
-          sessionKey: runtimePolicySessionKey,
-          sandboxAvailable: sandboxed,
-        })
+      ? await resolvePreparedExecDefaultsAsync(
+          prepareExecDefaults(
+            {
+              cfg: params.cfg,
+              sessionEntry: params.execSession,
+              execOverrides: params.execOverrides,
+              agentId: policyAgentId,
+              sessionKey: runtimePolicySessionKey,
+              sandboxAvailable: sandboxed,
+            },
+            sandboxRuntime,
+          ),
+          loadExecApprovalsReadOnlyAsync,
+        )
       : undefined;
   const nodeExecDefaults =
     nodeExecSurface &&

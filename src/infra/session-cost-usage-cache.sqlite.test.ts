@@ -3,10 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import * as validationCache from "../state/openclaw-agent-db-validation-cache.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -535,10 +535,9 @@ describe("session cost usage SQLite cache", () => {
       const agentId = "worker-1";
       const database = openOpenClawAgentDatabase({ agentId });
       const databasePath = database.path;
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
 
-      const stateDatabase = openOpenClawStateDatabase();
-      stateDatabase.db.prepare("DELETE FROM agent_databases").run();
+      unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
       expect(countRegisteredAgentDatabases()).toBe(0);
 
       expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual([]);

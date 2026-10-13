@@ -212,7 +212,6 @@ describe("direct session model catalogs", () => {
           preparedAcpMeta: null,
           preparedRepositoryWorkspace: null,
           activeModel: null,
-          skipTranscriptUsageFallback: true,
         });
         expect(
           buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true }),

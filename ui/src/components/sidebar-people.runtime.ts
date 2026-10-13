@@ -19,7 +19,7 @@ import {
   hovercardBootstrapIntentActive,
   remainingHovercardOpenDelay,
 } from "./lazy-hovercard-registration.ts";
-import { updatePersonActivityCard } from "./person-activity-card.ts";
+import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";

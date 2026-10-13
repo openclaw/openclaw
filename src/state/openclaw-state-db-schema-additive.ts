@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  assertSqliteSchemaContains,
+  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteTableNames,
+} from "../infra/sqlite-schema-contract.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -19,12 +24,23 @@ import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-s
 import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+const tableEnsurers = new Map<string, ReturnType<typeof createSqliteSchemaEnsurer>>();
+
 function ensureTable(
   database: DatabaseSync,
   table: string,
   options?: Parameters<typeof extractSqliteTableSchema>[2],
 ): void {
-  database.exec(getOpenClawStateFeatureSchemaSql(table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+  let ensure = tableEnsurers.get(table);
+  if (!ensure) {
+    const schema = getOpenClawStateFeatureSchemaSql(table, options);
+    ensure = createSqliteSchemaEnsurer(() => schema, {
+      tables: getCanonicalSqliteTableNames(schema),
+      indexes: getCanonicalSqliteNamedIndexContracts(schema).map(({ name }) => name),
+    });
+    tableEnsurers.set(table, ensure);
+  }
+  ensure(database);
 }
 
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
@@ -42,9 +58,6 @@ export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): 
 }
 
 export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync): void {
-  if (tableExists(database, "github_repository_publication_requests")) {
-    return;
-  }
   ensureTable(database, "github_repository_publication_requests", {
     endMarker:
       "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;",
@@ -53,9 +66,6 @@ export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync):
 }
 
 export function ensureGitHubPublicationSessionLifecycleSchema(database: DatabaseSync): void {
-  if (tableExists(database, "github_publication_session_lifecycles")) {
-    return;
-  }
   ensureTable(database, "github_publication_session_lifecycles", {
     errorMessage: "GitHub publication lifecycle schema marker is missing.",
   });
@@ -153,25 +163,18 @@ export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSy
 
 /** Register fixed build ownership on the dedicated node's current transaction. */
 export function ensureNodeWorkerPreparedWorkspaceSchema(database: DatabaseSync): void {
-  // Registration can still roll back; never cache a nested transaction's DDL.
+  // Prepared DDL is reusable; admitted presence still follows transaction rollback.
   ensureTable(database, "node_worker_prepared_workspaces", {
     errorMessage: "Node prepared workspace schema marker is missing.",
   });
 }
 
 function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
-  db.exec(
-    [
-      extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "worker_turn_tool_authorities"),
-      extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "worker_session_tool_operations"),
-    ].join("\n"),
-  );
+  ensureTable(db, "worker_turn_tool_authorities");
+  ensureTable(db, "worker_session_tool_operations");
 }
 
 export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
-  if (tableExists(db, "github_publication_requests")) {
-    return;
-  }
   ensureTable(db, "github_publication_requests", {
     endMarker: "ON github_publication_requests(status, updated_at_ms, request_id);",
   });
@@ -179,9 +182,6 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
 
 /** First personal publication write only; status and old readers leave this surface dormant. */
 export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
-  if (tableExists(db, "github_personal_publication_requests")) {
-    return;
-  }
   ensureTable(db, "github_personal_publication_requests", {
     endMarker: "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
     errorMessage: "Personal GitHub publication schema marker is missing.",

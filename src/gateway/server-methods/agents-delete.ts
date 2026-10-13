@@ -412,7 +412,11 @@ export async function deleteGatewayAgent(
                 ) {
                   return entry;
                 }
-                const updated = Object.assign({}, entry, { done: true });
+                const updated = Object.assign({}, entry, {
+                  done: true,
+                  dev: cleanupPath.preparedIdentity?.dev ?? null,
+                  ino: cleanupPath.preparedIdentity?.ino ?? null,
+                });
                 if (note) {
                   updated.note = note;
                 }

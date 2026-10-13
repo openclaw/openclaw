@@ -5,6 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -165,6 +169,8 @@ export function setupWorkerEnvironmentServiceSuite() {
         },
       },
     };
+    // The Gateway publishes its runtime config at startup.
+    setRuntimeConfigSnapshot(testState.config);
     testState.prepareInstallation = vi.fn(async (install) =>
       install === "bundle" ? BUNDLE_ARTIFACT : NPM_ARTIFACT,
     );
@@ -184,6 +190,7 @@ export function setupWorkerEnvironmentServiceSuite() {
       for (const release of testState.releaseTurnOwners) {
         await release();
       }
+      clearRuntimeConfigSnapshot();
     }
     await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });

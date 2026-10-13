@@ -9,7 +9,7 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surf
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import {
   ensureSandboxWorkspaceForSession,
-  resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
 } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -109,16 +109,19 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     classificationSessionKey: toolPolicySessionKey,
+    ...(toolPolicySessionKey === params.sessionKey
+      ? { preparedSessionEntry: targetSessionEntry ?? null }
+      : {}),
   });
   const nodeSkills = await resolveNodeExecEligibilityAsync({
     agentId: sessionAgentId,
     cfg: params.cfg,
-    sessionEntry: targetSessionEntry,
+    sessionEntry: targetSessionEntry ?? null,
     sessionKey: params.sessionKey,
   });
   const skillsPrompt = await resolveCommandSkillsPrompt({

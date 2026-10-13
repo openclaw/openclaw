@@ -175,7 +175,7 @@ function cpuDegradedOption(requiredArgs) {
   reject("invalid performance waiver argument");
 }
 
-function snapshotCpuWaived(snapshot, allowCpuDegraded, label) {
+function snapshotCpuWaived(snapshot, allowCpuDegraded, label, deploymentAcceptance = false) {
   if (
     !snapshot ||
     typeof snapshot !== "object" ||
@@ -223,9 +223,44 @@ function snapshotCpuWaived(snapshot, allowCpuDegraded, label) {
       reject(`Gateway ${label} event-loop metric ${field} is malformed`);
   }
   if (!degraded) return false;
+  // Native CPU/utilization warnings describe load, not lost admission. Deployment
+  // can progress with bounded delay; profiling still requires an undegraded sample.
+  if (deploymentAcceptance && !reasons.includes("event_loop_delay") &&
+      Number.isFinite(eventLoop.delayP99Ms) && eventLoop.delayP99Ms < 1000 &&
+      Number.isFinite(eventLoop.delayMaxMs) && eventLoop.delayMaxMs < 1000) {
+    return false;
+  }
   // Native reasons own threshold policy. Never rewrite evidence or infer reasons from metrics.
   if (!allowCpuDegraded) reject(`Gateway ${label} snapshot is degraded`);
   return true;
+}
+
+function gatewayStartupPending(startup, startupCode, readiness, readinessCode) {
+  if (!Number.isFinite(startup.uptimeMs) || startup.uptimeMs < 0) {
+    reject("Gateway startupz proof is malformed");
+  }
+  if (readiness.agentDatabases !== undefined && !Array.isArray(readiness.agentDatabases)) {
+    reject("Gateway agent admission is malformed");
+  }
+  if (readiness.stateDatabase !== undefined || readiness.agentDatabases?.some(
+    value => value?.code !== "agent-database-inspection-pending")) {
+    reject("Gateway database admission failed");
+  }
+  const agentId = operatorProfile().modelAgent;
+  const refusal = readiness.agentDatabases?.find(value => value?.agentId === agentId);
+  if (startupCode === "503" && startup.ok === false && startup.status === "starting") {
+    if (typeof startup.pendingReason !== "string" || !startup.pendingReason) {
+      reject("Gateway startupz recovery reason is malformed");
+    }
+    // Other agents may still inspect in the background after the marker's agent
+    // and critical initial startup are admitted by native readyz.
+    return startup.pendingReason !== "agent-database-inspection" ||
+      readinessCode !== "200" || readiness.ready !== true || Boolean(refusal);
+  }
+  if (startupCode !== "200" || startup.ok !== true || startup.status !== "started") {
+    reject("Gateway startupz is not started");
+  }
+  return Boolean(refusal);
 }
 
 const appServerPolicyFields = ["mode", "approvalPolicy", "approvalsReviewer", "sandbox", "defaultWorkspaceDir"];
@@ -446,6 +481,15 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
   }
   auditTree(root, owner, sealed);
   const uiDigest = createHash("sha256").update(html).digest("hex");
+  const buildCacheInputsPath = join(root, "dist", "build-cache-inputs.json");
+  const buildCacheInputs = existsSync(buildCacheInputsPath) ? jsonFile(buildCacheInputsPath) : undefined;
+  if (buildCacheInputs && (buildCacheInputs.version !== 1 ||
+      !buildCacheInputs.steps || typeof buildCacheInputs.steps !== "object" ||
+      Array.isArray(buildCacheInputs.steps) ||
+      Object.entries(buildCacheInputs.steps).some(([label, hash]) =>
+        !label || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)))) {
+    reject("release build cache input hashes are invalid");
+  }
   if (requireManifest) {
     const manifest = jsonFile(join(root, "deployment.json"));
     if (
@@ -455,7 +499,8 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
       manifest.controlUiSha256 !== uiDigest ||
       manifest.origin !== "https://github.com/openclaw/openclaw.git" ||
       manifest.schemaVersions?.state !== schemas.state ||
-      manifest.schemaVersions?.agent !== schemas.agent
+      manifest.schemaVersions?.agent !== schemas.agent ||
+      !isDeepStrictEqual(manifest.buildCacheInputs, buildCacheInputs)
     ) {
       reject("deployment manifest does not match the exact sealed candidate");
     }
@@ -465,6 +510,7 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
     buildId: build.buildId,
     controlUiSha256: uiDigest,
     schemaVersions: schemas,
+    ...(buildCacheInputs ? { buildCacheInputs } : {}),
   };
 }
 
@@ -561,21 +607,27 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
 }
 
 function sealTree(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const pathname = join(root, entry.name);
+  const pending = [root];
+  while (pending.length) {
+    const pathname = pending.pop();
     const metadata = lstatSync(pathname);
-    if (metadata.isSymbolicLink()) continue;
-    if (metadata.isDirectory()) {
-      sealTree(pathname);
+    if (metadata.isSymbolicLink()) {
       continue;
     }
-    if (!metadata.isFile()) reject(`cannot seal unsupported release entry: ${pathname}`);
-    chmodSync(pathname, (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
-    syncPath(pathname);
+    if (metadata.isDirectory()) {
+      for (const name of readdirSync(pathname)) {
+        pending.push(join(pathname, name));
+      }
+    } else if (!metadata.isFile()) {
+      reject(`cannot seal unsupported release entry: ${pathname}`);
+    }
+    chmodSync(pathname, metadata.isDirectory() || (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
   }
-  // Publishing a directory name cannot make its unsynced descendants durable.
-  chmodSync(root, 0o555);
-  syncPath(root);
+  // GNU sync -f uses syncfs: persist all data, modes and directory entries before publication.
+  const synced = spawnSync("sync", ["-f", "--", root], { encoding: "utf8" });
+  if (synced.status !== 0) {
+    reject(`cannot sync sealed release filesystem: ${synced.error?.message ?? synced.stderr.trim()}`);
+  }
 }
 
 function makeDirectoriesOwnerWritable(root) {
@@ -3972,14 +4024,14 @@ async function startupProfileCommand(command, input) {
     assert.equal(record.operation, input.operation);
     if (command === "strict-observation") {
       assert.equal(record.arm?.state, "pending");
-      const readinessWaived = snapshotCpuWaived(input.readiness, true, "readiness");
-      const channelsWaived = snapshotCpuWaived(input.channels, true, "channels");
+      const readinessWaived = snapshotCpuWaived(input.readiness, true, "readiness", true);
+      const channelsWaived = snapshotCpuWaived(input.channels, true, "channels", true);
       assert(input.readiness.ready === true && Array.isArray(input.readiness.failing) &&
         input.readiness.failing.length === 0 && Number.isFinite(input.readiness.uptimeMs) && input.readiness.uptimeMs >= 0);
       verifyChannelAccounts(input.channels);
       assert.equal(input.convergenceState, readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY");
       assert.equal(input.channelState, channelsWaived ? "CHANNELS_CPU_DEGRADED_OPERATOR_WAIVED" : "CHANNELS_OK");
-      if (readinessWaived || channelsWaived) return { operation: record.operation, outcome: "ineligible-load" };
+      if (input.readiness.eventLoop.degraded || input.channels.eventLoop.degraded) return { operation: record.operation, outcome: "ineligible-load" };
       registeredArm(directory, record);
       record.arm = { state: "strict-observed", readinessSha256: digest(JSON.stringify(input.readiness)),
         channelsSha256: digest(JSON.stringify(input.channels)) };
@@ -4313,6 +4365,7 @@ try {
         buildId: release.buildId,
         controlUiSha256: release.controlUiSha256,
         schemaVersions: release.schemaVersions,
+        ...(release.buildCacheInputs ? { buildCacheInputs: release.buildCacheInputs } : {}),
         createdAt: new Date().toISOString(),
       });
       result = JSON.stringify(release);
@@ -4474,9 +4527,36 @@ try {
     case "channels": {
       const allowCpuDegraded = cpuDegradedOption(1);
       const payload = jsonArgument(args[0]);
-      const waived = snapshotCpuWaived(payload, allowCpuDegraded, "channels");
+      const waived = snapshotCpuWaived(payload, allowCpuDegraded, "channels", true);
       verifyChannelAccounts(payload);
       result = waived ? "CHANNELS_CPU_DEGRADED_OPERATOR_WAIVED" : "CHANNELS_OK";
+      break;
+    }
+    case "marker-readiness": {
+      const [rawStartup, startupCode, rawReadiness, readinessCode] = args;
+      if (args.length !== 4) {
+        reject("invalid marker readiness arguments");
+      }
+      const startup = JSON.parse(rawStartup), readiness = JSON.parse(rawReadiness);
+      if (gatewayStartupPending(startup, startupCode, readiness, readinessCode)) {
+        result = "RECOVERING";
+        break;
+      }
+      if (readinessCode !== "200" || readiness.ready !== true ||
+          !Array.isArray(readiness.failing) || readiness.failing.length ||
+          !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
+        reject("Gateway marker readyz is not ready");
+      }
+      // CPU/utilization alone can reflect useful startup work. Native delay evidence
+      // and a bounded system.info response determine whether dispatch may proceed.
+      if (readiness.eventLoop === undefined) {
+        result = "RECOVERING";
+        break;
+      }
+      const delayPending = snapshotCpuWaived(readiness, true, "marker readiness", true);
+      const loop = readiness.eventLoop;
+      result = delayPending || loop.delayP99Ms === undefined || loop.delayMaxMs === undefined
+        ? "RECOVERING" : "READY";
       break;
     }
     case "probes": {
@@ -4497,21 +4577,12 @@ try {
       if (healthCode !== "200" || health.ok !== true || health.status !== "live") {
         reject("Gateway healthz proof is malformed or unhealthy");
       }
-      if (!Number.isFinite(startup.uptimeMs) || startup.uptimeMs < 0) {
-        reject("Gateway startupz proof is malformed");
-      }
-      if (startupCode === "503" && startup.ok === false && startup.status === "starting") {
-        if (typeof startup.pendingReason !== "string" || !startup.pendingReason) {
-          reject("Gateway startupz recovery reason is malformed");
-        }
+      if (gatewayStartupPending(startup, startupCode, readiness, readinessCode)) {
         result = "RECOVERING";
         break;
       }
-      if (startupCode !== "200" || startup.ok !== true || startup.status !== "started") {
-        reject("Gateway startupz is not started");
-      }
-      const readinessWaived = snapshotCpuWaived(readiness, allowCpuDegraded, "readiness");
-      const channelsWaived = snapshotCpuWaived(channels, allowCpuDegraded, "channels");
+      const readinessWaived = snapshotCpuWaived(readiness, allowCpuDegraded, "readiness", true);
+      const channelsWaived = snapshotCpuWaived(channels, allowCpuDegraded, "channels", true);
       if (!Array.isArray(readiness.failing) || !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
         reject("Gateway readiness identity is malformed");
       }

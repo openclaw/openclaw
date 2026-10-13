@@ -5,11 +5,12 @@ import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { AgentSelect } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { PaletteSessionDraft } from "./palette-session-draft.ts";
@@ -111,6 +112,8 @@ describe("PaletteSessionDraft", () => {
     vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
+    await host.updateComplete;
+    expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull();
     await host.attachmentReady.promise;
     host.observeColdSubmission = true;
     host.draft.submitCold();
@@ -147,6 +150,44 @@ describe("PaletteSessionDraft", () => {
       expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
     );
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
+  });
+
+  it("loads identities for every open agent-menu row and only the selection after closing", async () => {
+    const { host, context } = await mount({
+      agents: [
+        { id: "main", workspace: "/workspace" },
+        { id: "other", workspace: "/other" },
+      ],
+    });
+    const picker = expectDefined(
+      host.querySelector<AgentSelectElement>("openclaw-agent-select"),
+      "palette agent picker",
+    );
+    await picker.updateComplete;
+    for (const item of picker.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
+      item.scrollIntoView = vi.fn();
+    }
+    const trigger = expectDefined(
+      picker.querySelector<HTMLButtonElement>(".agent-select__trigger"),
+      "agent picker trigger",
+    );
+    const menu = expectDefined(picker.querySelector(".agent-select__menu"), "agent menu");
+    const ensure = vi.mocked(context.agentIdentity.ensure);
+    await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
+
+    ensure.mockClear();
+    trigger.click();
+    await waitForSolid(() => {
+      expect(menu.matches(":popover-open")).toBe(true);
+      expect(ensure).toHaveBeenLastCalledWith(["main", "other"]);
+    });
+
+    ensure.mockClear();
+    trigger.click();
+    await waitForSolid(() => {
+      expect(menu.matches(":popover-open")).toBe(false);
+      expect(ensure).toHaveBeenLastCalledWith(["main"]);
+    });
   });
 
   it("selects a hosted workspace in palette settings without cloning or dispatching a project", async () => {
@@ -521,7 +562,7 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
     );
   const select = () =>
     expectDefined(
-      fixture.host.querySelector<AgentSelect>("openclaw-agent-select"),
+      fixture.host.querySelector<AgentSelectElement>("openclaw-agent-select"),
       "palette agent select",
     );
   const worktree = () =>
@@ -647,7 +688,7 @@ describe("palette-only remembered settings", () => {
         );
         if (edited) {
           const select = expectDefined(
-            current.querySelector<AgentSelect>("openclaw-agent-select"),
+            current.querySelector<AgentSelectElement>("openclaw-agent-select"),
             "replacement agent",
           );
           select.onSelect("other");
@@ -666,7 +707,7 @@ describe("palette-only remembered settings", () => {
               ?.checked,
           ).toBe(!edited),
         );
-        expect(current.querySelector<AgentSelect>("openclaw-agent-select")?.value).toBe(
+        expect(current.querySelector<AgentSelectElement>("openclaw-agent-select")?.value).toBe(
           edited ? "main" : "other",
         );
       } finally {

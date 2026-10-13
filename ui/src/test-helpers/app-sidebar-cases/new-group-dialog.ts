@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
+import "../../lib/toast-host.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import {

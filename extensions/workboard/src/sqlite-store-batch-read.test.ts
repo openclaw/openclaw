@@ -11,7 +11,8 @@ import type {
   PersistedWorkboardNotificationSubscription,
 } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
-import { createWorkboardSqliteKernel } from "./test/database-config.js";
+import { createWorkboardSqliteKernel, workboardTestDatabaseInput } from "./test/database-config.js";
+import { runPostgresGroupedRollback } from "./test/postgres-fixture.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { sqliteTestAuxStores } from "./test/sqlite-store.js";
@@ -344,9 +345,26 @@ describe("workboard sqlite batch card read", () => {
     "rolls back a grouped write and claim after a later child %s fails",
     async (fault) => {
       await withStores(async (dbPath) => {
-        const stores = createWorkboardSqliteKernel(dbPath);
         const sibling = fixtureCard(0);
         const target = fixtureCard(2);
+        const postgresInput = workboardTestDatabaseInput();
+        if (postgresInput) {
+          const result = await runPostgresGroupedRollback(
+            { dbPath, postgresInput },
+            { kind: "groupedRollback", sibling, target, fault },
+          );
+          expect(result).toMatchObject({
+            failure:
+              fault === "constraint"
+                ? { error: { message: expect.stringContaining("UNIQUE constraint failed") } }
+                : { name: "TypeError" },
+            target: { version: 1, card: target },
+            sibling: { version: 1, card: sibling },
+          });
+          expect(result).toHaveProperty("board", undefined);
+          return;
+        }
+        const stores = createWorkboardSqliteKernel(dbPath);
         try {
           stores.cards.register(sibling.id, { version: 1, card: sibling });
           stores.cards.register(target.id, { version: 1, card: target });

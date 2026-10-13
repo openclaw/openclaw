@@ -69,16 +69,20 @@ export const routedCommandDefinitions = {
     await runConfigGet(args);
   }),
   "config-unset": defineRoutedCommand(parseConfigUnsetRouteArgs, async (args) => {
+    const runLocal = async () => {
+      const { runConfigUnset } = await import("../config-cli.js");
+      await runConfigUnset(args);
+    };
+    if (args.cliOptions?.dryRun) {
+      return runLocal();
+    }
     const { runWithLocalStateOwner } = await import("../local-state-owner.js");
     await runWithLocalStateOwner({
       method: "config unset",
       params: {},
       target: args.path,
       onForeignOwner: "refuse",
-      runLocal: async () => {
-        const { runConfigUnset } = await import("../config-cli.js");
-        await runConfigUnset(args);
-      },
+      runLocal,
     });
   }),
   "models-list": defineRoutedCommand(parseModelsListRouteArgs, async (args) => {

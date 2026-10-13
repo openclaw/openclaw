@@ -1,6 +1,20 @@
+import { statSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
-import { FsSafeError } from "../infra/fs-safe.js";
+import { FsSafeError, type ReadResult } from "../infra/fs-safe.js";
+
+const identityStat = statSync(new URL(import.meta.url));
+
+function identityReadResult(content: string): ReadResult {
+  const buffer = Buffer.from(content);
+  return {
+    buffer,
+    containment: "best-effort",
+    realPath: "/tmp/work/IDENTITY.md",
+    exactIdentity: { dev: 1n, ino: 1n },
+    stat: identityStat,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
@@ -11,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveAgentDir: vi.fn(),
-  rootRead: vi.fn(),
+  rootRead: vi.fn<() => Promise<ReadResult>>(),
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
@@ -117,7 +131,7 @@ describe("createAgent", () => {
       dir,
       bootstrapPending: true,
     }));
-    mocks.rootRead.mockResolvedValue({ buffer: Buffer.from("") });
+    mocks.rootRead.mockResolvedValue(identityReadResult(""));
     mocks.rootWrite.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
     mocks.parseBindingSpecs.mockReturnValue({ bindings: [], errors: [] });
@@ -459,7 +473,7 @@ describe("createAgent", () => {
       beforePersistentApply.mockImplementation(() => {
         throw closed;
       });
-      return { buffer: Buffer.from("# Identity\n") };
+      return identityReadResult("# Identity\n");
     });
     const prepareConfigCommit = vi.fn();
 

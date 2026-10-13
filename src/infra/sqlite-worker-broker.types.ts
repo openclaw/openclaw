@@ -5,13 +5,16 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
-  SqliteWorkerEphemeralTarget,
 } from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import type {
+  SqliteWorkerRequestCustody,
+  SqliteWorkerSlotCustody,
+} from "./sqlite-worker-request-custody.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type {
   createSqliteWorkerTransferOwner,
@@ -24,19 +27,18 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
     : never
   : never;
 type DispatchState = {
-  dispatched: boolean;
+  custody: SqliteWorkerRequestCustody;
   openNotEntered?: boolean;
   openRefused?: boolean;
 };
 export type Job = {
+  custody: SqliteWorkerRequestCustody;
   observation: WorkerRequestObservation;
   signal?: AbortSignal;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
-  nativeDispatched?: boolean;
-  requestPosted?: boolean;
   assertCurrent?: () => void;
   inputTransfer?: {
     id: number;
@@ -55,7 +57,7 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
-  ephemeral?: true;
+  custody: SqliteWorkerSlotCustody;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
@@ -70,7 +72,6 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
-  target?: SqliteWorkerEphemeralTarget;
   nativeLostObservers?: Set<(reason: Error) => void>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   nativeStopped: Promise<void>;
@@ -128,7 +129,6 @@ export type StoreClient = {
 };
 
 export type SqliteWorkerStoreOptions = {
-  target?: SqliteWorkerEphemeralTarget;
   runtimeGeneration?: RuntimeWorkerGeneration;
   moduleUrl: URL;
   databasePath: string;
@@ -138,7 +138,6 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
-  target?: SqliteWorkerEphemeralTarget;
   onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
   preparation?: Buffer;

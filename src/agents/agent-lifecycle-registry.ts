@@ -388,7 +388,7 @@ export function withAgentDeletion<T>(
                   assertAgentDeletionFinalInDatabase(db, { lease: lifetime.identity, predicate });
                   return true;
                 },
-                { path: statePath, env: context.environment },
+                { path: statePath, env: context.environment, allowNativeRead: true },
               );
               if (!found) {
                 throw new Error(`Agent ${id} deletion no longer owns database cleanup.`);

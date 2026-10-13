@@ -16,6 +16,7 @@ import {
   memoryEmbeddingCacheBatches,
   memoryEmbeddingCacheFitsInline,
   memoryPublicationBatches,
+  memoryPublicationGroup,
   memoryPublicationHeader,
   memoryPublicationInline,
 } from "./manager-publication-transfer.js";
@@ -83,7 +84,7 @@ export async function retryMemoryPublication<T>(params: {
 
 /** Small publications use one request; larger inputs retain their bounded transfer scope. */
 export async function publishMemorySource(params: {
-  replacement: MemorySourceIndexReplacement;
+  replacement: MemorySourceIndexReplacement | MemorySourceIndexReplacement[];
   state: () => MemoryPublicationState;
   execute: PublicationScope["execute"];
   run: <T>(operation: (scope: PublicationScope) => Promise<T>) => Promise<T>;
@@ -92,6 +93,16 @@ export async function publishMemorySource(params: {
   assertPublished: (() => void) | undefined;
 }) {
   const { replacement, state, execute, run, retry, prepare, assertPublished } = params;
+  if (Array.isArray(replacement)) {
+    return retry(() => {
+      // Preparation may exclude files edited while their embeddings were in flight.
+      const sources = memoryPublicationGroup(replacement);
+      if (!sources) {
+        throw new Error("Memory publication group exceeds its bounded transfer");
+      }
+      return execute({ type: "source.replace.group", input: { sources, state: state() } });
+    }, prepare);
+  }
   const inline = memoryPublicationInline(replacement);
   if (inline) {
     return retry(

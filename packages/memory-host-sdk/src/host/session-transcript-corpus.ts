@@ -11,14 +11,12 @@ import {
   cloneEnvWithPlatformSemantics,
   getRuntimeConfig,
   isSessionArchiveArtifactName,
-  isIncognitoOpenClawAgentSqlitePath,
   isUsageCountedSessionTranscriptFileName,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
-  readBoundIncognitoMemoryCorpus,
   readSessionTranscriptCorpusInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
@@ -54,6 +52,7 @@ function sqliteContentRevision(params: {
   sessionId: string;
   sessionKey?: string;
   storePath: string;
+  readOnly: boolean;
 }): string | undefined {
   try {
     return readTranscriptContentRevisionSync(params);
@@ -109,9 +108,11 @@ function toArtifactCorpusEntry(
   };
 }
 
-function resolveSessionTranscriptCorpusScope(agentId: string): SessionTranscriptCorpusScope {
+function resolveSessionTranscriptCorpusScope(
+  agentId: string,
+  cfg: SessionTranscriptCorpusScope["cfg"],
+): SessionTranscriptCorpusScope {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const cfg = getRuntimeConfig();
   const env = cloneEnvWithPlatformSemantics(process.env);
   const configuredStore = cfg.session?.store;
   const storePath = resolveStorePath(configuredStore, {
@@ -193,6 +194,7 @@ function projectSessionTranscriptCorpusEntries(
           sessionId,
           ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
           storePath: databasePath,
+          readOnly: options.readOnly === true,
         })
       : undefined;
     return {
@@ -377,36 +379,10 @@ async function readSessionTranscriptCorpusArtifacts(
 export async function listSessionTranscriptCorpusEntriesForAgent(
   agentId: string,
   options: SessionTranscriptCorpusOptions = {},
-  source?: {
-    memoryCorpus(
-      scope: SessionTranscriptCorpusScope,
-      options: SessionTranscriptCorpusOptions,
-    ): Promise<SessionTranscriptCorpusEntry[]>;
-  },
 ): Promise<SessionTranscriptCorpusEntry[]> {
-  const scope = resolveSessionTranscriptCorpusScope(agentId);
-  const capturedOptions = { ...options };
-  if (source) {
-    return source.memoryCorpus(scope, capturedOptions);
-  }
-  const incognito = readBoundIncognitoMemoryCorpus(scope, capturedOptions);
-  if (incognito) {
-    return incognito;
-  }
+  const { config, ...capturedOptions } = options;
+  const scope = resolveSessionTranscriptCorpusScope(agentId, config ?? getRuntimeConfig());
   const prepareArtifacts = () => readSessionTranscriptCorpusArtifacts(scope, capturedOptions);
-  if (
-    isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
-      agentId: scope.normalizedAgentId,
-      env: scope.env,
-    })
-  ) {
-    return projectSessionTranscriptCorpusEntries(
-      scope,
-      capturedOptions,
-      await prepareArtifacts(),
-      readCorpusSessionEntries(scope, capturedOptions),
-    );
-  }
   return readSessionTranscriptCorpusInWorker(scope, capturedOptions, prepareArtifacts);
 }
 
@@ -418,15 +394,12 @@ export function readSessionTranscriptCorpusInventory(
   databasePath: string,
   continuation?: CanonicalSessionReaderContinuation,
 ): SessionTranscriptCorpusEntry[] {
+  const readOnlyOptions = { ...options, readOnly: true };
   return projectSessionTranscriptCorpusEntries(
     scope,
-    options,
+    readOnlyOptions,
     artifacts,
-    readCorpusSessionEntries(
-      { ...scope, storePath: databasePath },
-      { ...options, readOnly: true },
-      continuation,
-    ),
+    readCorpusSessionEntries({ ...scope, storePath: databasePath }, readOnlyOptions, continuation),
     databasePath,
     continuation,
   );

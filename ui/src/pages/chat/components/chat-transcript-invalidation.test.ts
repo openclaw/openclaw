@@ -730,6 +730,7 @@ describe("chat transcript invalidation", () => {
       transcript.hostUpdated();
     };
     state.requestUpdate = renderPane;
+    vi.spyOn(pane.chatState, "requestBackgroundUpdate").mockImplementation(renderPane);
 
     renderPane();
     transcript.hostConnected();

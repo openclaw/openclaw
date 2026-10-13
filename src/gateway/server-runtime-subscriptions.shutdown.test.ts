@@ -14,7 +14,11 @@ import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.te
 import * as sessionObserverModel from "./session-observer-model.js";
 
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
+// mock-isolation: Subscription and transcript readers share the fixture config without live file I/O.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => runtimeConfigState.value,
+  getRuntimeConfigSnapshot: () => runtimeConfigState.value,
+}));
 vi.mock("../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({
     record: vi.fn(),
@@ -65,7 +69,10 @@ it.for(["before startup", "before inherited connection drain"] as const)(
     let draining: Promise<void> | undefined;
     try {
       runtimeConfigState.value = { agents: { defaults: { utilityModel: "test/utility" } } };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const entry = await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+      });
       await persistSessionTranscriptTurn(scope, {
         messages: Array.from({ length: 70 }, (_, index) => ({
           eventId: `shutdown-message-${index}`,
@@ -82,12 +89,16 @@ it.for(["before startup", "before inherited connection drain"] as const)(
         log: createSubsystemLogger("test/subscriptions-shutdown"),
       });
       if (phase === "before startup") {
-        expect((await unsubs.sessionActivitySummaries.ensure(target)).state).toBe("unavailable");
+        expect(
+          (await unsubs.sessionActivitySummaries.ensure(target, entry ?? undefined)).state,
+        ).toBe("unavailable");
         expect(prepared).not.toHaveBeenCalled();
         expect(complete).not.toHaveBeenCalled();
         return;
       }
-      await connectionWork.track(() => unsubs!.sessionActivitySummaries.ensure(target));
+      await connectionWork.track(() =>
+        unsubs!.sessionActivitySummaries.ensure(target, entry ?? undefined),
+      );
       // ensure returns a projection before the real transcript worker reaches the model.
       await withinTest(started.promise, signal);
       expect(complete).toHaveBeenCalledOnce();

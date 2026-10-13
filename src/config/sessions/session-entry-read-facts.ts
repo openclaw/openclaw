@@ -6,6 +6,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
+import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import type { SessionActorTarget } from "./session-actor-contract.js";
@@ -19,7 +20,6 @@ import type {
   SessionExactEntriesWorkerRequest,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import {
@@ -119,14 +119,14 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
     }) &&
     (request.projection === undefined ||
       request.projection === "full" ||
+      request.projection === "sharing" ||
       request.projection === "exact") &&
-    !request.lifecycleSessionKey &&
     !request.replyInitializationSessionKey &&
     !request.manualCompact &&
     !request.transcript &&
-    !request.runtimeTarget &&
     !request.includeAuthProfileSource &&
-    !request.includeColdMetadata
+    !request.includeColdMetadata &&
+    (request.projection !== "sharing" || (!request.lifecycleSessionKey && !request.runtimeTarget))
   );
 }
 
@@ -146,7 +146,7 @@ function captureTarget(database: Database, sessionKey: string): FileTarget | und
   };
 }
 
-/** Hits require the current committed write token; callers keep their own live assertions. */
+/** The actor owner admits committed facts; callers keep their own live assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
@@ -155,18 +155,15 @@ export function readRetainedSessionEntryFacts(
   if (!eligible(request)) {
     return undefined;
   }
-  const before = readSqliteDatabaseWriteTokenForPath(database.path);
-  if (!before) {
-    return undefined;
-  }
   const validation = captureOpenClawAgentDatabaseReadValidation(database);
   if (!validation || Atomics.load(new Int32Array(validation.validation.canonicalReady), 0) !== 1) {
     return undefined;
   }
   nativeOwner?.assertCurrent();
-  const projection = request.snapshotFields ?? "full";
+  const projection = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
   const entries: SessionEntryCohortResult["entries"] = [];
   const members: NonNullable<SessionEntryCohortResult["members"]> = {};
+  const sharingMembers: NonNullable<SessionEntryCohortResult["sharing"]>["members"] = [];
   const participantRecords: NonNullable<SessionEntryCohortResult["participantRecords"]> = {};
   let source: SessionEntryCohortResult["source"] | undefined;
   let databaseIdentity: SessionEntryCohortResult["databaseIdentity"] | undefined;
@@ -182,9 +179,10 @@ export function readRetainedSessionEntryFacts(
     ) {
       return undefined;
     }
-    const facts = readSessionActorEntryFacts(target);
+    const facts = readSessionActorEntryFacts(target, projection);
     if (
       !facts ||
+      (request.projection === "sharing" && (!facts.entry || facts.members === undefined)) ||
       (facts.snapshots !== "full" &&
         (projection === "full" || projection.some((field) => !facts.snapshots.includes(field)))) ||
       (request.includeMembers && facts.members === undefined) ||
@@ -212,15 +210,45 @@ export function readRetainedSessionEntryFacts(
     if (facts.entry) {
       entries.push({
         sessionKey: key,
-        entry: attachSessionEntrySnapshots(facts.entry, {}, projection),
+        entry: facts.entry,
       });
       if (facts.members) {
         members[key] = facts.members;
+        if (request.projection === "sharing") {
+          sharingMembers.push({
+            sessionKey: key,
+            identityIds: facts.members.map(({ identityId }) => identityId),
+          });
+        }
       }
       if (facts.participants?.length) {
         participantRecords[key] = facts.participants;
       }
     }
+  }
+  let lifecycleTimestamps: SessionEntryCohortResult["lifecycleTimestamps"] = {};
+  if (request.lifecycleSessionKey) {
+    const entry = entries.find(
+      ({ sessionKey }) => sessionKey === request.lifecycleSessionKey,
+    )?.entry;
+    const sessionStartedAt = resolveTimestamp(entry?.sessionStartedAt);
+    if (sessionStartedAt === undefined) {
+      return undefined;
+    }
+    lifecycleTimestamps = {
+      sessionStartedAt,
+      lastInteractionAt: resolveTimestamp(entry?.lastInteractionAt),
+    };
+  }
+  const runtimeTarget = request.runtimeTarget;
+  if (
+    runtimeTarget &&
+    !entries.some(
+      ({ sessionKey, entry }) =>
+        sessionKey === runtimeTarget.sessionKey && entry.sessionId === runtimeTarget.sessionId,
+    )
+  ) {
+    return undefined;
   }
   for (const expected of request.expected?.sessions ?? []) {
     const entry = entries.find(({ sessionKey }) => sessionKey === expected.sessionKey)?.entry;
@@ -232,13 +260,7 @@ export function readRetainedSessionEntryFacts(
       return undefined;
     }
   }
-  validation.assertCurrent();
-  nativeOwner?.assertCurrent();
-  if (
-    !source ||
-    !databaseIdentity ||
-    readSqliteDatabaseWriteTokenForPath(database.path) !== before
-  ) {
+  if (!source || !databaseIdentity) {
     return undefined;
   }
   return {
@@ -246,9 +268,20 @@ export function readRetainedSessionEntryFacts(
     entries,
     members,
     participantRecords,
-    lifecycleTimestamps: {},
+    lifecycleTimestamps,
+    ...(runtimeTarget ? { runtimeTarget: { ...runtimeTarget, storePath: database.path } } : {}),
     source,
     databaseIdentity,
+    ...(request.projection === "sharing"
+      ? {
+          sharing: {
+            source: { agentId: database.agentId, path: database.path },
+            databaseIdentity: `file:${databaseIdentity.identity}`,
+            members: sharingMembers,
+            placeholders: [],
+          },
+        }
+      : {}),
   };
 }
 
@@ -282,7 +315,7 @@ export function retainSessionEntryReadFacts(
     }
     const previous = readSessionActorEntryFacts(target);
     const entry = byKey.get(toUSVString(key));
-    const fields = request.snapshotFields ?? "full";
+    const fields = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
     retainSessionActorEntryFacts(
       target,
       {

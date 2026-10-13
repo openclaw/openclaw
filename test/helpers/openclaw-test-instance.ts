@@ -134,7 +134,7 @@ export type GatewayReadinessDiagnostic = {
   startedAtMs: number;
   deadlineMs: number;
   elapsedMs: number;
-  outcome: "ready" | "timeout" | "child-exit" | "aborted";
+  outcome: "ready" | "timeout" | "child-exit" | "aborted" | "agent-refused";
   attempts: number;
   probes: Array<ReadinessProbe & { startedAtMs: number; deadlineMs: number }>;
   omittedProbes: number;
@@ -343,6 +343,24 @@ export function formatGatewayReadinessDiagnostic(
 
 class GatewayReadinessError extends Error {}
 
+export class GatewayAgentAdmissionError extends GatewayReadinessError {
+  override readonly name = "GatewayAgentAdmissionError";
+
+  constructor(
+    readonly refusals: readonly Record<string, unknown>[],
+    diagnostic: string,
+  ) {
+    const details = refusals
+      .map((refusal) =>
+        typeof refusal.reason === "string" && typeof refusal.repairHint === "string"
+          ? `${refusal.reason}\n${refusal.repairHint}`
+          : JSON.stringify(refusal),
+      )
+      .join("\n");
+    super(`gateway agent database admission refused:\n${details}\n${diagnostic}`);
+  }
+}
+
 async function waitForGatewayReady(
   proc: OpenClawTestProcessReadiness,
   chunksOut: string[],
@@ -452,10 +470,42 @@ async function waitForGatewayReady(
                 probe.omittedFailing = Math.max(0, readiness.failing.length - 8);
               }
             }
-            if (!response.ok || !isRecord(readiness) || readiness.ready !== true) {
+            const agentDatabases =
+              isRecord(readiness) && Array.isArray(readiness.agentDatabases)
+                ? readiness.agentDatabases
+                : [];
+            const refused = agentDatabases.filter(
+              (entry): entry is Record<string, unknown> =>
+                isRecord(entry) &&
+                typeof entry.code === "string" &&
+                entry.code !== "agent-database-inspection-pending",
+            );
+            if (refused.length) {
+              outcome = "agent-refused";
+              throw new GatewayAgentAdmissionError(
+                refused,
+                formatGatewayReadinessDiagnostic({
+                  attempts,
+                  elapsedMs: Date.now() - startedAt,
+                  lastProbe: probe,
+                  lastFailedResponse,
+                  child: {
+                    pid: proc.pid ?? null,
+                    exitCode: proc.exitCode,
+                    signalCode: proc.signalCode,
+                  },
+                }),
+              );
+            }
+            if (
+              !response.ok ||
+              !isRecord(readiness) ||
+              readiness.ready !== true ||
+              agentDatabases.length > 0
+            ) {
               return false;
             }
-            // Readiness serves healthy agents while startup still owns deferred admission.
+            // All configured agents are admitted; also join the startup sidecars.
             probeAbort.signal.throwIfAborted();
             probe.endpoint = "/startupz";
             probe.phase = "headers";
@@ -492,6 +542,9 @@ async function waitForGatewayReady(
         }
       } catch (error) {
         signal?.throwIfAborted();
+        if (error instanceof GatewayAgentAdmissionError) {
+          throw error;
+        }
         probe.elapsedMs = Date.now() - attemptStartedAt;
         if (hasChildExited(proc)) {
           probe.error ??= "child-exit";
@@ -532,7 +585,7 @@ async function waitForGatewayReady(
             error,
           };
         }
-        // The 60-second desktop wait cannot exceed this bound at its existing 10ms cadence.
+        // Bound retained diagnostics even when callers extend the startup budget.
         if (probes.length < 8192) {
           probes.push({
             ...lastProbe,
@@ -547,13 +600,22 @@ async function waitForGatewayReady(
         signal?.removeEventListener("abort", abortProbe);
       }
 
-      const delayMs = Math.min(10, timeoutMs - (Date.now() - startedAt));
+      // Agent-launched fixtures can inherit the secret proxy: a closed listener
+      // must not produce a stream of proxied refusals at a fixed 10ms cadence.
+      const delayMs = Math.min(
+        10 * 2 ** Math.min(attempts - 1, 6),
+        500,
+        timeoutMs - (Date.now() - startedAt),
+      );
       if (delayMs > 0) {
-        await sleep(delayMs);
+        await sleep(delayMs, signal);
       }
     }
     signal?.throwIfAborted();
     throw startupError(`timeout waiting for gateway readiness on port ${port}`);
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw error;
   } finally {
     record?.({
       probe: "GET /readyz",
@@ -965,6 +1027,9 @@ export async function createOpenClawTestInstance(
         onError,
         onSpawnCleanup: (cleanup) => {
           constructionCleanup = cleanup;
+          void cleanup.catch(() => {
+            acceptingWork = false;
+          });
         },
       });
       owned = {
@@ -1168,8 +1233,11 @@ export async function createOpenClawTestInstance(
             }
             // Exit precedes pipe closure. Capture output after the owner's drain,
             // including when reclaiming its port failed after successful cleanup.
+            if (err instanceof GatewayAgentAdmissionError) {
+              err.message += `\n${formatLogs(stdout, stderr)}`;
+            }
             const startupError =
-              err instanceof GatewayReadinessError
+              err instanceof GatewayReadinessError && !(err instanceof GatewayAgentAdmissionError)
                 ? new Error(`${err.message}\n${formatLogs(stdout, stderr)}`, { cause: err })
                 : err;
             if (cleanupErrors.length > 0) {

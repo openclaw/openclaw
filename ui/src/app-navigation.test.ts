@@ -166,6 +166,12 @@ describe("routeIdFromPath", () => {
       segment: "release%2Ejs",
       reference: "release.js",
     },
+    {
+      personId: "team/alice",
+      label: undefined,
+      segment: "team%2Falice",
+      reference: "team/alice",
+    },
   ])("round-trips Activity links for $personId", ({ personId, label, segment, reference }) => {
     const pathname = `/ui/activity/${segment}`;
     expect(activityPersonLocation(personId, "/ui", label)).toEqual({

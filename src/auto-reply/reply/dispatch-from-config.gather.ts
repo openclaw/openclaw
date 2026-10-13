@@ -31,6 +31,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -77,6 +78,7 @@ export async function gatherDispatchRequest(
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
   onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void,
+  onDispose?: (dispose: () => void) => void,
 ) {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const ctx = isFinalizedInboundContext(params.ctx)
@@ -105,11 +107,42 @@ export async function gatherDispatchRequest(
         : {}),
     },
   };
+  let turnAdoption: PluginHookReplyDispatchContext["turnAdoption"];
+  const adoptInput = normalizedParams.replyOptions?.turnAdoptionLifecycle?.onAdopted;
+  if (adoptInput) {
+    let active = true;
+    let pending: Promise<void> | undefined;
+    let failure: { error: unknown } | undefined;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("Reply input adoption is no longer active.");
+      }
+      if (failure) {
+        throw failure.error;
+      }
+    };
+    turnAdoption = {
+      assertCurrent,
+      adopt: () => {
+        assertCurrent();
+        return (pending ??= Promise.resolve()
+          .then(adoptInput)
+          .catch((error: unknown) => {
+            failure = { error };
+            throw error;
+          }));
+      },
+    };
+    onDispose?.(() => {
+      active = false;
+    });
+  }
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   let replayUnsafeActivity = false;
   const state = {
     params: normalizedParams,
+    turnAdoption,
     messageAuditTerminal,
     allowInboundHandlers:
       replyOperationRunState.heartbeat === undefined &&
@@ -466,7 +499,7 @@ export async function gatherDispatchRequest(
     replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
     assertRequestCurrent();
   };
-  const verboseProgress = await createShouldEmitVerboseProgress({
+  const verboseProgress = createShouldEmitVerboseProgress({
     agentId: sessionAgentId,
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
@@ -480,6 +513,7 @@ export async function gatherDispatchRequest(
           "",
       ) ?? "off",
   });
+  onDispose?.(verboseProgress.release);
   const pluginRegistry =
     preparedReplyDispatchRuntime?.inboundPluginRegistry ??
     (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {

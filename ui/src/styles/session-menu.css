@@ -6,6 +6,21 @@ wa-dropdown.session-menu::part(menu) {
   box-shadow: var(--overlay-shadow);
 }
 
+.session-menu__panel {
+  --oc-overlay-distance: 0px;
+
+  min-width: 224px;
+  max-width: min(264px, calc(100dvw - 16px));
+}
+
+.session-menu__panel .oc-menu-item__icon {
+  margin-inline-end: 0;
+}
+
+.session-menu__panel > .session-menu__item {
+  padding: 0 8px;
+}
+
 /* Contributed dropdown rows share the menu typography without renderer-specific classes. */
 :is(.session-menu wa-dropdown-item, .session-menu__item, .sidebar-session-sort-menu__item) {
   font: inherit;
@@ -193,6 +208,13 @@ wa-dropdown-item.session-menu__advanced::part(submenu) {
 
 .session-menu__communication {
   padding: 2px 8px;
+}
+
+.session-menu__communication-heading {
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .session-menu__communication-row {

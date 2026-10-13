@@ -35,7 +35,7 @@ it("warns once per plugin and Inbox family, including after a plugin reload", as
       );
       expect(calls).toHaveLength(1);
       expect(calls[0]?.[0]).toContain(`mentionInbox.${method}Async`);
-      expect(calls[0]?.[0]).toContain("next Plugin SDK major");
+      expect(calls[0]?.[0]).toContain("later release after stable deprecation");
       expect(calls[0]?.[1]).toMatchObject({
         code: "DEP_SESSION_PERSISTENCE",
         type: "DeprecationWarning",

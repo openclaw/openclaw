@@ -401,6 +401,59 @@ describe("cron trigger script evaluator", () => {
     ]);
   });
 
+  it.each(["policy change", "capacity eviction"] as const)(
+    "retains an active runtime through %s and disposes it after its last evaluation",
+    async (retirement) => {
+      const config: OpenClawConfig = {};
+      const entered = createDeferred();
+      const release = createDeferred();
+      const disposed: number[] = [];
+      let generation = 0;
+      const prepareRuntime = vi.fn(async () => {
+        const current = ++generation;
+        return {
+          ...createPreparedRuntime(config),
+          createTools: async () => [],
+          [Symbol.dispose]: () => disposed.push(current),
+        };
+      });
+      let first = true;
+      const evaluate = createCronTriggerEvaluator({
+        config,
+        prepareRuntime,
+        runHeadless: async () => {
+          if (first) {
+            first = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return completed({ value: { fire: false } });
+        },
+      });
+      const request = { jobId: "active-cache", script: "return {}", state: null };
+      const active = evaluate(request);
+      try {
+        await entered.promise;
+        if (retirement === "policy change") {
+          await evaluate({ ...request, toolsAllow: [] });
+          await evaluate({ ...request, toolsAllow: [] });
+          expect(prepareRuntime).toHaveBeenCalledTimes(2);
+        } else {
+          for (let index = 0; index < 128; index++) {
+            await evaluate({ ...request, jobId: `cache-${index}` });
+          }
+        }
+        expect(disposed).toEqual([]);
+        release.resolve();
+        await expect(active).resolves.toMatchObject({ kind: "evaluated", fire: false });
+        expect(disposed).toEqual([1]);
+      } finally {
+        release.resolve();
+        await active;
+      }
+    },
+  );
+
   it.each([
     completed({ value: { fire: "yes" } }),
     completed({ value: { fire: true, message: 42 } }),

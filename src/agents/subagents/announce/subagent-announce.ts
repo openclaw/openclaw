@@ -43,7 +43,7 @@ import {
   shouldIgnorePostCompletionAnnounceForSession,
 } from "../registry/subagent-registry-read.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
-import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
@@ -242,7 +242,7 @@ async function runSubagentAnnounceFlowBound(
     if (failedTerminalOutcome && !params.terminalReply) {
       reply = undefined;
     }
-    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
+    let requesterDepth = await getSubagentDepthFromSessionStoreInWorker(targetRequesterSessionKey, {
       cfg: getRuntimeConfig(),
       agentId: targetRequesterAgentId,
     });
@@ -500,10 +500,13 @@ async function runSubagentAnnounceFlowBound(
           targetRequesterAgentId = fallback.requesterAgentId;
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey, {
-            cfg: getRuntimeConfig(),
-            agentId: targetRequesterAgentId,
-          });
+          requesterDepth = await getSubagentDepthFromSessionStoreInWorker(
+            targetRequesterSessionKey,
+            {
+              cfg: getRuntimeConfig(),
+              agentId: targetRequesterAgentId,
+            },
+          );
           requesterIsSubagent = requesterIsInternalSession();
         }
       }

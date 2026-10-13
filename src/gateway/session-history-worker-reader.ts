@@ -39,6 +39,12 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "recent-usage") {
+    return {
+      kind: "recent-usage",
+      result: options.readers.readRecentUsage(request.params.maxBytes),
+    };
+  }
   if (request.kind === "history-event-page") {
     return {
       kind: "history-event-page",

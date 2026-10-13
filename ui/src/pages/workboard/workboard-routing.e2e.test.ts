@@ -119,9 +119,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
       const headerGlyph = page.locator(".workboard-board-glyph--header openclaw-appearance-glyph");
-      await expect
-        .poll(() => headerGlyph.evaluate((element) => element.shadowRoot?.textContent ?? ""))
-        .toContain("⚙");
+      await expect.poll(() => headerGlyph.textContent()).toContain("⚙");
       await expect
         .poll(() => headerGlyph.evaluate((element) => getComputedStyle(element).color))
         .toBe("rgb(34, 197, 94)");
@@ -266,13 +264,13 @@ suite.define(() => {
         await expect
           .poll(() =>
             agentScope
-              .locator("wa-dropdown-item[data-agent-option]")
+              .locator(".agent-select__option[data-agent-option]")
               .filter({ hasText: "Main" })
               .evaluate((option) => option === document.activeElement),
           )
           .toBe(true);
         await agentScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Writer" })
           .click();
         await expect
@@ -283,15 +281,12 @@ suite.define(() => {
         await expect
           .poll(
             () =>
-              agentScope.locator("wa-dropdown").evaluate((dropdown) => {
-                const popup = dropdown.shadowRoot?.querySelector("wa-popup");
-                return {
-                  open: (dropdown as HTMLElement & { open: boolean }).open,
-                  popupActive: Boolean(
-                    (popup as (HTMLElement & { active: boolean }) | null)?.active,
-                  ),
-                };
-              }),
+              agentScope.evaluate((picker) => ({
+                open:
+                  picker.querySelector(".agent-select__trigger")?.getAttribute("aria-expanded") ===
+                  "true",
+                popupActive: picker.querySelector(".agent-select__menu")?.matches(":popover-open"),
+              })),
             { timeout: 5_000 },
           )
           .toEqual({ open: false, popupActive: false });

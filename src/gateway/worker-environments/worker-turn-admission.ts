@@ -9,12 +9,13 @@ import { withSessionPlacementForcedTerminalSettlement } from "../../agents/sessi
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -36,7 +37,7 @@ import {
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -211,24 +212,28 @@ export async function waitForInitialWorkerPlacement(params: {
     signal?: AbortSignal,
   ) => Promise<WorkerSessionPlacementRecord>;
   assertRunCurrent?: () => void;
-}): Promise<{ placement: ActiveWorkerPlacement; assertCurrent: () => void }> {
+}): Promise<{
+  placement: ActiveWorkerPlacement;
+  assertCurrent: () => void;
+  release: () => Promise<void>;
+}> {
   const identity = resolvePlacementIdentity(params.turn, params.placement);
   const target = {
     ...identity,
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const memory = captureSessionActorStorageOwner(target, {
+    assertCurrent: () => params.assertRunCurrent?.(),
+    authorize: () => params.assertRunCurrent?.(),
+  });
   const original = memory
-    ? memory.actor.snapshot(memory.authority)?.entry
-    : binding
-      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-      : loadSessionEntryReadOnly(target);
+    ? readCapturedSessionActorEntry(memory, target.sessionKey)
+    : await readSessionEntryReadOnlyInWorker(target, params.assertRunCurrent);
   const refuseSession = (): never => {
     throw createAbortError("Session changed while waiting for worker setup");
   };
   const source = original
-    ? captureWorkerTurnTranscriptSource(target, {
+    ? await prepareWorkerTurnTranscriptSource(target, {
         fields: ["sessionId", "archivedAt", "lifecycleRevision", "activeWriterRunId"],
         expected: {
           sessionId: identity.sessionId,
@@ -238,36 +243,42 @@ export async function waitForInitialWorkerPlacement(params: {
         },
         refuse: refuseSession,
       })
-    : refuseSession;
-  const assertSessionCurrent = composeSessionSourceAssertion(
-    [params.assertRunCurrent, source],
-    (assertSources) => {
-      params.turn.abortSignal?.throwIfAborted();
-      assertSources();
-    },
-  );
-  const completed = await params.wait(params.placement, params.turn.abortSignal);
-  // Setup completion is a notification, not authority: read the durable owner again.
-  let placement = completed;
-  const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
-    assertSession();
-    const current = params.placements.get(identity.sessionId);
-    if (
-      !current ||
-      !matchesWorkerPlacementTarget(current, completed) ||
-      current.sessionKey !== identity.sessionKey ||
-      current.agentId !== identity.agentId ||
-      current.executionMode !== params.placement.executionMode
-    ) {
-      throw createAbortError("Worker placement changed while waiting for setup");
-    }
-    placement = current;
-  });
-  assertCurrent();
-  return {
-    placement: requireActivePlacement(placement),
-    assertCurrent,
-  };
+    : refuseSession();
+  try {
+    const assertSessionCurrent = composeSessionSourceAssertion(
+      [params.assertRunCurrent, source],
+      (assertSources) => {
+        params.turn.abortSignal?.throwIfAborted();
+        assertSources();
+      },
+    );
+    const completed = await params.wait(params.placement, params.turn.abortSignal);
+    // Setup completion is a notification, not authority: read the durable owner again.
+    let placement = completed;
+    const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
+      assertSession();
+      const current = params.placements.get(identity.sessionId);
+      if (
+        !current ||
+        !matchesWorkerPlacementTarget(current, completed) ||
+        current.sessionKey !== identity.sessionKey ||
+        current.agentId !== identity.agentId ||
+        current.executionMode !== params.placement.executionMode
+      ) {
+        throw createAbortError("Worker placement changed while waiting for setup");
+      }
+      placement = current;
+    });
+    assertCurrent();
+    return {
+      placement: requireActivePlacement(placement),
+      assertCurrent,
+      release: () => source.release(),
+    };
+  } catch (error) {
+    await source.release();
+    throw error;
+  }
 }
 
 export function latestDurableWorkspaceConflict(
@@ -427,10 +438,15 @@ export async function executeLocalTurn<T>(params: {
       ...identity,
       storePath: reader?.database.path ?? resolveSessionStorePathForScope(identity),
     };
-    const memory = getSessionActorStorageBinding(scope);
+    const memory = captureSessionActorStorageOwner(scope, {
+      assertCurrent: assertPreflightCurrent,
+      authorize: assertPreflightCurrent,
+    });
     if (memory) {
       assertPreflightCurrent();
-      assertLocalWorkspace(memory.actor.snapshot(memory.authority)?.entry?.repositoryWorkspaceId);
+      assertLocalWorkspace(
+        readCapturedSessionActorEntry(memory, scope.sessionKey)?.repositoryWorkspaceId,
+      );
     } else if (reader) {
       const key = assertSessionEntryCohortScope(reader, scope);
       await reader.withRead(

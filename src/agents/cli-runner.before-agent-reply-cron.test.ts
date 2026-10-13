@@ -758,7 +758,11 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("preserves delivery after failed MCP retirement", async () => {
-    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+    executeMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;

@@ -5,6 +5,7 @@ import {
   resolveCurrentConversationSession,
   resolveCurrentConversationSessionAsync,
 } from "./conversation-registry.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type {
@@ -17,7 +18,6 @@ import {
 } from "./session-entry-read-request.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import type {
   PreparedSessionSourceAssertion,
   AsyncSessionSourceCheck,
@@ -65,12 +65,12 @@ type SessionEntryCurrentCheckParams = {
 
 async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentCheckParams) {
   const params = { ...inputParams };
-  const incognito = captureIncognitoSessionSource(params);
-  const storePath = incognito
-    ? "kind" in incognito
-      ? incognito.path
-      : incognito.actor.path
-    : (params.storePath ?? resolveSessionStorePathForScope(params));
+  const incognito = captureMemoryExactSessionReader(params, () => {
+    if (params.isActive?.() === false) {
+      throw new Error(params.errorMessage ?? "Session operation is no longer active");
+    }
+  });
+  const storePath = incognito?.path ?? params.storePath ?? resolveSessionStorePathForScope(params);
   const input = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -78,10 +78,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
     projection: params.fields ? undefined : ("list" as const),
     env: params.env,
   };
-  const captured =
-    incognito && "kind" in incognito
-      ? { scope: { ...input, env: incognito.env }, agentId: incognito.agentId }
-      : captureSessionEntryReadScope(input);
+  const captured = captureSessionEntryReadScope(input);
   const scope = { ...captured.scope, storePath: captured.scope.storePath ?? storePath };
   const fields = [
     ...new Set([
@@ -115,9 +112,15 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
         throw new Error("Session currentness requires a valid conversation address");
       }
       const conversationStorePath = condition.storePath ?? scope.storePath;
-      const locator = captureSessionStoreReadCandidate(
-        resolveUnsuffixedSqliteTargetFromSessionStorePath(conversationStorePath).path,
-      );
+      const locator = captureMemoryExactSessionReader({
+        agentId: condition.agentId ?? params.agentId,
+        storePath: conversationStorePath,
+        env: scope.env,
+      })
+        ? undefined
+        : captureSessionStoreReadCandidate(
+            resolveUnsuffixedSqliteTargetFromSessionStorePath(conversationStorePath).path,
+          );
       return {
         scope: {
           agentId: condition.agentId ?? params.agentId,
@@ -152,24 +155,17 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       env: scope.env,
     };
     const identity = incognito ? undefined : readDatabasePathIdentitySync(target.storePath);
-    const claim =
-      incognito && !("kind" in incognito)
-        ? incognito.actor.sessions.captureCurrent(target.sessionKey)
-        : undefined;
     const selectedStore = owner.selectedStore;
-    const native = owner.kind === "native";
+    let active = true;
+    const release = () => {
+      active = false;
+    };
     const sourceIsCurrent = () => {
-      if (incognito) {
-        incognito.admissionSignal?.throwIfAborted();
-        if ("kind" in incognito) {
-          incognito.assertCurrent();
-        } else {
-          incognito.actor.assertReadable();
-          claim!.assertCurrent();
-        }
-        return true;
+      if (!active) {
+        return false;
       }
-      if (native) {
+      if (incognito) {
+        incognito.assertCurrent();
         return true;
       }
       try {
@@ -177,7 +173,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
           inputCandidates.some((candidate) => !isSessionStoreReadCandidateCurrent(candidate)) ||
           alternatives.some((alternative) =>
             alternative.conversations.some(
-              ({ locator }) => !isSessionStoreReadCandidateCurrent(locator),
+              ({ locator }) => locator && !isSessionStoreReadCandidateCurrent(locator),
             ),
           ) ||
           (selectedStore &&
@@ -201,9 +197,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       }
       if (fields.length > 0) {
         const current = incognito
-          ? "kind" in incognito
-            ? undefined
-            : incognito.actor.sessions.readCapability(target.sessionKey)
+          ? incognito.read(target.sessionKey)
           : loadSessionEntryReadOnly(readScope);
         if (
           (current === undefined) !== (selected === undefined) ||
@@ -227,14 +221,13 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
         refuse();
       }
     };
-    // Pending publishers have no persistent target; incognito keeps its existing adapter.
+    // Pending publishers and memory actors have no persistent source row.
     const nativeSource =
       incognito ||
-      native ||
       !identity?.key.startsWith("file:") ||
       alternatives.some((alternative) =>
         alternative.conversations.some(
-          ({ locator }) => locator.physicalPath !== identity?.canonicalPath,
+          ({ locator }) => locator?.physicalPath !== identity?.canonicalPath,
         ),
       );
     const source: PreparedSessionSourceAssertion =
@@ -326,7 +319,6 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       fields.every((field, index) => isDeepStrictEqual(current?.[field], selectedValues[index]));
     const entryCurrent: SessionEntryCurrentCheck | undefined =
       !incognito &&
-      !native &&
       identity?.key.startsWith("file:") &&
       alternatives.every((alternative) => alternative.conversations.length === 0)
         ? {
@@ -347,14 +339,14 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
         : undefined;
     const isCurrentAsync: AsyncSessionSourceCheck = Object.assign(
       async () => {
-        if (incognito || native) {
+        if (incognito) {
           return check();
         }
         const sameStore =
           identity?.key.startsWith("file:") &&
           alternatives.every((alternative) =>
             alternative.conversations.every(
-              ({ locator }) => locator.physicalPath === identity.canonicalPath,
+              ({ locator }) => locator?.physicalPath === identity.canonicalPath,
             ),
           );
         let matches: readonly number[];
@@ -448,6 +440,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       assertCurrentAsync,
       source: preparedSource,
       entryCurrent,
+      release,
     };
   });
 }
@@ -463,5 +456,6 @@ export async function captureSessionEntryCurrentCheckAsyncInternal(
     assertCurrent: prepared.assertCurrentAsync,
     source: prepared.source,
     entryCurrent: prepared.entryCurrent,
+    release: prepared.release,
   };
 }

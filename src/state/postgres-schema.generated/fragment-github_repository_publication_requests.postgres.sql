@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."github_repository_publication_requests" (
+CREATE TABLE "github_repository_publication_requests" (
   "request_id" text COLLATE "C" NOT NULL,
   "owner_profile_id" text COLLATE "C",
   "connection_generation" text COLLATE "C",
@@ -60,8 +56,6 @@ CREATE TABLE "openclaw_state"."github_repository_publication_requests" (
   CHECK (("last_effect" IS NULL AND "effect_state" IS NULL) OR ("last_effect" IS NOT NULL AND "effect_state" IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX "idx_github_repository_publication_personal_request" ON "openclaw_state"."github_repository_publication_requests" (("owner_profile_id") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("idempotency_key") ASC NULLS FIRST) WHERE "owner_profile_id" IS NOT NULL;
+CREATE UNIQUE INDEX "idx_github_repository_publication_personal_request" ON "github_repository_publication_requests" (("owner_profile_id") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("idempotency_key") ASC NULLS FIRST) WHERE "owner_profile_id" IS NOT NULL;
 
-CREATE UNIQUE INDEX "idx_github_repository_publication_shared_request" ON "openclaw_state"."github_repository_publication_requests" (("session_id") ASC NULLS FIRST, ("idempotency_key") ASC NULLS FIRST) WHERE "owner_profile_id" IS NULL;
-
-COMMIT;
+CREATE UNIQUE INDEX "idx_github_repository_publication_shared_request" ON "github_repository_publication_requests" (("session_id") ASC NULLS FIRST, ("idempotency_key") ASC NULLS FIRST) WHERE "owner_profile_id" IS NULL;

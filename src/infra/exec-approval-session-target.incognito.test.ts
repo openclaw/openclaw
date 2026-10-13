@@ -1,23 +1,8 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
-import path from "node:path";
-import { afterAll, beforeAll, expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { withEnv } from "../test-utils/env.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestAccountId,
@@ -25,10 +10,20 @@ import {
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-let actor: IncognitoAgentDatabaseExecution;
-let env: NodeJS.ProcessEnv;
+vi.mock("node:sqlite", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:sqlite")>()),
+  DatabaseSync: vi.fn(function () {
+    throw new Error("Incognito approval routing opened SQLite");
+  }),
+}));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: vi.fn(function () {
+    throw new Error("Incognito approval routing allocated a worker");
+  }),
+}));
+const authority = { assertCurrent() {}, authorize() {} };
+afterEach(() => memorySessionActorOwners.reset());
 
 function request(sessionKey: string): ExecApprovalRequest {
   return {
@@ -38,7 +33,6 @@ function request(sessionKey: string): ExecApprovalRequest {
     expiresAtMs: 2,
   };
 }
-
 function delivery(accountId: string): SessionEntry["delivery"] {
   return {
     kind: "external",
@@ -47,40 +41,41 @@ function delivery(accountId: string): SessionEntry["delivery"] {
     route: { channel: "slack", accountId, target: { to: "channel:C123", chatType: "channel" } },
   };
 }
-
-beforeAll(async () => {
-  env = { OPENCLAW_STATE_DIR: tempDirs.make("approval-delivery-actor-") };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
-});
-
-afterAll(async () => {
-  await actor?.close();
-  await closeOpenClawStateDatabaseAsync();
-});
-
-it("routes synchronous approval selectors from current actor delivery facts, including native grants", async () => {
+async function fixture() {
   const sessionKey = "agent:main:dashboard:incognito-approval-delivery";
-  await actor.sessions.create(authority, {
-    sessionKey,
-    entry: {
-      sessionId: "approval-delivery",
-      updatedAt: 1,
-      incognito: true,
-      delivery: delivery("ops"),
-    },
+  const path = resolveIncognitoOpenClawAgentSqlitePath({
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: "/synthetic/approval" },
   });
-  const params = {
-    cfg: { session: { store: actor.path } },
-    request: request(sessionKey),
-    channel: "slack",
+  const owner = memorySessionActorOwners.get({ agentId: "main", path });
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    {
+      assertCurrent() {},
+      assertReadable() {},
+    },
+  );
+  const created = await actor.storage!.mutate(
+    {
+      type: "session.entry.create",
+      input: {
+        entry: { sessionId: "approval", updatedAt: 1, incognito: true, delivery: delivery("ops") },
+      },
+    },
+    authority,
+  );
+  expect(created.kind).toBe("committed");
+  return {
+    owner,
+    actor,
+    sessionKey,
+    binding: { actor, authority, agentId: "main", path },
+    params: { cfg: { session: { store: path } }, request: request(sessionKey), channel: "slack" },
   };
+}
+
+it.each([true, false])("routes from committed memory delivery facts (bound=%s)", async (bound) => {
+  const { actor, binding, params } = await fixture();
   const select = (accountId: string) =>
     doesApprovalRequestSelectChannelAccount({
       ...params,
@@ -88,120 +83,43 @@ it("routes synchronous approval selectors from current actor delivery facts, inc
       defaultAccountId: "default",
       eligibleAccountIds: ["default", "ops", "audit"],
     });
-  const sql = observeHostDataSql();
-  try {
-    await withIncognitoSessionActor(actor, async () => {
-      expect(select("ops")).toBe(true);
-      expect(select("default")).toBe(false);
-      expect(resolveExecApprovalSessionTarget(params)).toMatchObject({
-        channel: "slack",
-        accountId: "ops",
-        to: "channel:C123",
-      });
-      let grants = 0;
-      await patchSessionEntryCore(
-        { agentId: actor.agentId, env, storePath: actor.path, sessionKey },
-        () => ({ delivery: delivery("audit") }),
-        {
-          assertCommitAllowed() {
-            grants += 1;
-            expect(select("ops")).toBe(true);
-            expect(select("audit")).toBe(false);
-            expect(resolveExecApprovalSessionTarget(params)?.accountId).toBe("ops");
-          },
-        },
-      );
-      expect(grants).toBe(2);
-      expect(select("ops")).toBe(false);
-      expect(select("audit")).toBe(true);
-      expect(resolveExecApprovalSessionTarget(params)?.accountId).toBe("audit");
-      expect(
-        resolveExecApprovalSessionTarget({
-          ...params,
-          request: request("agent:main:dashboard:incognito-missing-delivery"),
-        }),
-      ).toBeNull();
-    });
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
-
-it("keeps ordinary unbound private approval routing on the native owner without allocating an actor", async () => {
-  const nativeEnv = { OPENCLAW_STATE_DIR: tempDirs.make("approval-delivery-native-") };
-  const sessionKey = "agent:main:dashboard:incognito-native-approval";
-  const storePath = path.join(
-    nativeEnv.OPENCLAW_STATE_DIR,
-    "agents",
-    "main",
-    "sessions",
-    "sessions.json",
-  );
-  await replaceSessionEntry(
-    { env: nativeEnv, storePath, sessionKey },
-    { sessionId: "native-approval", updatedAt: 1, incognito: true, delivery: delivery("native") },
-  );
-  const params = {
-    cfg: { session: { store: storePath } },
-    request: request(sessionKey),
-    channel: "slack",
-  };
-  withEnv(nativeEnv, () => {
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(nativeEnv)).toEqual([]);
-    expect(resolveApprovalRequestAccountId(params)).toBe("native");
-    expect(resolveExecApprovalSessionTarget(params)?.accountId).toBe("native");
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(nativeEnv)).toEqual([]);
-  });
-});
-
-it("refuses a retained actor after replacement instead of selecting its successor's route", async () => {
-  const replacementEnv = { OPENCLAW_STATE_DIR: tempDirs.make("approval-delivery-replacement-") };
-  const old = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env: replacementEnv,
-    authority,
-  });
-  assert(old);
-  const sessionKey = "agent:main:dashboard:incognito-replaced-approval";
-  const entry: SessionEntry = {
-    sessionId: "replaced-approval",
-    updatedAt: 1,
-    incognito: true,
-    delivery: delivery("old"),
-  };
-  await old.sessions.create(authority, { sessionKey, entry });
-  await old.close();
-  const replacement = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env: replacementEnv,
-    authority,
-  });
-  assert(replacement);
-  try {
-    await replacement.sessions.create(authority, {
-      sessionKey,
-      entry: { ...entry, delivery: delivery("successor") },
-    });
-    const params = {
-      cfg: { session: { store: old.path } },
-      request: request(sessionKey),
+  const run = async () => {
+    expect(select("ops")).toBe(true);
+    expect(select("default")).toBe(false);
+    expect(resolveExecApprovalSessionTarget(params)).toMatchObject({
       channel: "slack",
-    };
-    expect(() =>
-      withIncognitoSessionBinding({ actor: old }, () => resolveApprovalRequestAccountId(params)),
-    ).toThrow(IncognitoSessionEndedError);
-    expect(() =>
-      withIncognitoSessionBinding({ actor: old }, () => resolveExecApprovalSessionTarget(params)),
-    ).toThrow(IncognitoSessionEndedError);
+      accountId: "ops",
+      to: "channel:C123",
+    });
+    const changed = await actor.storage!.mutate(
+      {
+        type: "session.entry.patch",
+        input: { operation: { kind: "fields", patch: { delivery: delivery("audit") } } },
+      },
+      authority,
+    );
+    expect(changed.kind).toBe("committed");
+    expect(select("ops")).toBe(false);
+    expect(select("audit")).toBe(true);
+    expect(resolveExecApprovalSessionTarget(params)?.accountId).toBe("audit");
     expect(
-      withIncognitoSessionBinding({ actor: replacement }, () =>
-        resolveApprovalRequestAccountId(params),
-      ),
-    ).toBe("successor");
-  } finally {
-    await replacement.close();
-  }
+      resolveExecApprovalSessionTarget({
+        ...params,
+        request: request("agent:main:dashboard:incognito-missing"),
+      }),
+    ).toBeNull();
+  };
+  await (bound ? runWithSessionActorStorage(binding, run) : run());
+});
+
+it("refuses a retained session after close while unbound routing observes absence", async () => {
+  const { owner, sessionKey, binding, params } = await fixture();
+  owner.closeSession(sessionKey);
+  expect(() =>
+    runWithSessionActorStorage(binding, () => resolveApprovalRequestAccountId(params)),
+  ).toThrow("closed");
+  expect(() =>
+    runWithSessionActorStorage(binding, () => resolveExecApprovalSessionTarget(params)),
+  ).toThrow("closed");
+  expect(resolveExecApprovalSessionTarget(params)).toBeNull();
 });

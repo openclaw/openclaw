@@ -28,7 +28,7 @@ import { prepareSessionRepositoryWorkspace } from "./server-methods/session-crea
 import { createGatewaySession } from "./session-create-service.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
 describe("Gateway creation preparation", () => {
   it.each(["caller", "database"] as const)(
@@ -141,7 +141,10 @@ describe("Gateway creation preparation", () => {
         if (!first.ok) {
           throw new Error(first.error.message);
         }
-        const scope = { ...resolveGatewaySessionStoreTarget({ cfg: {}, key }), sessionKey: key };
+        const scope = {
+          ...(await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key })),
+          sessionKey: key,
+        };
         const transcriptScope = { ...scope, sessionId: first.entry.sessionId };
         for (const message of [
           { role: "user", content: "Keep this conversation when moving the workspace." },
@@ -242,7 +245,7 @@ describe("Gateway creation preparation", () => {
       if (!first.ok) {
         throw new Error(first.error.message);
       }
-      const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
+      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key });
       const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
       const entered = createDeferredCore();
       const rotate = createDeferredCore();
@@ -312,7 +315,7 @@ describe("Gateway creation preparation", () => {
         expect(
           (await createGatewaySession({ ...common, key: "agent:main:sibling", label: "Taken" })).ok,
         ).toBe(true);
-        const target = resolveGatewaySessionStoreTarget({ cfg: {}, key });
+        const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key });
         const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
         const entered = createDeferredCore();
         const proceed = createDeferredCore();

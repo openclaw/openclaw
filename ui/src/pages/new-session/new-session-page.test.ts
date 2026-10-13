@@ -173,8 +173,9 @@ describe("new session draft route ownership", () => {
       page
         .querySelector<HTMLElement>("openclaw-chat-pasted-text .chat-attachment-file__open")
         ?.click();
-      await expect.poll(() => page.querySelector("openclaw-chat-detail-panel")).not.toBeNull();
       await customElements.whenDefined("openclaw-chat-detail-panel");
+      await settle(page);
+      await expect.poll(() => page.querySelector("openclaw-chat-detail-panel")).not.toBeNull();
       await page.querySelector<ChatDetailPanel>("openclaw-chat-detail-panel")?.updateComplete;
       await expect
         .poll(() => {

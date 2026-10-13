@@ -5,8 +5,7 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -121,6 +120,42 @@ it.each(["deadline", "revocation"])(
   },
 );
 
+it("admits foreground writes while 65 prepared history reads remain queued", async ({ signal }) => {
+  observed.serializePools = true;
+  const request = input();
+  const readersOccupied = createDeferredCore();
+  const releaseReaders = createDeferredCore();
+  let started = 0;
+  let completed = 0;
+  observed.run.mockImplementation(async () => {
+    if (++started === SESSION_TRANSCRIPT_FOREGROUND_WORKERS) {
+      readersOccupied.resolve();
+    }
+    await releaseReaders.promise;
+    completed++;
+    return { ok: true, value: { kind: "transcript-watermark", watermark: undefined } };
+  });
+  const reads = Array.from({ length: 65 }, () =>
+    withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readWatermark({ scope: { ...request.scope, sessionId: "history-backlog" } }),
+    ),
+  );
+  let writer: Promise<string> | undefined;
+  try {
+    await withinTest(readersOccupied.promise, signal);
+    expect(started).toBe(SESSION_TRANSCRIPT_FOREGROUND_WORKERS);
+    expect(historyLane.pending).toBe(65);
+    writer = runOpenClawAgentWriteAdmission(request.database, () => "foreground admitted");
+    await expect(withinTest(writer, signal)).resolves.toBe("foreground admitted");
+    expect(completed).toBe(0);
+    expect(historyLane.pending).toBe(65);
+  } finally {
+    releaseReaders.resolve();
+    await Promise.allSettled([...reads, ...(writer ? [writer] : [])]);
+  }
+  expect(completed).toBe(65);
+});
+
 it("keeps cold reads progressing while history searches await the same writer", async () => {
   observed.serializePools = true;
   const request = input();
@@ -230,7 +265,7 @@ it("hands admitted read deadlines to the worker pool", async () => {
   }
 });
 
-it("retains branch reads across ten-minute gaps in the maintenance owner", async () => {
+it("retains branch reads across four-minute gaps and retires after five idle minutes", async () => {
   const { database, scope } = input();
   const request = {
     database,
@@ -254,14 +289,14 @@ it("retains branch reads across ten-minute gaps in the maintenance owner", async
   try {
     await expect(runSessionBranchSummaryWorkerRequest(request, signal)).resolves.toEqual(result);
     expect(maintenanceLane.nativeSequence).toBe(before + 1);
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(observed.rotate).not.toHaveBeenCalled();
 
     await expect(runSessionBranchSummaryWorkerRequest(request, signal)).resolves.toEqual(result);
     expect(maintenanceLane.nativeSequence).toBe(before + 2);
     expect([historyLane.nativeSequence, projectionLane.nativeSequence]).toEqual(sequences);
     expect(independentRead).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
     expect(observed.rotate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(observed.rotate).toHaveBeenCalledOnce();
@@ -290,7 +325,7 @@ it.each([historyLane, maintenanceLane])(
     expect(lane.pending).toBe(0);
     expect(observed.unregister).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
     await prewarmSessionHistoryWorker(request.database, lane);
     expect(observed.run).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);

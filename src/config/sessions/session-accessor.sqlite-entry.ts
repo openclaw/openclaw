@@ -11,6 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
@@ -47,7 +48,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
-import { patchSessionActorEntry } from "./session-actor-entry-adapter.js";
+import { patchSessionActorEntryInScope } from "./session-actor-entry-adapter.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
@@ -70,7 +71,6 @@ import type {
 import { buildInboundSessionCreationStamp } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
-import { patchIncognitoSessionEntry } from "./session-incognito-entry-patch.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -255,9 +255,13 @@ async function patchSessionEntryInScope(
   options: SqliteSessionEntryPatchOptions,
   databaseAgentId?: string,
 ): Promise<SessionEntry | null> {
-  const memory = getSessionActorStorageBinding(scope);
+  const memory = patchSessionActorEntryInScope(scope, {
+    update,
+    options,
+    sessionKey: scope.sessionKey,
+  });
   if (memory) {
-    return patchSessionActorEntry(memory, { update, options, sessionKey: scope.sessionKey });
+    return (await memory).entry;
   }
   const resolved = resolveSqliteScope(scope);
   if (databaseAgentId) {
@@ -312,13 +316,12 @@ async function patchSessionEntryTargetInScope(
   update: SqliteSessionEntrySnapshotPatchParams["update"],
   options: SqliteSessionEntryPatchOptions,
 ): Promise<SessionEntry | null> {
-  const memory = getSessionActorStorageBinding({ ...scope, sessionKey: scope.target.canonicalKey });
+  const memory = patchSessionActorEntryInScope(
+    { ...scope, sessionKey: scope.target.canonicalKey },
+    { update, options, sessionKey: scope.target.canonicalKey },
+  );
   if (memory) {
-    return patchSessionActorEntry(memory, {
-      update,
-      options,
-      sessionKey: scope.target.canonicalKey,
-    });
+    return (await memory).entry;
   }
   const source = scope.readSource;
   const resolved: ResolvedSqliteScope = source
@@ -368,8 +371,6 @@ async function patchSqliteSessionEntrySnapshot(
     databaseOptions,
     databasePath,
     targetIdentity,
-    incognito,
-    incognitoBinding,
     useWorker,
     ensureIdentitySource,
     assertCapturedSource,
@@ -434,35 +435,22 @@ async function patchSqliteSessionEntrySnapshot(
   };
   const withDatabase = <T>(operation: () => T | Promise<T>) => {
     assertCurrent?.();
-    return !incognito && !getOpenClawAgentDatabaseIfOpen(databaseOptions)
+    return !getOpenClawAgentDatabaseIfOpen(databaseOptions)
       ? withOpenClawAgentDatabaseRuntime(databaseOptions, operation, assertCurrent)
       : operation();
   };
-  if (incognitoBinding) {
-    const result = await patchIncognitoSessionEntry({
-      ...incognitoBinding,
-      sessionKey,
-      selection: params.selection,
-      assertCurrent() {
-        assertCurrent?.();
-        options.workerGuard?.assertCurrent?.();
-      },
-      assertCommitAllowed: () => {
-        options.assertCommitAllowed?.();
-        options.workerGuard?.assertMutationAllowed?.();
-      },
-      shouldCommit: options.shouldCommit,
-      source: options.workerGuard?.source,
-      prepare,
-      onCommitted: options.onCommitted,
-      onCommittedSource: options.onCommittedSource,
-    });
-    return result.entry;
-  }
   let wrote = false;
+  // A background owner can retain the same absent store before its first write.
+  const creatingExecution =
+    useWorker && !options.retainedExecution && targetIdentity.key.startsWith("path:")
+      ? captureOpenClawAgentDatabaseExecution(databaseOptions, {
+          expectedCreationIdentity: targetIdentity,
+        })
+      : undefined;
   const workerPatch = (source: PreparedSessionSourceAuthority, assertSource?: () => void) =>
     patchSessionEntryInWorker({
       database: { ...databaseOptions, path: databasePath },
+      expectedCreationIdentity: targetIdentity,
       databaseIdentity:
         typeof captured?.databaseIdentity === "string" ? captured.databaseIdentity : undefined,
       agentId: resolved.agentId,
@@ -475,7 +463,7 @@ async function patchSqliteSessionEntrySnapshot(
       },
       shouldCommit: options.shouldCommit,
       preparedSource: source,
-      retainedExecution: options.retainedExecution,
+      retainedExecution: options.retainedExecution ?? creatingExecution,
       reduction:
         typeof params.update === "function"
           ? undefined
@@ -504,7 +492,7 @@ async function patchSqliteSessionEntrySnapshot(
     });
   const sourceAssertion = options.workerGuard?.source;
   // Reserve the existing FIFO before async source planning or selecting either writer path.
-  const committed = await runExclusiveSqliteSessionWrite(
+  const pendingCommit = runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
       if (useWorker) {
@@ -512,8 +500,7 @@ async function patchSqliteSessionEntrySnapshot(
         const locality: "same-store" | "cross-store" =
           !source.nativeSource &&
           source.checks.every(
-            ({ predicate }) =>
-              targetIdentity.key === `file:${String(predicate.source.databaseIdentity)}`,
+            ({ predicate }) => targetIdentity.key === `file:${predicate.source.databaseIdentity}`,
           )
             ? "same-store"
             : "cross-store";
@@ -636,6 +623,12 @@ async function patchSqliteSessionEntrySnapshot(
       ? "foreground-reentrant"
       : "foreground",
   );
+  let committed: SessionEntry | null;
+  try {
+    committed = await pendingCommit;
+  } finally {
+    await creatingExecution?.release();
+  }
   if (wrote) {
     kickSessionEntryMaintenanceAfterWrite({
       activeSessionKey: sessionKey,
@@ -680,7 +673,10 @@ export async function recordInboundSessionMeta(
 
 /** Updates last-route/delivery metadata without refreshing activity timestamps. */
 export async function updateSessionLastRoute(
-  params: UpdateSessionLastRouteParams & { assertCommitAllowed?: () => void },
+  params: UpdateSessionLastRouteParams & {
+    assertCommitAllowed?: () => void;
+    workerGuard?: SessionEntryPatchGuard;
+  },
 ): Promise<SessionEntry | null> {
   return await updateSessionLastRouteInScope(
     { sessionKey: params.sessionKey, storePath: params.storePath },

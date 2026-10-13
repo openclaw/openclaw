@@ -23,6 +23,7 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+import { personalCredentialPublication } from "./user-model-account-authority.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import {
   invalidUserModelAccounts as invalidAccounts,
@@ -181,7 +182,7 @@ export function registerUserModelAuthProfileSecrets(credential: AuthProfileCrede
   }
 }
 
-export function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
+function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
   return JSON.stringify(profileSchema.parse({ version: 1, ...profile }));
 }
 
@@ -198,8 +199,12 @@ function writeProfile(
   owner: string,
   authProfileId: string,
   profile: UserModelAuthProfile,
+  replacement = false,
 ): void {
   writeRecord(db, owner, `model-account:${authProfileId}`, encodeUserModelAuthProfile(profile));
+  personalCredentialPublication.stagePostimages(db, [
+    { id: authProfileId, credential: profile.credential, replacement },
+  ]);
 }
 
 function accountLinks(record: UserModelLinks): UserProfileAuthLink[] {
@@ -423,7 +428,7 @@ export function connectUserModelAccount(
       const authProfileId = canReplace ? replacement.id : `personal:${owner}:${randomUUID()}`;
       record.links[credential.provider] = { authProfileId, updatedAt: Date.now() };
       params.assertCurrent("transaction");
-      writeProfile(db, owner, authProfileId, { credential });
+      writeProfile(db, owner, authProfileId, { credential }, true);
       writeLinks(db, owner, record);
       params.assertCurrent("commit");
       return { authProfileId, links: accountLinks(record) };

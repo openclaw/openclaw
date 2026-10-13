@@ -446,6 +446,30 @@ describe("operator access cancellation", () => {
     },
   );
 
+  it("does not append a retained run's partial after a session reset", async () => {
+    await withCancellationFixture(async (f) => {
+      const source = new AbortController();
+      const guest = f.register("reset-before-cancellation");
+      f.context.chatRunState.getOrCreate("reset-before-cancellation").buffer =
+        "Progress from the previous session lifecycle.";
+      const retained = await f.retain(source.signal, "reset-before-cancellation", guest.entry);
+      retained.armCancellation();
+      await replaceSessionEntry(f.scope, {
+        sessionId: f.scope.sessionId,
+        updatedAt: 2,
+        lifecycleRevision: "reset-lifecycle",
+      });
+      const transcript = loadTranscriptEventsSync(f.scope);
+
+      source.abort();
+      await f.settle();
+
+      expect(guest.controller.signal.aborted).toBe(true);
+      expect(loadTranscriptEventsSync(f.scope)).toEqual(transcript);
+      expect(f.warn).toHaveBeenCalled();
+    });
+  });
+
   it("still stops its exact run if partial transcript capture fails", async () => {
     await withCancellationFixture(async (f) => {
       const source = new AbortController();

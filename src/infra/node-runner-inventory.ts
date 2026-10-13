@@ -19,6 +19,11 @@ export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
 export const NODE_WORKER_NATIVE_INFERENCE_VERSION = 1;
+export const NODE_WORKER_INFERENCE_SETUP_ERROR =
+  "Worker-local inference is not configured on this node. Add a compatible model under " +
+  "models.providers with a usable credential in the node openclaw.json, set " +
+  'nodeHost.workerRuns.isolation to "none", then restart the node host. ' +
+  "If the node runs an older OpenClaw version, update it first.";
 export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.

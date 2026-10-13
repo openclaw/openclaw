@@ -325,52 +325,67 @@ export async function prepareDirectCompactionAttempt(
             }),
         )
       : params.sandbox;
-  const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  return {
-    ok: true as const,
-    value: {
-      params,
-      diagId,
-      trigger,
-      attempt,
-      maxAttempts,
-      runId,
-      compactionModelCallTrace,
-      diagnosticCompactionRunId,
-      nextDiagnosticModelCallId: () =>
-        `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
-      agentDir,
-      provider,
-      contextConfigProvider,
-      modelId,
-      preparedHarnessRuntime,
-      thinkLevel,
-      attemptedThinking: new Set<ThinkLevel>(),
-      fail,
-      authStorage,
-      modelRegistry,
-      runtimeModel,
-      apiKeyInfo,
-      resolvedRuntimeAuthPlan,
-      hasRuntimeAuthExchange,
-      resolvedWorkspace,
-      sandboxSessionKey,
-      sandboxAgentId,
-      sandbox,
-      effectiveWorkspace,
-      effectiveCwd,
-      sessionAgentId,
-    },
+  const releaseSandbox = () => {
+    if (params.sandbox === undefined) {
+      sandbox?.[Symbol.dispose]?.();
+    }
   };
+  try {
+    const effectiveWorkspace =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw"
+        ? sandbox.workspaceDir
+        : resolvedWorkspace;
+    const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+    if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+      throw new Error(
+        "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
+      );
+    }
+    const effectiveCwd = sandbox?.enabled
+      ? effectiveWorkspace
+      : (requestedCwd ?? effectiveWorkspace);
+    await fs.mkdir(effectiveWorkspace, { recursive: true });
+    return {
+      ok: true as const,
+      value: {
+        params,
+        diagId,
+        trigger,
+        attempt,
+        maxAttempts,
+        runId,
+        compactionModelCallTrace,
+        diagnosticCompactionRunId,
+        nextDiagnosticModelCallId: () =>
+          `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
+        agentDir,
+        provider,
+        contextConfigProvider,
+        modelId,
+        preparedHarnessRuntime,
+        thinkLevel,
+        attemptedThinking: new Set<ThinkLevel>(),
+        fail,
+        authStorage,
+        modelRegistry,
+        runtimeModel,
+        apiKeyInfo,
+        resolvedRuntimeAuthPlan,
+        hasRuntimeAuthExchange,
+        resolvedWorkspace,
+        sandboxSessionKey,
+        sandboxAgentId,
+        sandbox,
+        effectiveWorkspace,
+        effectiveCwd,
+        sessionAgentId,
+        releaseSandbox,
+      },
+    };
+  } catch (preparationError) {
+    releaseSandbox();
+    throw preparationError;
+  }
 }
 
 export type DirectCompactionPreparation = Extract<

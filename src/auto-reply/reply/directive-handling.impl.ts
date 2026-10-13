@@ -8,7 +8,7 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -133,12 +133,16 @@ export async function handleDirectiveOnly(
   const activeAgentId = params.agentId;
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey(params);
-  const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: activeAgentId,
     sessionKey,
     classificationSessionKey: runtimePolicySessionKey,
-  }).sandboxed;
+    ...(runtimePolicySessionKey === sessionKey
+      ? { preparedSessionEntry: params.sessionEntry ?? null }
+      : {}),
+  });
+  const runtimeIsSandboxed = sandboxRuntime.sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   let thinkingCatalog = params.thinkingCatalog?.length
     ? params.thinkingCatalog

@@ -180,6 +180,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       sessionKey: input.sessionKey,
       agentId: input.agentId,
     });
+    using _ = { [Symbol.dispose]: () => initialAuthority.release() };
+
     const loaded = initialAuthority.loaded;
     const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
     const session = {

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-host.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import type { ShellGatewayOwner } from "./app-shell-gateway.ts";
 import type { ApplicationContext } from "./context.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -53,9 +53,7 @@ describe("OpenClaw shell locale preferences", () => {
       theme: { refresh: refreshTheme },
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
@@ -91,9 +89,7 @@ describe("OpenClaw shell locale preferences", () => {
       theme: { refresh: refreshTheme },
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
@@ -126,9 +122,7 @@ describe("OpenClaw shell locale preferences", () => {
       theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);

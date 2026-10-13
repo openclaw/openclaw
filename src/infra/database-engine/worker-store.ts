@@ -1,12 +1,20 @@
+import { deserialize, serialize } from "node:v8";
 import type { SqliteWorkerStoreOptions } from "../sqlite-worker-broker.types.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "../sqlite-worker-contract.js";
 import {
+  SqliteWorkerError,
+  type SqliteWorkerOperations,
+  type SqliteWorkerStore,
+} from "../sqlite-worker-contract.js";
+import {
+  isSqliteWorkerStoreAvailable,
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
 } from "../sqlite-worker-store.js";
 import type { DatabaseEngineInput } from "./config.js";
 import { observeDatabaseRequest } from "./observation.js";
+
+type EngineStoreOptions = SqliteWorkerStoreOptions & { existingOnly?: false; target?: never };
 
 function observeScope<Operations extends SqliteWorkerOperations>(
   scope: Pick<SqliteWorkerStore<Operations>, "execute">,
@@ -18,23 +26,84 @@ function observeScope<Operations extends SqliteWorkerOperations>(
   };
 }
 
+class EngineWorkerStore<
+  Operations extends SqliteWorkerOperations,
+> implements SqliteWorkerStore<Operations> {
+  private reopening?: Promise<void>;
+  private closing?: Promise<void>;
+  private closed = false;
+
+  constructor(
+    private readonly options: EngineStoreOptions,
+    private readonly input: DatabaseEngineInput,
+    private store: SqliteWorkerStore<Operations>,
+  ) {}
+
+  async current(): Promise<SqliteWorkerStore<Operations>> {
+    if (this.closed) {
+      throw new SqliteWorkerError("Database engine store is closed", "closed");
+    }
+    if (!isSqliteWorkerStoreAvailable(this.store)) {
+      this.reopening ??= (async () => {
+        await this.store.close();
+        this.store = await observeDatabaseRequest(this.input ? "postgres" : "sqlite", () =>
+          openSqliteWorkerStore<Operations>(this.options),
+        );
+      })().finally(() => {
+        this.reopening = undefined;
+      });
+      await this.reopening;
+      if (this.closed) {
+        throw new SqliteWorkerError("Database engine store is closed", "closed");
+      }
+    }
+    return this.store;
+  }
+
+  async execute<Key extends keyof Operations>(
+    command: { type: Key; input: Operations[Key]["input"] },
+    options?: { signal?: AbortSignal },
+  ): Promise<Operations[Key]["output"]> {
+    if (!this.closed && isSqliteWorkerStoreAvailable(this.store)) {
+      return observeScope(this.store, this.input).execute(command, options);
+    }
+    const payload = serialize(command);
+    const store = await this.current();
+    const captured: typeof command = deserialize(payload);
+    // Never replay a command: a failed worker may have committed before losing its reply.
+    return observeScope(store, this.input).execute(captured, options);
+  }
+
+  close(): Promise<void> {
+    this.closed = true;
+    this.closing ??= (async () => {
+      await this.reopening?.catch(() => undefined);
+      await observeDatabaseRequest(this.input ? "postgres" : "sqlite", () => this.store.close());
+    })().catch((error: unknown) => {
+      this.closing = undefined;
+      throw error;
+    });
+    return this.closing;
+  }
+}
+
 export async function openEngineWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly?: false; target?: never },
+  options: EngineStoreOptions,
   input: DatabaseEngineInput,
 ): Promise<SqliteWorkerStore<Operations>> {
-  const engine = input ? "postgres" : "sqlite";
-  const store = await observeDatabaseRequest(engine, () =>
-    openSqliteWorkerStore<Operations>(options),
+  const captured = {
+    ...options,
+    moduleUrl: new URL(options.moduleUrl),
+    input: deserialize(serialize(options.input)),
+  };
+  const store = await observeDatabaseRequest(input ? "postgres" : "sqlite", () =>
+    openSqliteWorkerStore<Operations>(captured),
   );
-  const scope = observeScope({ execute: store.execute.bind(store) }, input);
-  store.execute = scope.execute;
-  const close = store.close.bind(store);
-  store.close = () => observeDatabaseRequest(engine, close);
-  return store;
+  return new EngineWorkerStore(captured, input, store);
 }
 
 /** The selected adapter owns the host admission envelope, not a store facade. */
-export function runEngineStoreOperation<Operations extends SqliteWorkerOperations, T>(
+export async function runEngineStoreOperation<Operations extends SqliteWorkerOperations, T>(
   store: SqliteWorkerStore<Operations>,
   input: DatabaseEngineInput,
   writes: boolean,
@@ -42,12 +111,16 @@ export function runEngineStoreOperation<Operations extends SqliteWorkerOperation
   assertCurrent: (() => void) | undefined,
   databasePath: string,
 ): Promise<T> {
+  const current: SqliteWorkerStore<Operations> =
+    store instanceof EngineWorkerStore ? await store.current() : store;
   const observed = (scope: Pick<SqliteWorkerStore<Operations>, "execute">) =>
     operation(observeScope(scope, input));
   if (input && writes) {
-    return runSqliteWorkerStoreWrite(store, observed, assertCurrent ?? (() => {}), [databasePath]);
+    return runSqliteWorkerStoreWrite(current, observed, assertCurrent ?? (() => {}), [
+      databasePath,
+    ]);
   }
   return assertCurrent
-    ? runSqliteWorkerStoreOperation(store, observed, undefined, assertCurrent)
-    : operation(store);
+    ? runSqliteWorkerStoreOperation(current, observed, undefined, assertCurrent)
+    : observed(current);
 }

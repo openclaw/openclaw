@@ -156,7 +156,7 @@ export function registerSubagentSweepRetainedAuthorityTests(
               cleanupCompletedAt: now,
               execution: { suppressSessionEffects: true },
             });
-            await expect(fs.access(attachmentDir)).resolves.toBeUndefined();
+            await fs.access(attachmentDir);
           }
           vi.setSystemTime(now + 2);
           await harness.sweeper.sweepOnce();
@@ -174,7 +174,7 @@ export function registerSubagentSweepRetainedAuthorityTests(
               fs.readFile(path.join(attachmentDir, "artifact.txt"), "utf8"),
             ).resolves.toBe("retained child artifact");
           }
-          await expect(fs.access(siblingDir)).resolves.toBeUndefined();
+          await fs.access(siblingDir);
         } finally {
           await harness.sweeper.reset();
         }

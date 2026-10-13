@@ -17,7 +17,6 @@ import {
   killSubagentRunAdmin,
   buildControlledSubagentRunsReadContext,
   MAX_RECENT_MINUTES,
-  resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
 import type { ResolvedSubagentController } from "../subagents/registry/subagent-control.types.js";
 import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
@@ -222,15 +221,9 @@ function waitForSelectedRuns(params: {
 }
 
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
-  const readScope = (readController?: ReturnType<typeof createSubagentControllerRead>["read"]) => {
+  const readScope = (readController: ReturnType<typeof createSubagentControllerRead>["read"]) => {
     const cfg = opts.config ?? getRuntimeConfig();
-    const controller = readController
-      ? readController()
-      : resolveSubagentController({
-          cfg,
-          agentSessionKey: opts.agentSessionKey,
-          agentId: opts.agentId,
-        });
+    const controller = readController();
     if (!controller.controllerAgentId) {
       throw new ToolInputError("Subagent controller agent required");
     }
@@ -324,22 +317,19 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           }
         }
       };
-      const controllerRead =
-        action === "cancel"
-          ? createSubagentControllerRead({
-              config: () => opts.config ?? getRuntimeConfig(),
-              agentSessionKey: opts.agentSessionKey,
-              agentId: opts.agentId,
-              assertCurrent: assertSelection,
-            })
-          : undefined;
-      const readCurrentScope = () => readScope(controllerRead?.read);
+      const controllerRead = createSubagentControllerRead({
+        config: () => opts.config ?? getRuntimeConfig(),
+        agentSessionKey: opts.agentSessionKey,
+        agentId: opts.agentId,
+        assertCurrent: assertSelection,
+      });
+      const readCurrentScope = () => readScope(controllerRead.read);
       const prepareRead = () => {
         assertSelection();
         if (!getSubagentSessionListReadSnapshotIdentity()) {
           return prepareSubagentSessionListReadCache();
         }
-        return controllerRead?.prepare();
+        return controllerRead.prepare();
       };
       try {
         for (let pending = prepareRead(); pending; pending = prepareRead()) {
@@ -357,7 +347,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             ...(await waitForSelectedRuns({
               runIds,
               readRuns: (snapshot) => {
-                const visible = new Set(readScope().readable.map((entry) => entry.runId));
+                const visible = new Set(readCurrentScope().readable.map((entry) => entry.runId));
                 return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
               },
               timeoutMs:
@@ -366,8 +356,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             })),
           });
         }
-        const { cfg, controller, readable, controlled } = readCurrentScope();
         if (action === "list") {
+          const cfg = opts.config ?? getRuntimeConfig();
+          const controller = controllerRead.read();
           const readContext = await buildControlledSubagentRunsReadContext(
             controller.controllerSessionKey,
             controller.controllerAgentId,
@@ -394,6 +385,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           });
         }
         if (action === "cancel") {
+          const { cfg, controller, readable, controlled } = readCurrentScope();
           const runId = requestedRunId;
           if (!runId) {
             throw new ToolInputError("Subagent runId required");
@@ -437,7 +429,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         }
         throw new ToolInputError("Unsupported subagents action");
       } finally {
-        controllerRead?.release();
+        controllerRead.release();
         selection?.ownership.release();
       }
     },

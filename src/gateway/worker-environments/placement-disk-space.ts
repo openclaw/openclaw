@@ -182,10 +182,14 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
 
   const sweep = async (): Promise<void> => {
     const inventory = await params.placements.prepareMaintenancePlacements();
-    const active = inventory.placements.filter(
-      (placement): placement is ActivePlacement => placement.state === "active",
-    );
-    inventory.release();
+    let active: ActivePlacement[];
+    try {
+      active = inventory.placements.filter(
+        (placement): placement is ActivePlacement => placement.state === "active",
+      );
+    } finally {
+      inventory.release();
+    }
     const activeBySession = new Map(active.map((placement) => [placement.sessionId, placement]));
     for (const [sessionId, observation] of observations) {
       if (!hasExactBinding(observation, activeBySession.get(sessionId))) {

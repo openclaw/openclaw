@@ -697,13 +697,13 @@ export function prepareCommandLaneClear(lane: string, matches: CommandLaneEntryF
   const cleaned = normalizeLane(lane);
   const state = getQueueState().lanes.get(cleaned);
   const entries = state ? selectQueuedCommandEntries(state, matches) : [];
-  return () => {
+  return (select: CommandLaneEntryFilter = () => true) => {
     if (!state || getQueueState().lanes.get(cleaned) !== state) {
       return 0;
     }
     let removed = 0;
     for (const entry of entries) {
-      if (removeLaneQueueEntry(state.queue, entry)) {
+      if (select(entry.sessionTarget) && removeLaneQueueEntry(state.queue, entry)) {
         removed += 1;
         entry.reject(new CommandLaneClearedError(cleaned));
       }

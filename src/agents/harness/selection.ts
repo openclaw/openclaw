@@ -45,6 +45,7 @@ import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
+  preparePluginHarnessToolPolicies,
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
   type ResolvedPluginHarnessToolPolicies,
@@ -272,7 +273,6 @@ export async function runAgentHarnessAttempt(
       modelExecution?.release();
     }
   };
-  assertAgentHarnessExecutionEnvironment(harness, params);
   if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
     throw new AgentHarnessPreflightError(
       "Native session runtime changed before dispatch. Reattach the original native session before retrying.",
@@ -360,16 +360,19 @@ export async function runAgentHarnessAttempt(
   let result: EmbeddedRunAttemptResult;
   try {
     result = await runAgentHarnessOperation(harness, params, () =>
-      runWithAgentRingZeroTools(ringZeroTools, () => {
+      runWithAgentRingZeroTools(ringZeroTools, async () => {
         // Resolve plugin policy after entering the host scope. Ring-zero tools are
         // trusted setup authority and must survive ordinary deny-all policy.
         const hostOpenClawAuthority =
           isHostScopedAgentToolActive("openclaw") &&
           isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
-        const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(harness, params);
+        const nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
+          harness,
+          params,
+        );
         const preparedParams = selection.builtIn
           ? pluginAttempt.params
-          : preparePluginHarnessParams(
+          : await preparePluginHarnessParams(
               pluginAttempt.params,
               harness,
               nativePermissionsConsented,
@@ -392,15 +395,20 @@ export async function runAgentHarnessAttempt(
               effectiveAttemptParams,
               selection.builtIn
                 ? undefined
-                : (input) => {
-                    const policies = resolvePluginHarnessToolPolicies({
-                      ...input.run,
-                      modelId: input.run.model,
-                      sandboxSessionKey: input.run.runtimePolicySessionKey,
-                      messageChannel: input.originatingChannel,
-                      toolsAllow: input.toolsAllow,
-                      disableTools: input.disableTools,
-                    });
+                : (input, sandbox) => {
+                    const policies = resolvePluginHarnessToolPolicies(
+                      {
+                        ...input.run,
+                        modelId: input.run.model,
+                        sandboxSessionKey: input.run.runtimePolicySessionKey,
+                        messageChannel: input.originatingChannel,
+                        toolsAllow: input.toolsAllow,
+                        disableTools: input.disableTools,
+                      },
+                      undefined,
+                      undefined,
+                      sandbox,
+                    );
                     return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
                       ? { ...input, toolsAllow: [] }
                       : input;
@@ -643,12 +651,12 @@ function withoutPluginHarnessPrivateState(
   return pluginParams;
 }
 
-function preparePluginHarnessParams(
+async function preparePluginHarnessParams(
   params: import("./types.js").AgentHarnessAttemptParamsV2,
   harness: AgentHarness,
   nativePermissionsConsented: boolean,
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
-): import("./types.js").AgentHarnessAttemptParamsV2 {
+): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
@@ -658,7 +666,7 @@ function preparePluginHarnessParams(
     model === params.model && resolvedApiKey === params.resolvedApiKey
       ? params
       : { ...params, model, resolvedApiKey };
-  const policies = resolvePluginHarnessToolPolicies(
+  const policies = await preparePluginHarnessToolPolicies(
     preparedParams,
     harness.conversationToolPolicySupport === "exact"
       ? harness.conversationToolPolicySafeDenyTools

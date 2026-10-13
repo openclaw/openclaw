@@ -348,12 +348,11 @@ function sanitizeNumericMetadata(
       projected[key] = value;
     }
   }
-  if (
-    fields === USAGE_FIELDS &&
-    "cost" in record &&
-    record.cost != null &&
-    typeof record.cost === "object"
-  ) {
+  if (fields === USAGE_FIELDS) {
+    const state = readObjectRecord(record.usageReport)?.state;
+    if (state === "available" || state === "unavailable") {
+      projected.usageReport = { state };
+    }
     const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
     if (cost) {
       projected.cost = cost;

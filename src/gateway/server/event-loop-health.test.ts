@@ -53,7 +53,11 @@ afterEach(() => {
   }
 });
 
-function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: number }) {
+function createMonitorHarness(params?: {
+  cpuMsPerWallMs?: number;
+  utilization?: number;
+  isIdle?: () => boolean;
+}) {
   let nowMs = 10_000;
   nativeDelay.max = 20_000_000;
   const clock = createGatewaySchedulerClock(nowMs);
@@ -78,6 +82,7 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
     now: () => nowMs,
     cpuUsage,
     eventLoopUtilization,
+    isIdle: params?.isIdle,
   });
   monitors.push(monitor);
   const sample = async (elapsedMs = 20) => {
@@ -105,6 +110,48 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
 }
 
 describe("createGatewayEventLoopHealthMonitor", () => {
+  it("sleeps for ten seconds while idle and resumes full sampling with work", async () => {
+    let idle = true;
+    const harness = createMonitorHarness({ isIdle: () => idle });
+    await harness.samples(50);
+    const first = harness.monitor.snapshot();
+    const reads = harness.cpuUsage.mock.calls.length;
+    await harness.samples(499);
+    await harness.sample(19);
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(reads);
+    await harness.sample(1);
+    expect(harness.monitor.snapshot()).toMatchObject({
+      intervalMs: 10_000,
+      delayP99Ms: 0,
+      delayMaxMs: 20,
+      degraded: false,
+    });
+    idle = false;
+    await harness.samples(500);
+    await harness.samples(50);
+    expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, delayMaxMs: 20 });
+  });
+
+  it("keeps idle callback stalls and resumes one-second sampling after degradation", async () => {
+    const harness = createMonitorHarness({ isIdle: () => true });
+    await harness.samples(50);
+    harness.scheduler.schedule({
+      id: "maintenance:synthetic-work",
+      delayMs: 0,
+      run: () => harness.elapseWithoutSampling(1_200),
+    });
+    await harness.sample();
+    await harness.samples(439);
+    expect(harness.monitor.snapshot()).toMatchObject({
+      degraded: true,
+      delayMaxMs: 1_220,
+      reasons: ["event_loop_delay"],
+    });
+    await harness.samples(50);
+    expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, degraded: false });
+  });
+
   it("logs the blocking scheduler job once when its callback also contains the overdue sample", async () => {
     const warn = vi.fn();
     const rawConsole = loggingState.rawConsole;

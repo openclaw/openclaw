@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -45,6 +46,9 @@ afterEach(() => vi.restoreAllMocks());
 
 it("keeps sidebar display facts while bounding the wire payload", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const benchmark = process.env.OPENCLAW_SIDEBAR_BENCH === "1";
     const count = benchmark ? 5_000 : 8;
     const context = requestContext(rolePolicyConfig());
@@ -178,6 +182,9 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
 
 it("projects dashboard cards without sending session execution details", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const benchmark = process.env.OPENCLAW_DASHBOARD_BENCH === "1";
     const count = benchmark ? 200 : 2;
     const context = requestContext(rolePolicyConfig());
@@ -306,6 +313,9 @@ it("projects dashboard cards without sending session execution details", async (
 
 it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const alice = roleClient("view", "cold-alice");
@@ -374,6 +384,9 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
   const start = 1_800_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(start);
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "first-list");
@@ -613,6 +626,9 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
 
 it("refreshes shared socket selection when the same viewer changes roles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "selection-viewer");
@@ -649,6 +665,9 @@ it("refreshes shared socket selection when the same viewer changes roles", async
 
 it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const clients = [roleClient("view", "reader-a"), roleClient("view", "reader-b")];
@@ -678,5 +697,91 @@ it("retains each embedded reader's identity when their shared row presentation i
       true,
       false,
     ]);
+  });
+});
+
+it("omits swarm detail reads from sidebar and dashboard pages while authorizing compact members", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "swarm-list-reader");
+    const creator = ensureProfileForEmail("swarm-list-owner@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const parent = "agent:main:dashboard:swarm-parent";
+    const children = ["agent:main:subagent:visible", "agent:main:subagent:hidden"];
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "swarm-parent", updatedAt: Date.now(), visibility: "shared" },
+    );
+    for (const [index, child] of children.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        {
+          sessionId: `swarm-child-${index}`,
+          updatedAt: Date.now(),
+          visibility: index === 0 ? "shared" : "draft",
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        },
+      );
+      const runId = `swarm-list-${index}`;
+      subagentRuns.set(
+        runId,
+        createSubagentRunRecord({
+          runId,
+          childSessionKey: child,
+          requesterSessionKey: parent,
+          requesterAgentId: "main",
+          swarmRequesterSessionKey: parent,
+          collect: true,
+          groupId: "list-group",
+          execution: { status: "terminal", startedAt: 1, endedAt: 2 },
+          collectorCompletion: { status: "done" },
+        }),
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "sidebar" | "dashboard" | "compact") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode, excludeSubagents: true },
+      });
+    try {
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
+      for (const rowMode of ["sidebar", "dashboard"] as const) {
+        await read(rowMode);
+        const selections = vi.spyOn(projection, "selectEntries");
+        try {
+          const page = await read(rowMode);
+          expect(page.sessions).toHaveLength(1);
+          expect(expandSessionRowFacts(page.sessions, page.sharedFacts)[0]).not.toHaveProperty(
+            "swarm",
+          );
+          // A warmed page must not read children solely for omitted swarm detail.
+          expect(selections).not.toHaveBeenCalled();
+        } finally {
+          selections.mockRestore();
+        }
+      }
+      const sidebar = await read("sidebar");
+      const compact = await read("compact");
+      expect(compact.sessions[0]?.swarm?.groups).toMatchObject([
+        { groupId: "list-group", done: 2, children: [{ sessionKey: children[0], status: "done" }] },
+      ]);
+      expect(compact.sessions[0]?.swarm?.groups[0]?.children).toHaveLength(1);
+      expect((await read("sidebar")).sessions).toBe(sidebar.sessions);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+      for (let index = 0; index < children.length; index++) {
+        subagentRuns.delete(`swarm-list-${index}`);
+      }
+    }
   });
 });

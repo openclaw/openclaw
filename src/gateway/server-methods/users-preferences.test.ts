@@ -227,6 +227,7 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       layout: "state-only",
       prefix: "users-self-read-",
     });
+    setRuntimeConfigSnapshot({});
     let releaseProfiles: (() => void) | undefined;
     try {
       setRuntimeConfigSnapshot({});
@@ -328,6 +329,7 @@ test("users.prefs.get retains its original scope across the preference read", as
     layout: "state-only",
     prefix: "users-prefs-read-",
   });
+  setRuntimeConfigSnapshot({});
   let releaseProfiles: (() => void) | undefined;
   try {
     setRuntimeConfigSnapshot({});

@@ -3279,7 +3279,7 @@ td.data-table-key-col {
   text-transform: uppercase;
 }
 
-.agent-select::part(menu) {
+.agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
   overflow-y: auto;
@@ -3289,9 +3289,12 @@ td.data-table-key-col {
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   color: var(--text);
-  /* Keep page content from showing through Web Awesome's menu fade.
-   * The scale animation still communicates that the picker opened. */
-  opacity: 1 !important;
+}
+
+@starting-style {
+  .agent-select__menu.oc-menu:popover-open {
+    opacity: 1;
+  }
 }
 
 .agent-select__trigger {
@@ -3326,6 +3329,24 @@ td.data-table-key-col {
 .agent-select__trigger:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.agent-select__trigger > .oc-menu-item__label {
+  display: contents;
+}
+
+.agent-select__option[data-create-agent] {
+  position: relative;
+}
+
+.agent-select__option[data-create-agent] .agent-select__separator {
+  position: absolute;
+  inset: -4px 4px auto;
+  margin: 0;
+}
+
+.agent-select__option[data-create-agent]:has(.agent-select__separator) {
+  margin-top: 8px;
 }
 
 .agent-select__label {
@@ -3433,6 +3454,10 @@ td.data-table-key-col {
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.agent-select__option > .oc-menu-item__check {
+  display: none;
 }
 
 .agent-select__option[data-selected] {
@@ -4315,16 +4340,21 @@ td.data-table-key-col {
   font-size: 12px;
 }
 
-.agent-tools-group__preview > span {
+.agent-tools-group__preview > span,
+.agent-tool-title,
+.agent-tool-sub {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tools-group__preview > span {
   max-width: min(180px, 100%);
   padding: 2px 6px;
   border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--card) 70%, transparent);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-tools-group__counts {
@@ -4447,21 +4477,13 @@ td.data-table-key-col {
 .agent-tool-title {
   font-weight: 600;
   font-size: 13px;
-  min-width: 0;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-tool-sub {
   color: var(--muted);
   font-size: 12px;
   margin-top: 3px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-tool-details {
@@ -5260,7 +5282,6 @@ td.data-table-key-col {
 .session-row-host--draft-other {
   --session-row-bg: color-mix(in srgb, var(--bg-muted) 44%, transparent);
   --draft-row-opacity: 0.58;
-  background: var(--session-row-bg);
 }
 
 .session-row-host--draft-other:hover,
@@ -5308,7 +5329,7 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--muted);
+  color: var(--session-row-muted, var(--muted));
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

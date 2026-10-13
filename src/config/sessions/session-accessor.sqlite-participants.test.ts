@@ -653,6 +653,78 @@ describe("SQLite session participants", () => {
     });
   });
 
+  it("keeps count-only worker contributions out of the participant projection and publishes reordered facts", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:worker-counts" };
+      await upsertSessionEntryCore(scope, { sessionId: "worker-counts", updatedAt: 1 });
+      recordSessionParticipant(scope, { identity: remote("first"), promptedAt: 10 });
+      recordSessionParticipant(scope, { identity: remote("second"), promptedAt: 20 });
+      listSessionParticipantsReadOnly(scope);
+      listSessionEntriesCore({ ...scope, projection: "list" });
+      const database = openOpenClawAgentDatabase(scope);
+      const backend = bindSqliteWorkerBackend(undefined, {
+        database: database.db,
+        databasePath: database.path,
+        admit() {},
+      });
+      const { port1, port2 } = new MessageChannel();
+      const record = (promptedAt: number) =>
+        withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+          backend.execute({
+            type: "participant",
+            input: { scope, params: { identity: remote("second"), promptedAt } },
+          }),
+        );
+      const reads = trackSqliteStatementExecutions(database.db, ["projection"], (sql) =>
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+          ? "projection"
+          : null,
+      );
+      try {
+        expect(record(30)).toEqual({
+          value: "updated",
+          projectionChanged: false,
+          participants: {},
+        });
+        expect(reads.counts.projection).toBe(0);
+        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual([
+          {
+            identity: remote("first"),
+            contributionCount: 1,
+            firstPromptedAt: 10,
+            lastPromptedAt: 10,
+          },
+          {
+            identity: remote("second"),
+            contributionCount: 2,
+            firstPromptedAt: 20,
+            lastPromptedAt: 30,
+          },
+        ]);
+        const participants = ["second", "first"].map((id) => ({ identity: remote(id) }));
+        expect(record(5)).toEqual({
+          value: "updated",
+          projectionChanged: true,
+          participants: { participants, participantCount: 2 },
+        });
+        expect(loadSessionEntry(scope)).toMatchObject({ participants, participantCount: 2 });
+        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)?.[0]).toEqual({
+          identity: remote("second"),
+          contributionCount: 3,
+          firstPromptedAt: 5,
+          lastPromptedAt: 30,
+        });
+        backend.assertSettled?.();
+      } finally {
+        reads.restore();
+        port1.close();
+        port2.close();
+        await backend.close();
+      }
+    });
+  });
+
   it.each([false, true])(
     "updates a merged profile at the admission bound using resident native aliases (canonical row: %s)",
     async (hasCanonicalRow) => {
@@ -816,6 +888,62 @@ describe("SQLite session participants", () => {
       });
       expect(deletion.deleted).toBe(true);
       expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toBeUndefined();
+    });
+  });
+
+  it("merges alias contributions with current destination writes and unknown timestamps", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const makeScope = (name: string) => ({
+        agentId: "main",
+        env: state.env,
+        sessionKey: `agent:main:${name}`,
+      });
+      const canonical = makeScope("canonical");
+      const first = makeScope("first-alias");
+      const second = makeScope("second-alias");
+      for (const scope of [canonical, first, second]) {
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionKey, updatedAt: 1 });
+      }
+      recordSessionParticipant(canonical, { identity: profile("shared"), promptedAt: 20 });
+      recordSessionParticipant(first, { identity: profile("shared"), promptedAt: 10 });
+      recordSessionParticipant(first, { identity: profile("shared"), promptedAt: 30 });
+      recordSessionParticipant(second, { identity: profile("shared"), promptedAt: 40 });
+      const database = openOpenClawAgentDatabase(canonical);
+      database.db
+        .prepare("UPDATE session_participants SET first_prompted_at = NULL WHERE session_key = ?")
+        .run(second.sessionKey);
+      const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
+        sql.includes('from "session_participants"') ? "participants" : null,
+      );
+      try {
+        runOpenClawAgentWriteTransaction(() => {
+          copySessionNodeArtifactsForRepair(
+            database,
+            database,
+            [canonical.sessionKey, first.sessionKey, second.sessionKey],
+            canonical.sessionKey,
+          );
+          // A second transfer must consume the aggregate written earlier in this transaction.
+          copySessionNodeArtifactsForRepair(
+            database,
+            database,
+            [first.sessionKey],
+            canonical.sessionKey,
+          );
+        }, canonical);
+        expect(reads.counts.participants).toBe(2);
+      } finally {
+        reads.restore();
+      }
+      expect(listSessionParticipantsReadOnly(canonical).get(canonical.sessionKey)).toEqual([
+        {
+          identity: profile("shared"),
+          contributionCount: 6,
+          firstPromptedAt: null,
+          lastPromptedAt: 40,
+        },
+      ]);
     });
   });
 

@@ -12,6 +12,7 @@ import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { transcriptSessionExportKey } from "./store-artifacts.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
 import {
+  deleteEmptyMeetingTranscriptCandidateInDatabase,
   markMeetingTranscriptPendingExportsInDatabase,
   updateMeetingTranscriptExportManifestInDatabase,
   writeMeetingTranscriptSessionInDatabase,
@@ -26,16 +27,16 @@ type ExportInput = {
   readOnly?: boolean;
 };
 
-function writeTranscript(
+function writeTranscript<T>(
   input: { readOnly?: boolean },
   { open, stateOptions }: WorkerOperationContext,
   operationLabel: string,
-  write: (db: DatabaseSync) => void,
+  write: (db: DatabaseSync) => T,
   exportInput?: ExportInput,
 ) {
   const options = { database: open(), ...stateOptions(), readOnly: input.readOnly };
   ensureMeetingTranscriptsSchema(options);
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const assertWrite = (stage: "transaction" | "commit") => {
         if (exportInput?.lease) {
@@ -52,8 +53,9 @@ function writeTranscript(
         }
       };
       assertWrite("transaction");
-      write(db);
+      const result = write(db);
       assertWrite("commit");
+      return result;
     },
     options,
     { operationLabel },
@@ -101,10 +103,10 @@ export const transcriptWriteOperations = {
     context,
   ) => {
     try {
-      writeTranscript(input, context, "meeting-transcripts.session.write", (db) =>
+      const receipt = writeTranscript(input, context, "meeting-transcripts.session.write", (db) =>
         writeMeetingTranscriptSessionInDatabase(db, input),
       );
-      return { ok: true } as const;
+      return { ok: true, ...receipt } as const;
     } catch (error) {
       if (error instanceof TranscriptsSummaryChangedError) {
         return { ok: false, reason: "changed" } as const;
@@ -115,6 +117,17 @@ export const transcriptWriteOperations = {
       throw error;
     }
   },
+  "transcripts.deleteEmptySessionCandidate": (
+    input: { session: SessionIdentity; expectedInputRevision: string; readOnly?: boolean },
+    context,
+  ) =>
+    writeTranscript(input, context, "meeting-transcripts.session.discard-empty", (db) =>
+      deleteEmptyMeetingTranscriptCandidateInDatabase(
+        db,
+        input.session,
+        input.expectedInputRevision,
+      ),
+    ),
   "transcripts.markPendingExports": (input: ExportInput & { fileNames: string[] }, context) =>
     writeTranscript(
       input,

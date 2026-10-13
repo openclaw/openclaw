@@ -96,7 +96,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   // Gmail watch requires the Pub/Sub topic to live in the OAuth client project.
   if (!projectId) {
     throw new Error(
-      "GCP project id required (use --project or ensure gog credentials are available)",
+      "GCP project id required (use --project or check that gog credentials are available)",
     );
   }
 

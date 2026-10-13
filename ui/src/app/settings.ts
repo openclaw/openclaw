@@ -19,6 +19,7 @@ import {
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme } from "./custom-theme.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveProfileAppearanceProfileId } from "./server-prefs-profile.ts";
 import {
   loadBackgroundPreference,
@@ -152,7 +153,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (!isViteDevPage()) {
+  if (isRemoteControlUiIngress() || !isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping

@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -22,7 +21,10 @@ type TestDebugOverlay = HTMLElement & {
   toggle: () => void;
 };
 
-type TestSparkline = LitElement & { samples: readonly SparklineSample[] };
+type TestSparkline = HTMLElement & {
+  readonly updateComplete: Promise<boolean>;
+  samples: readonly SparklineSample[];
+};
 
 async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
   await overlay.updateComplete;

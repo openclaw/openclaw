@@ -435,11 +435,7 @@ function ChatAudioPlayerContent(
     }
   }
 
-  function updateBuffered(): void {
-    const media = mediaElement;
-    if (!media) {
-      return;
-    }
+  function updateBuffered(media: HTMLAudioElement): void {
     if (!state.duration || media.buffered.length === 0) {
       updateState({ buffered: 0 });
       return;
@@ -609,53 +605,38 @@ function ChatAudioPlayerContent(
           class="chat-audio-player__media"
           preload="metadata"
           ref={setMedia}
-          onLoadedMetadata={() => {
-            const media = mediaElement;
-            if (!media) {
-              return;
-            }
+          onLoadedMetadata={(event) => {
+            const media = event.currentTarget;
             sourceController.handleLoadedMetadata(media, () => canResumeChatAudioPlayback(media));
             updateState({
               duration: Number.isFinite(media.duration) ? media.duration : 0,
               currentTime: media.currentTime,
             });
-            updateBuffered();
+            updateBuffered(media);
             props.onMediaLoaded?.();
           }}
-          onDurationChange={() => {
-            if (mediaElement) {
-              updateState({
-                duration: Number.isFinite(mediaElement.duration) ? mediaElement.duration : 0,
-              });
-            }
+          onDurationChange={(event) => {
+            const media = event.currentTarget;
+            updateState({ duration: Number.isFinite(media.duration) ? media.duration : 0 });
           }}
-          onTimeUpdate={() => {
-            if (mediaElement) {
-              updateState({ currentTime: mediaElement.currentTime });
-              updateBuffered();
-            }
+          onTimeUpdate={(event) => {
+            updateState({ currentTime: event.currentTarget.currentTime });
+            updateBuffered(event.currentTarget);
           }}
-          onProgress={updateBuffered}
-          onPlay={() => {
-            if (mediaElement) {
-              claimChatAudioPlayback(mediaElement, cancelPendingResume);
-              updateState({ playing: true });
-            }
+          onProgress={(event) => updateBuffered(event.currentTarget)}
+          onPlay={(event) => {
+            claimChatAudioPlayback(event.currentTarget, cancelPendingResume);
+            updateState({ playing: true });
           }}
-          onPause={() => mediaElement && updateState({ playing: false })}
-          onEnded={() => {
-            if (mediaElement) {
-              releaseChatAudioPlayback(mediaElement);
-              sourceController.handleEnded(mediaElement);
-              updateState({ playing: false });
-            }
+          onPause={() => updateState({ playing: false })}
+          onEnded={(event) => {
+            releaseChatAudioPlayback(event.currentTarget);
+            sourceController.handleEnded(event.currentTarget);
+            updateState({ playing: false });
           }}
-          onError={() => {
-            if (!mediaElement) {
-              return;
-            }
-            if (!sourceController.handleError(mediaElement)) {
-              releaseChatAudioPlayback(mediaElement);
+          onError={(event) => {
+            if (!sourceController.handleError(event.currentTarget)) {
+              releaseChatAudioPlayback(event.currentTarget);
               updateState({ playing: false });
             }
             publish();

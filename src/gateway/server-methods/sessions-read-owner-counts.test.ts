@@ -23,9 +23,12 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   identifiedClient,
-  listSessions,
+  listSessions as readList,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
+
+const listSessions = (params: Parameters<typeof readList>[0]) =>
+  readList({ ...params, acceptsSerializedJson: true });
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -45,7 +48,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       const { owner, participants, ...entry } = fields;
       replaceSessionEntrySync(scope, {
         sessionId: name,
-        updatedAt: 100,
+        updatedAt: Date.now(),
         visibility: "shared",
         createdActor: actor(ada),
         ...entry,
@@ -193,6 +196,7 @@ it("counts caller-visible conversations once through direct and delegated work b
         runId: "counts-child",
         childSessionKey: child,
         requesterSessionKey: idle,
+        controllerSessionKey: "agent:work:delegated-controller",
         startedAt: Date.now(),
       });
       const grandchildRun = createSubagentRunRecord({
@@ -263,9 +267,11 @@ it("counts caller-visible conversations once through direct and delegated work b
             assignedBy: actor(ada),
           },
         );
-        await patchSessionEntryCore({ agentId: "main", sessionKey: running }, () => ({
-          visibility: "draft",
-        }));
+        await patchSessionEntryCore(
+          { agentId: "main", sessionKey: running },
+          () => ({ visibility: "draft" }),
+          { skipMaintenance: true },
+        );
         await ensure();
       });
       expect(await listSessions({ client, context, request })).toMatchObject({
@@ -309,6 +315,9 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
       peopleIncomplete: true,
       count: 1,
     });
+    expect(
+      await listSessions({ client, context, request: { ...request, involvingMe: true } }),
+    ).toMatchObject({ ownerSessionCounts: [{ profileId: profiles[1], open: 1, running: 0 }] });
     mergeProfiles(profiles[0]!, profiles[1]!);
     expect(await listSessions({ client, context, request })).toMatchObject({
       ownerSessionCounts: counts
@@ -316,5 +325,76 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
         .map((count, i) => ({ profileId: count.profileId, open: i === 0 ? 2 : 1, running: 0 }))
         .toSorted((a, b) => a.profileId.localeCompare(b.profileId)),
     });
+    expect(
+      await listSessions({ client, context, request: { ...request, involvingMe: true } }),
+    ).toMatchObject({ ownerSessionCounts: [{ profileId: profiles[1], open: 2, running: 0 }] });
+  });
+});
+
+it("updates personal membership after owner, participant, and archive publications while retaining owner facets", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const ada = ensureProfileForEmail("membership-ada@example.test").id;
+    const bob = ensureProfileForEmail("membership-bob@example.test").id;
+    const actor = (id: string) => ({ type: "human", source: "profile", id }) as const;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
+    const client = identifiedClient(ada);
+    for (const [name, profileId] of [
+      ["owned", ada],
+      ["reassigned", bob],
+      ["participant", bob],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:${name}` },
+        {
+          sessionId: name,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: actor(profileId),
+        },
+      );
+    }
+    const request = { involvingMe: true, includeOwnerSessionCounts: true, limit: 100 };
+    const initial = await listSessions({ client, context, request });
+    expect(initial.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
+    expect(initial.owners?.map((owner) => owner.identity?.id).toSorted()).toEqual(
+      [ada, bob].toSorted(),
+    );
+    expect(initial.ownerSessionCounts).toEqual([{ profileId: ada, open: 1, running: 0 }]);
+    assignSessionOwner(
+      { agentId: "main", sessionKey: "agent:main:reassigned" },
+      {
+        owner: actor(ada),
+        assignedBy: actor(bob),
+      },
+    );
+    recordSessionParticipant(
+      { agentId: "main", sessionKey: "agent:main:participant" },
+      {
+        identity: { type: "profile", id: ada },
+        promptedAt: 10,
+      },
+    );
+    const involved = await listSessions({ client, context, request });
+    expect(involved.sessions.map((row) => row.key).toSorted()).toEqual([
+      "agent:main:owned",
+      "agent:main:participant",
+      "agent:main:reassigned",
+    ]);
+    expect(involved.ownerSessionCounts).toEqual(
+      [
+        { profileId: ada, open: 2, running: 0 },
+        { profileId: bob, open: 1, running: 0 },
+      ].toSorted((a, b) => a.profileId.localeCompare(b.profileId)),
+    );
+    await patchSessionEntryCore({ agentId: "main", sessionKey: "agent:main:participant" }, () => ({
+      archivedAt: 20,
+    }));
+    const archived = await listSessions({ client, context, request });
+    expect(archived.sessions.map((row) => row.key).toSorted()).toEqual([
+      "agent:main:owned",
+      "agent:main:reassigned",
+    ]);
+    expect(archived.ownerSessionCounts).toEqual([{ profileId: ada, open: 2, running: 0 }]);
   });
 });

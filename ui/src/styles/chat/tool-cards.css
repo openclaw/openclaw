@@ -1292,3 +1292,34 @@ openclaw-chat-tool-output {
   overflow-wrap: anywhere;
   font-family: var(--mono);
 }
+.chat-permission-card {
+  margin: 8px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.chat-permission-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-permission-card__heading svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--accent);
+}
+
+.chat-permission-card p {
+  margin: 8px 0 12px;
+  color: var(--muted);
+}
+
+.chat-permission-card .btn {
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
+}

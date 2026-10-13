@@ -5356,7 +5356,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     platform: "linux",
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
-      readCodexCliCredentials: () => null,
+      hasCodexCliAuthFile: () => false,
       readGeminiCliCredentials: () => null,
     },
   });

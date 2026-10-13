@@ -223,7 +223,7 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
-  /** Current facts from the original process-owned actor, never a replacement. */
+  /** Current facts from the original actor or its receipt-backed delivery preparation. */
   readCurrentSession?: () =>
     | {
         sessionId: string;

@@ -1,7 +1,7 @@
 import { once } from "node:events";
-import { fstatSync } from "node:fs";
+import { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
-import { getEnvironmentData, Worker } from "node:worker_threads";
+import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -14,6 +14,8 @@ import {
   installSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissions,
   readSqliteDatabasePendingWriteToken,
+  prepareSqliteDatabaseCleanClose,
+  recordSqliteDatabaseIntegrity,
   readSqliteDatabaseWriteTokenForPath,
   retireSqliteDatabaseAdmissionForPath,
   retainSqliteDatabaseAdmissionLocation,
@@ -53,7 +55,15 @@ it("retires the final closed handle's facts while preserving open siblings and d
     first.close();
     expect(recordsFor(location)).toHaveLength(1);
     expect(getAdmittedSqliteSchemaFacts(second)?.tables.has("proof")).toBe(true);
-    second.close();
+    const admittedSchema = getAdmittedSqliteSchemaFacts(second);
+    recordSqliteDatabaseIntegrity(second);
+    {
+      using seal = prepareSqliteDatabaseCleanClose(second);
+      second.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      second.close();
+      expect(recordsFor(location)).toHaveLength(1);
+      expect(seal.publish()).toBe(true);
+    }
     expect(recordsFor(location)).toEqual([]);
     expect(fstatSync(original.descriptor).isFile()).toBe(true);
 
@@ -61,6 +71,7 @@ it("retires the final closed handle's facts while preserving open siblings and d
     expect(recordsFor(location)).toEqual([]);
 
     first.open();
+    expect(getAdmittedSqliteSchemaFacts(first)?.admissionId).toBe(admittedSchema?.admissionId);
     admitSqliteSchema(first);
     expect(first.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
     expect(getAdmittedSqliteSchemaFacts(first)?.tables.has("proof")).toBe(true);
@@ -172,6 +183,130 @@ it("inherits only open database facts after 300 databases close", async () => {
   }
 });
 
+it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced"] as const)(
+  "settles native-open reference admission before exposing the handle (%s)",
+  async (ordering) => {
+    const location = path.join(tempDirs.make("sqlite-admission-open-reference-"), "proof.sqlite");
+    const database = createDatabase(location);
+    const relay = createSqliteDatabaseAdmissionRelay(() => {});
+    const bridge = new MessageChannel();
+    let firstReference: SharedArrayBuffer | undefined;
+    let worker: Worker | undefined;
+    bridge.port1.on("message", (message: { admissions: unknown; port: MessagePort }) => {
+      const admissions = readSqliteDatabaseAdmissions(message.admissions);
+      const reference =
+        worker &&
+        admissions?.find((record) => record.location === location)?.references.get(worker.threadId);
+      if (!firstReference && reference && Atomics.load(new Int32Array(reference), 0) > 0) {
+        firstReference = reference;
+        if (ordering === "explicit-retirement") {
+          retireSqliteDatabaseAdmissionForPath(location);
+        }
+        if (ordering !== "reference-first") {
+          database.close();
+        }
+        if (ordering === "path-replaced") {
+          renameSync(location, path.join(path.dirname(location), "previous.sqlite"));
+          createDatabase(location).close();
+        }
+      }
+      relay.port.postMessage(message, [message.port]);
+    });
+    const script = `const { parentPort, workerData } = require("node:worker_threads");
+     (async () => {
+       const { register } = await import(workerData.loader);
+       register();
+       const { openNodeSqliteDatabase } = await import(workerData.native);
+       const { withSqliteDatabaseAdmissionExchange, readSqliteDatabaseScopedWriteToken } =
+         await import(workerData.admission);
+       const { exchangeSqliteDatabaseAdmissions } = await import(workerData.relay);
+       const { runSqliteImmediateTransactionSync } = await import(workerData.transaction);
+       const run = (callback) => withSqliteDatabaseAdmissionExchange(
+         (records, location, create) =>
+           exchangeSqliteDatabaseAdmissions(workerData.port, records, location, create),
+         callback,
+       );
+       let database;
+       try {
+         database = run(() => openNodeSqliteDatabase(workerData.location));
+       } catch (error) {
+         parentPort.postMessage({ kind: "open-error", message: error.message });
+         workerData.port.close();
+         parentPort.close();
+         return;
+       }
+       parentPort.on("message", () => {
+         const result = run(() => runSqliteImmediateTransactionSync(database, () => ({
+           isOpen: database.isOpen,
+           value: database.prepare("SELECT value FROM proof").get().value,
+           tokenPresent: readSqliteDatabaseScopedWriteToken(database, ["proof"]) !== undefined,
+         })));
+         run(() => database.close());
+         parentPort.postMessage({ kind: "read", ...result });
+         workerData.port.close();
+         parentPort.close();
+       });
+       parentPort.postMessage({ kind: "opened" });
+     })().catch((error) => { throw error; });`;
+    try {
+      worker = new Worker(script, {
+        eval: true,
+        execArgv: [],
+        workerData: {
+          location,
+          port: bridge.port2,
+          loader: import.meta.resolve("tsx/esm/api"),
+          native: new URL("./node-sqlite.ts", import.meta.url).href,
+          admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
+          relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
+          transaction: new URL("./sqlite-transaction.ts", import.meta.url).href,
+        },
+        transferList: [bridge.port2],
+      });
+      trackSqliteDatabaseAdmissionWorker(worker);
+      const [opened] = await once(worker, "message");
+      if (!firstReference) {
+        throw new Error("Worker omitted its first native reference publication");
+      }
+      if (ordering === "explicit-retirement" || ordering === "path-replaced") {
+        expect(opened).toEqual({
+          kind: "open-error",
+          message:
+            ordering === "explicit-retirement"
+              ? "SQLite database admission retired during native open"
+              : "SQLite database changed identity during native open",
+        });
+        expect(Atomics.load(new Int32Array(firstReference), 0)).toBe(0);
+        return;
+      }
+      expect(opened).toEqual({ kind: "opened" });
+      if (database.isOpen) {
+        database.close();
+      }
+      const read = once(worker, "message");
+      worker.postMessage("read", []);
+      expect((await read)[0]).toEqual({
+        kind: "read",
+        isOpen: true,
+        value: 42,
+        tokenPresent: true,
+      });
+      expect(Atomics.load(new Int32Array(firstReference), 0)).toBe(0);
+    } finally {
+      await worker?.terminate();
+      bridge.port1.close();
+      relay.finish();
+      if (database.isOpen) {
+        database.close();
+      }
+      retireSqliteDatabaseAdmissionForPath(location);
+      if (ordering === "path-replaced") {
+        retireSqliteDatabaseAdmissionForPath(path.join(path.dirname(location), "previous.sqlite"));
+      }
+    }
+  },
+);
+
 it.each([false, true])(
   "retains later worker siblings until final close or exit (retained: %s)",
   async (retained) => {
@@ -276,6 +411,8 @@ it.each([false, true])(
       expect(recordsFor(location)).toHaveLength(1);
       expect(await command("close")).toBe("close");
       expect(recordsFor(location)).toHaveLength(1);
+      expect(await command("open")).toEqual({ value: 42, admissionId });
+      expect(await command("close")).toBe("close");
       const siblingReply = once(siblingWorker, "message");
       siblingWorker.postMessage("read", []);
       expect((await siblingReply)[0]).toEqual({ value: 42, admissionId });
@@ -292,9 +429,19 @@ it.each([false, true])(
         value: 42,
         admissionId: getAdmittedSqliteSchemaFacts(database)?.admissionId,
       });
-      database.close();
-      expect(recordsFor(location)).toHaveLength(1);
+      const retiredOwner = worker.threadId;
+      const stale = structuredClone(recordsFor(location));
+      expect(stale[0]!.references.has(retiredOwner)).toBe(true);
       await worker.terminate();
+      const inherited = readSqliteDatabaseAdmissions(
+        getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+      )?.find((record) => record.location === location);
+      expect(inherited).toBeDefined();
+      expect(inherited!.references.has(retiredOwner)).toBe(false);
+      installSqliteDatabaseAdmissions(stale);
+      expect(recordsFor(location)[0]!.references.has(retiredOwner)).toBe(false);
+      expect(getAdmittedSqliteSchemaFacts(database)?.tables.has("proof")).toBe(true);
+      database.close();
       expect(recordsFor(location)).toEqual([]);
     } finally {
       await sibling?.worker.terminate();

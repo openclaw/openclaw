@@ -1,6 +1,7 @@
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { prepareSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -39,7 +40,7 @@ export function resolveUpstreamForkHarness(
 }
 
 /** Keep source identity and execution authority current until native I/O. */
-export function createUpstreamForkCurrentGuard(params: {
+export async function prepareUpstreamForkCurrentGuard(params: {
   client: GatewayClient | null;
   commitGuard: () => void;
   context: Pick<GatewayRequestContext, "getRuntimeConfig">;
@@ -53,11 +54,14 @@ export function createUpstreamForkCurrentGuard(params: {
   if (!expectedEntry) {
     throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
   }
-  const sourceMetadata = captureSessionEntryMetadataRead({
-    agentId: params.source.agentId,
-    sessionKey: params.source.canonicalKey,
-    storePath: params.source.storePath,
-  });
+  const sourceMetadata = captureSessionEntryMetadataRead(
+    {
+      agentId: params.source.agentId,
+      sessionKey: params.source.canonicalKey,
+      storePath: params.source.storePath,
+    },
+    params.commitGuard,
+  );
   const assertCurrent = () => {
     params.commitGuard();
     const currentConfig = params.context.getRuntimeConfig();
@@ -124,8 +128,10 @@ export function createUpstreamForkCurrentGuard(params: {
       throw new SessionMutationAuthorizationChangedError(restriction);
     }
   };
+  const prepared = await prepareSessionCapabilityRead(assertCurrent);
   return {
-    assertCurrent,
+    assertCurrent: prepared.read,
+    release: prepared.release,
     // After capture, the child initializer and plugin own rollback independently;
     // their target, registry, binding, and thread fences replace forward authority.
     assertRollbackCurrent: () => undefined,

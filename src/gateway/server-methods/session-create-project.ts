@@ -7,9 +7,10 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -362,19 +363,13 @@ export async function prepareSessionWorkspaceForRun(params: {
     signal,
   } = params;
   const target = { agentId, sessionKey, storePath };
-  const incognito = captureIncognitoSessionSource(target);
-  const metadata = captureSessionEntryMetadataRead(target);
-  const claim =
-    incognito && !("kind" in incognito)
-      ? incognito.actor.sessions.captureCurrent(sessionKey)
-      : undefined;
+  const metadata = captureSessionEntryMetadataRead(target, params.assertCurrent);
   const assertRunOwnership = composeSessionSourceAssertion(
     [params.assertCurrent],
     (assertSources) => {
       signal.throwIfAborted();
       assertSources();
       metadata?.assertCurrent();
-      claim?.assertCurrent();
     },
   );
   assertRunOwnership();
@@ -389,11 +384,9 @@ export async function prepareSessionWorkspaceForRun(params: {
   const prepare = () =>
     workspacePreparations.enqueue(`${storePath}\0${sessionKey}`, async () => {
       assertRunOwnership();
-      const saved = incognito
-        ? await (
-            await import("../../config/sessions/session-entry-read-runtime.js")
-          ).readSessionEntryReadOnlyInWorker(target, assertRunOwnership)
-        : loadSessionEntry(target);
+      const saved = metadata
+        ? metadata.readCurrent()
+        : await readSessionEntryReadOnlyInWorker(target, assertRunOwnership);
       if (
         !saved ||
         saved.sessionId !== entry.sessionId ||
@@ -469,6 +462,7 @@ export async function prepareSessionWorkspaceForRun(params: {
         // Direct bindings still require containment. Pending managed checkouts use
         // the saved child requirement and source custody in the preparation owner.
         enforceSandboxContainment: !pending && Boolean(project || saved.projectId),
+        sandboxRequired: saved.sandbox === "required",
         requestedProjectId: project?.id ?? saved.projectId,
         sessionCwd: directory,
         sessionKey,
@@ -589,8 +583,19 @@ export async function prepareSessionWorkspaceForRun(params: {
       assertRunOwnership();
       emitSessionsChanged(context, { sessionKey, agentId, reason: "project" });
     });
-  await (incognito && !("kind" in incognito)
-    ? incognito.actor.sessions.withSharedState(prepare)
-    : prepare());
+  const handled = await withSessionActorStorage(
+    target,
+    {
+      lifetime: { assertCurrent: assertRunOwnership, assertReadable: assertRunOwnership },
+      authority: { assertCurrent: assertRunOwnership, authorize() {} },
+    },
+    async () => {
+      await prepare();
+      return true;
+    },
+  );
+  if (!handled) {
+    await prepare();
+  }
   assertRunOwnership();
 }

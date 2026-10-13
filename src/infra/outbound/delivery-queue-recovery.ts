@@ -743,6 +743,7 @@ async function drainQueuedEntry(
   );
   let mediaRecoveryLeaseId: string | undefined;
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  let releaseWriterAuthority: (() => void) | undefined;
   try {
     // Unknown-send reconciliation above owns already-dispatched work. Only a new
     // dispatch requires current generation authority.
@@ -760,13 +761,14 @@ async function drainQueuedEntry(
             stateContext,
           )
         : undefined;
-    const deliveryParams = await buildRecoveryDeliverParams(
+    const { release, ...deliveryParams } = await buildRecoveryDeliverParams(
       entry,
       opts.cfg,
       opts.stateDir,
       producerClaimId,
       stateContext,
     );
+    releaseWriterAuthority = release;
     let dispatchAdmitted = false;
     const result = await deliver({
       ...deliveryParams,
@@ -994,6 +996,7 @@ async function drainQueuedEntry(
       isProvenDeliveryNotSentError(err) ? failDeliveryBeforePlatformSend : failDelivery,
     );
   } finally {
+    releaseWriterAuthority?.();
     generation?.release();
     // Early fallback acks make the row non-replayable before the adapter has
     // necessarily finished reading every payload. Release only after the whole

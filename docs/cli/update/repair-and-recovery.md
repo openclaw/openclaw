@@ -87,6 +87,11 @@ the original manager and service identity. This does not start the service or
 rewrite its definition. A later refusal still uses the recorded stop to restore
 the previous Gateway; a service that was already stopped remains stopped.
 
+On macOS, a failed LaunchAgent state probe is recorded as a failed recovery
+attempt with its reason. OpenClaw leaves the service definition unchanged and
+prints `LaunchAgent state could not be inspected`. Run
+`openclaw gateway status --deep` to inspect the service before retrying recovery.
+
 An already-current installation can still need plugin maintenance. If the update
 parks its Gateway for Doctor and a maintenance step is refused, recovery uses
 the current run's latest stop and restarts the installed package after Doctor's
@@ -310,6 +315,10 @@ including a verified backup and stopping the managed Gateway, then run
 from the new installation before restarting through the service manager.
 
 ## `update repair`
+
+If state ownership or a maintenance lock is held, repair refuses before that
+maintenance and reports `Stop the Gateway first (openclaw gateway stop)`. Stop
+the Gateway for the same profile/state directory before retrying.
 
 Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
@@ -866,7 +875,8 @@ create or change WAL/SHM sidecars, invalidating cleanup's destination check even
 when session content is unchanged. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
 and retry. Cleanup requires exclusive offline state ownership and never stops
-or restarts a service itself.
+or restarts a service itself. On owner or maintenance-lock contention, cleanup
+reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches

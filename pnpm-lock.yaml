@@ -273,8 +273,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       '@openclaw/proc-safe':
         specifier: 0.2.0
         version: 0.2.0
@@ -651,8 +651,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       acpx:
         specifier: 0.19.4
         version: 0.19.4
@@ -898,18 +898,18 @@ importers:
   extensions/clawrouter:
     dependencies:
       '@solidjs/web':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       solid-js:
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -962,8 +962,8 @@ importers:
         specifier: 0.160.0
         version: 0.160.0
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -1021,8 +1021,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       '@trycua/cua-driver':
         specifier: 0.33.4
         version: 0.33.4
@@ -1234,8 +1234,8 @@ importers:
         specifier: 1.74.0
         version: 1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       mdast-util-from-markdown:
         specifier: 2.1.0
         version: 2.1.0(supports-color@10.2.2)
@@ -1262,8 +1262,8 @@ importers:
   extensions/file-transfer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
@@ -1504,8 +1504,8 @@ importers:
   extensions/llama-cpp:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1560,8 +1560,8 @@ importers:
         specifier: 18.9.0
         version: 18.9.0
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
@@ -1601,11 +1601,17 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/mcp-relay:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -1714,8 +1720,8 @@ importers:
   extensions/migrate-claude:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1944,8 +1950,8 @@ importers:
   extensions/openshell:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -2019,8 +2025,8 @@ importers:
         specifier: 0.1.29
         version: 0.1.29
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -2151,8 +2157,8 @@ importers:
   extensions/signal:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.2
-        version: 0.26.2
+        specifier: 0.26.3
+        version: 0.26.3
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -4835,8 +4841,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-arm64@0.26.2':
-    resolution: {integrity: sha512-PNxP4Q4KM7+MkmxHvuLWYoUgCIq/4/kZ89ujsjQ+ACnzc0hR1Jz4XLyk5qtP4bNvdda8G41eDyh/YOBHtoNbnQ==}
+  '@openclaw/fs-safe-darwin-arm64@0.26.3':
+    resolution: {integrity: sha512-fLTwYvQGaKRkffeXMhZteCQh2ugOAZ1dWuqLLKZj58vTG/0fTPKEnVHKKYKspgiSrzB7/zwBqjuxh5LHHOoQbw==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
@@ -4847,20 +4853,20 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-x64@0.26.2':
-    resolution: {integrity: sha512-/Gls+kKGNPxv1LhYJc6kYq3ldMfj6iKUbK0OOyLJa694epulNM28UGfRmleCekXRU4VP09vuePnSYGCN46epwg==}
+  '@openclaw/fs-safe-darwin-x64@0.26.3':
+    resolution: {integrity: sha512-3AlJBxQ2fyP/dSVHBDeSd9oAc2/qm0zzsnLACaEYFL4UALInz4eR21+PXEnjATJjdmGsZeeJ1lFTNm8s/bZAIg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/fs-safe-freebsd-arm64@0.26.2':
-    resolution: {integrity: sha512-JCFvGQwbkI7C5H2CKevwpP4OQch5bMb8MvepdvSZaUzlSJFAnyzRjtpfbIKNgM9tKlHVK2rzgPndAPbxkNZy0Q==}
+  '@openclaw/fs-safe-freebsd-arm64@0.26.3':
+    resolution: {integrity: sha512-ShOI91bnXkEetPmrqLiXYCwCiItamHRBIi83QBQqKQI7pcmDyGePGLIxyPVF1zJVewAIkfXqsBHqajfeTSCasg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [freebsd]
 
-  '@openclaw/fs-safe-freebsd-x64@0.26.2':
-    resolution: {integrity: sha512-qeEqbW6h/gx7Lqxd13fTmx6hM+wic4d6UOEmWksjw65a+oT2Z2xX4RQzt/rsGTWCh3hYFZ4os3XP6xAgNg1gqQ==}
+  '@openclaw/fs-safe-freebsd-x64@0.26.3':
+    resolution: {integrity: sha512-7CmAP/I1xYl47ZqqGAa0GVSDVS1mNF0G053RVpJg5xIcRwnbAvut5o5SLdW4kASEzQDYUHOpttMqnkdIGXUTMQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [freebsd]
@@ -4872,8 +4878,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.26.2':
-    resolution: {integrity: sha512-a6lzIZ6mUUy4ZKm12aU6N5KmsyDmzwY3Yfzsi1HXEkbzyT1XAubu+GjDDB9OxrNZyZhyDVI5tVgsS6ZoE7pEEg==}
+  '@openclaw/fs-safe-linux-arm64-gnu@0.26.3':
+    resolution: {integrity: sha512-fBHtjqFYQzjn40opd2pjGCKZORsj4e+WQa4NsPr70ZU17pq7GGgPe6gmz0XUWAQiIdoAjCPm4h4nimfKtC7CLQ==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -4886,8 +4892,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.26.2':
-    resolution: {integrity: sha512-su7K6XJrMkIBG5WLTILzSqr5v6+m6bGaxhl3ff6PIkzA8FBBe3KyUDqIWoTn5C+dTrsrnDkMQ7XWBJkhZ40FJA==}
+  '@openclaw/fs-safe-linux-arm64-musl@0.26.3':
+    resolution: {integrity: sha512-IvPm7ppCmq4RYzJUwlWRA+suq7ZzQLnXsNO0Qw7BV8r+RmztHd1WIbD1FJDJAVEf8C2oDRo/4FcTIT7MdfZqPw==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -4900,8 +4906,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.26.2':
-    resolution: {integrity: sha512-WnHrli9//G5fGBGiZ2dFxe3v/RltTyechOkV6qhy1YH3ZGNUjnOCE0qIbI4JWSM9Gdod89b6UJqvA8gUqiKJ4Q==}
+  '@openclaw/fs-safe-linux-x64-gnu@0.26.3':
+    resolution: {integrity: sha512-U2AbB6W4uLYyeBJWjuE5G3VqvdJDqQ/ZyUuk840ZPjXrfLOmGC0kaYJOq5BcCjwIfAv5spHtVQ6BgqYLdJIXVA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -4914,15 +4920,15 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-x64-musl@0.26.2':
-    resolution: {integrity: sha512-UexX3RU24H8hgzY9u5VMHn/seb9rOrRRsOsKOHsxZT6ed5uk7MGacH6JBk0WhPEqe6crt3KWXpIEPBX9lRn2Cw==}
+  '@openclaw/fs-safe-linux-x64-musl@0.26.3':
+    resolution: {integrity: sha512-/u9oGTLpPuHjhGGu8YWXQZnvFshgg1zNTw5auP7WGNqMQJXj0TnfvIBMQHnuWZ6vVZQTmECHzcQzOoZNIduvfQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-win32-arm64-msvc@0.26.2':
-    resolution: {integrity: sha512-ntmm5N5ANN+p1u5bPPVd/bD6KCHwkXdw5c7CsfVVGlcjS5OUMeGBHMy8jd4FlnXXkh+90348SXaKCdDaO+mIXQ==}
+  '@openclaw/fs-safe-win32-arm64-msvc@0.26.3':
+    resolution: {integrity: sha512-XMXZgVadAzGBguFlcNK6IwaegWohsSTjJTUEvVH4A52T7UFHZtRoImuOAf0xLjhBOBKgehT87+ADfEERUDN6Rg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [win32]
@@ -4933,8 +4939,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.26.2':
-    resolution: {integrity: sha512-S7dNLnYYDwDEmHnu4MFXveQK/M17OddERPKYk1AlYy5qYVsugkBXnO3ZuzT5jT8x2RXCM5LjpVGZbkeT3QTmfg==}
+  '@openclaw/fs-safe-win32-x64-msvc@0.26.3':
+    resolution: {integrity: sha512-KH4kn429FnoSKvSy1n7iGw8tzoBrJYXye4GxkKRtzYmzeFCW+6/s27O4QFOPOHqT2yqDjCwFRQT4ws5R0wWyfQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
@@ -4943,8 +4949,8 @@ packages:
     resolution: {integrity: sha512-sBm68f4QiZrrqlZxbOlqVIutrmOK/KLZBrwyPIhV7xXJmlPFc6ZET8AggcU3hMDM3dDSUYgA8LUupxwTB2DZsg==}
     engines: {node: '>=22'}
 
-  '@openclaw/fs-safe@0.26.2':
-    resolution: {integrity: sha512-BubxKwauBAL5kMHZ+ijgYDT1EoStCbt6gqJW7flWPIKU4ikJmLaNcNWh7jUe50AxT4x3FVzNpBxc/WSyZULLVQ==}
+  '@openclaw/fs-safe@0.26.3':
+    resolution: {integrity: sha512-p9ORyEheR2x+PMvxsrYyM47KN7LH7bsgyeiKaCvu08ibW/8733h/NmUy2xWoNP39ChULBN8adRcT03DSs3sXWw==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.9':
@@ -6077,19 +6083,9 @@ packages:
       '@tsrx/core':
         optional: true
 
-  '@solidjs/compiler-darwin-arm64@2.0.0-rc.13':
-    resolution: {integrity: sha512-uG3Sa/2jNZNxoKkcHjHw3KZEEuwDrRAk9aqUU2qqJZl9GDLLI0HVW7i/Lvq9b17f5yN+fNTdNyojO8rLgHnQuQ==}
-    cpu: [arm64]
-    os: [darwin]
-
   '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
     resolution: {integrity: sha512-WiOnnVov6XfT7QG9OrgqWfoJMrUYYbjO88qMzJ09tijV6Phu+BoeK2J3I0B3IpPPrOTMQ2mXpcwdvnSLuAtWdw==}
     cpu: [arm64]
-    os: [darwin]
-
-  '@solidjs/compiler-darwin-x64@2.0.0-rc.13':
-    resolution: {integrity: sha512-jIyzyn/fYHmzikOaskiqmkc8FusXMaxl1Z6huh7lEeHaZsl9NIdzzAIxq8j/EJFByvoCyfQitggRTuubGNblpA==}
-    cpu: [x64]
     os: [darwin]
 
   '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
@@ -6097,21 +6093,9 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.13':
-    resolution: {integrity: sha512-cGIX7ZWTyw3Qdpd5ZqJtHdb2vQkAtZlkTgy919dMldjoRqDwQIRlqCmH35kaH/IUBlhuG224BoP4twqK9GYyGw==}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
   '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
     resolution: {integrity: sha512-2d8F8x4sBae7DQHi9wholdzHir8UsHVHpPRPj4NRr4seD5rWkpIbQ3Pwk/9FMZoM4KZmCZ+6+SInQm7iGALgTw==}
     cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.13':
-    resolution: {integrity: sha512-Dnft4iic4zHsemNSBGMwOMjN4fP0DEoyfeSUWbqBk1CMsXRarLTcMKhjNQmJvL0opzjOUq0/m7/17LTe6AKpvg==}
-    cpu: [x64]
     os: [linux]
     libc: [glibc]
 
@@ -6121,26 +6105,14 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.13':
-    resolution: {integrity: sha512-nNOMOFxanzfM2wNbSXyekMtGazyOcM3ja+P7tk0NJYTAo2MYmRTY/HUDdFRDluk6Nc5aehu87I7AVMRj5l1WXw==}
-    engines: {node: '>=14.0.0'}
-
   '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
     resolution: {integrity: sha512-cTaAmM7Ca6JisgvnqsLT9Fce4sDmonCaTvBb5eF2iEfdt8htFZ2Z9RlUEK2yG6LxCN89/K/vZLbI7giLA4HUjw==}
     engines: {node: '>=14.0.0'}
-
-  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.13':
-    resolution: {integrity: sha512-1DT+5TgIFV5L8GdrGb+uD9ruHFVq6kJ4A/cb9amUU574TGM88B4nwy//dM57zmT99u7mej7JF91glQBnHOGhHQ==}
-    cpu: [x64]
-    os: [win32]
 
   '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
     resolution: {integrity: sha512-JosTalJd6Pgb8mjNgPCEauQSOi647Vlm2mS0qvO3hYLvzcrODmrYsHIY1/DqbI1FxQdc9vUOKJ5zCHvhjlScuA==}
     cpu: [x64]
     os: [win32]
-
-  '@solidjs/compiler@2.0.0-rc.13':
-    resolution: {integrity: sha512-OveR/xhLKo8MTJO/53jgjHuBW54c6/a9B/jiSjDrBeQ3JSbODUxQ8t58WBSlHaxyowPd27TwhVkLo3zeT1YqMQ==}
 
   '@solidjs/compiler@2.0.0-rc.14':
     resolution: {integrity: sha512-eCTVcxXl1UHOisRMYg+hABwiiTkfTmSkaOFtAb8bjzeqpLlju3lo6pT2qWPfUbrvnslbNGnLZd+HZSIVgZu9VQ==}
@@ -6170,12 +6142,6 @@ packages:
         optional: true
       '@testing-library/jest-dom':
         optional: true
-
-  '@solidjs/web@2.0.0-rc.13':
-    resolution: {integrity: sha512-vI/7v/XM8B/3U/oKAzCW2VjTLFkM5IArB2DFnrjxyPRYD3FX9KAXg9QuAnPIPQHC/xvg/LgxmvoVfZUfJ96gOQ==}
-    engines: {node: '>=22.12.0'}
-    peerDependencies:
-      solid-js: ^2.0.0-rc.13
 
   '@solidjs/web@2.0.0-rc.14':
     resolution: {integrity: sha512-MhHqUoVBdgAG7EZOANx7Y5SuCFH7sBxzt9uBSYLpJxE503tqoi7pX1UhV7PWxw4LvmPe1PZkdkSOZ8BLchZkhQ==}
@@ -10360,10 +10326,6 @@ packages:
     resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
     engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
 
-  solid-js@2.0.0-rc.13:
-    resolution: {integrity: sha512-62bYOI4JZ15KOqL5eReKyWSwAXrGb0fbX8SDnHsbJk2UX+SzSyy1gobas2cxW/0BXcobGfQ1V6ffPyQkMIBdoQ==}
-    engines: {node: '>=22.12.0'}
-
   solid-js@2.0.0-rc.14:
     resolution: {integrity: sha512-fmaqUHgbITf18Hedur6gPnaPE4GrdPgkTbLujHqM5Vl5jxWf9rxwFh6hZMXQs+Kg1pu8KYuOMfqnuSizFQ9I6Q==}
     engines: {node: '>=22.12.0'}
@@ -13343,52 +13305,52 @@ snapshots:
   '@openclaw/fs-safe-darwin-arm64@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-darwin-arm64@0.26.2':
+  '@openclaw/fs-safe-darwin-arm64@0.26.3':
     optional: true
 
   '@openclaw/fs-safe-darwin-x64@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-darwin-x64@0.26.2':
+  '@openclaw/fs-safe-darwin-x64@0.26.3':
     optional: true
 
-  '@openclaw/fs-safe-freebsd-arm64@0.26.2':
+  '@openclaw/fs-safe-freebsd-arm64@0.26.3':
     optional: true
 
-  '@openclaw/fs-safe-freebsd-x64@0.26.2':
+  '@openclaw/fs-safe-freebsd-x64@0.26.3':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.26.2':
+  '@openclaw/fs-safe-linux-arm64-gnu@0.26.3':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-musl@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.26.2':
+  '@openclaw/fs-safe-linux-arm64-musl@0.26.3':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-gnu@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.26.2':
+  '@openclaw/fs-safe-linux-x64-gnu@0.26.3':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-musl@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-musl@0.26.2':
+  '@openclaw/fs-safe-linux-x64-musl@0.26.3':
     optional: true
 
-  '@openclaw/fs-safe-win32-arm64-msvc@0.26.2':
+  '@openclaw/fs-safe-win32-arm64-msvc@0.26.3':
     optional: true
 
   '@openclaw/fs-safe-win32-x64-msvc@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.26.2':
+  '@openclaw/fs-safe-win32-x64-msvc@0.26.3':
     optional: true
 
   '@openclaw/fs-safe@0.21.3':
@@ -13402,18 +13364,18 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.21.3
       jszip: 3.10.2
 
-  '@openclaw/fs-safe@0.26.2':
+  '@openclaw/fs-safe@0.26.3':
     optionalDependencies:
-      '@openclaw/fs-safe-darwin-arm64': 0.26.2
-      '@openclaw/fs-safe-darwin-x64': 0.26.2
-      '@openclaw/fs-safe-freebsd-arm64': 0.26.2
-      '@openclaw/fs-safe-freebsd-x64': 0.26.2
-      '@openclaw/fs-safe-linux-arm64-gnu': 0.26.2
-      '@openclaw/fs-safe-linux-arm64-musl': 0.26.2
-      '@openclaw/fs-safe-linux-x64-gnu': 0.26.2
-      '@openclaw/fs-safe-linux-x64-musl': 0.26.2
-      '@openclaw/fs-safe-win32-arm64-msvc': 0.26.2
-      '@openclaw/fs-safe-win32-x64-msvc': 0.26.2
+      '@openclaw/fs-safe-darwin-arm64': 0.26.3
+      '@openclaw/fs-safe-darwin-x64': 0.26.3
+      '@openclaw/fs-safe-freebsd-arm64': 0.26.3
+      '@openclaw/fs-safe-freebsd-x64': 0.26.3
+      '@openclaw/fs-safe-linux-arm64-gnu': 0.26.3
+      '@openclaw/fs-safe-linux-arm64-musl': 0.26.3
+      '@openclaw/fs-safe-linux-x64-gnu': 0.26.3
+      '@openclaw/fs-safe-linux-x64-musl': 0.26.3
+      '@openclaw/fs-safe-win32-arm64-msvc': 0.26.3
+      '@openclaw/fs-safe-win32-x64-msvc': 0.26.3
       jszip: 3.10.2
 
   '@openclaw/libterminal@0.3.9':
@@ -14409,35 +14371,16 @@ snapshots:
       html-entities: 2.3.3
       parse5: 7.3.0
 
-  '@solidjs/compiler-darwin-arm64@2.0.0-rc.13':
-    optional: true
-
   '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
-    optional: true
-
-  '@solidjs/compiler-darwin-x64@2.0.0-rc.13':
     optional: true
 
   '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
     optional: true
 
-  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.13':
-    optional: true
-
   '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
     optional: true
 
-  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.13':
-    optional: true
-
   '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14':
-    optional: true
-
-  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.13':
-    dependencies:
-      '@emnapi/core': 1.11.3
-      '@emnapi/runtime': 1.11.3
-      '@napi-rs/wasm-runtime': 1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
     optional: true
 
   '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
@@ -14447,20 +14390,8 @@ snapshots:
       '@napi-rs/wasm-runtime': 1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
     optional: true
 
-  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.13':
-    optional: true
-
   '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
     optional: true
-
-  '@solidjs/compiler@2.0.0-rc.13':
-    optionalDependencies:
-      '@solidjs/compiler-darwin-arm64': 2.0.0-rc.13
-      '@solidjs/compiler-darwin-x64': 2.0.0-rc.13
-      '@solidjs/compiler-linux-arm64-gnu': 2.0.0-rc.13
-      '@solidjs/compiler-linux-x64-gnu': 2.0.0-rc.13
-      '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.13
-      '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.13
 
   '@solidjs/compiler@2.0.0-rc.14':
     optionalDependencies:
@@ -14494,12 +14425,6 @@ snapshots:
     transitivePeerDependencies:
       - '@tsrx/core'
       - supports-color
-
-  '@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13)':
-    dependencies:
-      seroval: 1.6.8
-      seroval-plugins: 1.6.8(seroval@1.6.8)
-      solid-js: 2.0.0-rc.13
 
   '@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14)':
     dependencies:
@@ -19122,13 +19047,6 @@ snapshots:
     dependencies:
       ip-address: 10.7.3
       smart-buffer: 4.2.0
-
-  solid-js@2.0.0-rc.13:
-    dependencies:
-      '@solidjs/signals': 2.0.0-rc.14
-      csstype: 3.2.3
-      seroval: 1.6.8
-      seroval-plugins: 1.6.8(seroval@1.6.8)
 
   solid-js@2.0.0-rc.14:
     dependencies:

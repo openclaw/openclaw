@@ -33,11 +33,6 @@ vi.mock("./drive.js", () => ({
   deliverCommentThreadText: deliverCommentThreadTextMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
-  dispatchInboundMessage: dispatchInboundMessageMock,
-}));
-
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
   return await Promise.race([
     promise,
@@ -137,15 +132,7 @@ function createTestRuntime(overrides?: {
         ),
         resolveAgentRoute: vi.fn(overrides?.resolveAgentRoute ?? (() => buildResolvedRoute())),
       },
-      reply: {
-        settleReplyDispatcher: vi.fn(async ({ dispatcher, onSettled }) => {
-          dispatcher.markComplete();
-          await dispatcher.waitForIdle();
-          await onSettled?.();
-        }),
-      },
       session: {
-        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
         recordInboundSession,
       },
       inbound: {
@@ -179,7 +166,6 @@ function createTestRuntime(overrides?: {
               created: true,
             })),
         ),
-        buildPairingReply: vi.fn((code: string) => `Pairing code: ${code}`),
       },
     },
   } as unknown as PluginRuntime;

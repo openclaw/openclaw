@@ -1,16 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { beforeEach, describe, expect, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -38,8 +34,6 @@ import {
 
 const it = createCommandTest();
 
-afterEach(clearRuntimeConfigSnapshot);
-
 describe("worker placement result recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
   let root: string;
@@ -47,7 +41,6 @@ describe("worker placement result recovery", () => {
   let placementStore: PlacementStore;
 
   beforeEach(() => {
-    setRuntimeConfigSnapshot(support.testState.config);
     root = support.testState.root;
     database = support.testState.stateDb;
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });

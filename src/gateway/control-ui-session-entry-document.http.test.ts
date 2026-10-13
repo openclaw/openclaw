@@ -80,6 +80,22 @@ it("restores the mounted canonical path before SPA scripts with the full app CSP
       isSessionEntryCurrent: () => false,
     },
   );
-  expect(revoked.res.statusCode).toBe(403);
+  expect(revoked.res.statusCode).toBe(303);
+  expect(revoked.setHeader).toHaveBeenCalledWith("Location", canonical);
   expect(revoked.getBody()).not.toContain("openclaw-app");
+
+  // Ordinary documents carry no entry path but still withhold prepared bytes.
+  const plain = createResponse();
+  await handleControlUiHttpRequest(
+    createRequest({ path: "/control/", host: "localhost", headers: { "accept-encoding": "gzip" } }),
+    plain.res,
+    {
+      basePath: "/control",
+      root: { kind: "resolved", path: root },
+      isSessionEntryCurrent: () => false,
+    },
+  );
+  expect(plain.res.statusCode).toBe(403);
+  expect(plain.setHeader).not.toHaveBeenCalledWith("Location", expect.anything());
+  expect(plain.getBody()).not.toContain("openclaw-app");
 });

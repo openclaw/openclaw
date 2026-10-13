@@ -252,7 +252,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       operation?.abortSignal.aborted !== true &&
       agentMeta !== undefined &&
       areRuntimeModelRefsEquivalent(
-        buildModelCatalogRef(agentMeta.provider, agentMeta.model),
+        buildModelCatalogRef(sessionModel.provider, sessionModel.model),
         fallbackTransition.selectedModelRef,
         { config: cfg },
       );

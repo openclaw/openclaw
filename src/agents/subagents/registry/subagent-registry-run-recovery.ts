@@ -16,7 +16,6 @@ import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
 } from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
@@ -505,7 +504,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     const source = replacement.source;
     const next = publishedNext ?? replacement.next;
-    warnLegacySubagentAuthority(source, log.warn);
     if (!isSameSubagentRunOwner(this.options.runs.get(nextRunId), next)) {
       return true;
     }

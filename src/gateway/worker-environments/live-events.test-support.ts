@@ -12,8 +12,7 @@ import { captureSessionTranscriptTargetBinding } from "../../config/sessions/tra
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
-import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
-import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
 export const SID = "session-worker-live";
 export const KEY = "agent:main:worker-live";
@@ -63,9 +62,7 @@ export const lifecycle = (payload: Payload<"lifecycle">): WireEvent => ({
   payload,
 });
 
-export function captureWorkerTranscriptSource(
-  target: SessionTranscriptRuntimeTarget,
-): WorkerTurnTranscriptSource {
+export async function captureWorkerTranscriptSource(target: SessionTranscriptRuntimeTarget) {
   const entry = loadSessionEntry(target);
   if (!entry || entry.sessionId !== target.sessionId) {
     throw new Error("expected admitted worker session");
@@ -75,11 +72,11 @@ export function captureWorkerTranscriptSource(
     expectedLifecycleRevision: entry.lifecycleRevision,
     expectedWriterRunId: entry.activeWriterRunId,
   };
+  const authority = await prepareWorkerTurnTranscriptSource(sessionTarget);
   return {
     sessionTarget,
-    receiptAuthority: () => {
-      resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
-    },
+    receiptAuthority: authority,
+    release: () => authority.release(),
   };
 }
 

@@ -15,9 +15,10 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { removeChatAbortControllerEntry } from "../chat-abort.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
-import { createChatAbortContext } from "./chat.abort.test-helpers.js";
+import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
 
@@ -195,6 +196,80 @@ it.each([
     } finally {
       settled.resolve();
       await stop;
+    }
+  },
+);
+
+it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
+  "exact sessions.abort fences the %s outcome during native preparation",
+  async (ending) => {
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      ...target,
+      defaultSessionId: sessionId,
+      lifecycleRevision,
+    });
+    const context = createChatAbortContext({
+      getRuntimeConfig,
+      getSessionEventSubscriberConnIds: () => new Set(),
+    });
+    const parent = createActiveRun(sessionKey, { sessionId, agentId: "main" });
+    const successor = createActiveRun(sessionKey, { sessionId, agentId: "main" });
+    context.chatAbortControllers.set(runId, parent);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const cancel = vi.fn(async () => ({ killed: 0, cancelledRequesters: [] }));
+    installHarness(async (_params, run) => {
+      entered.resolve();
+      await resume.promise;
+      return run(cancel);
+    });
+    const respond = vi.fn<RespondFn>();
+    const stop = Promise.resolve(
+      sessionAbortHandlers["sessions.abort"]!({
+        req: { type: "req", id: "exact-stop", method: "sessions.abort" },
+        params: { key: sessionKey, runId },
+        respond,
+        context: context as never,
+        client: { connect: { scopes: ["operator.admin"] } } as never,
+        isWebchatConnect: () => false,
+      }),
+    );
+    void stop.catch(() => {});
+    try {
+      await awaitGateBeforeSettlement(entered.promise, stop, "Stop skipped native preparation");
+      expect(respond).not.toHaveBeenCalled();
+      if (ending === "retargeted") {
+        parent.sessionId = "replacement-session";
+      } else {
+        removeChatAbortControllerEntry(context.chatAbortControllers, runId, parent);
+        if (ending === "replaced") {
+          context.chatAbortControllers.set(runId, successor);
+        } else if (ending === "queued successor") {
+          context.chatQueuedTurns.set(runId, successor);
+        }
+      }
+      const session = loadSessionEntry(target);
+      resume.resolve();
+      if (ending === "completed") {
+        await stop;
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          { ok: true, status: "no-active-run", abortedRunId: null },
+          undefined,
+          undefined,
+        );
+      } else {
+        await expect(stop).rejects.toThrow("Run changed before cancellation; retry Stop.");
+        expect(respond).not.toHaveBeenCalled();
+      }
+      expect(parent.controller.signal.aborted).toBe(false);
+      expect(successor.controller.signal.aborted).toBe(false);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(loadSessionEntry(target)).toEqual(session);
+    } finally {
+      resume.resolve();
+      await stop.catch(() => {});
     }
   },
 );

@@ -7,7 +7,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
   openOpenClawStateDatabase,
@@ -39,7 +39,7 @@ const stores = vi.hoisted(() => ({
   syncRegister: vi.fn<SyncStore["register"]>(),
   syncDelete: vi.fn<SyncStore["delete"]>(),
   syncUpdate: vi.fn<NonNullable<SyncStore["update"]>>(),
-  openKeyedStore: vi.fn<(options: OpenKeyedStoreOptions) => AsyncStore>(),
+  openKeyedStoreV2: vi.fn<(options: OpenKeyedStoreOptions) => AsyncStore>(),
   openSyncKeyedStore: vi.fn<(options: OpenKeyedStoreOptions) => SyncStore>(),
 }));
 
@@ -140,7 +140,7 @@ describe("Discord thread binding restoration", () => {
     stores.syncUpdate.mockReturnValue(false);
     stores.register.mockResolvedValue();
     stores.delete.mockResolvedValue(true);
-    stores.openKeyedStore.mockImplementation(() => ({
+    stores.openKeyedStoreV2.mockImplementation(() => ({
       entries: stores.entries,
       register: stores.register,
       delete: stores.delete,
@@ -317,8 +317,10 @@ describe("Discord thread binding restoration", () => {
 
   it("keeps activity in memory after a real native read-only failure", async () => {
     await withOpenClawTestState({ label: "discord-binding-native-readonly" }, async () => {
-      stores.openKeyedStore.mockImplementation((options) => {
-        return createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
+      stores.openKeyedStoreV2.mockImplementation((options) => {
+        return createPluginStateKeyedStoreV2ForTests<ThreadBindingRecord>("discord", options, {
+          assertCurrent() {},
+        });
       });
       let observed = false;
       stores.openSyncKeyedStore.mockImplementation((options) => {

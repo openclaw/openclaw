@@ -119,9 +119,6 @@ export function preparePluginStateObservationCacheRead(identity: string, key: Ke
 }
 
 export function readPluginStateEntriesCache(identity: string, key: Omit<Key, "key">) {
-  if (state.pending.has(identity)) {
-    return undefined;
-  }
   const entries = state.namespaces.get(
     JSON.stringify([identity, key.pluginId, key.namespace]),
   )?.entries;

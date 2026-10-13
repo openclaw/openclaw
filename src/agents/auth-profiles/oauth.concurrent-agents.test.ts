@@ -119,14 +119,18 @@ afterEach(async () => {
 
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
   it("gives one copied refresh generation one durable main-store owner", async () => {
+    const { createSqliteReadOnlyWorkerScope } =
+      await import("../../infra/sqlite-readonly-worker.js");
+    const readOnlyWorkers = createSqliteReadOnlyWorkerScope();
     const work = new AsyncWorkScope();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
     // Vitest can time out the observer before the accepted refresh finishes.
     settleCaseWork = async () => {
       finishRefresh();
       await work.drain();
+      await readOnlyWorkers.close();
     };
-    await work.track(async () => {
+    const runCase = async () => {
       const freshExpiry = Date.now() + 60 * 60 * 1000;
       const subAgents = await Promise.all(
         Array.from({ length: 4 }, async (_, i) => {
@@ -256,7 +260,8 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       await expect(resolveFrom(subAgents[3])).resolves.toEqual(
         expect.objectContaining({ apiKey: "portable-access" }),
       );
-    });
+    };
+    await readOnlyWorkers.run(() => work.track(runCase));
   }, 10_000);
 
   it("keeps pending observers read-only until the owner claims a late peer", async () => {

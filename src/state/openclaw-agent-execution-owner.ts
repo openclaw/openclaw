@@ -14,7 +14,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as creationClaims from "./agent-creation-claim.js";
-import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import {
+  AgentDatabaseExecutionAdmissionClosedError,
+  AgentDatabaseSchemaAdmissionChangedError,
+} from "./agent-database-admission-error.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
@@ -28,6 +31,7 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
 } from "./openclaw-agent-db-resources.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
@@ -35,7 +39,6 @@ import type {
   AgentDatabaseNativeGeneration,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
-import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import {
   type AgentDatabaseExecutionPreparedTarget,
@@ -57,7 +60,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export type AgentDatabaseExecutionState = {
-  owners: Map<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>;
+  owners: Map<string, AgentDatabaseFileExecutionOwner>;
   // LRU entries keep their slots during eviction and after failed cleanup.
   idle: Set<AgentDatabaseFileExecutionOwner>;
 };
@@ -80,8 +83,7 @@ export function createAgentDatabaseExecution(
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const aliases = new Map<string, () => void>();
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });
-  let retired = false;
-  let revoked = false;
+  const lifetime = new AgentDatabaseExecutionLifetime();
   let borrowers = 0;
   const acceptedWork = createAgentDatabaseAcceptedWork();
   let creationIdentity = expectedCreationIdentity;
@@ -121,7 +123,7 @@ export function createAgentDatabaseExecution(
     }
   };
   const finishRetirement = () => {
-    retired = true;
+    lifetime.retire();
     if (executions.get(pathname) !== owner) {
       return;
     }
@@ -131,7 +133,7 @@ export function createAgentDatabaseExecution(
 
   const assertCurrent = () => {
     if (
-      retired ||
+      !lifetime.open ||
       executions.get(pathname) !== owner ||
       !supportsAgentDatabaseExecutionScope(executionOptions)
     ) {
@@ -190,6 +192,7 @@ export function createAgentDatabaseExecution(
     signal?: AbortSignal,
     readmitSchema = false,
     contentionDeadline?: number,
+    schemaReadmitted = false,
   ): Promise<T | undefined> {
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
@@ -220,6 +223,7 @@ export function createAgentDatabaseExecution(
         agentId,
         identity.canonicalPath,
         context,
+        lifetime.state,
         assertCurrent,
         () => {
           if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
@@ -228,10 +232,6 @@ export function createAgentDatabaseExecution(
         },
         expectedIdentity ?? fileIdentity,
         acceptFileIdentity,
-        () => {
-          const retained = owner.borrow(pathname);
-          return () => retained.release();
-        },
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
         creationClaim?.witness,
       );
@@ -259,7 +259,12 @@ export function createAgentDatabaseExecution(
     } catch (error) {
       const nativeFailure = current.failure();
       const contended = !entered && isSqliteLockError(error);
-      if (generation === current && (nativeFailure || retireNativeOnFailure)) {
+      const schemaChanged =
+        !entered &&
+        !schemaReadmitted &&
+        nativeFailure !== "native" &&
+        error instanceof AgentDatabaseSchemaAdmissionChangedError;
+      if (generation === current && (nativeFailure || retireNativeOnFailure || schemaChanged)) {
         try {
           if (nativeFailure === "native" && !contended && !nativeClosing) {
             await owner.close();
@@ -275,6 +280,26 @@ export function createAgentDatabaseExecution(
             error,
           );
         }
+      }
+      if (schemaChanged) {
+        // Fresh proof can recover a refused publication; an entered operation is never replayed.
+        assertCurrent();
+        source.assertCurrent();
+        assertCallerCurrent();
+        signal?.throwIfAborted();
+        return run(
+          source,
+          operation,
+          assertCallerCurrent,
+          expectedIdentity,
+          retireNativeOnFailure,
+          createIfMissing,
+          creatingTarget,
+          signal,
+          readmitSchema,
+          contentionDeadline,
+          true,
+        );
       }
       if (contended) {
         const deadline =
@@ -304,6 +329,7 @@ export function createAgentDatabaseExecution(
             signal,
             readmitSchema,
             deadline,
+            schemaReadmitted,
           );
         }
       }
@@ -369,12 +395,12 @@ export function createAgentDatabaseExecution(
           );
         }
       };
-      let released = false;
+      const borrowerLifetime = new AgentDatabaseExecutionLifetime();
       let release: Promise<void> | undefined;
       const borrower = Symbol("agent database borrower");
 
       const assertBorrowed = () => {
-        if (released) {
+        if (!borrowerLifetime.open) {
           throw new Error("Agent database execution reference is released");
         }
         cleanup?.assertCurrentHost();
@@ -449,7 +475,7 @@ export function createAgentDatabaseExecution(
           await result;
         },
         async runExisting(source, operation, runOptions) {
-          const capturedGeneration = released ? undefined : generation;
+          const capturedGeneration = borrowerLifetime.open ? generation : undefined;
           const completion = createDeferredCore();
           acceptedWork.pending.set(completion.promise, { borrower });
           try {
@@ -494,7 +520,7 @@ export function createAgentDatabaseExecution(
           }
         },
         release() {
-          released = true;
+          borrowerLifetime.retire();
           acceptedWork.cancelReadAdmissions(borrower);
           return (release ??= (async () => {
             await acceptedWork.settleBorrower(borrower);
@@ -514,7 +540,7 @@ export function createAgentDatabaseExecution(
               }
             }
             borrowers -= 1;
-            if (borrowers !== 0 || retired || cleanupFailure || cleanupOwner) {
+            if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
               return;
             }
             const drainSignal = getGatewayRestartDrainSignal();
@@ -524,7 +550,7 @@ export function createAgentDatabaseExecution(
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
                   break;
                 }
-                if (borrowers !== 0 || retired || executionState.idle.has(owner)) {
+                if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
                   return;
                 }
                 await idle.closeIdle();
@@ -532,7 +558,7 @@ export function createAgentDatabaseExecution(
             } catch (error) {
               reportCleanupFailure(error);
             }
-            if (borrowers !== 0 || retired || executionState.idle.has(owner)) {
+            if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
               return;
             }
             if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
@@ -580,26 +606,22 @@ export function createAgentDatabaseExecution(
       }
     },
     close() {
-      retired = true;
+      lifetime.close();
       acceptedWork.cancelReadAdmissions();
       closing ??= (async () => {
         await closeNative();
         finishRetirement();
       })().catch((error: unknown) => {
         closing = undefined;
-        if (!revoked) {
-          // Failed cleanup retains this generation and lease. Let later borrowers retry;
-          // explicit revocation still prevents new work.
-          retired = false;
-        }
+        // Failed cleanup retains its lease; explicit revocation still prevents new work.
+        lifetime.reopen();
         throw error;
       });
       return closing;
     },
   };
   const revoke = () => {
-    revoked = true;
-    retired = true;
+    lifetime.revoke();
     acceptedWork.cancelReadAdmissions();
     clearIdleTimer();
   };
@@ -656,6 +678,7 @@ export function createAgentDatabaseExecution(
       prepared.requestedPath,
     );
   } catch (error) {
+    lifetime.retire();
     unregisterAgent();
     unregisterShared?.();
     throw error;

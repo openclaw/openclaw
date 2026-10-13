@@ -6,6 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   collectKnownSessionGroups,
@@ -99,16 +100,31 @@ import {
   projectSidebarNavigation,
   sidebarNavigationInputs,
   sidebarRowsInputs,
+  type SidebarProjectionHost,
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
 import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 
 export class AppSidebarSessionNavigationElement extends AppSidebarBase {
-  @state() rosterSessionSource: {
-    result: SessionsListResult | null;
-    agentIds: readonly string[];
-    collapsedAgentIds: ReadonlySet<string>;
-  } | null = null;
+  @state() rosterCollapsedAgentIds: ReadonlySet<string> | null = null;
+  private readonly rosterSourceMemo = new SidebarProjectionMemo<
+    NonNullable<SidebarProjectionHost["rosterSessionSource"]>
+  >();
+
+  get rosterSessionSource() {
+    const context = this.context;
+    const collapsedAgentIds = this.rosterCollapsedAgentIds;
+    if (!context || !collapsedAgentIds) {
+      return null;
+    }
+    // Cache release and row projection read the same owner before the child renders.
+    const { result, cards } = rosterActivityStore(context).snapshot;
+    const agentIds = cards.map((card) => card.id);
+    return this.rosterSourceMemo.read(
+      () => [context, result, collapsedAgentIds, ...agentIds],
+      () => ({ result, agentIds, collapsedAgentIds }),
+    );
+  }
 
   protected rosterVisibleSessionLimits = new Map<string, number>();
 

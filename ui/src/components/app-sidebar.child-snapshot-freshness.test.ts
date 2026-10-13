@@ -212,9 +212,9 @@ describe("sidebar child snapshot freshness", () => {
       }
       await waitForFast(() => expect(sidebar.textContent).toContain("Original child"));
       expect(childList).toHaveBeenCalledTimes(1);
-      // The initial selected descriptor is a fresh read and still invalidates membership.
+      // The newer child list already covers the initial selected descriptor.
       await vi.advanceTimersByTimeAsync(5_000);
-      const initialReads = 2;
+      const initialReads = 1;
       expect(childList).toHaveBeenCalledTimes(initialReads);
       await settleLitElement(sidebar);
       const childScope = sidebar.sessionData.childSessionScope;

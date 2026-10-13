@@ -250,6 +250,11 @@ public actor GatewayNodeSession {
             admissionGeneration: expectedAdmissionGeneration)
     }
 
+    public func connectedDeviceId() async -> String? {
+        guard let channel else { return nil }
+        return await channel.connectedDeviceId()
+    }
+
     public func disconnect() async {
         let detached = self.detachChannel(resetConnectionHistory: true)
         if detached.channel != nil || !self.isExecutingLifecycleCallback() {
@@ -1462,10 +1467,12 @@ extension GatewayNodeSession {
             params["payload"] = payload
         }
         if let error = response.error {
-            params["error"] = AnyCodable([
-                "code": error.code.rawValue,
-                "message": error.message,
-            ])
+            var fields: [String: Any] = ["code": error.code.rawValue, "message": error.message]
+            // v2026.10.2 closes this object to code/message; opt in through the current hello.
+            if self.serverCapabilities?.contains(.nodePermissionErrors) == true, let details = error.details {
+                fields["details"] = ["capabilities": details.capabilities, "state": details.state.rawValue]
+            }
+            params["error"] = AnyCodable(fields)
         }
         do {
             try await channel.send(

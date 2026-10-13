@@ -197,6 +197,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     `channels.telegram.replyToMode`: `off` (default), `first`, `all`.
 
+    With `first`, message-tool sends share one implicit reply target per turn; each admitted queued follow-up starts with a fresh target. Explicit replies are still honored. Final answers and streaming previews keep their own reply-target tracking.
+
     When reply threading is enabled and the original text/caption is available, OpenClaw adds a native quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units; longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 
     `off` disables implicit reply threading only; explicit `[[reply_to_*]]` tags are still honored.

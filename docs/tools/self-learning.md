@@ -37,7 +37,10 @@ count toward the same 10-iteration threshold.
 
 A queued review starts after 30 seconds with no agent or reply run active; later
 activity in the same session restarts that wait. Reviews run one at a time.
-The foreground reply never waits for a review.
+The foreground reply never waits for a review. Once started, the review keeps
+its original completed-turn snapshot while later turns continue. Resetting the
+conversation or changing its permissions cancels the review. Before changing a
+skill, the review also verifies that its original transcript anchor is still valid.
 
 These turns do not count:
 

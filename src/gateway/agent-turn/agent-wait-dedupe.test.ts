@@ -6,6 +6,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
@@ -17,6 +18,7 @@ import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import * as agentJobs from "./agent-job.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 
@@ -75,6 +77,7 @@ function terminalReceipt(runId: string) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -372,6 +375,13 @@ describe("agent.wait gateway dedupe observations", () => {
         context.getRuntimeConfig = () => cfg;
         const respond = vi.fn();
         const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
+        const started = createDeferredCore();
+        const wait = agentJobs.waitForAgentJob;
+        vi.spyOn(agentJobs, "waitForAgentJob").mockImplementationOnce((params) => {
+          const pending = wait(params);
+          started.resolve();
+          return pending;
+        });
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const waiting = handler({
           req: { type: "req", id: runId, method: "agent.wait" },
@@ -382,6 +392,7 @@ describe("agent.wait gateway dedupe observations", () => {
           context,
         });
         try {
+          await started.promise;
           expect(respond).not.toHaveBeenCalled();
           await upsertSessionEntryCore(target, { sessionId: "successor-session" });
           if (transition === "replacement") {
@@ -651,8 +662,18 @@ describe("agent.wait gateway dedupe observations", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const runId = `run-public-timeout-${activeKind ?? "untracked"}-${timeoutMs}`;
       const dedupe = new Map<string, DedupeEntry>();
+      const started = createDeferredCore();
+      const wait = agentJobs.waitForAgentJob;
+      vi.spyOn(agentJobs, "waitForAgentJob").mockImplementationOnce((params) => {
+        const pending = wait(params);
+        started.resolve();
+        return pending;
+      });
       const timedOut = waitThroughGateway({ runId, timeoutMs }, activeKind);
+      await started.promise;
       if (reset) {
+        // Native worker shutdown joins its exit through setImmediate.
+        vi.useRealTimers();
         await drainGlobalSingletonLifecycleState("restart");
       } else {
         await vi.advanceTimersByTimeAsync(timeoutMs);

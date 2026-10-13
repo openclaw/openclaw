@@ -59,6 +59,8 @@ export type TestChatPane = HTMLElement & {
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
+    readonly isPositionSettled: boolean;
+    readonly isProgrammaticScroll: boolean;
     readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
@@ -137,6 +139,7 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
   return { pane, state, requestUpdate };
 }
 

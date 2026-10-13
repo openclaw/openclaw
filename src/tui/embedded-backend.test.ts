@@ -303,7 +303,7 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
-// mock-isolation: use the synthetic session fixture without opening Gateway worker databases.
+// mock-isolation: Use the synthetic session fixture without opening Gateway worker databases.
 vi.mock("../gateway/session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: ({
     key,
@@ -314,21 +314,8 @@ vi.mock("../gateway/session-utils-store-worker.js", () => ({
     cfg: unknown;
     agentId?: string;
     includeStoreChildEntries?: boolean;
-  }) => Promise.resolve(loadSessionEntryMock(key, opts)),
-}));
-
-vi.mock("../gateway/session-utils.js", () => ({
-  getSessionDefaults: () => getSessionDefaultsMock(),
-  listAgentsForGateway: () => [],
-  loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  loadGatewaySessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
-    loadSessionEntryMock(sessionKey, opts),
-  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
-    primaryKey: key,
-    target: { storeKeys: [key] },
-  }),
-  resolveGatewaySessionStoreTargetWithStore: ({
+  }) => Promise.resolve(loadSessionEntryMock(key, Object.keys(opts).length ? opts : undefined)),
+  resolveGatewaySessionStoreTargetInWorker: async ({
     key,
     agentId,
   }: {
@@ -339,6 +326,16 @@ vi.mock("../gateway/session-utils.js", () => ({
     canonicalKey: key,
     storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
+  }),
+}));
+
+// mock-isolation: Embedded-backend tests supply defaults and model facts without loading Gateway storage.
+vi.mock("../gateway/session-utils.js", () => ({
+  getSessionDefaults: () => getSessionDefaultsMock(),
+  listAgentsForGateway: () => [],
+  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
+    primaryKey: key,
+    target: { storeKeys: [key] },
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
@@ -1281,7 +1278,6 @@ describe("EmbeddedTuiBackend", () => {
           entry,
           storePath: "/tmp/private.sqlite",
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
         }),
       );
       expect(sessionProjection.present).not.toHaveBeenCalled();
@@ -2646,6 +2642,7 @@ describe("EmbeddedTuiBackend", () => {
     "scopes selected global patch policy and result to the stored owner: $input.sessionKey",
     async ({ input, owner }) => {
       const sessionUtils = await import("../gateway/session-utils.js");
+      const sessionWorker = await import("../gateway/session-utils-store-worker.js");
       const entry = { sessionId: `session-${owner}`, updatedAt: embeddedEventTimestamp };
       const target = {
         agentId: owner,
@@ -2655,8 +2652,8 @@ describe("EmbeddedTuiBackend", () => {
         store: { global: entry },
       };
       const resolveTarget = vi
-        .spyOn(sessionUtils, "resolveGatewaySessionStoreTargetWithStore")
-        .mockReturnValue(target);
+        .spyOn(sessionWorker, "resolveGatewaySessionStoreTargetInWorker")
+        .mockResolvedValue(target);
       const resolveCanonical = vi
         .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
         .mockReturnValue({ target, primaryKey: "global", entry });

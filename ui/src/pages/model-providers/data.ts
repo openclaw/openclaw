@@ -34,6 +34,7 @@ type ModelProviderAuthSummary = {
 };
 
 type ModelProviderLocalCost = {
+  usageReport?: SessionModelUsage["totals"]["usageReport"];
   totalCost: number;
   totalTokens: number;
   messageCount: number;
@@ -359,6 +360,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     cost.totalCost += entry.totals.totalCost;
     cost.totalTokens += entry.totals.totalTokens;
     cost.messageCount += entry.count;
+    if (entry.totals.usageReport?.state === "unavailable") {
+      cost.usageReport = entry.totals.usageReport;
+    }
   }
 
   return drafts
@@ -372,7 +376,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
         draft.card.checkingModels ||
-        (draft.card.localCost?.totalTokens ?? 0) > 0,
+        (draft.card.localCost?.totalTokens ?? 0) > 0 ||
+        draft.card.localCost?.usageReport?.state === "unavailable",
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);

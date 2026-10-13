@@ -258,6 +258,9 @@ export function resolveNewSessionSubmitBlock(
       };
     }
   }
+  if (place.suggestedCloudProfile.pending) {
+    return { gate: "cloud", reason: t("newSession.placementNotReady") };
+  }
   if (place.folderSubmissionBlocked()) {
     return { gate: "folder", reason: t("newSession.checkingPlace") };
   }

@@ -570,7 +570,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     })
                   : undefined;
               try {
-                const result = await runEmbeddedAgent({
+                const run = runEmbeddedAgent({
                   userTurnTranscriptRecorder: recorder,
                   messageActionTurnCapability: capability,
                   messageProvider: api === "openai-responses" ? "webchat" : "telegram",
@@ -621,6 +621,15 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ? { images: [{ type: "image" as const, mimeType: "image/png", data: PNG }] }
                     : {}),
                 });
+                if (api === "openai-responses" && turn === 5) {
+                  await expect(run).rejects.toMatchObject({ reason: "format" });
+                  if (providerFailure) {
+                    throw providerFailure;
+                  }
+                  expect(requestsThisTurn, "permanent failure is not retried").toBe(1);
+                  continue;
+                }
+                const result = await run;
                 if (providerFailure) {
                   throw providerFailure;
                 }
@@ -639,12 +648,10 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ),
                   })}`,
                 ).toBeGreaterThan(0);
-                if (!(api === "openai-responses" && turn === 5)) {
-                  expect(
-                    result.payloads?.some((payload) => payload.text?.includes("answer")),
-                    `turn ${turn} completed`,
-                  ).toBe(true);
-                }
+                expect(
+                  result.payloads?.some((payload) => payload.text?.includes("answer")),
+                  `turn ${turn} completed`,
+                ).toBe(true);
               } finally {
                 if (capability) {
                   revokeMessageActionTurnCapability(capability);

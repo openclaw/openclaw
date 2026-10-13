@@ -321,7 +321,7 @@ describe("Gateway state ownership", () => {
             expect(() => lease.assertCurrent()).toThrow("no longer current");
             if (kind === "owner") {
               expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-                "could not be verified",
+                "lock removed/replaced; restart the Gateway",
               );
             }
             expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(

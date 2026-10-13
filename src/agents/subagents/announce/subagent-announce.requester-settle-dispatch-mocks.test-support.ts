@@ -69,8 +69,11 @@ vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRead);
+// mock-isolation: Dispatch fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
+    sessionKey.split(":subagent:").length - 1,
+  getSubagentDepthFromSessionStoreInWorker: async (sessionKey: string) =>
     sessionKey.split(":subagent:").length - 1,
 }));
 // mock-isolation: Dispatch fixtures select the delivery boundary and requester store explicitly.

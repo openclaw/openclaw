@@ -60,7 +60,9 @@ Install and launch **OpenClaw.app**. On a fresh installation with no saved Gatew
 or configuration, a progress window appears while the app prepares its bundled
 runtime, starts a Gateway on **This Mac**, and opens the dashboard's onboarding conversation. It never joins
 a discovered Gateway automatically. The window shows the current step and closes
-once the dashboard is ready. Choose **Set up manually** to use native setup instead.
+once the dashboard is ready. Reconnecting the dashboard during this handoff keeps setup in the same
+window, and **Review permissions** continues in the dashboard. Choose **Set up manually** to use native
+setup instead.
 
 The dashboard connects your AI, shows what it selected, and offers alternatives.
 You can choose another Gateway or review this Mac's permissions from the setup
@@ -74,11 +76,28 @@ older Gateway without automatic AI setup opens the native AI picker instead.
 Native setup remains available from the menu for manual recovery: choose
 **This Mac** or enter an existing Gateway's address, prepare the local runtime
 when needed, then select an AI connection to run its live model check.
+Native setup keeps the current page visible when runtime readiness removes the
+installation step from the flow.
 
 Existing installations and remote connections keep their saved setup. Native AI
 detection only presents available connections; it checks and activates one after
 you select it. A verified existing model opens the normal dashboard without
 replacing the configured route.
+
+Automatic setup preserves an existing configured model. Otherwise it tries saved
+OpenClaw auth profiles, a stored Codex login, a Claude CLI login, `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, then eligible loaded models in Ollama, LM Studio, or
+llama.cpp. It activates the first connection that passes a live completion. If
+none works, it installs or enables the official Codex plugin and uses its login
+or asks you to sign in with ChatGPT. Apple Foundation Models is never selected
+as the primary model, and native Claude/Codex conversation discovery stays off.
+
+When setup reuses Codex, the card says **Using your existing Codex login ·
+sessions shared with Codex**. Codex owns authentication and token refresh in the
+Gateway user's `CODEX_HOME` (or `~/.codex`); OpenClaw does not copy the OAuth
+tokens. Choose **Use a separate login** on the card to sign in to an isolated
+OpenClaw agent home. You can also change providers or sign in separately through
+**Model Setup**. See [Codex login and isolation](/start/onboarding#codex-login-and-isolation).
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
@@ -230,7 +249,7 @@ Right-click an external link in the dashboard to choose **Open in Browser Panel*
 
 ## Import browser logins
 
-The first time a Mac tab opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+Choose **Import browser logins** in **Dashboard → Settings → This Mac → Browser** to discover Chrome-family profiles and open the import banner. First launch, automatic setup, and passive dashboard refreshes do not inspect other apps' browser data before you request this feature. macOS may ask for access when discovery starts. Choose a profile from the banner's **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied into an isolated managed profile — passwords never leave the source browser. Dismissing the banner records the choice; the same Settings action can re-open it. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 Switching away from Local mode hides the import banner and discards pending status or banner results. An import already sent to the local Gateway may still finish there; switching modes does not undo copied cookies. Returning to Local mode lets you request a fresh offer from **Settings → This Mac → Browser**.
 

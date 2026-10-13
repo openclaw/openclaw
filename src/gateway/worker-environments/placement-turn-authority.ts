@@ -1,7 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerListener } from "../../shared/listeners.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
@@ -9,8 +11,10 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import {
   closePlacementAuthorityOwner as closeOwner,
   notifyPlacementClaimRevoked as notifyRevoked,
+  placementChangeAllowsClaim as allows,
   placementAuthorityOwnerFor as ownerFor,
   placementAuthorityOwners as owners,
+  preparePlacementChangeNotification,
 } from "./placement-authority-owner.js";
 import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import {
@@ -35,6 +39,7 @@ import {
   sameWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementRecord,
+  type WorkerSessionPlacementIdentity,
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnClaimFacts,
 } from "./placement-record.js";
@@ -57,14 +62,6 @@ import {
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 export type { PlacementTurnClaimAuthority } from "./placement-turn-authority.types.js";
-
-function allows(change: ClaimChange, claim: WorkerSessionTurnClaim): boolean {
-  return (
-    change.kind !== "claim" ||
-    change.sessionId !== claim.sessionId ||
-    Boolean(change.facts && isCurrentPlacementTurnClaim(change.facts, claim))
-  );
-}
 
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
@@ -202,6 +199,10 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
     sessionId === undefined
       ? "Worker placement inventory changed"
       : `Session ${sessionId} placement authority changed`;
+  const changed = () => {
+    const error = new Error(changedMessage);
+    return attachErrorDiagnostic(error, error.stack ?? changedMessage);
+  };
   const assertUsable = () => {
     context.admission.assertCurrent();
     if (
@@ -210,7 +211,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
       !owner.active ||
       owners.get(owner.identity.key) !== owner
     ) {
-      throw new Error(changedMessage);
+      throw changed();
     }
   };
   const authority = {
@@ -227,7 +228,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
             ]),
           );
         }
-        throw new Error(changedMessage);
+        throw changed();
       }
     },
     release(this: void) {
@@ -298,11 +299,15 @@ export async function prepareSessionPlacementRead(
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementRecord | undefined>,
 ) {
-  return await preparePlacementRead(
-    capturePlacementObservation(pathname, sessionId),
-    read,
-    (placement, captured) => retainSessionPlacementRead(sessionId, placement, captured),
-  );
+  const captured = capturePlacementObservation(pathname, sessionId);
+  try {
+    const placement = await read();
+    captured.assertUsable();
+    return retainSessionPlacementRead(sessionId, placement, captured);
+  } catch (error) {
+    captured.authority.release();
+    throw error;
+  }
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
@@ -313,7 +318,9 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
         owner.pending.add(change);
       },
       commit() {
+        const notify = preparePlacementChangeNotification(owner, change);
         commitChange(owner, change, ++owner.sequence);
+        notify();
       },
       invalidate: () => closeOwner(owner),
       prepareObservers() {
@@ -345,6 +352,7 @@ export function stagePlacementTurnClaimWorkerPublication(
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
   workspacePlacement?: WorkerSessionPlacementRecord,
   projection?: WorkerSessionPlacementReadResult,
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
@@ -353,6 +361,7 @@ export function stagePlacementTurnClaimWorkerPublication(
     facts: freezeJsonSnapshot(facts),
     workspacePlacement: freezeJsonSnapshot(workspacePlacement),
     projection,
+    nativeSettlement,
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
   });
 }
@@ -378,12 +387,16 @@ export function stagePlacementRetirementWorkerPublication(
   identity: DatabasePathIdentity,
   sessionId: string,
   previousState: WorkerSessionTurnClaimFacts["state"],
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>,
+  retiredIdentity?: WorkerSessionPlacementIdentity,
 ) {
   return stageWorkerChange(identity, {
     kind: "claim",
     sessionId,
+    retiredIdentity,
     localOnly: previousState === "local",
     retired: true,
+    nativeSettlement,
   });
 }
 
@@ -410,14 +423,11 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
 /** Synchronous SDK reads consume committed writer receipts; cold reads use the async API. */
 export function readPlacementReplica(identity: DatabasePathIdentity, sessionId: string) {
   const owner = owners.get(identity.key);
-  if (
-    !owner?.active ||
-    !owner.placements.has(sessionId) ||
-    hasPendingPublication(owner, sessionId)
-  ) {
+  const published = owner?.placements.get(sessionId);
+  if (!owner?.active || !published || hasPendingPublication(owner, sessionId)) {
     return undefined;
   }
-  return { placement: owner.placements.get(sessionId)!.placement };
+  return { placement: published.placement };
 }
 
 /** Claim effects consult the single writer's postimage without reopening SQLite. */
@@ -563,7 +573,9 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     }
   };
   const publish = () => {
+    const notify = preparePlacementChangeNotification(owner, change);
     commitChange(owner, change, sequence);
+    notify();
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
       notifyRevoked(retained);
     }

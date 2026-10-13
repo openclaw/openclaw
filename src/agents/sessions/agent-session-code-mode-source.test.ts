@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -76,12 +76,13 @@ afterEach(async () => {
   await drainSessionStateForTest({ stateDir: fixtureDir });
 });
 registerAgentSessionLoopTestLifecycle();
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   resetDiagnosticRunActivityForTest();
   resetGlobalHookRunner();
   resetSecretRedactionRegistryForTest();
-  clearRuntimeConfigSnapshot();
 });
 
 describe("AgentSession runtime and transcript projections", () => {
@@ -550,6 +551,7 @@ describe("AgentSession runtime and transcript projections", () => {
   });
 
   it("preserves source across reused managers and ordinary append batches", async () => {
+    setRuntimeConfigSnapshot({});
     const { dir, scope } = createSessionScope("source-reuse");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope, dir);

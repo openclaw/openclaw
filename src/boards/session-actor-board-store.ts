@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import type { SessionActorStorageAuthority } from "../config/sessions/session-actor-storage-contract.js";
 import { restoreBoardError } from "./board-store-errors.js";
 import type {
   BoardSessionTarget,
@@ -21,14 +20,8 @@ export function createSessionActorBoardStore(
     input: SessionActorBoardWrites[Key]["input"],
     options?: BoardWriteOptions,
   ): Promise<SessionActorBoardWrites[Key]["output"]> => {
-    const authority: SessionActorStorageAuthority = {
-      ...binding.authority,
-      assertCurrent() {
-        binding.authority.assertCurrent();
-        options?.assertCurrent?.();
-      },
-    };
-    const outcome = await binding.actor.storage!.mutate({ type, input }, authority);
+    options?.assertCurrent?.();
+    const outcome = await binding.actor.storage!.mutate({ type, input }, binding.authority);
     if (outcome.kind === "rolled-back") {
       throw restoreBoardError(Object.assign(new Error(outcome.error.message), outcome.error));
     }

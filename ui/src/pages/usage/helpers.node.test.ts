@@ -110,6 +110,22 @@ describe("usage-helpers", () => {
     }
   });
 
+  it("does not classify unknown usage as zero or as its known subtotal", () => {
+    const interrupted = {
+      key: "interrupted",
+      usage: {
+        usageReport: { state: "unavailable" as const },
+        totalTokens: 100,
+        totalCost: 0,
+        messageCounts: { total: 2 },
+      },
+    };
+    for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
+      expect(filterSessionsByQuery([interrupted], query).sessions).toEqual([]);
+    }
+    expect(filterSessionsByQuery([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
+  });
+
   it("supports every has predicate and warns on unknown values", () => {
     const populated = {
       key: "populated",

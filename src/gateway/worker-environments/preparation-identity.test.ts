@@ -58,6 +58,31 @@ describe("worker preparation identity", () => {
     expect(readWorkerProjectPreparation({ preparation: skipped })).toEqual(skipped);
   });
 
+  it("uses the provider disk fingerprint independently of lease and runtime policy", () => {
+    const target = { ...input.target, profileKey: "7".repeat(64) };
+    const original = createWorkerProjectPreparationIdentity({ ...input, target });
+    const changed = createWorkerProjectPreparationIdentity({
+      ...input,
+      target,
+      profileId: "renamed",
+      profileSnapshot: {
+        install: "npm",
+        executionMode: "remote-exec",
+        suspendAfter: "45m",
+        readyWorkers: 0,
+        settings: { ttl: "4h", idleTimeout: "2h", binary: "/other/crabbox", warmImage: true },
+      },
+    });
+    expect(changed.cacheKey).toBe(original.cacheKey);
+    expect(changed.key).not.toBe(original.key);
+    expect(
+      createWorkerProjectPreparationIdentity({
+        ...input,
+        target: { ...target, profileKey: "8".repeat(64) },
+      }).cacheKey,
+    ).not.toBe(original.cacheKey);
+  });
+
   it.each<[string, Partial<typeof input>]>([
     ["namespace", { namespace: "gateway-two" }],
     ["commit", { project: { ...input.project, baseCommit: "1".repeat(40) } }],
@@ -66,9 +91,13 @@ describe("worker preparation identity", () => {
       "profile",
       { profileSnapshot: { ...input.profileSnapshot, settings: { region: "elsewhere" } } },
     ],
+    ["project", { project: { ...input.project, key: "9".repeat(64) } }],
+    ["class", { target: { ...input.target, machineClass: "large" } }],
     ["target", { target: { ...input.target, arch: "arm64" } }],
     ["OS", { target: { ...input.target, platform: "darwin" } }],
     ["mode", { profileSnapshot: { ...input.profileSnapshot, executionMode: "remote-exec" } }],
+    ["version", { artifacts: { ...input.artifacts, openclawVersion: "2026.9.1" } }],
+    ["archive", { artifacts: { ...input.artifacts, workerArchiveSha256: "6".repeat(64) } }],
     ["runtime", { artifacts: { ...input.artifacts, nodeBootstrapSha256: "3".repeat(64) } }],
     [
       "plugins",
@@ -94,7 +123,11 @@ describe("worker preparation identity", () => {
     const next = createWorkerProjectPreparationIdentity({ ...input, ...change });
     expect(next.key).not.toBe(original.key);
     expect(next.cacheKey).toMatch(/^[a-f0-9]{64}$/u);
-    if (label === "commit") {
+    if (
+      ["commit", "mode", "runtime", "plugins", "bundle", "protocol", "version", "archive"].includes(
+        label,
+      )
+    ) {
       expect(next.cacheKey).toBe(original.cacheKey);
     } else {
       expect(next.cacheKey).not.toBe(original.cacheKey);

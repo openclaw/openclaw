@@ -323,19 +323,67 @@ export function registerHarnessCompletionRecoveryCases(
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
-  it.each(["delegated", "unverified internal", "internal system"] as const)(
+  it.each(["control-ui", "channel"] as const)(
+    "resumes a human %s turn after inter-session steering was committed",
+    async (sourceIngress) => {
+      const { expectRecovery, loadSessionEntry, gatewayParams } = getFixture();
+      const sourceRunId = "human-run-with-steering";
+      const { storePath, sessionKey } = await writeMainSession(
+        {
+          restartRecoveryDeliveryRunId: sourceRunId,
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoverySourceIngress: sourceIngress,
+          restartRecoveryRuns: [{ runId: sourceRunId, lifecycleGeneration: "before-restart" }],
+        },
+        [
+          {
+            role: "user",
+            content: "Finish the requested repair",
+            provenance: { kind: "external_user" },
+          },
+          {
+            role: "user",
+            content: "The independent review found one more regression",
+            provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "inspect-regression", name: "read" }],
+          },
+        ],
+      );
+
+      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({
+        sessionKey,
+        expectedExistingSessionId: "main-session",
+        deliver: false,
+      });
+      const recovered = loadSessionEntry({ sessionKey, storePath });
+      expect(recovered).toMatchObject({
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+        restartRecoverySourceIngress: sourceIngress,
+      });
+      expect(recovered?.mainRestartRecovery?.tombstone).toBeUndefined();
+    },
+  );
+
+  it.each(["delegated", "unscoped control-ui", "unverified internal", "internal system"] as const)(
     "refuses %s recovery without surviving sender authority",
     async (source) => {
       const { expectRecovery, loadSessionEntry } = getFixture();
       const { storePath, sessionKey } = await writeMainSession(
-        source !== "delegated"
-          ? {
-              restartRecoverySourceIngress: "internal",
-              pendingFinalDelivery: preparedFinal("unverified"),
-            }
-          : {},
+        source === "unscoped control-ui"
+          ? { restartRecoverySourceIngress: "control-ui" }
+          : source !== "delegated"
+            ? {
+                restartRecoverySourceIngress: "internal",
+                pendingFinalDelivery: preparedFinal("unverified"),
+              }
+            : {},
         [
-          ...(source === "delegated"
+          ...(source === "delegated" || source === "unscoped control-ui"
             ? [
                 {
                   role: "user",

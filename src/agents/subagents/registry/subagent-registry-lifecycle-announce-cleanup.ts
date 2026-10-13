@@ -9,7 +9,6 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
 } from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
@@ -128,7 +127,6 @@ export const startSubagentAnnounceCleanupFlow = (
     return false;
   }
   let entry = publishedEntry;
-  warnLegacySubagentAuthority(entry, (message, meta) => params.warn(message, meta));
   let runId = entry.runId;
   const runtimeKey = getSubagentRunRuntimeKey(observedEntry);
   if (entry.killReconciliation) {

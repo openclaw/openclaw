@@ -9,7 +9,7 @@ import {
 import {
   mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers/turns.js";
@@ -404,7 +404,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       }
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
         });
       }
     }

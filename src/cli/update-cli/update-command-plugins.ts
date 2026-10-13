@@ -585,6 +585,11 @@ async function updatePluginsAfterCoreUpdateWithLease(
       }
     }
   }
+  for (const outcome of finalPluginOutcomes) {
+    if (outcome.status === "skipped") {
+      runtime.log(theme.muted(`${outcome.pluginId}: ${outcome.message}`));
+    }
+  }
 
   for (const message of uniqueStrings(
     pluginUpdateOutcomes.flatMap(({ channelFallback }) =>

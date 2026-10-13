@@ -65,13 +65,17 @@ export function runReplyDispatchHook(
                 onReplyStart: params.replyOptions?.onReplyStart,
                 onAgentRunStart: params.replyOptions?.onAgentRunStart,
                 onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
+                turnAdoption: state.turnAdoption,
                 userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                 prepareAssistantTranscriptMessage:
                   params.replyOptions?.prepareAssistantTranscriptMessage,
                 recordProcessed: state.recordProcessed,
                 markIdle: state.markIdle,
               },
-              options.isTailDispatch ? undefined : { prepare: state.assertCurrentBindingRoute },
+              {
+                ...(!options.isTailDispatch ? { prepare: state.assertCurrentBindingRoute } : {}),
+                assertCurrent: state.turnAdoption?.assertCurrent,
+              },
             ),
           );
         },

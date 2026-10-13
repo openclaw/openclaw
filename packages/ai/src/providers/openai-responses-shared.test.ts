@@ -1657,6 +1657,49 @@ describe("processResponsesStream", () => {
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
   });
 
+  it.each(["item-done", "terminal"])(
+    "keeps provider name validation independent of consumer normalization at %s",
+    async (completion) => {
+      const output = createAssistantOutput();
+      const { stream, events } = createCapturedAssistantMessageEventStream();
+      const push = stream.push.bind(stream);
+      stream.push = (event) => {
+        // The runner normalizes aliases on the shared partial before completion.
+        if ("partial" in event && event.partial) {
+          for (const block of event.partial.content) {
+            if (block.type === "toolCall" && block.name === "tool_call") {
+              block.name = "dispatch_action";
+            }
+          }
+        }
+        push(event);
+      };
+      const item = toolItem("alias", '{"id":"sessions_spawn","args":{}}', "tool_call");
+      await processResponsesStream(
+        streamResponsesEvents([
+          itemEvent("added", { ...item, arguments: "" }, 0),
+          ...(completion === "item-done" ? [itemEvent("done", item, 0)] : []),
+          {
+            type: "response.completed",
+            response: { id: "resp_alias", status: "completed", output: [item] },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
+      expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_alias|fc_alias",
+          name: "dispatch_action",
+          arguments: { id: "sessions_spawn", args: {} },
+        },
+      ]);
+    },
+  );
+
   it("rejects a completed Responses tool call whose function name changed", async () => {
     const output = createAssistantOutput();
 

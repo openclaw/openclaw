@@ -115,6 +115,13 @@ export type CronRuntimeMutationInputs = {
     notificationId: string | undefined;
     outcome: CronFailureNotificationDelivery;
   };
+  "cron.recordFailureRepairSettlement": {
+    storeKey: string;
+    jobId: string;
+    repairAtMs: number;
+    repairId: string;
+    settledAtMs: number;
+  };
 };
 
 /** Completed run facts sent to the worker; live execution owners stay on the host. */
@@ -154,6 +161,7 @@ export type CronRuntimeMutationContracts = {
       defaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       cronConfig?: CronConfig;
+      failureRepairTimeoutMs?: number;
       ownership: CronScheduleOwnershipFacts[];
     };
     outcome: {
@@ -208,6 +216,7 @@ export type CronRuntimeMutationContracts = {
       nowMs: number;
       defaultAgentId?: string;
       cronConfig?: CronConfig;
+      failureRepairTimeoutMs?: number;
       outcomes: CronRunFinalizationOutcome[];
     };
     outcome: {
@@ -236,6 +245,11 @@ export type CronRuntimeMutationContracts = {
   };
   "cron.recordFailureAlertOutcome": {
     input: CronRuntimeMutationInputs["cron.recordFailureAlertOutcome"];
+    snapshot: Record<string, never>;
+    outcome: { job?: CronJob };
+  };
+  "cron.recordFailureRepairSettlement": {
+    input: CronRuntimeMutationInputs["cron.recordFailureRepairSettlement"];
     snapshot: Record<string, never>;
     outcome: { job?: CronJob };
   };

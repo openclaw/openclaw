@@ -466,6 +466,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             sendPairingReply: async () => {},
           });
         }, signal);
+        await receiptNotifier.notifyRejections(await trust.pendingOutboundRejections());
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.

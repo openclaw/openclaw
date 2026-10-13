@@ -35,16 +35,13 @@ const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: fal
 async function createPolicyOperation(
   name: string,
   options: {
-    incognito?: boolean;
     mainAlias?: boolean;
     store?: string;
     policyStorePath?: string;
   } = {},
 ) {
-  const { incognito, mainAlias } = options;
-  const policyKey = incognito
-    ? `agent:main:dashboard:incognito-${name}`
-    : `agent:main:${name}-policy`;
+  const { mainAlias } = options;
+  const policyKey = `agent:main:${name}-policy`;
   const config: OpenClawConfig = {
     ...(mainAlias || options.store
       ? {
@@ -64,7 +61,6 @@ async function createPolicyOperation(
       sessionId: name,
       updatedAt: 1,
       sandboxMode: "off",
-      ...(incognito ? { incognito: true } : {}),
     },
   );
   if (!policyEntry) {
@@ -119,6 +115,7 @@ it.each(["worker", "compatibility"] as const)(
   "retains supplied %s source policy alongside an overlay through final native admission",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const source = await createPolicyOperation("source");
       const target = await createPolicyOperation("target");
       const assertSourcePolicy = (fingerprint: string | undefined) => {
@@ -192,18 +189,18 @@ it.each(["worker", "compatibility"] as const)(
 );
 
 it.each([
-  { storage: "file", change: "session", admission: "compatibility" },
-  { storage: "file", change: "revision", admission: "compatibility" },
-  { storage: "file", change: "metadata", admission: "compatibility" },
-  { storage: "incognito", change: "session", admission: "compatibility" },
-  { storage: "file", change: "alias", admission: "worker" },
-  { storage: "file", change: "other-store", admission: "worker" },
-  { storage: "file", change: "missing-store", admission: "worker" },
-  { storage: "file", change: "other-store-move", admission: "worker" },
+  { change: "session", admission: "compatibility" },
+  { change: "revision", admission: "compatibility" },
+  { change: "metadata", admission: "compatibility" },
+  { change: "alias", admission: "worker" },
+  { change: "other-store", admission: "worker" },
+  { change: "missing-store", admission: "worker" },
+  { change: "other-store-move", admission: "worker" },
 ] as const)(
-  "retains $storage policy lineage in $admission admission after $change",
-  async ({ storage, change, admission }) => {
+  "retains file policy lineage in $admission admission after $change",
+  async ({ change, admission }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const multipleStores = change.startsWith("other-store") || change === "missing-store";
       const store = state.statePath(
         "configured",
@@ -230,8 +227,7 @@ it.each([
       const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
         "retained-policy",
         {
-          incognito: storage === "incognito",
-          mainAlias: storage === "file",
+          mainAlias: true,
           ...(multipleStores
             ? {
                 store,

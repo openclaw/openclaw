@@ -49,8 +49,10 @@ vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   updateSessionLastRoute: mocks.updateSessionLastRoute,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
+// mock-isolation: Outbound routing tests supply session rows without starting persistent storage.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (params: { sessionKey: string; storePath: string }) =>
+    mocks.loadSessionEntryReadOnly(params),
 }));
 
 const imessageRoutePlugin = {

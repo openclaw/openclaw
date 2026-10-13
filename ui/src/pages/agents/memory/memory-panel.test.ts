@@ -818,7 +818,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: name })
           .evaluate((item) => (item as HTMLElement).click());
       };
@@ -877,18 +877,9 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         await gateway.closeLatest(1001, "proxy idle timeout");
         await gateway.setOnline(false);
         await expect
-          .poll(
-            () =>
-              page.evaluate(
-                () =>
-                  (
-                    document.querySelector("openclaw-app") as HTMLElement & {
-                      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-                    }
-                  ).runtime?.context.gateway.snapshot.phase,
-              ),
-            { timeout: 15_000 },
-          )
+          .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase), {
+            timeout: 15_000,
+          })
           .toBe("reconnecting");
         await expect
           .poll(() => gateway.getSocketCount(), { timeout: 15_000 })

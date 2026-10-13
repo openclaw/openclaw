@@ -398,7 +398,7 @@ describe("schtasks Windows integration fixture isolation", () => {
       await expect(createIntegrationRoot(existingRoot, "existing")).rejects.toThrow(
         "CI_WINDOWS_SCHTASKS_ROOT must not already exist",
       );
-      await expect(fs.access(existingRoot)).resolves.toBeUndefined();
+      await fs.access(existingRoot);
     } finally {
       await fs.rm(existingRoot, { recursive: true, force: true });
     }

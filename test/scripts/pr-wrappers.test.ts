@@ -396,6 +396,29 @@ describe("scripts/pr wrappers", () => {
       ["123", "a".repeat(40), "--confirmed-no-running-tools"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--cancel-auto", "--cancel-auto"],
+      ["123", "a".repeat(40), "--confirmed-operator-recovery", "--observed-head", "b".repeat(40)],
+      ...[
+        [],
+        [""],
+        ["HEAD"],
+        ["B".repeat(40)],
+        ["b".repeat(40), "--observed-head", "c".repeat(40)],
+        ["b".repeat(40), "--merged-head", "c".repeat(40)],
+        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
+        ["b".repeat(40), "--auto-merge"],
+        ["b".repeat(40), "--body-file", "message.md"],
+        ["b".repeat(40), "--legacy-refusal", "proof"],
+        ["b".repeat(40), "--pre-dispatch-refusal", "proof"],
+        ["b".repeat(40), "--admin-evidence", "proof", "--confirmed-operator-admin"],
+      ].map((suffix) =>
+        [
+          "123",
+          "a".repeat(40),
+          "--confirmed-operator-recovery",
+          "--cancel-auto",
+          "--observed-head",
+        ].concat(suffix),
+      ),
       [
         "123",
         "a".repeat(40),
@@ -518,8 +541,40 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n<>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n<>\n<>\n`,
     );
+  });
+
+  itPosix("passes an explicitly observed head only to auto retirement", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--observed-head",
+        "b".repeat(40),
+        "--cancel-auto",
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<false>\n<${"a".repeat(40)}>\n<>\n<>\n<>\n<true>\n<>\n<>\n<false>\n<>\n<${"b".repeat(40)}>\n`,
+    );
+    const invalid = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      ["merge-run", "123", "--observed-head", "b".repeat(40)],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(invalid.status).toBe(2);
   });
 
   itPosix("passes an explicitly selected merged head to merge recovery", () => {
@@ -543,7 +598,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<${"a".repeat(40)}>\n<>\n<>\n<>\n<false>\n<>\n<>\n<false>\n<${"b".repeat(40)}>\n`,
+      `<123>\n<false>\n<${"a".repeat(40)}>\n<>\n<>\n<>\n<false>\n<>\n<>\n<false>\n<${"b".repeat(40)}>\n<>\n`,
     );
   });
 
@@ -577,7 +632,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n<>\n`,
+        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n<>\n<>\n`,
       );
     }
   });
@@ -694,7 +749,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n<>\n`,
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n<>\n<>\n`,
       );
     },
   );

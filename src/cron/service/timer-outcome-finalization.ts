@@ -43,7 +43,9 @@ export async function finalizeCompletedCronRunOutcomes(
   let committedSuccessfully = false;
   try {
     const committed = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      if (!state.store) {
+        await ensureLoaded(state);
+      }
       const { outcome: result } = await executeOpenClawStateWorker(context, {
         type: "cron.finalizeRuns",
         input: {
@@ -52,6 +54,7 @@ export async function finalizeCompletedCronRunOutcomes(
             nowMs: state.deps.nowMs(),
             defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
             cronConfig: state.deps.cronConfig,
+            failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
             outcomes: outcomes.map(
               ({ activeJobMarker, runReceiptContext: _context, request, ...completed }) => ({
                 ...completed,

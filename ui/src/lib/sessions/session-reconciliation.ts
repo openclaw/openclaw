@@ -284,6 +284,7 @@ export function createSessionReconciliation(host: Host) {
         parseAgentSessionKey(row.key)?.agentId ?? historyAgentId,
         accepted || row,
         options?.sourceListScope,
+        observation?.revision,
       );
     }
     return true;

@@ -521,7 +521,7 @@ describe("worker turn launcher terminal results", () => {
       placements,
       loadSessionRuntime: async () => ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetWithStore: () => ({
+        resolveGatewaySessionStoreTargetInWorker: async () => ({
           storePath: sessionTarget.storePath,
           canonicalKey: SESSION_KEY,
           storeKeys: [SESSION_KEY],
@@ -702,7 +702,7 @@ describe("worker turn launcher terminal results", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
       throw new Error("fixture: Move barrier complete");
     });
-    const loadSessionRuntime = createWorkerTurnSessionRuntimeLoader();
+    const loadSessionRuntime = await createWorkerTurnSessionRuntimeLoader();
     const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
       placements,
       loadSessionRuntime,

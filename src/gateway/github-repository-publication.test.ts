@@ -473,6 +473,7 @@ describe("repository checkpoint GitHub publication", () => {
         if (person) {
           const requestId = listRepositoryGitHubPublications()[0]!.request_id;
           const prepared = await person.coordinator.preparePersonalStatus(requestId);
+          using _ = { [Symbol.dispose]: () => prepared?.release() };
           expect(
             await person.coordinator.personalStatusAsync(
               person.action,

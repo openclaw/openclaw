@@ -42,7 +42,7 @@ suite.define(() => {
     { mode: "worktree", label: "Start in a new worktree", accent: "#ffffff" },
     { mode: "session", label: "Start in this session", accent: "#ffffff" },
     { mode: "worktree", label: "Start in a new worktree", accent: "#00ff00" },
-  ])("starts task without changing sessions ($mode, $accent)", async ({ mode, label, accent }) => {
+  ])("hides tasks and restores failures ($mode, $accent)", async ({ mode, label, accent }) => {
     const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
       colorScheme: mode === "worktree" ? "dark" : "light",
@@ -152,20 +152,35 @@ suite.define(() => {
         await card.getByRole("menuitem", { name: label, exact: true }).click();
       }
       await gateway.waitForRequest("taskSuggestions.accept");
-      expect(await card.getByRole("button", { name: "Starting…", exact: true }).isDisabled()).toBe(
-        true,
-      );
-      expect(await options.isDisabled()).toBe(true);
+      await card.waitFor({ state: "detached" });
       await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
       await gateway.emitGatewayEvent("task.suggestion", {
         action: "resolved",
         taskId: suggestion.id,
         resolution: "accepted",
       });
-      await card.getByText(suggestion.prompt, { exact: true }).waitFor({ state: "visible" });
-      expect(await card.getByRole("button", { name: "Starting…", exact: true }).isDisabled()).toBe(
-        true,
-      );
+      expect(await card.count()).toBe(0);
+      expect(page.url()).toBe(sourceUrl);
+      expect(await composer.inputValue()).toBe(draft);
+
+      if (mode !== "local") {
+        await gateway.rejectDeferred("taskSuggestions.accept", {
+          message: "Session creation unavailable",
+        });
+        await card.waitFor({ state: "visible" });
+        await card.getByRole("alert").filter({ hasText: "Session creation unavailable" }).waitFor();
+        expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
+        await captureUiProof(
+          suite,
+          page,
+          "task-suggestions",
+          `${mode}-${accent.slice(1)}-failed.png`,
+        );
+        await gateway.deferNext("taskSuggestions.accept");
+        await card.getByRole("button", { name: "Retry", exact: true }).click();
+        await waitForRequests(gateway, "taskSuggestions.accept", 2);
+        await card.waitFor({ state: "detached" });
+      }
       await gateway.resolveDeferred("taskSuggestions.accept", {
         taskId: suggestion.id,
         key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
@@ -173,12 +188,14 @@ suite.define(() => {
 
       const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
       expect(acceptRequest.params).toEqual({ taskId: "task_123", mode });
-      await card.getByRole("status").filter({ hasText: "Task started" }).waitFor();
-      await card.getByRole("link", { name: "Open session", exact: true }).waitFor();
-      expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
+      expect(await card.count()).toBe(0);
       expect(page.url()).toBe(sourceUrl);
       expect(await composer.inputValue()).toBe(draft);
-      expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(1);
+      expect(
+        (await gateway.getRequests("taskSuggestions.accept")).map((request) => request.params),
+      ).toEqual(
+        Array.from({ length: mode === "local" ? 1 : 2 }, () => ({ taskId: suggestion.id, mode })),
+      );
       await captureUiProof(
         suite,
         page,
@@ -445,15 +462,19 @@ suite.define(() => {
         expect(
           await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
         ).toBe(true);
-        expect(
-          await summary.evaluate((element) => {
-            element.scrollTop = element.scrollHeight;
-            return (
+        const summaryScroll = await summary.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+          return {
+            reachesBottom:
               element.scrollTop > 0 &&
-              element.scrollTop + element.clientHeight >= element.scrollHeight - 1
-            );
-          }),
-        ).toBe(true);
+              element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+            scrollTop: element.scrollTop,
+            scrollHeight: element.scrollHeight,
+            clientHeight: element.clientHeight,
+            clientWidth: element.clientWidth,
+          };
+        });
+        expect(summaryScroll.reachesBottom, JSON.stringify(summaryScroll)).toBe(true);
 
         const card = tray.locator(".task-suggestion:visible");
         await card.getByText("Show instructions", { exact: true }).click();

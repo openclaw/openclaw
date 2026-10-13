@@ -7,11 +7,8 @@ import {
   type McpAppHostFile,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
-import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug } from "../logger.js";
@@ -25,6 +22,7 @@ import {
   readWorkspaceFile,
   resolveWorkspacePath,
 } from "./server-methods/workspace-fs.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-file-limits.js";
 
@@ -40,37 +38,32 @@ function captureHostFileSession(
   options: GatewayRequestHandlerOptions,
   target: { sessionKey: string; agentId: string },
 ) {
-  const binding = captureIncognitoSessionSource(target);
-  const metadata = captureSessionEntryMetadataRead(target);
-  const initial = metadata?.readCurrent();
+  // File handles outlive their opening RPC; each file effect owns its request authority.
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(target, authority);
+  const readEntry = () =>
+    memory
+      ? memory.owner?.readSession(target.sessionKey, authority)?.entry
+      : loadGatewaySessionEntryReadOnly(target.sessionKey, { agentId: target.agentId }).entry;
+  const initial = memory ? readEntry() : undefined;
   return {
-    withSource<T>(consume: () => Promise<T>): Promise<T> {
-      if (!binding || "kind" in binding) {
-        return consume();
-      }
-      binding.actor.assertReadable();
-      return withIncognitoSessionBinding(binding, consume);
-    },
     assertCurrent() {
-      if (metadata) {
-        const current = metadata.readCurrent();
+      if (memory) {
+        const current = readEntry();
         if (
           current?.sessionId !== initial?.sessionId ||
           current?.lifecycleRevision !== initial?.lifecycleRevision
         ) {
-          throw new Error("App file session generation changed");
+          throw new Error("App file session identity changed");
         }
       }
     },
-    readEntry: () =>
-      metadata
-        ? metadata.readCurrent()
-        : loadGatewaySessionEntryReadOnly(target.sessionKey, { agentId: target.agentId }).entry,
+    readEntry,
     readRoot: () =>
       resolveLocalSessionWorkspaceRoot({
         ...target,
-        ...(metadata
-          ? { source: { entry: metadata.readCurrent(), cfg: options.context.getRuntimeConfig() } }
+        ...(memory
+          ? { source: { entry: readEntry(), cfg: options.context.getRuntimeConfig() } }
           : {}),
       }),
   };
@@ -82,12 +75,19 @@ export async function prepareMcpAppHostFile(
   target: { sessionKey: string; agentId: string; path: string },
 ): Promise<McpAppHostFile> {
   const session = captureHostFileSession(options, target);
+  const cfg = options.context.getRuntimeConfig();
+  const entry = await withGatewaySessionEntryReadOnly(
+    { cfg, key: target.sessionKey, agentId: target.agentId, projection: "list" },
+    async (loaded) => loaded.entry,
+  );
   const read = retainSessionScopedRead(options, target.sessionKey, target.agentId, {
     requireMaterialized: true,
   });
   try {
-    const rootDir = session.readRoot();
-    const entry = session.readEntry();
+    const rootDir = resolveLocalSessionWorkspaceRoot({
+      ...target,
+      source: { entry, cfg },
+    });
     if (!rootDir || !entry?.sessionId) {
       throw new Error("Local workspace file access is unavailable");
     }
@@ -146,53 +146,51 @@ async function withHostFile<T>(
   }
   const session =
     fileSources.get(file) ?? captureHostFileSession(options, { sessionKey, agentId: view.agentId });
-  return session.withSource(async () => {
-    const read = retainSessionScopedRead(options, sessionKey, view.agentId, {
-      requireMaterialized: true,
-    });
-    const assertCurrent = () => {
-      view.runtime.assertOwnerCurrent?.();
-      session.assertCurrent();
-      read?.assertCurrent();
-      options.sessionMutationAuthorization?.assertCurrent();
-      if (
-        options.signal?.aborted ||
-        options.client?.connectionSignal?.aborted ||
-        options.hasCurrentClientAuthority?.() === false ||
-        getMcpAppViewLease(view.viewId, view.runtime) !== view ||
-        view.readOnly ||
-        view.allowedAppToolNames === undefined ||
-        resolveMcpAppRequesterId(options.client) !== file.requesterId ||
-        session.readEntry()?.sessionId !== file.sessionId ||
-        session.readRoot() !== file.rootDir
-      ) {
-        throw new Error("MCP App file authority expired");
-      }
-      // File commits require a synchronous live grant. An asynchronous widget grant
-      // can authorize reads but cannot establish authority at the filesystem commit.
-      if (mutation && view.authorizeAppInteraction) {
-        const grant = view.authorizeAppInteraction();
-        if (grant !== true) {
-          if (grant instanceof Promise) {
-            void grant.catch(() => undefined);
-          }
-          throw new Error("MCP App file requires current synchronous interaction authority");
+  const read = retainSessionScopedRead(options, sessionKey, view.agentId, {
+    requireMaterialized: true,
+  });
+  const assertCurrent = () => {
+    view.runtime.assertOwnerCurrent?.();
+    session.assertCurrent();
+    read?.assertCurrent();
+    options.sessionMutationAuthorization?.assertCurrent();
+    if (
+      options.signal?.aborted ||
+      options.client?.connectionSignal?.aborted ||
+      options.hasCurrentClientAuthority?.() === false ||
+      getMcpAppViewLease(view.viewId, view.runtime) !== view ||
+      view.readOnly ||
+      view.allowedAppToolNames === undefined ||
+      resolveMcpAppRequesterId(options.client) !== file.requesterId ||
+      session.readEntry()?.sessionId !== file.sessionId ||
+      session.readRoot() !== file.rootDir
+    ) {
+      throw new Error("MCP App file authority expired");
+    }
+    // File commits require a synchronous live grant. An asynchronous widget grant
+    // can authorize reads but cannot establish authority at the filesystem commit.
+    if (mutation && view.authorizeAppInteraction) {
+      const grant = view.authorizeAppInteraction();
+      if (grant !== true) {
+        if (grant instanceof Promise) {
+          void grant.catch(() => undefined);
         }
+        throw new Error("MCP App file requires current synchronous interaction authority");
       }
-    };
-    try {
+    }
+  };
+  try {
+    await requireMcpAppInteraction(view);
+    assertCurrent();
+    const result = await operation(file, assertCurrent);
+    if (!mutation) {
       await requireMcpAppInteraction(view);
       assertCurrent();
-      const result = await operation(file, assertCurrent);
-      if (!mutation) {
-        await requireMcpAppInteraction(view);
-        assertCurrent();
-      }
-      return result;
-    } finally {
-      read?.release();
     }
-  });
+    return result;
+  } finally {
+    read?.release();
+  }
 }
 
 export async function readMcpAppHostFile(
@@ -457,12 +455,23 @@ export async function subscribeMcpAppHostFile(
   });
 }
 
-export function canOpenMcpAppFiles(view: McpAppViewLease): boolean {
+export async function canOpenMcpAppFiles(view: McpAppViewLease): Promise<boolean> {
   const sessionKey = view.runtime.sessionKey;
   if (!sessionKey) {
     return false;
   }
-  return Boolean(resolveLocalSessionWorkspaceRoot({ sessionKey, agentId: view.agentId }));
+  const cfg = getRuntimeConfig();
+  const entry = await withGatewaySessionEntryReadOnly(
+    { cfg, key: sessionKey, agentId: view.agentId, projection: "list" },
+    async (loaded) => loaded.entry,
+  );
+  return Boolean(
+    resolveLocalSessionWorkspaceRoot({
+      sessionKey,
+      agentId: view.agentId,
+      source: { entry, cfg },
+    }),
+  );
 }
 
 export async function openMcpAppFile(

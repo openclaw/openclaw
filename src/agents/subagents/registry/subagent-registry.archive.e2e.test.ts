@@ -436,7 +436,7 @@ describe("subagent registry archive behavior", () => {
     });
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
     expect(onSubagentEnded).not.toHaveBeenCalled();
-    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    await fs.access(attachmentsDir);
 
     await mod.testing.sweepOnceForTests();
     await vi.dynamicImportSettled();
@@ -655,6 +655,6 @@ describe("subagent registry archive behavior", () => {
     });
 
     expect(replaced).toBe(true);
-    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    await fs.access(attachmentsDir);
   });
 });

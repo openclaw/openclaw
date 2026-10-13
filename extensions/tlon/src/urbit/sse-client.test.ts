@@ -41,6 +41,55 @@ describe("UrbitSSEClient", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { outcome: "bodyless success", status: 204, body: null, failHandler: false },
+    { outcome: "HTTP error", status: 503, body: null, failHandler: false },
+    {
+      outcome: "stream completion",
+      status: 200,
+      body: 'data: {"json":{"ok":true}}\n\n',
+      failHandler: false,
+    },
+    {
+      outcome: "handler error",
+      status: 200,
+      body: 'data: {"json":{"ok":true}}\n\n',
+      failHandler: true,
+    },
+  ])("releases the stream guard after $outcome", async ({ status, body, failHandler }) => {
+    const guarded = guardedResponse(new Response(body, { status }));
+    vi.mocked(urbitFetch).mockResolvedValueOnce(guarded);
+    const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+    const processing = vi.spyOn(client, "processStream");
+    vi.spyOn(client, "attemptReconnect").mockResolvedValue(undefined);
+    await client.subscribe({
+      app: "chat",
+      path: "/inbox",
+      event: () => {
+        if (failHandler) {
+          throw new Error("handler failed");
+        }
+      },
+    });
+
+    if (status === 503) {
+      await expect(client.openStream()).rejects.toThrow("Stream connection failed: 503");
+    } else {
+      await client.openStream();
+      if (body !== null) {
+        const completion = processing.mock.results[0]?.value;
+        if (failHandler) {
+          await expect(completion).rejects.toThrow("handler failed");
+        } else {
+          await expect(completion).resolves.toBeUndefined();
+        }
+      }
+    }
+
+    expect(guarded.release).toHaveBeenCalledOnce();
+    expect(client.streamRelease).toBeNull();
+  });
+
   describe("updateCookie", () => {
     it("normalizes cookie when updating", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
