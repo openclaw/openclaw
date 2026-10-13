@@ -162,6 +162,10 @@ describe("OpenClaw shell Control UI refresh", () => {
     expect(resumed.pendingBootstrapToken).toBe("synthetic-owner-bootstrap");
     expect(resumed.pendingBootstrapProfile).toBe("owner");
     expect(resumed.location.hash).toBe("");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(replace).toHaveBeenCalledOnce();
   });
 
   it("keeps a pending remote handoff out of the serving document on manual Refresh", async () => {

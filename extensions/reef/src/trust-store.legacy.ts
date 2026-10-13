@@ -7,12 +7,17 @@ import {
   ReefPeerIdentitySchema,
   ReefPeerTrustSchema,
   matchesReefPeerIdentity,
-  sameReefPeerIdentity,
   reefPeerIdentity,
   type ReefAutonomy,
   type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
+import {
+  overdueReefDeliveries,
+  pendingReefRejections,
+  rejectReefDelivery,
+  reserveReefRejection,
+} from "./trust-delivery-transition.js";
 import { transitionReefPeer, type ReefPeerMutation } from "./trust-peer-transition.js";
 import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
@@ -21,7 +26,6 @@ import {
   REEF_DELIVERY_STORE_OPTIONS,
   ReefOutboundDeliveryBindingSchema,
   ReefOutboundDeliverySchema,
-  ReefOutboundRejectionSchema,
   ReefRejectionNoticeStateSchema,
   createReefPairingApproval,
   parseReefPairingApproval,
@@ -291,15 +295,12 @@ export class LegacyReefTrustStore {
   ): Array<{ peer: string; id: string; sentAt: number }> {
     this.assertActive?.();
     const peers = new Map<string, ReefPeerTrust | undefined>();
-    return currentReefDeliveries(this.stores.deliveries.entries(), this.#prefix, (peer) =>
-      this.#peerForScan(peer, peers),
-    ).flatMap(({ peer, id, delivery }) =>
-      delivery.rejection ||
-      delivery.overdueNotifiedAt !== undefined ||
-      delivery.sentAt === undefined ||
-      delivery.sentAt + olderThanMs > now
-        ? []
-        : [{ peer, id, sentAt: delivery.sentAt }],
+    return overdueReefDeliveries(
+      currentReefDeliveries(this.stores.deliveries.entries(), this.#prefix, (peer) =>
+        this.#peerForScan(peer, peers),
+      ),
+      olderThanMs,
+      now,
     );
   }
 
@@ -393,59 +394,34 @@ export class LegacyReefTrustStore {
     this.assertActive?.();
     const key = this.#deliveryKey(peer, id);
     const expected = this.#parseDeliveryBinding(binding);
-    const current = this.#outboundDelivery(peer, id);
-    if (!current || !matchesReefDeliveryBinding(current, expected)) {
-      return false;
-    }
-    if (current.rejection) {
-      return true;
-    }
     const update = this.stores.deliveries.update;
     if (!update) {
       throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
     }
-    return update(key, (value) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(value);
-      if (!parsed.success || !matchesReefDeliveryBinding(parsed.data, expected)) {
-        return undefined;
-      }
-      if (parsed.data.rejection) {
-        return parsed.data;
-      }
-      const rejection = ReefOutboundRejectionSchema.parse({
-        ...(category ? { category } : {}),
-        ...(parsed.data.resendDisabled ? { notice: { lastRejectionAt: Date.now() } } : {}),
-      });
-      return { ...parsed.data, rejection };
+    let matched = false;
+    update(key, (value) => {
+      const next = rejectReefDelivery(value, expected, category, Date.now());
+      matched = next !== undefined;
+      return next?.changed ? next.delivery : undefined;
     });
+    return matched;
   }
 
   pendingOutboundRejections(): ReefDeliveryRejection[] {
     this.assertActive?.();
     const peers = new Map<string, ReefPeerTrust | undefined>();
-    return currentReefDeliveries(
-      this.stores.deliveries.entries(),
-      this.#prefix,
-      (peer) => this.#peerForScan(peer, peers),
-      true,
-    )
-      .flatMap(({ peer, id, delivery }) => {
-        if (!delivery.rejection) {
-          return [];
-        }
-        return [
-          {
-            id,
-            peer,
-            recovery: this.#recovery(peer, id, delivery.recipient),
-            recipient: delivery.recipient,
-            ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
-            ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
-            ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
-          },
-        ];
-      })
-      .toSorted((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1));
+    return pendingReefRejections(
+      currentReefDeliveries(
+        this.stores.deliveries.entries(),
+        this.#prefix,
+        (peer) => this.#peerForScan(peer, peers),
+        true,
+      ),
+    ).map((entry) =>
+      Object.assign(entry, {
+        recovery: this.#recovery(entry.peer, entry.id, entry.recipient),
+      }),
+    );
   }
 
   #recovery(peer: string, id: string, recipient: ReefPeerIdentity): ReefRejectionRecovery {
@@ -480,26 +456,9 @@ export class LegacyReefTrustStore {
       | { kind: "existing"; state: ReefRejectionNoticeState }
       | undefined;
     const updated = update(this.#deliveryKey(peer, id), (value) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(value);
-      if (
-        !parsed.success ||
-        !parsed.data.rejection ||
-        !sameReefPeerIdentity(parsed.data.recipient, expectedRecipient)
-      ) {
-        return undefined;
-      }
-      if (parsed.data.rejection.notice) {
-        outcome = { kind: "existing", state: parsed.data.rejection.notice };
-        return parsed.data;
-      }
-      outcome = { kind: "reserved" };
-      return {
-        ...parsed.data,
-        rejection: {
-          ...parsed.data.rejection,
-          notice: noticeState,
-        },
-      };
+      const reservation = reserveReefRejection(value, expectedRecipient, noticeState);
+      outcome = reservation?.outcome;
+      return reservation?.delivery;
     });
     if (!updated || !outcome) {
       throw new Error(`Reef rejection ${id} lost its durable delivery state`);

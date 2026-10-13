@@ -12,6 +12,7 @@ import type {
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -72,7 +73,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
   it(
     "pins the creator's bundle across ordinary collaborator authoring, edits, turn boundaries, removal and worker replacement",
     { timeout: 600_000 },
-    async () => {
+    async ({ signal }) => {
       const instance = await createSkillLibraryWireInstance();
       let provider: Awaited<ReturnType<typeof startSkillLibraryWireProvider>> | undefined;
       let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
@@ -113,7 +114,22 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             clients.push(connected.client);
             return connected;
           };
-          const { client: admin, hello } = await connect();
+          let onSessionChanged: ((key: string) => void) | undefined;
+          const { client: admin, hello } = await connect({
+            onEvent: (event) => {
+              if (event.event === "sessions.changed") {
+                const payload = event.payload as {
+                  sessionKey?: string;
+                  session?: { key?: string };
+                };
+                const key = payload.sessionKey ?? payload.session?.key;
+                if (key) {
+                  onSessionChanged?.(key);
+                }
+              }
+            },
+          });
+          await admin.request("sessions.subscribe", {});
           const { client: aliceAdmin } = await connect({
             email: SKILL_LIBRARY_ALICE,
             scopes: ["operator.admin", "operator.read", "operator.write"],
@@ -182,6 +198,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
                 PROOF_TIMEOUT_MS + 5_000,
               ),
             ).resolves.toMatchObject({ status: "ok" });
+            await waitForWorkerSettlement(key);
             await vi.waitFor(
               async () => {
                 const history = await client.request<{ messages: unknown[] }>("chat.history", {
@@ -212,10 +229,45 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const turn = async (client: SkillLibraryWireClient, key: string, marker: string) =>
             finishTurn(client, key, marker, await startTurn(client, key, marker, saved.entry.name));
           const describeSession = (key: string) =>
-            admin.request<{ session: { execCwd?: string; spawnedCwd?: string } }>(
-              "sessions.describe",
-              { key },
-            );
+            admin.request<{
+              session: {
+                execCwd?: string;
+                spawnedCwd?: string;
+                placement?: { state: string; workspaceResultReconciling?: boolean };
+              };
+            }>("sessions.describe", { key });
+          const waitForWorkerSettlement = async (key: string) => {
+            if (key !== remoteKey) {
+              return;
+            }
+            const settled = createDeferred();
+            const check = () => {
+              void describeSession(key)
+                .then(({ session }) => {
+                  process.stderr.write(
+                    `[skill-library-wire] settlement ${JSON.stringify({ key, state: session.placement?.state, reconciling: session.placement?.workspaceResultReconciling })}\n`,
+                  );
+                  if (
+                    session.placement?.state === "active" &&
+                    !session.placement.workspaceResultReconciling
+                  ) {
+                    settled.resolve();
+                  }
+                })
+                .catch(settled.reject);
+            };
+            onSessionChanged = (changedKey) => {
+              if (changedKey === key) {
+                check();
+              }
+            };
+            try {
+              check();
+              await withinTest(settled.promise, signal);
+            } finally {
+              onSessionChanged = undefined;
+            }
+          };
           const localDescription = await describeSession(localKey);
           const remoteDescription = await describeSession(remoteKey);
           const localCwd = localDescription.session.execCwd ?? localDescription.session.spawnedCwd;
@@ -362,6 +414,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               PROOF_TIMEOUT_MS + 5_000,
             ),
           ).resolves.toMatchObject({ status: "ok" });
+          await waitForWorkerSettlement(remoteKey);
           const authorOutput = provider.authorOutputs.get("bob-worker");
           expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
           if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {

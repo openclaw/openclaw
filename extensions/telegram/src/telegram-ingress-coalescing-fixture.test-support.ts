@@ -11,6 +11,10 @@ import {
   type GetReplyOptions,
   type MsgContext,
 } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
@@ -182,6 +186,7 @@ export function createDownstreamTurnFixture(
 }
 
 export function resetTelegramIngressRuntime() {
+  setRuntimeConfigSnapshot(cfg);
   resetInboundDedupe();
   resetPluginStateStoreForTests({ closeDatabase: false });
   resetTelegramAccountThrottlersForTest();
@@ -290,6 +295,7 @@ export async function releaseIngressCase(
   }
   // Session maintenance outlives its writer by design; retire it with this case's databases.
   await closeOpenClawAgentDatabasesAsync(stateDir);
+  clearRuntimeConfigSnapshot();
 }
 
 export function useIngressTimers() {

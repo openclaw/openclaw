@@ -82,6 +82,7 @@ export function createSubagentRegistrySweeper(params: {
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
   isCleanupOwnerCurrent: SubagentLifecycleController["isCleanupOwnerCurrent"];
+  isTerminalTailActive: SubagentLifecycleController["isTerminalTailActive"];
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
   shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
@@ -179,6 +180,7 @@ export function createSubagentRegistrySweeper(params: {
     getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
     finalizeRun: params.finalizeInterruptedSubagentRun,
+    isTerminalTailActive: params.isTerminalTailActive,
     recoverRow: async (recoveryParams) =>
       (await restartRecoveryLoader.load()).recoverInterruptedSubagentRow(recoveryParams),
     schedule: (delayMs) => schedule({ delayMs }),

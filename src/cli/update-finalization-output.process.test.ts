@@ -501,14 +501,25 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         expect(report.body).toContain("Reason code: doctor-failed");
         expect(report.body).toContain("Failed phase finalize-doctor: exit 1");
         expect(report.body).toContain("Recovery outcome: not serving (timeout)");
+        expect(report.body).toContain(
+          "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
+        );
         expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([
           {
             step: "gateway recovery verification",
             status: "failed",
             exitCode: 1,
-            detail:
-              "Exit code: 1; Gateway did not settle; startup phase: waiting for managed service",
-            failureFacts: [{ check: "settled", code: "timeout", message: expect.any(String) }],
+            detail: expect.stringContaining(
+              "Gateway readiness was not verified; service status: unknown; startup phase: waiting for managed service.",
+            ),
+            failureFacts: [
+              {
+                check: "settled",
+                code: "timeout",
+                message:
+                  "Gateway readiness was not verified; service status: unknown; startup phase: waiting for managed service. Check openclaw gateway status --deep.",
+              },
+            ],
           },
         ]);
         expect({

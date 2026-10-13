@@ -172,7 +172,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   ): Promise<number[][]> {
     const provider = generation.provider;
     const batchEmbed = generation.runtime?.batchEmbed;
-    if (!batchEmbed) {
+    if (!this.batch.enabled || !batchEmbed) {
       return this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
     }
     const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
@@ -817,9 +817,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         entry: prepared.entry,
         source: prepared.source,
       }));
-      embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(candidates, source, generation)
-        : await this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
+      embeddings = await this.embedChunksWithBatch(candidates, source, generation);
     } catch (err) {
       const message = formatErrorMessage(err);
       if (

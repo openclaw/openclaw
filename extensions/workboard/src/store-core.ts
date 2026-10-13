@@ -34,6 +34,7 @@ import type {
   WorkboardLinkedCreateInput,
   WorkboardListOptions,
   WorkboardMutationScope,
+  WorkboardOwnedCardPatch,
   WorkboardStatsResult,
   WorkboardUpdateCardOptions,
 } from "./store-inputs.js";
@@ -69,15 +70,19 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   private compensationJournal?: WorkboardMutationJournalEntry[];
 
   protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
-    if (this.compensationJournal) {
-      return await run();
-    }
     const journal: WorkboardMutationJournalEntry[] = [];
     this.compensationJournal = journal;
     try {
       return await run();
     } catch (operationError) {
-      const compensationErrors = await this.rollbackCardMutations(journal);
+      const compensationErrors: unknown[] = [];
+      for (const { before, after } of journal.toReversed()) {
+        try {
+          await this.rollbackCardMutation(before, after);
+        } catch (error) {
+          compensationErrors.push(error);
+        }
+      }
       if (compensationErrors.length > 0) {
         const message =
           operationError instanceof Error ? operationError.message : String(operationError);
@@ -94,20 +99,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
     // Undo later steps first so each saved state is restored before its predecessor.
     this.compensationJournal?.push({ before, after });
-  }
-
-  private async rollbackCardMutations(
-    journal: WorkboardMutationJournalEntry[],
-  ): Promise<unknown[]> {
-    const errors: unknown[] = [];
-    for (const entry of journal.toReversed()) {
-      try {
-        await this.rollbackCardMutation(entry.before, entry.after);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    return errors;
   }
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
@@ -171,7 +162,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
 
   protected async updateLatestCard(
     id: string,
-    buildPatch: (current: WorkboardCard) => WorkboardCardPatch | undefined,
+    buildPatch: (current: WorkboardCard) => WorkboardOwnedCardPatch | undefined,
     options: WorkboardUpdateCardOptions = {},
   ): Promise<{ card: WorkboardCard; updated: boolean }> {
     const current = await this.requireCard(id);
@@ -181,12 +172,14 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     ) {
       throw new WorkboardCardConflictError(current);
     }
-    const patch = buildPatch(current);
-    if (!patch) {
+    const ownedPatch = buildPatch(current);
+    if (!ownedPatch) {
       return { card: current, updated: false };
     }
+    const { ownedLaunch, ...patch } = ownedPatch;
     const card = await this.updateCard(current, patch, {
       ...options,
+      automationLaunch: ownedLaunch,
       expectedUpdatedAt: current.updatedAt,
     });
     return { card, updated: card.updatedAt !== current.updatedAt };
@@ -577,7 +570,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
-      allowAutomationLaunch: options.allowAutomationLaunch,
+      automationLaunch: options.automationLaunch,
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       preserveProofId: options.preserveProofId,
     });

@@ -7,7 +7,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { normalizeDatabasePath } from "../../infra/sqlite-worker-identity.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   readOpenClawAgentDatabaseIdentity,
@@ -124,20 +123,11 @@ export function readSessionEntryCohort(
     input.lifecycleSessionKey ||
     input.replyInitializationSessionKey,
   );
-  const assertSource = () => {
-    const current = readOpenClawAgentDatabaseIdentity(database);
-    if (
-      current.incarnation !== source.incarnation ||
-      !database.db.isOpen ||
-      normalizeDatabasePath(database.db.location() ?? "") !== source.filename ||
-      (expected && current.incarnation !== expected.incarnation)
-    ) {
-      throw new SessionEntryChangedDuringReadError();
-    }
-  };
-  assertSource();
+  if (expected && source.incarnation !== expected.incarnation) {
+    throw new SessionEntryChangedDuringReadError();
+  }
+  // This synchronous read stays on its admitted handle; replacement is checked at admission.
   const read = (): SessionEntryCohortResult => {
-    assertSource();
     const sharedHeader =
       transcript?.includeHeader && transcript.sessionKey === input.lifecycleSessionKey;
     const result: SessionExactEntriesWorkerResult = requiresSnapshot
@@ -200,7 +190,6 @@ export function readSessionEntryCohort(
         runtimeTarget.sessionKey,
       storePath: database.path,
     };
-    assertSource();
     return {
       ...result,
       ...(preparedRuntimeTarget ? { runtimeTarget: preparedRuntimeTarget } : {}),
@@ -249,18 +238,7 @@ export function readSessionEntryDataInDatabase(
   if (typeof identity !== "string") {
     throw new Error("Session entry read requires its admitted durable owner");
   }
-  const assertSource = () => {
-    if (
-      readOpenClawAgentDatabaseIdentity(database).incarnation !== source.incarnation ||
-      !database.db.isOpen ||
-      normalizeDatabasePath(database.db.location() ?? "") !== source.filename
-    ) {
-      throw new Error("Session entry read changed its admitted physical owner");
-    }
-  };
-  assertSource();
   const facts = readExactSessionEntryFactsInDatabase(database, [sessionKey]);
-  assertSource();
   return {
     kind: "session-exact-entries",
     source: {

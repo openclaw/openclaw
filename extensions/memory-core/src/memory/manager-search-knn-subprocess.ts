@@ -58,7 +58,6 @@ const children = new Map<
     child: ChildProcessWithoutNullStreams;
     idleTimer?: ReturnType<typeof setTimeout>;
     retire: () => void;
-    requestId: number;
   }
 >();
 
@@ -76,7 +75,7 @@ function setChildReferenced(child: ChildProcessWithoutNullStreams, referenced: b
   }
 }
 
-function parseChildResult(output: Buffer, maxRows: number, id: number): VectorKnnResponse {
+function parseChildResult(output: Buffer, maxRows: number): VectorKnnResponse {
   let parsed: unknown;
   try {
     parsed = JSON.parse(output.toString("utf8"));
@@ -86,13 +85,7 @@ function parseChildResult(output: Buffer, maxRows: number, id: number): VectorKn
       "protocol",
     );
   }
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    !("status" in parsed) ||
-    !("id" in parsed) ||
-    parsed.id !== id
-  ) {
+  if (!parsed || typeof parsed !== "object" || !("status" in parsed)) {
     throw new VectorKnnSubprocessError(
       "memory vector KNN child returned an invalid envelope",
       "protocol",
@@ -159,7 +152,6 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
   }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   const input: VectorKnnChildInput = {
-    id: (children.get(params.databasePath)?.requestId ?? 0) + 1,
     databasePath: params.databasePath,
     extensionPath: params.extensionPath,
     ...(sqliteLibrary.source !== "runtime" ? { sqliteLibraryPath: sqliteLibrary.path } : {}),
@@ -206,7 +198,6 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
     }
     worker = {
       child,
-      requestId: 0,
       retire: () => {
         if (children.get(params.databasePath) !== ownedWorker) {
           return;
@@ -233,7 +224,6 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
   }
   const { child } = worker;
   const ownedWorker = worker;
-  worker.requestId = input.id;
   clearTimeout(worker.idleTimer);
   worker.idleTimer = undefined;
   child.stdout.removeAllListeners("data");
@@ -328,7 +318,7 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
               "protocol",
             );
           }
-          const result = parseChildResult(Buffer.concat(chunks), params.request.limit, input.id);
+          const result = parseChildResult(Buffer.concat(chunks), params.request.limit);
           if (terminationReason) {
             return;
           }

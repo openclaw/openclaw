@@ -26,6 +26,7 @@ export function createInterruptedRecoveryCoordinator(params: {
   finalizeRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
   >["finalizeInterruptedSubagentRun"];
+  isTerminalTailActive: (entry: SubagentRunRecord) => boolean;
   recoverRow: (params: RestartRecoveryParams) => Promise<RestartRecoveryResult>;
   schedule: (delayMs: number) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
@@ -119,6 +120,10 @@ export function createInterruptedRecoveryCoordinator(params: {
         (getAgentRunContext(runId) || typeof entry.execution.endedAt === "number")
       ) {
         return false;
+      }
+      if (entry.execution.status === "terminal" && params.isTerminalTailActive(entry)) {
+        // Replay drains orphaned winners; this process is still draining this one.
+        return true;
       }
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const gatewayRuntime = params.getGatewayRuntime();

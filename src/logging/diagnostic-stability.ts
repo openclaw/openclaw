@@ -724,6 +724,8 @@ export function startDiagnosticStabilityRecorder(): void {
         "diagnostic.gc",
         "diagnostic.child_process.spawn",
         "worker.request",
+        "secret.egress",
+        "tool.catalog",
       ],
     },
   );
