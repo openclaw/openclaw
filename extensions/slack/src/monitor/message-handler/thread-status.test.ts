@@ -119,28 +119,25 @@ function createDeferredCycle() {
     publish,
     onActiveRestoreFailed: vi.fn(),
   });
-  return {
-    cycle,
-    settled,
-    pendingCount: () => pending.length,
-    async releaseNext() {
-      await waitForPending(() => pending.length);
-      const release = pending.shift();
-      if (!release) {
-        throw new Error("no status write is waiting");
-      }
-      release();
-    },
-    async releaseSettled() {
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        await waitForPending(() => pending.length);
-        if (pending.length === 0) {
-          return;
-        }
-        pending.shift()?.();
-      }
-    },
+  const pendingCount = () => pending.length;
+  const releaseNext = async () => {
+    await waitForPending(pendingCount);
+    const release = pending.shift();
+    if (!release) {
+      throw new Error("no status write is waiting");
+    }
+    release();
   };
+  const releaseSettled = async () => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await waitForPending(pendingCount);
+      if (pending.length === 0) {
+        return;
+      }
+      pending.shift()?.();
+    }
+  };
+  return { cycle, settled, pendingCount, releaseNext, releaseSettled };
 }
 
 async function waitForPending(pendingCount: () => number, minimum = 1) {
