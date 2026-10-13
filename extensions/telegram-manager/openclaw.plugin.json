@@ -1,0 +1,30 @@
+{
+  "id": "telegram-manager",
+  "name": "Telegram Manager",
+  "description": "Manager Bot that provisions per-user OpenClaw instances: managed Telegram bot via MTProto, Hetzner server, OpenClaw install.",
+  "categories": ["developer-tools"],
+  "contracts": {
+    "tools": ["provisioning_start", "provisioning_status", "provisioning_cancel"]
+  },
+  "toolMetadata": {
+    "provisioning_start": {},
+    "provisioning_status": {},
+    "provisioning_cancel": {}
+  },
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "managerBotToken": { "type": "string" },
+      "managerBotUsername": { "type": "string" },
+      "hcloudToken": { "type": "string" },
+      "sshPublicKey": { "type": "string" },
+      "defaultServerType": { "type": "string", "default": "cx23" },
+      "defaultLocation": { "type": "string", "default": "nbg1" },
+      "defaultImage": { "type": "string", "default": "debian-12" }
+    }
+  }
+}

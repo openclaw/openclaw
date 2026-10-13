@@ -1,0 +1,22 @@
+{
+  "name": "@openclaw/telegram-manager",
+  "version": "2026.9.8",
+  "private": true,
+  "description": "OpenClaw Telegram Manager Bot provisioning plugin (OP-167)",
+  "type": "module",
+  "dependencies": {
+    "grammy": "1.46.0",
+    "typebox": "1.3.34",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    }
+  }
+}
