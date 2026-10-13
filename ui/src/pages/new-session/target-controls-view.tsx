@@ -19,7 +19,7 @@ import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
-import { resolveWhereChip } from "./where-chip.ts";
+import { resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
@@ -159,6 +159,48 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
       selectCloudOption,
     };
   });
+  // Child prop reads must reuse this projection instead of rebuilding placement facts.
+  const whereParams = createMemo((): WhereChipOptions => ({
+    hostedEnvironments: props.params.place.modelControl.hostedEnvironments(),
+    hostedLoading: props.params.place.modelControl.hostedEnvironmentsLoading(),
+    onSelectHostedEnvironment: (id) => props.params.place.selectHostedEnvironment(id),
+    hostDisabledReason: props.params.place.modelControl.hostEnvironmentDisabledReason(),
+    state: view().whereState,
+    environmentQuery: view().browser.environmentQuery,
+    onEnvironmentQueryInput: (query) => view().browser.changeEnvironmentQuery(query),
+    gatewayName: view().gatewayName,
+    cloudProfileId: props.params.place.cloudProfileId,
+    machineClass: view().machineClass,
+    os: view().os,
+    deviceId: props.params.place.deviceId,
+    autoDevice: props.params.place.autoDevice,
+    autoPlacementMode: props.params.place.modelControl.autoPlacementSelectionMode(
+      environmentPlacementRuntime(props.params.place.modelControl),
+    ),
+    cloudDisabledReason: environmentCloudDisabledReason(props.params.place.modelControl),
+    cloudProfileDisabledReason: (profile) =>
+      environmentCloudDisabledReason(props.params.place.modelControl, profile),
+    submitting: props.params.submitting,
+    pendingPlacement: props.params.pendingPlacement,
+    catalogLoading: props.params.place.canWrite() && props.params.gateway.cloudProfilesPending,
+    isAdmin: props.params.place.isAdmin(),
+    ...view().browser.popoverCallbacks("where"),
+    onSelectDevice: (deviceId) => props.params.place.selectDevice(deviceId),
+    onSelectAutoDevice: () => props.params.place.selectDevice("", true),
+    onSelectCloudProfile: (profileId, useDefaults) => {
+      if (useDefaults) {
+        props.params.place.cloudMachines.applyPending(profileId);
+      }
+      props.params.place.selectCloudProfile(profileId);
+    },
+    onSelectCloudOs: (osId) => view().selectCloudOption("os", osId),
+    onSelectCloudMachine: (machineId) => view().selectCloudOption("machine", machineId),
+    onConnectMachine: props.params.onConnectMachine,
+    onManageCloudWorkers: () => {
+      view().browser.close();
+      props.params.onNavigate("cloud-workers");
+    },
+  }));
   return (
     <>
       {props.params.place.requiredPlacement ? (
@@ -175,52 +217,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
               }}
             />
           ) : (
-            <WhereChip
-              params={{
-                hostedEnvironments: props.params.place.modelControl.hostedEnvironments(),
-                hostedLoading: props.params.place.modelControl.hostedEnvironmentsLoading(),
-                onSelectHostedEnvironment: (id) => props.params.place.selectHostedEnvironment(id),
-                hostDisabledReason: props.params.place.modelControl.hostEnvironmentDisabledReason(),
-                state: view().whereState,
-                environmentQuery: view().browser.environmentQuery,
-                onEnvironmentQueryInput: (query) => view().browser.changeEnvironmentQuery(query),
-                gatewayName: view().gatewayName,
-                cloudProfileId: props.params.place.cloudProfileId,
-                machineClass: view().machineClass,
-                os: view().os,
-                deviceId: props.params.place.deviceId,
-                autoDevice: props.params.place.autoDevice,
-                autoPlacementMode: props.params.place.modelControl.autoPlacementSelectionMode(
-                  environmentPlacementRuntime(props.params.place.modelControl),
-                ),
-                cloudDisabledReason: environmentCloudDisabledReason(
-                  props.params.place.modelControl,
-                ),
-                cloudProfileDisabledReason: (profile) =>
-                  environmentCloudDisabledReason(props.params.place.modelControl, profile),
-                submitting: props.params.submitting,
-                pendingPlacement: props.params.pendingPlacement,
-                catalogLoading:
-                  props.params.place.canWrite() && props.params.gateway.cloudProfilesPending,
-                isAdmin: props.params.place.isAdmin(),
-                ...view().browser.popoverCallbacks("where"),
-                onSelectDevice: (deviceId) => props.params.place.selectDevice(deviceId),
-                onSelectAutoDevice: () => props.params.place.selectDevice("", true),
-                onSelectCloudProfile: (profileId, useDefaults) => {
-                  if (useDefaults) {
-                    props.params.place.cloudMachines.applyPending(profileId);
-                  }
-                  props.params.place.selectCloudProfile(profileId);
-                },
-                onSelectCloudOs: (osId) => view().selectCloudOption("os", osId),
-                onSelectCloudMachine: (machineId) => view().selectCloudOption("machine", machineId),
-                onConnectMachine: props.params.onConnectMachine,
-                onManageCloudWorkers: () => {
-                  view().browser.close();
-                  props.params.onNavigate("cloud-workers");
-                },
-              }}
-            />
+            <WhereChip params={whereParams()} />
           )}
           {props.params.place.hostedEnvironment ? (
             <span
