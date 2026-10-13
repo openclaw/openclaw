@@ -36,6 +36,7 @@ import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   MANAGED_BROWSER_PAGE_TAB_LIMIT,
+  MAX_MANAGED_BROWSER_PAGE_TAB_LIMIT,
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
@@ -98,36 +99,77 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
+type ProfileTabActivity = {
+  lastUsedByTarget: Map<string, number>;
+  ownerSessionByTarget: Map<string, string>;
+  tabCountBySession: Map<string, number>;
+};
+
 /**
- * Collects the freshest recorded session activity per target for one profile.
- * Durable records and volatile registrations both carry lastUsedAt; durable
- * native identities also fold in activity observed after the record froze.
+ * Collects the freshest recorded session activity and session ownership per
+ * target for one profile. Durable records and volatile registrations both carry
+ * lastUsedAt; durable native identities also fold in activity observed after
+ * the record froze.
  */
-async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string, number>> {
+async function readProfileTabActivity(
+  profileName: string,
+  openTargetIds?: ReadonlySet<string>,
+): Promise<ProfileTabActivity> {
   const profile = normalizeOptionalLowercaseString(profileName);
   const lastUsedByTarget = new Map<string, number>();
-  const observe = (targetId: string, recordProfile: string | undefined, lastUsedAt: number) => {
-    if (!targetId || normalizeOptionalLowercaseString(recordProfile) !== profile) {
+  const ownerSessionByTarget = new Map<string, string>();
+  const observe = (
+    targetId: string,
+    recordProfile: string | undefined,
+    profileAliases: readonly string[] | undefined,
+    sessionKey: string | undefined,
+    lastUsedAt: number,
+  ) => {
+    const normalizedRecordProfile = normalizeOptionalLowercaseString(recordProfile);
+    if (
+      !targetId ||
+      !profile ||
+      (normalizedRecordProfile !== profile && !profileAliases?.includes(profile))
+    ) {
       return;
     }
     const previous = lastUsedByTarget.get(targetId);
     if (previous === undefined || lastUsedAt > previous) {
       lastUsedByTarget.set(targetId, lastUsedAt);
+      if (sessionKey) {
+        ownerSessionByTarget.set(targetId, sessionKey);
+      }
     }
   };
   for (const record of await readDurableTabs()) {
+    if (record.dashboard) {
+      continue;
+    }
     const observedAt =
       record.interactionTargetKind === "native"
         ? readColdNativeActivity(browserSessionTabNativeIdentity(record))
         : undefined;
-    observe(record.nativeTargetId, record.profile, Math.max(record.lastUsedAt, observedAt ?? 0));
+    observe(
+      record.nativeTargetId,
+      record.profile,
+      record.profileAliases,
+      record.sessionKey,
+      Math.max(record.lastUsedAt, observedAt ?? 0),
+    );
   }
-  for (const sessionTabs of volatileTabsBySession().values()) {
+  for (const [sessionKey, sessionTabs] of volatileTabsBySession().entries()) {
     for (const tab of sessionTabs.values()) {
-      observe(tab.targetId, tab.profile, tab.lastUsedAt);
+      observe(tab.targetId, tab.profile, undefined, sessionKey || tab.sessionKey, tab.lastUsedAt);
     }
   }
-  return lastUsedByTarget;
+  const tabCountBySession = new Map<string, number>();
+  for (const [targetId, sessionKey] of ownerSessionByTarget.entries()) {
+    if (openTargetIds && !openTargetIds.has(targetId)) {
+      continue;
+    }
+    tabCountBySession.set(sessionKey, (tabCountBySession.get(sessionKey) ?? 0) + 1);
+  }
+  return { lastUsedByTarget, ownerSessionByTarget, tabCountBySession };
 }
 
 /**
@@ -135,19 +177,33 @@ async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string
  * targets most-recently-activated first, so raw /json/list order is exactly
  * backwards for cleanup: slicing from the front closes the tabs other sessions
  * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
- * session activity) evict first in reverse CDP order; tracked tabs follow in
- * ascending last-use order.
+ * session activity) evict first in reverse CDP order; tracked tabs from
+ * sessions exceeding their per-session share follow in ascending last-use
+ * order; in-quota tracked tabs evict last in ascending last-use order.
  */
 function orderManagedTabEvictionCandidates(
   candidates: readonly BrowserTab[],
-  lastUsedByTarget: ReadonlyMap<string, number>,
+  activity: ProfileTabActivity,
+  perSessionLimit = MANAGED_BROWSER_PAGE_TAB_LIMIT,
 ): BrowserTab[] {
-  return candidates
-    .toReversed()
-    .toSorted(
-      (left, right) =>
-        (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
-    );
+  const { lastUsedByTarget, ownerSessionByTarget, tabCountBySession } = activity;
+  const evictionTier = (targetId: string): number => {
+    if (!lastUsedByTarget.has(targetId)) {
+      return 0;
+    }
+    const owner = ownerSessionByTarget.get(targetId);
+    if (owner && (tabCountBySession.get(owner) ?? 0) > perSessionLimit) {
+      return 1;
+    }
+    return 2;
+  };
+  return candidates.toReversed().toSorted((left, right) => {
+    const tierDiff = evictionTier(left.targetId) - evictionTier(right.targetId);
+    if (tierDiff !== 0) {
+      return tierDiff;
+    }
+    return (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0);
+  });
 }
 
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
@@ -305,7 +361,11 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     const pageTabs = await listTabs(options)
       .then((tabs) => tabs.filter((tab) => (tab.type ?? "page") === "page"))
       .catch(() => [] as BrowserTab[]);
-    if (pageTabs.length <= MANAGED_BROWSER_PAGE_TAB_LIMIT) {
+    const perSessionLimit = Math.max(
+      1,
+      state().resolved.tabCleanup?.maxTabsPerSession ?? MANAGED_BROWSER_PAGE_TAB_LIMIT,
+    );
+    if (pageTabs.length <= perSessionLimit) {
       return;
     }
 
@@ -315,9 +375,17 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         tab.targetId !== keepTargetId &&
         !findRetainedBrowserDashboardTab(tab.targetId, profile.name, retained),
     );
-    const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
-    const lastUsedByTarget = await readProfileTabLastUsedAt(profile.name);
-    const evictionOrder = orderManagedTabEvictionCandidates(candidates, lastUsedByTarget);
+    const openTargetIds = new Set(pageTabs.map((tab) => tab.targetId));
+    const activity = await readProfileTabActivity(profile.name, openTargetIds);
+    const activeSessionCount = Math.max(1, activity.tabCountBySession.size);
+    const effectiveLimit = !state().resolved.tabCleanup.enabled
+      ? MAX_MANAGED_BROWSER_PAGE_TAB_LIMIT
+      : Math.min(MAX_MANAGED_BROWSER_PAGE_TAB_LIMIT, perSessionLimit * activeSessionCount);
+    if (pageTabs.length <= effectiveLimit) {
+      return;
+    }
+    const excessCount = pageTabs.length - effectiveLimit;
+    const evictionOrder = orderManagedTabEvictionCandidates(candidates, activity, perSessionLimit);
     for (const tab of evictionOrder.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
       await dispatchBrowserTabClose(
