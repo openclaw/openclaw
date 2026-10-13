@@ -72,6 +72,8 @@ CREATE TABLE "workboard_card_comments" (
   "body" text COLLATE "C" NOT NULL,
   "created_at" bigint NOT NULL,
   "updated_at" bigint,
+  "author_kind" text COLLATE "C",
+  "author_id" text COLLATE "C",
   PRIMARY KEY ("id")
 );
 
@@ -181,6 +183,7 @@ CREATE TABLE "workboard_cards" (
   "stale_json" text COLLATE "C",
   "lifecycle_status_source_updated_at" bigint,
   "failure_count" bigint,
+  "feed_json" text COLLATE "C",
   PRIMARY KEY ("id")
 );
 

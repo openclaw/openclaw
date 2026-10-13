@@ -4,6 +4,7 @@ import { captureLocalStateMutationGuard } from "openclaw/plugin-sdk/gateway-runt
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
+import { registerWorkboardFeedGatewayMethods } from "./gateway-feed.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
@@ -265,7 +266,10 @@ export function registerWorkboardGatewayMethods(params: {
   register("workboard.cards.delete", WRITE_SCOPE, ({ params: input }) =>
     store.delete(readId(input), { expectedUpdatedAt: readExpectedUpdatedAt(input) }),
   );
-  cardMutation("comment", (id, input) => store.addComment(id, input));
+  // Gateway callers are operators; agent comments arrive through workboard_comment.
+  cardMutation("comment", (id, input) =>
+    store.addComment(id, { body: input.body, author: { kind: "owner" } }),
+  );
   cardMutation("link", (id, input) => store.addLink(id, input));
   register("workboard.cards.linkDependency", WRITE_SCOPE, ({ params: input }) => {
     const { parentId, childId } = input;
@@ -386,6 +390,7 @@ export function registerWorkboardGatewayMethods(params: {
       children: result.children.map(redactClaimToken),
     };
   });
+  registerWorkboardFeedGatewayMethods({ api, store, register });
   register("workboard.notifications.subscribe", WRITE_SCOPE, async ({ params: input }) => ({
     subscription: await store.subscribeNotifications(input),
   }));

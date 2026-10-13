@@ -49,8 +49,8 @@ it before opening the dashboard. See [Apply changes and inspect](/plugins/manage
 
 ## Configuration
 
-Workboard has no plugin-specific config. Enable/disable it with the standard
-plugin entry:
+Enable/disable Workboard with the standard plugin entry. The only
+plugin-specific config is the optional `feed` block:
 
 ```json5
 {
@@ -58,7 +58,14 @@ plugin entry:
     entries: {
       workboard: {
         enabled: true,
-        config: {},
+        config: {
+          feed: {
+            // Every card on these boards shows in the Feed.
+            boards: ["owner"],
+            // Name used in the messages agents receive from the Feed.
+            ownerName: "Sam",
+          },
+        },
       },
     },
   },
@@ -407,6 +414,7 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                 |
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                           |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                    |
+| `workboard_feed`                                                                                                                                 | Set or change the Feed fields on a card. `reopen: true` puts a handled card back at the top.                                                                                              |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
@@ -649,6 +657,38 @@ The template id is stored as card metadata.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually
    move the card to `done` when accepted.
+
+### Feed
+
+The **Feed** page shows the cards that wait on the owner, one decision per card,
+with an open count on its sidebar item. A card shows in the Feed when it is on
+a board listed in `feed.boards`, or when it has Feed fields.
+
+Agents set Feed fields with `workboard_create` (`feed` parameter) or
+`workboard_feed`:
+
+| Field       | What it does                                                                     |
+| ----------- | -------------------------------------------------------------------------------- |
+| `tag`       | Short uppercase source line, such as `EMAIL · DRAFT`. It also picks the icon.    |
+| `summary`   | One muted line under the title.                                                  |
+| `body`      | Longer text with light markdown. Long text folds behind **More**.                |
+| `draft`     | Editable text, such as an email reply. `draftHeader` adds `To:` and `Re:` lines. |
+| `metric`    | A number with optional `delta`, `caption`, and `bars`.                           |
+| `links`     | Up to 6 http(s) link chips.                                                      |
+| `actions`   | Up to 4 buttons with `label`, `message`, optional `style` and `doneLabel`.       |
+| `doneLabel` | The line shown under **Handled today** after the owner acts.                     |
+| `notify`    | Session that gets clicks and comments. Default: the agent's main session.        |
+
+When the owner clicks a button, Workboard sends the action `message` (and any
+edited draft) to the `notify` session, then marks the card handled. A comment
+goes to the same session and also marks the card handled. A draft edit the
+owner saves travels with their next click or comment, until the agent sets a
+new draft. **Done** only marks the card handled; it does not move the card to
+`done`. When the agent answers with `workboard_comment`, the
+card returns to the top of the Feed as a new reply. The undo button on a handled
+row puts the card back. Scripts can use the Gateway methods `workboard.feed.list`,
+`workboard.feed.act`, `workboard.feed.comment`, `workboard.feed.ack`, and
+`workboard.feed.update`.
 
 ### Session-board widgets
 

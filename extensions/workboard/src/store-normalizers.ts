@@ -50,6 +50,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { definedFields } from "../record-fields.js";
+import { feedIsEmpty, normalizeCommentAuthor, normalizeFeed } from "./feed-normalize.js";
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_CARD_ARTIFACTS,
@@ -472,6 +473,7 @@ function normalizeComment(record: Record<string, unknown>): WorkboardComment | n
     body,
     createdAt,
     updatedAt: normalizeTimestamp(record.updatedAt, 0) || undefined,
+    author: normalizeCommentAuthor(record.author),
   });
 }
 
@@ -941,6 +943,7 @@ export function normalizeMetadata(
       : fallback.lifecycleStatusSourceUpdatedAt,
     failureCount:
       resolveOptionalIntegerOption(record.failureCount, { min: 0 }) ?? fallback.failureCount,
+    feed: Object.hasOwn(record, "feed") ? normalizeFeed(record.feed) : fallback.feed,
   };
   return trimMetadataToBudget(normalized, options);
 }
@@ -1016,10 +1019,12 @@ export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): Work
     "stale",
     "lifecycleStatusSourceUpdatedAt",
     "failureCount",
+    "feed",
   ] as const) {
     const value = next[key];
     if (
       value === undefined ||
+      (key === "feed" && feedIsEmpty(next.feed)) ||
       (Array.isArray(value) && value.length === 0) ||
       (typeof value === "number" && value === 0 && key === "failureCount")
     ) {

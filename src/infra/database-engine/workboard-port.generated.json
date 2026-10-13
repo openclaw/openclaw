@@ -1,6 +1,6 @@
 {
   "id": "workboard",
-  "version": 3,
+  "version": 4,
   "minimumPostgresVersion": 16,
   "schema": "",
   "tables": [
@@ -448,6 +448,20 @@
         {
           "name": "updated_at",
           "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "author_kind",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "author_id",
+          "type": "text",
           "nullable": true,
           "identity": false,
           "default": null
@@ -1202,6 +1216,13 @@
           "nullable": true,
           "identity": false,
           "default": null
+        },
+        {
+          "name": "feed_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
         }
       ],
       "pk": [
@@ -1563,10 +1584,10 @@
   ],
   "preData": [
     0,
-    6963
+    7061
   ],
   "postData": [
-    6963,
-    10540
+    7061,
+    10638
   ]
 }

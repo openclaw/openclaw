@@ -3,6 +3,7 @@ import { WorkboardCatalog } from "./catalog.ts";
 import { deleteWorkboardBoard } from "./delete-board.tsx";
 import { bindWorkboardHost } from "./host.ts";
 import { t } from "./i18n/index.ts";
+import { createFeedStore } from "./lib/feed/feed-store.ts";
 import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
@@ -13,6 +14,7 @@ import { createWorkboardWidget } from "./widgets.tsx";
 import "./styles/workboard.css";
 import "./styles/widgets.css";
 import "./styles/session-chip.css";
+import "./styles/feed.css";
 
 type NavigationBoard = Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">;
 
@@ -21,6 +23,7 @@ export default defineControlUiPlugin({
   activate(host) {
     const unbind = bindWorkboardHost(host);
     const workboard = createWorkboardCapability();
+    const feed = createFeedStore(host);
     const client = host;
     let pendingDeletion: Promise<void> | undefined;
     const navigation = new Map<
@@ -126,6 +129,26 @@ export default defineControlUiPlugin({
         icon: "kanban",
         order: 10,
       }),
+      host.ui.registerPage({
+        id: "feed",
+        label: t("feed.title"),
+        mount: createLazyWorkboardPage(async () => {
+          const { createFeedPage } = await import("./pages/feed/feed-page.tsx");
+          return createFeedPage(feed);
+        }),
+      }),
+      host.ui.registerNavigation({
+        id: "feed",
+        label: t("feed.title"),
+        page: { id: "feed" },
+        icon: "inbox",
+        order: 5,
+        get badge() {
+          const count = feed.openCount();
+          return count > 0 ? String(count) : "";
+        },
+      }),
+      feed.subscribe(host.ui.invalidate),
       host.ui.registerAccessory({
         id: "linked-card",
         placement: "session-header",
@@ -158,6 +181,7 @@ export default defineControlUiPlugin({
         dispose();
       }
       catalog.dispose();
+      feed.dispose();
       workboard.dispose();
       unbind();
     };

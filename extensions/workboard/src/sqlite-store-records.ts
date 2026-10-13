@@ -1,6 +1,7 @@
 import type {
   WorkboardAttachment,
   WorkboardCard,
+  WorkboardCommentAuthor,
   WorkboardDiagnostic,
   WorkboardEvent,
   WorkboardExecution,
@@ -258,6 +259,14 @@ export function readAttachment(row: Row): WorkboardAttachment {
   });
 }
 
+function readCommentAuthor(row: Row): WorkboardCommentAuthor | undefined {
+  const kind = stringValue(row, "author_kind");
+  if (kind !== "owner" && kind !== "agent") {
+    return undefined;
+  }
+  return definedFields({ kind, id: stringValue(row, "author_id") });
+}
+
 function readMetadata(
   db: WorkboardSqlConnection,
   row: Row,
@@ -292,6 +301,7 @@ function readMetadata(
     body: requiredString(child, "body"),
     createdAt: requiredNumber(child, "created_at"),
     updatedAt: numberValue(child, "updated_at"),
+    author: readCommentAuthor(child),
   }));
   const links = readChildren("workboard_card_links", (child) => ({
     id: requiredString(child, "id"),
@@ -370,6 +380,8 @@ function readMetadata(
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.stale unchanged.
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
+  // SAFETY: insertCard serializes normalized WorkboardMetadata.feed unchanged.
+  const feed = parseJson(row.feed_json) as WorkboardMetadata["feed"] | undefined;
   return optional(
     definedFields({
       attempts,
@@ -399,6 +411,7 @@ function readMetadata(
       stale: stale || undefined,
       lifecycleStatusSourceUpdatedAt: numberValue(row, "lifecycle_status_source_updated_at"),
       failureCount: numberValue(row, "failure_count"),
+      feed: feed || undefined,
     }),
   );
 }

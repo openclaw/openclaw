@@ -3105,6 +3105,21 @@ a:is(
   white-space: nowrap;
 }
 
+.nav-item__badge {
+  min-width: 18px;
+  height: 18px;
+  margin-inline-start: auto;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
 .settings-sidebar__item:hover,
 .nav-item:hover {
   color: var(--text);

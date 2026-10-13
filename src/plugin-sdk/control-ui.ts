@@ -154,6 +154,8 @@ export type ControlUiNavigationItem = {
   order?: number;
   /** False offers the destination in the pin editor without adding it to the sidebar. */
   defaultVisible?: boolean;
+  /** Short count or status shown after the label, such as open items. Empty hides it. */
+  badge?: string;
   /** Context menu actions, available by right-click or the keyboard menu shortcut. */
   actions?: ControlUiNavigationAction[];
 };

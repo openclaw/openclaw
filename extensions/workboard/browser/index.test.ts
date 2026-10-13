@@ -64,6 +64,9 @@ it("keeps reassigned session cards current through events without polling", asyn
     return { tasks: [] };
   });
   host.request = request as typeof host.request;
+  // The Feed keeps its own list for the nav badge; this test covers the board catalog.
+  const catalogRequests = () =>
+    request.mock.calls.filter(([method]) => method !== "workboard.feed.list");
   const dispose = await workboardPlugin.activate(host);
   const container = document.createElement("div");
   let disposeAccessory = () => {};
@@ -78,7 +81,7 @@ it("keeps reassigned session cards current through events without polling", asyn
     disposeAccessory = () => mounted?.dispose?.();
     expect(container.textContent).toContain(card.title);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
+    expect(catalogRequests()).toEqual([["workboard.cards.list", {}]]);
 
     // The session accessory follows the catalog's refreshed card state.
     currentCard = {
@@ -90,7 +93,7 @@ it("keeps reassigned session cards current through events without polling", asyn
     fixture.emit("plugin.workboard.changed", { epoch: "catalog-epoch", revision: 1 });
     await vi.advanceTimersByTimeAsync(0);
     expect(container.textContent).toContain(currentCard.title);
-    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
+    expect(catalogRequests()).toEqual([["workboard.cards.list", {}]]);
   } finally {
     disposeAccessory();
     dispose?.();
@@ -439,7 +442,11 @@ it("keeps accessories on the same recovered snapshot and retires pending activat
   const card = createWorkboardCard({ title: "Linked card", sessionKey: session.key });
   const boards = [{ id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
   const request = vi.fn().mockResolvedValue({ cards: [card], boards });
-  host.request = request as typeof host.request;
+  // The Feed keeps its own list for the nav badge; this test covers the board catalog.
+  host.request = (async (method: string, params?: unknown) =>
+    method === "workboard.feed.list"
+      ? { cards: [] }
+      : request(method, params)) as typeof host.request;
   const dispose = await workboardPlugin.activate(host);
   const container = document.createElement("div");
   const context = { sessionKey: session.key, session };

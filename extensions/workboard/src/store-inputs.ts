@@ -1,6 +1,7 @@
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardCommentAuthor,
   WorkboardDiagnostic,
   WorkboardEvent,
   WorkboardLaunchState,
@@ -53,7 +54,14 @@ export type WorkboardUpdateCardOptions = {
   ownerSlot?: { ownerId: string; now: number };
   preserveProofId?: string;
 };
-export type WorkboardCommentInput = { body?: unknown };
+export type WorkboardCommentInput = {
+  body?: unknown;
+  author?: WorkboardCommentAuthor;
+  /** Also record the owner's Feed ack in the same write. */
+  ackFeed?: boolean;
+  /** Comment and ack time when it must predate the write, e.g. taken before routing. */
+  createdAt?: number;
+};
 export type WorkboardLinkInput = {
   type?: unknown;
   targetCardId?: unknown;

@@ -140,6 +140,7 @@ export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): voi
     stale_json: () => jsonValue(metadata?.stale),
     lifecycle_status_source_updated_at: () => bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
     failure_count: () => bindNull(metadata?.failureCount),
+    feed_json: () => jsonValue(metadata?.feed),
   })();
 
   insertChildren(db, "workboard_card_labels", card.id, card.labels, {
@@ -175,6 +176,8 @@ export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): voi
     body: (entry) => entry.body,
     created_at: (entry) => entry.createdAt,
     updated_at: (entry) => bindNull(entry.updatedAt),
+    author_kind: (entry) => bindNull(entry.author?.kind),
+    author_id: (entry) => bindNull(entry.author?.id),
   });
   insertChildren(db, "workboard_card_links", card.id, metadata?.links, {
     id: (entry) => entry.id,

@@ -4,6 +4,8 @@ import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
+import { mergeFeedPatch } from "./feed-normalize.js";
+import type { WorkboardFeedConfig } from "./feed.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
 import type { WorkboardStore } from "./store.js";
 import {
@@ -61,6 +63,64 @@ function redactedProofResult(card: WorkboardCard) {
 
 const ScopedClaimTokenField = claimTokenField("Claim token for claimed cards.");
 
+const FeedFieldsSchema = {
+  tag: Type.Optional(
+    Type.String({ description: 'Small uppercase source tag, e.g. "EMAIL · DRAFT".' }),
+  ),
+  summary: Type.Optional(Type.String({ description: "One muted context line under the title." })),
+  body: Type.Optional(
+    Type.String({ description: "Longer detail (light markdown). Long text folds behind More." }),
+  ),
+  draft: Type.Optional(
+    Type.String({
+      description: "Editable text the owner may change before acting, e.g. an email or post.",
+    }),
+  ),
+  draftHeader: Type.Optional(
+    Type.String({ description: 'Muted lines above the draft, e.g. "To: Dana\nRe: Q3 proposal".' }),
+  ),
+  metric: Type.Optional(
+    strictObject({
+      value: Type.String({ description: 'Headline number, e.g. "$4.2M".' }),
+      delta: Type.Optional(Type.String({ description: 'Change line, e.g. "+12% vs Q2".' })),
+      caption: Type.Optional(Type.String({ description: "Muted caption." })),
+      bars: Type.Optional(
+        Type.Array(strictObject({ label: Type.String(), value: Type.Number() }), {
+          description: "Small bar chart; the last bar is highlighted.",
+        }),
+      ),
+    }),
+  ),
+  links: Type.Optional(
+    Type.Array(strictObject({ label: Type.String(), url: Type.String() }), {
+      description: "Link chips, e.g. Open draft. Pass [] to clear.",
+    }),
+  ),
+  actions: Type.Optional(
+    Type.Array(
+      strictObject({
+        label: Type.String({ description: "Button text, e.g. Send." }),
+        message: Type.String({
+          description: "Text sent back to the notify session when the owner clicks.",
+        }),
+        style: Type.Optional(Type.String({ description: "primary or secondary." })),
+        doneLabel: Type.Optional(Type.String({ description: "Button text after the click." })),
+        id: Type.Optional(Type.String({ description: "Stable action id." })),
+      }),
+      { description: "Up to 4 buttons. Pass [] to clear." },
+    ),
+  ),
+  doneLabel: Type.Optional(
+    Type.String({ description: 'One line shown once handled, e.g. "Sent the Q3 proposal".' }),
+  ),
+  notify: Type.Optional(
+    Type.String({
+      description:
+        "Session key that receives clicks and comments. Default: your agent main session.",
+    }),
+  ),
+};
+
 const CardIdSchema = strictObject({
   id: cardIdField(),
   token: claimTokenField(),
@@ -69,9 +129,13 @@ const CardIdSchema = strictObject({
 export function createWorkboardTools(params: {
   context?: OpenClawPluginToolContext;
   store: WorkboardStore;
+  feedConfig?: WorkboardFeedConfig;
 }): AnyAgentTool[] {
   const { store } = params;
   const ownerId = contextOwner(params.context);
+  const callerAgentId = params.context?.agentId?.trim() || undefined;
+  const feedBoards = new Set(params.feedConfig?.boards ?? []);
+  const defaultNotify = callerAgentId ? `agent:${callerAgentId}:main` : undefined;
   const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
     createWorkboardCardMutations(store, ownerId);
   const tools: AnyAgentTool[] = [
@@ -142,13 +206,31 @@ export function createWorkboardTools(params: {
         maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),
         maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
         scheduledAt: Type.Optional(Type.Number({ description: "Unix epoch milliseconds." })),
+        feed: Type.Optional(
+          Type.Object(FeedFieldsSchema, {
+            additionalProperties: false,
+            description: "How the card shows in the owner's Feed (see workboard_feed).",
+          }),
+        ),
       }),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
+        const { feed: feedInput, ...record } = rawParams as Record<string, unknown>;
         normalizeCappedStringList(record.parents, "parents");
+        const boardId = typeof record.boardId === "string" ? record.boardId.trim() : "";
+        // Feed cards remember which session hears about the owner's decision.
+        const feed =
+          feedInput !== undefined || feedBoards.has(boardId)
+            ? mergeFeedPatch(undefined, {
+                ...(defaultNotify ? { notify: defaultNotify } : {}),
+                ...(feedInput as Record<string, unknown> | undefined),
+              })
+            : undefined;
         return jsonResult({
           card: redactClaimToken(
-            await store.create(record, { ownerId, token: record.token as string | undefined }),
+            await store.create(
+              { ...record, ...(feed ? { metadata: { feed } } : {}) },
+              { ownerId, token: record.token as string | undefined },
+            ),
           ),
         });
       },
@@ -253,8 +335,38 @@ export function createWorkboardTools(params: {
         token: ScopedClaimTokenField,
       }),
       execute: scopedCardMutation((id, record, scope) =>
-        store.addComment(id, { body: record.body }, scope),
+        store.addComment(
+          id,
+          {
+            body: record.body,
+            author: { kind: "agent", ...(callerAgentId ? { id: callerAgentId } : {}) },
+          },
+          scope,
+        ),
       ),
+    },
+    {
+      name: "workboard_feed",
+      label: "Workboard Feed",
+      description:
+        "Set how a card shows in the owner's Feed: tag, one-line summary, body, an editable draft, links, a metric, and up to 4 action buttons. Clicking a button sends its message to the notify session. Omitted fields keep their value; an empty string or [] clears one. reopen: true puts a handled card back in front of the owner.",
+      parameters: strictObject({
+        id: cardIdField(),
+        token: ScopedClaimTokenField,
+        ...FeedFieldsSchema,
+        reopen: Type.Optional(
+          Type.Boolean({ description: "Show the card as open again after the owner handled it." }),
+        ),
+      }),
+      execute: scopedCardMutation(async (id, record, scope) => {
+        const { id: _id, token: _token, ...patch } = record;
+        const card = await store.get(id);
+        const withNotify =
+          defaultNotify && !card?.metadata?.feed?.notify && patch.notify === undefined
+            ? { ...patch, notify: defaultNotify }
+            : patch;
+        return await store.updateFeed(id, withNotify, scope);
+      }),
     },
     {
       name: "workboard_proof",

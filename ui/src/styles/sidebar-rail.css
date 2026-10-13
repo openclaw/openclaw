@@ -122,6 +122,7 @@
 }
 
 .sidebar-rail .nav-item__text,
+.sidebar-rail .nav-item__badge,
 .sidebar-rail .sidebar-identity-card__text {
   position: absolute;
   width: 1px;

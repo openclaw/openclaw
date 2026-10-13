@@ -163,6 +163,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           <Icon name={iconName(link.item.entry, link.fallbackIcon)} />
         </span>
         <span class="nav-item__text">{link.item.entry.value.label}</span>
+        <Show when={link.item.entry.value.badge}>
+          <span class="nav-item__badge">{link.item.entry.value.badge}</span>
+        </Show>
       </a>
     );
   }

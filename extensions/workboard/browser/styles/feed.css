@@ -1,0 +1,755 @@
+.wb-feed {
+  --wb-feed-gap: 12px;
+  --wb-feed-card-pad: 20px;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-family: var(--font-body);
+  color: var(--text);
+  -webkit-text-size-adjust: 100%;
+}
+
+.wb-feed__inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 28px 16px 96px;
+}
+
+.wb-feed__header {
+  margin-bottom: 20px;
+}
+
+.wb-feed__date {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.wb-feed__greeting {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: calc(26px * var(--control-ui-text-scale));
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+.wb-feed__subline {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-md);
+}
+
+.wb-feed__error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: var(--wb-feed-gap);
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+.wb-feed__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wb-feed-gap);
+}
+
+.wb-feed-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--wb-feed-card-pad);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.wb-feed-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.wb-feed-card--unread {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow:
+    0 0 0 3px var(--accent-subtle),
+    var(--shadow-sm);
+}
+
+.wb-feed-card--urgent::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--danger);
+}
+
+.wb-feed-card__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wb-feed-card__source {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.wb-feed-card__source svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wb-feed-card__source--done {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  animation: wb-feed-pop 260ms cubic-bezier(0.2, 0, 0, 1.4);
+}
+
+.wb-feed-card__tag {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-feed-card__unread,
+.wb-feed-card__urgent {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  font-size: calc(10px * var(--control-ui-text-scale));
+  letter-spacing: 0.04em;
+}
+
+.wb-feed-card__unread {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.wb-feed-card__urgent {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.wb-feed-card__time {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.wb-feed-card__title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: calc(17px * var(--control-ui-text-scale));
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.wb-feed-card__summary {
+  display: flex;
+  gap: 6px;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.wb-feed-card__summary-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2px;
+  opacity: 0.75;
+}
+
+.wb-feed-card__summary-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wb-feed-card__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+.wb-feed-draft {
+  position: relative;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.55;
+}
+
+.wb-feed-draft--editing {
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.wb-feed-draft__header {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--control-ui-text-sm);
+}
+
+.wb-feed-draft__key {
+  display: inline-block;
+  min-width: 34px;
+  color: var(--muted);
+}
+
+.wb-feed-draft__value {
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.wb-feed-draft__body {
+  padding-inline-end: 56px;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.wb-feed-draft__edit {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  cursor: var(--cursor-action);
+}
+
+.wb-feed-draft__edit:hover {
+  color: var(--text-strong);
+}
+
+.wb-feed-draft__edit svg {
+  width: 12px;
+  height: 12px;
+}
+
+.wb-feed-draft__input,
+.wb-feed-composer__input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  /* iOS zooms inputs under 16px. */
+  font-size: max(16px, var(--control-ui-text-md));
+  line-height: 1.55;
+}
+
+.wb-feed-draft__edit-actions,
+.wb-feed-composer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.wb-feed-composer {
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.wb-feed-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.wb-feed-composer__input {
+  min-height: 44px;
+}
+
+.wb-feed-composer__hint {
+  margin-inline-end: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.wb-feed-metric {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wb-feed-metric__value {
+  color: var(--text-strong);
+  font-size: calc(34px * var(--control-ui-text-scale));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.wb-feed-metric__delta {
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+}
+
+.wb-feed-metric__caption {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.wb-feed-metric__bars {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  height: 72px;
+}
+
+.wb-feed-metric__bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  width: 30px;
+  color: var(--muted);
+  font-size: calc(10px * var(--control-ui-text-scale));
+}
+
+.wb-feed-metric__bar {
+  width: 100%;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.wb-feed-metric__bar--current {
+  background: var(--accent);
+}
+
+.wb-feed-md {
+  color: var(--text);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.wb-feed-md p,
+.wb-feed-md ul,
+.wb-feed-md ol {
+  margin: 0 0 6px;
+}
+
+.wb-feed-md ul,
+.wb-feed-md ol {
+  padding-inline-start: 20px;
+}
+
+.wb-feed-md > :last-child {
+  margin-bottom: 0;
+}
+
+.wb-feed-md a {
+  color: var(--accent);
+}
+
+.wb-feed-md code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--bg-accent);
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.wb-feed-md__heading {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.wb-feed-md--folded {
+  position: relative;
+  max-height: calc(1.55em * 4);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 55%, transparent);
+}
+
+.wb-feed-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.wb-feed-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  cursor: var(--cursor-action);
+}
+
+.wb-feed-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wb-feed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  text-decoration: none;
+}
+
+.wb-feed-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-feed-chip:hover {
+  border-color: var(--border-strong, var(--border));
+  color: var(--text-strong);
+}
+
+.wb-feed-chip svg {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+}
+
+.wb-feed-thread {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.wb-feed-comment {
+  align-self: stretch;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+}
+
+.wb-feed-comment--owner {
+  background: var(--accent-subtle);
+}
+
+.wb-feed-comment__meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.wb-feed-comment__author {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.wb-feed-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.wb-feed-card__decisions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wb-feed-card__tools {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+.wb-feed-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: wb-feed-spin 700ms linear infinite;
+}
+
+.wb-feed__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 0 24px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-md);
+}
+
+.wb-feed__empty p {
+  margin: 0;
+}
+
+.wb-feed__empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.wb-feed__empty-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.wb-feed-handled {
+  margin-top: 28px;
+}
+
+.wb-feed-handled__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wb-feed-handled__title span {
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-feed-handled__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.wb-feed-handled__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 8px 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  animation: wb-feed-fade-in 280ms ease;
+}
+
+.wb-feed-handled__check {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.wb-feed-handled__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3;
+}
+
+.wb-feed-handled__label {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-feed-handled__time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.wb-feed-handled__reopen {
+  opacity: 0;
+}
+
+.wb-feed-handled__row:hover .wb-feed-handled__reopen,
+.wb-feed-handled__reopen:focus-visible {
+  opacity: 1;
+}
+
+.wb-feed-card__actions .btn {
+  min-height: 32px;
+  padding-block: 0;
+}
+
+.wb-feed-card__actions .btn.wb-feed-confirmed {
+  opacity: 1;
+  animation: wb-feed-pop 260ms cubic-bezier(0.2, 0, 0, 1.4);
+}
+
+.wb-feed-tool {
+  min-width: 32px;
+  padding-inline: 8px;
+}
+
+.wb-feed-tool svg {
+  width: 15px;
+  height: 15px;
+}
+
+@keyframes wb-feed-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes wb-feed-pop {
+  0% {
+    transform: scale(0.85);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes wb-feed-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes wb-feed-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (hover: none) {
+  .wb-feed-handled__reopen {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 560px) {
+  .wb-feed {
+    --wb-feed-card-pad: 16px;
+  }
+
+  .wb-feed__inner {
+    padding: 18px 12px 96px;
+  }
+
+  .wb-feed__greeting {
+    font-size: calc(22px * var(--control-ui-text-scale));
+  }
+
+  .wb-feed-card__title {
+    font-size: calc(16px * var(--control-ui-text-scale));
+  }
+
+  .wb-feed-card__actions .btn {
+    min-height: 38px;
+  }
+
+  .wb-feed-tool__label {
+    display: none;
+  }
+
+  .wb-feed-metric__bars {
+    gap: 6px;
+    height: 56px;
+  }
+
+  .wb-feed-metric__bar-col {
+    width: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wb-feed * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

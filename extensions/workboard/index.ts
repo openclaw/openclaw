@@ -3,6 +3,7 @@ import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
+import { resolveWorkboardFeedConfig } from "./src/feed.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
@@ -133,10 +134,11 @@ export default definePluginEntry({
         });
       }),
     );
+    const feedConfig = resolveWorkboardFeedConfig(api.pluginConfig);
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(
-          createWorkboardTools({ context, store }),
+          createWorkboardTools({ context, store, feedConfig }),
           context,
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),

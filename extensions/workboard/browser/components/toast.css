@@ -50,6 +50,15 @@ openclaw-workboard-toast button {
   cursor: default;
 }
 
+openclaw-workboard-toast button.toast__action {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 12px;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+}
+
 openclaw-workboard-toast button:hover {
   background: var(--bg-muted);
   color: var(--text-strong);

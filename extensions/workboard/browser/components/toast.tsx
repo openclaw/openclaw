@@ -11,6 +11,8 @@ type WorkboardToastProps = {
   tone?: "info" | "error";
   owner?: object;
   outcomeSource?: boolean;
+  /** One inline action, e.g. Undo. Running it dismisses the toast. */
+  action?: { label: string; run: () => void };
 };
 
 type ToastOutcome = {
@@ -169,6 +171,20 @@ export function WorkboardToast(props: WorkboardToastProps) {
           >
             {props.message}
           </span>
+          <Show when={props.action}>
+            {(action) => (
+              <button
+                type="button"
+                class="toast__action"
+                onClick={() => {
+                  dismiss();
+                  action().run();
+                }}
+              >
+                {action().label}
+              </button>
+            )}
+          </Show>
           <button type="button" aria-label={t("common.close")} onClick={dismiss}>
             {icons.x}
           </button>

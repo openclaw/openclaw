@@ -279,6 +279,11 @@ describe("workboard gateway methods", () => {
       "workboard.cards.runs",
       "workboard.cards.specify",
       "workboard.cards.decompose",
+      "workboard.feed.list",
+      "workboard.feed.update",
+      "workboard.feed.ack",
+      "workboard.feed.act",
+      "workboard.feed.comment",
       "workboard.notifications.subscribe",
       "workboard.notifications.list",
       "workboard.notifications.delete",
@@ -304,6 +309,7 @@ describe("workboard gateway methods", () => {
           "cards.attachments.get",
           "notifications.list",
           "notifications.events",
+          "feed.list",
         ],
       ],
       [
@@ -314,6 +320,8 @@ describe("workboard gateway methods", () => {
           "cards.attachments.add",
           "boards.upsert",
           "notifications.advance",
+          "feed.act",
+          "feed.comment",
         ],
       ],
     ] as const) {

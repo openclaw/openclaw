@@ -154,6 +154,10 @@ to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
 already pinned ID; call it for a user action such as creation, not on every
 catalog refresh, so a later manual removal stays removed.
 
+Set a navigation item's `badge` to a short count or status, such as open items,
+to show it after the label. An empty value hides it. Call `host.ui.invalidate()`
+when the value changes.
+
 Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
 `destructive` flag, and a `run` callback. The sidebar opens these actions on
 right-click, **Shift+F10**, or the context-menu key on the focused link, including

@@ -8,6 +8,7 @@ import type {
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { mergeFeedPatch } from "./feed-normalize.js";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -765,17 +766,74 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     input: WorkboardCommentInput,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    const now = Date.now();
+    const now = input.createdAt ?? Date.now();
     const body = normalizeBoundedString(input.body, undefined, 2000, "comment body");
     if (!body) {
       throw new Error("comment body is required.");
     }
-    const comment = { id: randomUUID(), body, createdAt: now };
+    const comment = {
+      id: randomUUID(),
+      body,
+      createdAt: now,
+      ...(input.author ? { author: input.author } : {}),
+    };
     return await this.updateMetadata(id, (existing) => {
       assertCanMutateClaimedCard(existing, scope);
+      const { ackedAction: _ackedAction, ...feed } = existing.metadata?.feed ?? {};
       return {
         ...existing.metadata,
-        comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
+        // A backdated comment still sorts before any reply written after its timestamp.
+        comments: [...(existing.metadata?.comments ?? []), comment]
+          .toSorted((a, b) => a.createdAt - b.createdAt)
+          .slice(-MAX_CARD_COMMENTS),
+        ...(input.ackFeed ? { feed: { ...feed, ackedAt: now } } : {}),
+      };
+    });
+  }
+
+  /** Merge agent-authored Feed fields; `null` clears a field and `reopen` clears the ack. */
+  async updateFeed(
+    id: string,
+    patch: unknown,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      return { ...existing.metadata, feed: mergeFeedPatch(existing.metadata?.feed, patch) };
+    });
+  }
+
+  /** Save the owner's edit of the Feed draft; it travels with the next click or comment. */
+  async setOwnerFeedDraft(id: string, draft: string | null): Promise<WorkboardCard> {
+    return await this.updateMetadata(id, (existing) => {
+      const { draft: _draft, draftEdited: _edited, ...feed } = existing.metadata?.feed ?? {};
+      return {
+        ...existing.metadata,
+        feed: draft?.trim() ? { ...feed, draft, draftEdited: true } : feed,
+      };
+    });
+  }
+
+  /** Record or undo the owner's Feed ack. Acking never changes the card's status. */
+  async ackFeed(
+    id: string,
+    input: { acked: boolean; at?: number; actionId?: string; draft?: string },
+  ): Promise<WorkboardCard> {
+    const now = input.at ?? Date.now();
+    return await this.updateMetadata(id, (existing) => {
+      const {
+        ackedAt: _ackedAt,
+        ackedAction: _ackedAction,
+        ...feed
+      } = existing.metadata?.feed ?? {};
+      return {
+        ...existing.metadata,
+        feed: {
+          ...feed,
+          ...(input.draft !== undefined ? { draft: input.draft, draftEdited: true } : {}),
+          ...(input.acked ? { ackedAt: now } : {}),
+          ...(input.acked && input.actionId ? { ackedAction: input.actionId } : {}),
+        },
       };
     });
   }

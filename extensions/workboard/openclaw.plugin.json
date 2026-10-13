@@ -111,7 +111,8 @@
       "workboard_worker_log",
       "workboard_protocol_violation",
       "workboard_unblock",
-      "workboard_move"
+      "workboard_move",
+      "workboard_feed"
     ]
   },
   "commandAliases": [
@@ -224,17 +225,40 @@
     },
     "workboard_move": {
       "optional": true
+    },
+    "workboard_feed": {
+      "optional": true
     }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "feed": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Feed page: cards that wait on the owner's decision.",
+        "properties": {
+          "boards": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Boards whose open cards all show in the Feed. Cards with feed fields show from any board."
+          },
+          "ownerName": {
+            "type": "string",
+            "description": "Name used in the Feed greeting and in the messages sent to agents."
+          }
+        }
+      }
+    }
   },
   "controlUi": {
-    "entry": "dist/control-ui/9c706f93136d02a047e9119255293aef9889d28bf322377aa97123f3ac31bcd9/index.js",
+    "entry": "dist/control-ui/9f77ab2d78ab53baef6faeea73c7fae43e3eb5a22b9f245f6806dfef4c5f7746/index.js",
     "styles": [
-      "dist/control-ui/9c706f93136d02a047e9119255293aef9889d28bf322377aa97123f3ac31bcd9/index.css"
+      "dist/control-ui/9f77ab2d78ab53baef6faeea73c7fae43e3eb5a22b9f245f6806dfef4c5f7746/index.css"
     ]
   }
 }

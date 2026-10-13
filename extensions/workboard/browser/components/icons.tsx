@@ -290,4 +290,56 @@ export const icons = {
       </StrokeIcon>
     );
   },
+  get calendar() {
+    return strokePath(
+      "M8 2v4M16 2v4M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM3 10h18",
+    );
+  },
+  get dollar() {
+    return strokePath("M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6");
+  },
+  get externalLink() {
+    return strokePath(
+      "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+    );
+  },
+  get inbox() {
+    return strokePath(
+      "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+    );
+  },
+  get lightbulb() {
+    return strokePath(
+      "M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5M9 18h6M10 22h4",
+    );
+  },
+  get mail() {
+    return strokePath(
+      "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm18 3-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7",
+    );
+  },
+  get megaphone() {
+    return strokePath("m3 11 18-5v12L3 14v-3zM11.6 16.8a3 3 0 1 1-5.8-1.6");
+  },
+  get send() {
+    return strokePath(
+      "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11zM21.854 2.147l-10.94 10.939",
+    );
+  },
+  get shield() {
+    return strokePath(
+      "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+    );
+  },
+  get signpost() {
+    return strokePath(
+      "M12 13v8M12 3v3M18 6a2 2 0 0 1 1.387.56l2.307 2.22a1 1 0 0 1 0 1.44l-2.307 2.22A2 2 0 0 1 18 13H6a2 2 0 0 1-1.387-.56l-2.307-2.22a1 1 0 0 1 0-1.44l2.307-2.22A2 2 0 0 1 6 6z",
+    );
+  },
+  get trendingUp() {
+    return strokePath("M22 7l-8.5 8.5-5-5L2 17M16 7h6v6");
+  },
+  get undo() {
+    return strokePath("M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11");
+  },
 };

@@ -235,3 +235,48 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     );
   }
 });
+
+it("shows a navigation badge and hides it when empty", async () => {
+  const listeners = new Set<() => void>();
+  let badge = "3";
+  const host = { navigation: { pageHref: () => "/feed" } } as unknown as ControlUiHost;
+  const entries: ControlUiRegistration<ControlUiNavigationItem>[] = [
+    {
+      key: "example/feed",
+      pluginId: "example",
+      signal: new AbortController().signal,
+      host,
+      value: {
+        id: "feed",
+        label: "Feed",
+        page: { id: "feed" },
+        get badge() {
+          return badge;
+        },
+      },
+    },
+  ];
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  const provider = createApplicationContextProvider({
+    plugins: { registrations: () => entries, subscribe },
+    router: { subscribe },
+  } as unknown as ApplicationContext);
+  const contribution = Object.assign(document.createElement("openclaw-plugin-contributions"), {
+    kind: "navigation",
+    navigationKey: "example/feed",
+  });
+  provider.append(contribution);
+  document.body.append(provider);
+  await contribution.updateComplete;
+  expect(contribution.querySelector(".nav-item__badge")?.textContent).toBe("3");
+
+  badge = "";
+  for (const listener of listeners) {
+    listener();
+  }
+  await contribution.updateComplete;
+  expect(contribution.querySelector(".nav-item__badge")).toBeNull();
+});
