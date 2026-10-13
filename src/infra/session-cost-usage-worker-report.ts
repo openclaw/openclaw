@@ -18,29 +18,47 @@ import { WorkerTaskError } from "./worker-task-pool.js";
 
 type RollupScan = Omit<Parameters<typeof scanUsageCostRollupInWorker>[0], "file" | "previous">;
 
-/** Reads one report entry under the caller's cache snapshot and transcript custody. */
-export async function readUsageCostReportEntry(params: {
+/** Capture cache inputs synchronously while their shared read snapshot is open. */
+export function prepareUsageCostReportEntry(params: {
   row: SessionCostUsageRollupRow;
+  body: (row: SessionCostUsageRollupRow) => Uint8Array | null;
+  partitions: (filePath: string, startMs?: number, endMs?: number) => UsageCostPartition[];
+  startMs?: number;
+  endMs?: number;
+  overview: boolean;
+  pricingFingerprint: string;
+}) {
+  const blob = params.body(params.row);
+  const cached = decodeUsageCostRollup(params.row.valueJson, params.pricingFingerprint, blob);
+  const envelope = decodeUsageCostRollupEnvelope(params.row.valueJson, params.pricingFingerprint);
+  const startMs = params.startMs ?? Number.NEGATIVE_INFINITY;
+  const endMs = params.endMs ?? Number.POSITIVE_INFINITY;
+  // Exact partial boundaries and legacy callers retain canonical addition order.
+  const aligned =
+    (!Number.isFinite(startMs) || startMs % USAGE_COST_QUARTER_MS === 0) &&
+    (!Number.isFinite(endMs) || (endMs + 1) % USAGE_COST_QUARTER_MS === 0);
+  const selected =
+    cached &&
+    envelope?.projection &&
+    params.overview &&
+    aligned &&
+    !envelope.projection.canonicalNumbers
+      ? params.partitions(params.row.key, startMs, endMs)
+      : undefined;
+  return { blob, cached, envelope, selected };
+}
+
+/** Project captured cache inputs; canonical replay uses its own bounded transcript reads. */
+export async function readUsageCostReportEntry(params: {
+  prepared: ReturnType<typeof prepareUsageCostReportEntry>;
   file: UsageCostTranscriptFile | undefined;
-  body: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>;
-  partitions: (
-    filePath: string,
-    startMs?: number,
-    endMs?: number,
-  ) => UsageCostPartition[] | Promise<UsageCostPartition[]>;
   startMs?: number;
   endMs?: number;
   dayBucket: UsageDailyBucket;
-  overview: boolean;
   scan: RollupScan;
 }): Promise<UsageCostRollupEntry | undefined> {
-  const { row, file, scan } = params;
-  const cached = decodeUsageCostRollup(
-    row.valueJson,
-    scan.pricingFingerprint,
-    await params.body(row),
-  );
-  const envelope = decodeUsageCostRollupEnvelope(row.valueJson, scan.pricingFingerprint);
+  const { file, scan } = params;
+  const { cached, envelope, selected } = params.prepared;
   if (!cached || !envelope?.projection) {
     return cached;
   }
@@ -49,12 +67,7 @@ export async function readUsageCostReportEntry(params: {
   }
   const startMs = params.startMs ?? Number.NEGATIVE_INFINITY;
   const endMs = params.endMs ?? Number.POSITIVE_INFINITY;
-  // Exact partial boundaries and legacy callers retain canonical addition order.
-  const aligned =
-    (!Number.isFinite(startMs) || startMs % USAGE_COST_QUARTER_MS === 0) &&
-    (!Number.isFinite(endMs) || (endMs + 1) % USAGE_COST_QUARTER_MS === 0);
-  if (params.overview && aligned && !envelope.projection.canonicalNumbers) {
-    const selected = await params.partitions(row.key, startMs, endMs);
+  if (selected) {
     const startMonth = Number.isFinite(startMs)
       ? `${new Date(startMs).toISOString().slice(0, 7)}-01`
       : "";

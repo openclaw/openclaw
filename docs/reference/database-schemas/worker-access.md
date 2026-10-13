@@ -412,6 +412,11 @@ worker snapshot; discovery still reads only metadata. Its transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
+Usage reports capture cache metadata, bodies, and selected monthly partitions in
+one synchronous engine read snapshot, then close it before asynchronous transcript
+discovery, replay, or pricing. Concurrent refreshes cannot change those captured
+inputs; subsequent reports see the newer cache. Canonical replay retains its
+checkpoint-bounded transcript reads and anchor comparison.
 Participant writers likewise reuse their committed projection-change decision:
 counter-only contributions skip the display-projection read, preserve committed
 display facts, and invalidate exact aggregate records. These changes do not alter stored
