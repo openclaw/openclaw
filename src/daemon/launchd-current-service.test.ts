@@ -29,7 +29,8 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
 
 const probe = vi.hoisted(() => vi.fn());
 const membership = vi.hoisted(() => vi.fn());
-vi.mock("./service-process-membership.js", () => ({
+vi.mock("./service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: membership,
 }));
 const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
