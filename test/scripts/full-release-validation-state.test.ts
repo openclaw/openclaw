@@ -862,6 +862,7 @@ describe("release child attempt composition", () => {
       runner_name: "GitHub Actions 1",
       steps: [{ name: "Run tests" }],
     };
+    const running = { ...completed, conclusion: null, status: "in_progress" };
     const ghostAttempt = {
       jobs: [ghost, completed, ghost, job("checks-ui", "failure")],
       runAttempt: 2,
@@ -919,6 +920,7 @@ describe("release child attempt composition", () => {
       label: string;
       attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
       effectiveRunAttempt: number;
+      effectiveRunStatus?: string;
       plannedRunAttempt: number;
     }>([
       {
@@ -939,11 +941,59 @@ describe("release child attempt composition", () => {
         effectiveRunAttempt: 2,
         plannedRunAttempt: 1,
       },
+      ...[
+        { label: "beside two running jobs", jobs: [ghost, running, running] },
+        {
+          label: "beside an assigned queued copy",
+          jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, running],
+        },
+        { label: "with only queued copies", jobs: [ghost, ghost] },
+      ].map(({ label, jobs }) => ({
+        label,
+        attempts: [
+          { jobs: [job("test", "success")], runAttempt: 1 },
+          { jobs, runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      })),
+      {
+        label: "beside a running job in a completed run",
+        attempts: [
+          { jobs: [job("test", "success")], runAttempt: 1 },
+          { jobs: [ghost, running], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "completed",
+        plannedRunAttempt: 1,
+      },
+      {
+        label: "beside a running job in an older attempt",
+        attempts: [
+          { jobs: [ghost, running], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 2 },
+        ],
+        effectiveRunAttempt: 2,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      },
+      {
+        label: "beside a running job without a rerun",
+        attempts: [{ jobs: [ghost, running], runAttempt: 1 }],
+        effectiveRunAttempt: 1,
+        effectiveRunStatus: "in_progress",
+        plannedRunAttempt: 1,
+      },
     ])(
       "still rejects duplicates $label",
-      ({ attempts, effectiveRunAttempt, plannedRunAttempt }) => {
+      ({ attempts, effectiveRunAttempt, effectiveRunStatus, plannedRunAttempt }) => {
         expect(() =>
-          composeReleaseAttemptJobs(attempts, { effectiveRunAttempt, plannedRunAttempt }),
+          composeReleaseAttemptJobs(attempts, {
+            effectiveRunAttempt,
+            effectiveRunStatus,
+            plannedRunAttempt,
+          }),
         ).toThrow("duplicate job identity");
       },
     );
@@ -1085,6 +1135,61 @@ describe("release decision policy", () => {
       expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
       expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
     ]);
+  });
+
+  it("keeps a running rerun pending beside runnerless queued copies, then accepts its result", async () => {
+    const planned = child("normalCi");
+    const ghost = { name: "test", status: "queued", runner_id: null, runner_name: null };
+    let completed = false;
+    const options = {
+      readRun: async () =>
+        githubRun(planned, {
+          conclusion: completed ? "success" : null,
+          run_attempt: 2,
+          status: completed ? "completed" : "in_progress",
+          triggering_actor: { login: "release-operator" },
+        }),
+      readAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 1
+          ? [
+              { name: "lint", status: "completed", conclusion: "success" },
+              { name: "test", status: "completed", conclusion: "failure" },
+            ]
+          : [
+              ghost,
+              {
+                name: "test",
+                status: completed ? "completed" : "in_progress",
+                conclusion: completed ? "success" : null,
+                runner_id: 42,
+                runner_name: "GitHub Actions 42",
+              },
+              ghost,
+            ],
+    };
+    const pending = await readChild(planned, undefined, undefined, options);
+    expect(classifyReleaseSnapshot({ children: [pending] })).toMatchObject({
+      activeRunIds: ["101"],
+      blockers: [],
+      errors: [],
+      state: "qualifying",
+    });
+    expect(pending.jobs).toEqual([
+      expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
+      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, status: "in_progress" }),
+    ]);
+
+    completed = true;
+    const settled = await readChild(planned, pending, undefined, options);
+    expect(classifyReleaseSnapshot({ children: [settled] })).toMatchObject({
+      activeRunIds: [],
+      blockers: [],
+      errors: [],
+      state: "passed",
+    });
+    expect(settled.jobs).toContainEqual(
+      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
+    );
   });
 
   it.each([

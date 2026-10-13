@@ -2401,17 +2401,19 @@ it.todo("retains todo coverage");
 });
 
 describe("CI timing sampler provenance", () => {
-  it("discovers packed release jobs in failed dispatches without repricing partial siblings", () => {
+  it("skips noncontributing dispatches to discover packed release jobs without repricing partial siblings", () => {
     const { timingKeys, text } = packedReleaseFixture();
     withSamplerFixture(
       {
         runs: [samplerRun(1), samplerRun(2)],
-        packedReleaseRuns: [11, 12].map((id) =>
+        packedReleaseRuns: [13, 14, 11, 12].map((id) =>
           samplerRun(id, { event: "workflow_dispatch", conclusion: "failure" }),
         ),
         jobs: [
           samplerJob(1, 1),
           samplerJob(2, 2),
+          samplerJob(130, 13),
+          samplerJob(140, 14),
           ...[11, 12].map((id) =>
             samplerJob(id * 10, id, {
               name: "checks-node-release-packed-1",
