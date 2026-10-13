@@ -332,6 +332,9 @@ function downgradeRichBlockTags(text: string): string {
   const append = (value: string) => {
     parts.push(value);
     if (value) {
+      if (trailingBoundary >= 0 && value.startsWith("\n")) {
+        parts[trailingBoundary] = "";
+      }
       trailingBoundary = -1;
       lineStart = value.endsWith("\n");
     }
@@ -366,8 +369,11 @@ function downgradeRichBlockTags(text: string): string {
         if (tag.closing) {
           lists.pop();
         } else {
-          const start = tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
-          lists.push({ name: tag.name, next: Number.isInteger(start) && start > 0 ? start : 1 });
+          const listStart = tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
+          lists.push({
+            name: tag.name,
+            next: Number.isInteger(listStart) && listStart > 0 ? listStart : 1,
+          });
         }
         break;
       case "li":
