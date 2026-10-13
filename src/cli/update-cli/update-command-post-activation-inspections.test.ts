@@ -127,23 +127,51 @@ it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selec
   },
 );
 
-it("does not turn a reported empty deferred set into an unfiltered lint pass", async () => {
-  const result: UpdateRunResult = {
-    status: "ok",
-    mode: "git",
-    durationMs: 0,
-    steps: [
-      {
-        name: "openclaw doctor",
-        command: "doctor --fix",
-        cwd: "/synthetic/candidate",
-        durationMs: 0,
-        exitCode: 0,
-        deferredInspectionCheckIds: [],
-      },
-    ],
-  };
-  await expect(
-    runPostActivationInspections({ root: "/synthetic/candidate", gatewayReady: true, result }),
-  ).resolves.toEqual(result);
-});
+it.each(["doctor", "inline lint"])(
+  "does not turn an empty deferred set from %s into an unfiltered lint pass",
+  async (receiptOwner) => {
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "git",
+      durationMs: 0,
+      steps: [
+        {
+          name: "openclaw doctor",
+          command: "doctor --fix",
+          cwd: "/synthetic/candidate",
+          durationMs: 0,
+          exitCode: 0,
+          deferredInspectionCheckIds: receiptOwner === "doctor" ? [] : null,
+        },
+      ],
+    };
+    if (receiptOwner === "inline lint") {
+      result.postUpdate = {
+        plugins: {
+          status: "ok",
+          changed: false,
+          sync: {
+            changed: false,
+            switchedToBundled: [],
+            switchedToNpm: [],
+            warnings: [],
+            errors: [],
+          },
+          npm: { changed: false, outcomes: [] },
+          integrityDrifts: [],
+          doctorLint: {
+            name: "post-plugin-doctor-lint",
+            command: "doctor --lint --all",
+            cwd: "/synthetic/candidate",
+            durationMs: 0,
+            exitCode: 0,
+            deferredInspectionCheckIds: [],
+          },
+        },
+      };
+    }
+    await expect(
+      runPostActivationInspections({ root: "/synthetic/candidate", gatewayReady: true, result }),
+    ).resolves.toEqual(result);
+  },
+);

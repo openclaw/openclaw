@@ -131,6 +131,13 @@ identity, and open admission still rejects replacements that collide with a live
 owner. Creation and schema-maintenance requests keep their target checks at the
 actual effect.
 
+Direct session readers retain an already-selected canonical target for the read.
+A creator borrower stops checking its original alias after
+the worker publishes the admitted file identity. Retargeting an alias does not
+redirect or invalidate those retained operations; a fresh lookup resolves the
+new target. Worker opens still check physical identity. Target-discovery checks
+shared with cross-store effects and source checks used for authorization remain.
+
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed
 session deletion retires its exact receipt scopes, including windows removed by
@@ -440,6 +447,12 @@ updates those records in its existing transaction and publishes them on commit;
 rollback retains the previous facts. Cold, evicted, or invalidated actors use the
 canonical participant read. Participant updates remain independent of metadata CAS.
 This changes no schema, retention, stored format, or update behavior.
+
+Collaboration writes reuse the captured agent executor without opening a Gateway
+SQLite handle. Their commit receipts install membership, owner, category, and
+participant facts through the same retained-fact owner as native writers, then
+release pending publication before notifying row and lifecycle observers. Live
+sharing authority is still checked by the worker's transaction and commit admission.
 
 Reply-initialization cohorts reuse those entry facts only when the selected entry
 and its parent are both covered. Cold-archive absence requires a complete actor

@@ -2880,11 +2880,13 @@ class ChatComposerLayoutTest {
       branchDiagnosticCase = "eligible"
       openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performClick()
-      composeRule.waitUntil {
+      awaitBranchSwitch(calls)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02"
-      }
+          ?.entryId,
+      )
       assertEquals(1, calls.count { it.method == "sessions.branches.switch" })
     }
 

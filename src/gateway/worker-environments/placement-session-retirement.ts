@@ -11,7 +11,7 @@ export type PlacementSessionEvidenceResolver = (
 type PlacementSessionRetirementDeps = {
   placements: Pick<
     WorkerSessionPlacementStore,
-    "getAsync" | "listAsync" | "retireSessionPlacementAsync"
+    "getAsync" | "getManyAsync" | "listAsync" | "retireSessionPlacementAsync"
   >;
   environments: Pick<WorkerEnvironmentService, "get">;
   forceDestroyEnvironment: (
@@ -26,8 +26,14 @@ type PlacementSessionRetirementDeps = {
 };
 
 export function createPlacementSessionRetirement(deps: PlacementSessionRetirementDeps) {
-  let dirty = true;
-  let retry = false;
+  const pending = new Set<string>();
+  let fullScanPending = true;
+  const markPending = (sessionId: string) => {
+    pending.add(sessionId);
+  };
+  const invalidateAll = () => {
+    fullScanPending = true;
+  };
   const retireCurrent = async (placement: WorkerSessionPlacementRecord): Promise<boolean> => {
     if (placement.turnClaim) {
       return false;
@@ -63,30 +69,27 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   const reconcilePlacement = async (
     placement: WorkerSessionPlacementRecord,
     resolveSessionEvidence: PlacementSessionEvidenceResolver,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const evidence = await resolveSessionEvidence(placement);
-    if (evidence !== "current") {
-      retry = true;
-    }
     if (evidence !== "absent") {
-      return;
+      return evidence === "current";
     }
 
     let current = await deps.placements.getAsync(placement.sessionId);
     if (!current) {
-      return;
+      return true;
     }
     try {
       if (await retireCurrent(current)) {
-        return;
+        return true;
       }
     } catch {
-      return;
+      return false;
     }
 
     const environmentId = current.environmentId;
     if (!environmentId) {
-      return;
+      return false;
     }
     try {
       await deps.forceDestroyEnvironment(environmentId, (error) => {
@@ -98,40 +101,46 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       deps.warn(
         `Worker placement orphan teardown failed for ${current.sessionId}: ${String(error)}`,
       );
-      return;
+      return false;
     }
 
     current = await deps.placements.getAsync(placement.sessionId);
     if (!current) {
-      return;
+      return true;
     }
     try {
-      await retireCurrent(current);
+      return await retireCurrent(current);
     } catch {
       // A concurrent placement transition owns the next reconciliation pass.
+      return false;
     }
   };
 
   const reconcile = async (): Promise<void> => {
-    if (!dirty && !retry) {
+    const readAll = fullScanPending;
+    const sessionIds = [...pending];
+    // Drain before yielding so receipts arriving during this pass remain queued.
+    fullScanPending = false;
+    pending.clear();
+    if (!readAll && sessionIds.length === 0) {
       return;
     }
-    // Consume before awaiting so a receipt arriving during discovery remains pending.
-    dirty = false;
-    retry = false;
     try {
-      const placements = await deps.placements.listAsync();
+      const placements = readAll
+        ? await deps.placements.listAsync()
+        : [...(await deps.placements.getManyAsync(sessionIds)).values()];
       if (placements.length === 0) {
         return;
       }
-      retry = placements.some((placement) => placement.state !== "local");
       await deps.reportChanges(async () => {
         const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
         for (const placement of placements) {
           try {
-            await reconcilePlacement(placement, resolveSessionEvidence);
+            if (!(await reconcilePlacement(placement, resolveSessionEvidence))) {
+              markPending(placement.sessionId);
+            }
           } catch (error) {
-            retry = true;
+            markPending(placement.sessionId);
             deps.warn(
               `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
             );
@@ -139,15 +148,11 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
         }
       });
     } catch (error) {
-      dirty = true;
+      fullScanPending ||= readAll;
+      sessionIds.forEach(markPending);
       throw error;
     }
   };
 
-  return {
-    reconcile,
-    invalidate() {
-      dirty = true;
-    },
-  };
+  return { reconcile, markPending, invalidateAll };
 }

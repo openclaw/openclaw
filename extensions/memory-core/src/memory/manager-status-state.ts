@@ -48,7 +48,7 @@ type StatusAggregateRow = {
 };
 
 /** Read only for explicit diagnostics: retained cache payloads can be large even when disabled. */
-export function collectMemoryStorageStatus(
+function collectMemoryStorageStatus(
   db: DatabaseSync | undefined,
   databasePath: string,
 ): NonNullable<MemoryProviderStatus["storage"]> {
@@ -105,7 +105,7 @@ export function resolveStatusProviderInfo(params: {
   };
 }
 
-export function collectMemoryStatusAggregate(params: {
+function collectMemoryStatusAggregate(params: {
   db: Pick<DatabaseSync, "prepare"> | undefined;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;
