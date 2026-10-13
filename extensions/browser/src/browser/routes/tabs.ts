@@ -1,5 +1,6 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import {
   BrowserProfileUnavailableError,
@@ -233,16 +234,15 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   });
 
   app.post("/tabs/open", async (req, res) => {
-    const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
+    const body = asNullableRecord(req.body);
+    const url = toStringOrEmpty(body?.url);
     const label = readOptionalTabLabel(req.body);
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
     let timeoutMs: number | undefined;
     try {
-      const requestedTimeoutMs = readRouteTimerTimeoutMs(
-        (req.body as { timeoutMs?: unknown })?.timeoutMs,
-      );
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(body?.timeoutMs);
       timeoutMs =
         requestedTimeoutMs === undefined
           ? undefined

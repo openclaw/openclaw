@@ -333,6 +333,9 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(f.pageClose).toHaveBeenCalledOnce();
   });
   it("checks the committed URL before retaining a timed-out tab", async () => {
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
+    });
     f.pageGoto.mockImplementationOnce(async () => {
       f.pageUrl.mockReturnValue(privateUrl);
       throw new errors.TimeoutError("load event timed out");
