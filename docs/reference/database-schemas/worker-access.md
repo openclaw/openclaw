@@ -69,10 +69,16 @@ replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
 Retained task workers request admission facts through their existing relay when
-needed. Task messages must not copy the global admission snapshot: its session
-write receipts can grow with every session, making unrelated reads expensive to
-dispatch. Shared receipts still invalidate cached facts, and replacement files
-still require admission through the same owner.
+needed. Task messages must not copy the global admission snapshot. Committed
+session deletion retires its exact receipt scopes, including windows removed by
+cascade, while windows transferred to a surviving session retain their scopes.
+Shared retirement flags remove those scopes and exited workers' reference cells
+from later admission snapshots; stale transfers cannot restore them. Recreated
+scope keys receive a fresh receipt identity, so old cached reads remain invalid.
+Receipt metadata follows retained session scopes rather than all deleted sessions;
+reads of absent keys can still register a scope. Replacement files still require
+admission through the same owner. Schemas, stored data, and update behavior are
+unchanged.
 
 For row data, hydrate once and update or invalidate the owner's in-memory facts
 from committed write receipts. Every writer must participate. A receipt may

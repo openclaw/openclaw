@@ -121,6 +121,7 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   },
 });
 export const {
+  retireSqliteDatabaseWriteScopes,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
