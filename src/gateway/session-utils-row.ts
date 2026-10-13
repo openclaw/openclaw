@@ -605,8 +605,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
   // JSON omits undefined fields; keep the resident projection equally sparse.
-  for (const [field, value] of Object.entries(row)) {
-    if (value === undefined) {
+  for (const field in row) {
+    if (Reflect.get(row, field) === undefined) {
       Reflect.deleteProperty(row, field);
     }
   }
