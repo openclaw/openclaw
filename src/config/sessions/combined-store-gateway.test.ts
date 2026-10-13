@@ -1,3 +1,4 @@
+import fsSync, { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -13,11 +14,13 @@ import { createGatewaySessionEntryReader } from "../../gateway/session-utils-sto
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   inspectAgentDatabaseAdmission,
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -28,7 +31,12 @@ import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-pref
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import {
+  applyGatewaySessionStoreAdmission,
+  loadCombinedSessionStoreForGatewayCore,
+  type ResolvedGatewaySessionStoreTargets,
+} from "./combined-store-gateway.js";
+import { storeTargetKey } from "./combined-store-paths.js";
 import * as sessionAccessor from "./session-accessor.js";
 import {
   listSessionEntriesReadOnly,
@@ -49,6 +57,84 @@ async function withResidentRows(
     projection.dispose();
   }
 }
+
+function admissionTargets(
+  durableTargets: ResolvedGatewaySessionStoreTargets["durableTargets"],
+): ResolvedGatewaySessionStoreTargets {
+  return {
+    defaultAgentId: "main",
+    diagnostics: [],
+    durableTargets,
+    incognitoTargets: [],
+    physicalTargets: new Map(durableTargets.map((target) => [storeTargetKey(target), target])),
+  };
+}
+
+it("admits repeated default-layout fleet reads without stat or realpath calls", async () => {
+  await withOpenClawTestState({ label: "fleet-admission" }, async (state) => {
+    const agentIds = Array.from({ length: 32 }, (_, index) => `fleet-${index}`);
+    const cfg = freezeJsonSnapshot<OpenClawConfig>({
+      agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
+    });
+    const targets = admissionTargets(
+      agentIds.map((agentId) => ({
+        agentId,
+        storePath: state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite"),
+      })),
+    );
+    await withAgentDatabaseStartupAdmission(async () => {
+      const stat = vi.spyOn(fsSync, "statSync");
+      const realpath = vi.spyOn(realpathSync, "native");
+      try {
+        for (let read = 0; read < 5; read++) {
+          expect(
+            applyGatewaySessionStoreAdmission(
+              cfg,
+              {
+                preserveSentinelOwners: "physical",
+                discovery: { env: state.env, snapshot: undefined },
+              },
+              targets,
+            ),
+          ).toBe(targets);
+        }
+        expect(stat).not.toHaveBeenCalled();
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+        realpath.mockRestore();
+      }
+    });
+  });
+});
+
+it.runIf(process.platform !== "win32")(
+  "refreshes admission aliases and configured paths between reads",
+  async () => {
+    await withOpenClawTestState({ label: "fleet-admission-alias" }, async (state) => {
+      const configured = state.statePath("configured.sqlite");
+      const replacement = state.statePath("replacement.sqlite");
+      const alias = state.statePath("alias.sqlite");
+      await fs.writeFile(configured, "configured");
+      await fs.writeFile(replacement, "replacement");
+      await fs.symlink(configured, alias);
+      const cfg = freezeJsonSnapshot<OpenClawConfig>({ session: { store: configured } });
+      const targets = admissionTargets([{ agentId: "main", storePath: alias }]);
+      await withAgentDatabaseStartupAdmission(async () => {
+        const options = {
+          preserveSentinelOwners: "physical" as const,
+          discovery: { env: state.env, snapshot: undefined },
+        };
+        expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+        await fs.unlink(alias);
+        await fs.symlink(replacement, alias);
+        expect(applyGatewaySessionStoreAdmission(cfg, options, targets).durableTargets).toEqual([]);
+        const next = freezeJsonSnapshot<OpenClawConfig>({ session: { store: replacement } });
+        expect(applyGatewaySessionStoreAdmission(next, options, targets)).toBe(targets);
+      });
+    });
+  },
+);
 
 it("lists admitted sessions across cached targets while preserving a refused database", async () => {
   await withOpenClawTestState({ label: "combined-admission" }, async (state) => {

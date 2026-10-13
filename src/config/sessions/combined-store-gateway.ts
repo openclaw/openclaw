@@ -1,5 +1,6 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
+import fs from "node:fs";
 import nodePath from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -8,11 +9,13 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
+import { resolveRequiredHomeDir, resolveUserPath } from "../../infra/home-dir.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
@@ -22,6 +25,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../../state/openclaw-agent-db.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -57,7 +61,6 @@ import { captureSessionActorStorageOwner } from "./session-actor-storage-binding
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
-  isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
@@ -94,6 +97,60 @@ type PreparedConfiguredSessionStoreTargets = {
 
 // Durable target discovery follows config and registry receipts. Memory owners are read directly.
 let preparedConfiguredSessionStoreTargets: PreparedConfiguredSessionStoreTargets | undefined;
+
+const configuredAdmissionPaths = new WeakMap<
+  OpenClawConfig,
+  {
+    admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
+    registryToken: symbol;
+    context: string;
+    paths: ReadonlySet<string>;
+  }
+>();
+
+function configuredDatabaseAdmission(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  const admission = getAgentDatabaseStartupAdmission();
+  const registryToken = readOpenClawAgentDatabaseRegistryToken({ env });
+  const context = JSON.stringify([
+    resolveStateDir(env),
+    resolveRequiredHomeDir(env),
+    resolveUserPath("."),
+  ]);
+  const cached = isDeeplyFrozenPlainData(cfg) ? configuredAdmissionPaths.get(cfg) : undefined;
+  const paths =
+    cached &&
+    cached.admission === admission &&
+    cached.registryToken === registryToken &&
+    cached.context === context
+      ? cached.paths
+      : new Set(resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }));
+  if (paths !== cached?.paths && isDeeplyFrozenPlainData(cfg)) {
+    configuredAdmissionPaths.set(cfg, { admission, registryToken, context, paths });
+  }
+  // Exact configured claims need no disk evidence. Alias evidence belongs to this read so
+  // replacing or retargeting a file cannot reuse an earlier filesystem observation.
+  let physical: { key: (pathname: string) => string; paths: Set<string> } | undefined;
+  return (pathname: string): boolean => {
+    if (paths.has(pathname)) {
+      return true;
+    }
+    if (!fs.statSync(pathname, { throwIfNoEntry: false })) {
+      return false;
+    }
+    if (!physical) {
+      const key = createOpenClawAgentDatabasePathMatcher().createIndex();
+      physical = {
+        key,
+        paths: new Set(
+          [...paths]
+            .filter((candidate) => fs.statSync(candidate, { throwIfNoEntry: false }))
+            .map(key),
+        ),
+      };
+    }
+    return physical.paths.has(physical.key(pathname));
+  };
+}
 
 function loadGatewayStoreEntries(params: {
   agentId: string;
@@ -461,19 +518,13 @@ export function applyGatewaySessionStoreAdmission(
   if (opts.agentId?.trim()) {
     assertAgentDatabaseAdmitted(opts.agentId, { env });
   }
-  const configuredTargets =
+  const isConfiguredDatabase =
     opts.preserveSentinelOwners === "physical" && getAgentDatabaseStartupAdmission()
-      ? resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }).map((pathname) => ({
-          path: pathname,
-        }))
+      ? configuredDatabaseAdmission(cfg, env)
       : undefined;
   const admitted = (target: SessionStoreTarget): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
-    if (
-      configuredTargets &&
-      physical &&
-      !isConfiguredAgentDatabaseTarget(configuredTargets, physical.agentId, physical.storePath)
-    ) {
+    if (isConfiguredDatabase && physical && !isConfiguredDatabase(physical.storePath)) {
       return false;
     }
     const refusal =
