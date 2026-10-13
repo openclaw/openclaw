@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,8 +6,10 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
-import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  SubscriptionsController,
+  type ControllerHost,
+} from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import "../../components/web-awesome-popover.ts";
@@ -17,20 +18,13 @@ import "../../styles/chat/composer.css";
 import {
   appendChatAttachmentFiles,
   handleChatAttachmentPaste,
-  renderAttachmentPreview,
 } from "../chat/components/chat-attachments.ts";
-import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { closeSessionMenus } from "./new-session-runtime.ts";
-import {
-  PaletteSessionAttachments,
-  PaletteSessionRecovery,
-} from "./palette-session-draft-view.tsx";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
-import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
@@ -38,7 +32,7 @@ import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-no
 registerCommandPaletteEnglish();
 
 /** Launcher-local prompt and selections; never binds the full page's durable draft or handoff. */
-export class PaletteSessionDraft implements ReactiveController {
+export class PaletteSessionDraft {
   private draft: NewSessionDraftController | undefined;
   private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
@@ -54,7 +48,10 @@ export class PaletteSessionDraft implements ReactiveController {
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly host: ReactiveControllerHost &
+    private readonly host: Pick<
+      ControllerHost,
+      "addController" | "removeController" | "requestUpdate" | "updateComplete"
+    > &
       Pick<HTMLElement, "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
@@ -143,7 +140,7 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft.submission.setMessage(value, mentions);
   }
 
-  private attachmentProps(): ChatAttachmentControlsProps | undefined {
+  attachmentProps(): ChatAttachmentControlsProps | undefined {
     const attachmentDraft = this.draft?.submission.attachmentDraft;
     if (!attachmentDraft) {
       return undefined;
@@ -195,14 +192,6 @@ export class PaletteSessionDraft implements ReactiveController {
       // intent across preparation, but never across dismissal or invalidation.
       this.submitCold(props.readSignal);
     }
-  }
-
-  renderAttachments() {
-    const params = this.attachmentProps();
-    const preview = params ? renderAttachmentPreview(params) : emptyLegacyContent;
-    return preview === emptyLegacyContent
-      ? emptyLegacyContent
-      : solidContent(PaletteSessionAttachments, { preview });
   }
 
   open() {
@@ -373,29 +362,27 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft?.disconnect();
   }
 
-  renderControls() {
+  settingsView() {
     const draft = this.draft;
     if (!draft) {
-      return emptyLegacyContent;
+      return undefined;
     }
-    return solidContent(PaletteSessionSettingsView, {
-      view: this.settings.view({
-        draft,
-        context: this.read().context,
-        preferences: this.preferences,
-        onAgentPickerOpen: (open) => {
-          this.agentPickerOpen = open;
-          this.host.requestUpdate();
-        },
-        onChange: () => this.preferences.changed(),
-        onConnectMachine: () => {
-          if (draft.place.isAdmin()) {
-            this.settings.close();
-            draft.browser.close();
-            this.connectMachine.start();
-          }
-        },
-      }),
+    return this.settings.view({
+      draft,
+      context: this.read().context,
+      preferences: this.preferences,
+      onAgentPickerOpen: (open) => {
+        this.agentPickerOpen = open;
+        this.host.requestUpdate();
+      },
+      onChange: () => this.preferences.changed(),
+      onConnectMachine: () => {
+        if (draft.place.isAdmin()) {
+          this.settings.close();
+          draft.browser.close();
+          this.connectMachine.start();
+        }
+      },
     });
   }
 
@@ -412,19 +399,17 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft.place.restorePreferenceSelections();
   }
 
-  renderRecovery() {
-    return this.rejectedOpen
-      ? solidContent(PaletteSessionRecovery, { onOpen: this.rejectedOpen })
-      : undefined;
+  get recoveryAction() {
+    return this.rejectedOpen;
   }
 
-  renderAuxiliary() {
-    return solidContent(
-      ConnectMachineDialog,
-      this.connectMachine.view(this.read().open && (this.draft?.place.isAdmin() ?? false), () => {
+  auxiliaryView() {
+    return this.connectMachine.view(
+      this.read().open && (this.draft?.place.isAdmin() ?? false),
+      () => {
         this.callbacks.onClose();
         this.read().context?.navigate("devices");
-      }),
+      },
     );
   }
 

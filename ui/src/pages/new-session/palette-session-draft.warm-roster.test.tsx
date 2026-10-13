@@ -1,29 +1,98 @@
-import { html } from "lit";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import type { SolidController } from "../../lit/solid-controller-host.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import {
+  PaletteSessionAttachments,
+  PaletteSessionAuxiliary,
+  PaletteSessionControls,
+  PaletteSessionRecovery,
+} from "./palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "./palette-session-draft.ts";
 
-class WarmRosterHost extends OpenClawLightDomElement {
-  context: ApplicationContext | undefined;
+class WarmRosterHost extends ControllerHost {
+  readonly element = document.createElement("div");
+  readonly ownerDocument = document;
+  readonly querySelector = this.element.querySelector.bind(this.element);
+  readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
+  private readonly updatedControllers = new Set<SolidController>();
+  private readonly unmount: () => void;
   readonly placementReady = createDeferred();
-  override updated() {
-    if (this.querySelector(".palette-session-settings__workspace")) {
-      this.placementReady.resolve();
-    }
-  }
+  readonly context: ApplicationContext;
   readonly draft = new PaletteSessionDraft(this, () => ({ context: this.context, open: true }), {
     onClose: () => undefined,
   });
-  override render() {
-    return html`${this.draft.renderControls()}${this.draft.renderRecovery()}`;
+
+  constructor(context: ApplicationContext) {
+    super();
+    this.context = context;
+    document.body.append(this.element);
+    const mounted = mountSolid(
+      () => {
+        const [revision, setRevision] = createSignal({}, { ownedWrite: true });
+        const unsubscribe = this.subscribe(() => setRevision({}));
+        const recovery = createMemo(() => {
+          revision();
+          return this.draft.recoveryAction;
+        });
+        createEffect(revision, () => {
+          for (const controller of this.updatedControllers) {
+            controller.hostUpdated?.();
+          }
+          if (this.querySelector(".palette-session-settings__workspace")) {
+            this.placementReady.resolve();
+          }
+        });
+        onCleanup(() => {
+          unsubscribe();
+          this.disconnect();
+        });
+        return (
+          <>
+            <PaletteSessionControls draft={this.draft} revision={revision()} />
+            <Show when={recovery()}>
+              {(onOpen) => <PaletteSessionRecovery onOpen={onOpen()} />}
+            </Show>
+            <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
+            <PaletteSessionAttachments draft={this.draft} revision={revision()} />
+          </>
+        );
+      },
+      { container: this.element },
+    );
+    this.unmount = mounted.unmount;
+    this.connect();
+  }
+
+  override addController(controller: SolidController) {
+    this.updatedControllers.add(controller);
+    super.addController(controller);
+  }
+
+  override removeController(controller: SolidController) {
+    this.updatedControllers.delete(controller);
+    super.removeController(controller);
+  }
+
+  override get updateComplete() {
+    return super.updateComplete.then(() => {
+      flush();
+      return true;
+    });
+  }
+
+  remove() {
+    this.unmount();
+    this.element.remove();
   }
 }
-customElements.define("test-palette-warm-roster", WarmRosterHost);
 
 function roster(id: string, workspace: string): AgentsListResult {
   return {
@@ -36,6 +105,7 @@ function roster(id: string, workspace: string): AgentsListResult {
 }
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   localStorage.clear();
   sessionStorage.clear();
@@ -79,9 +149,7 @@ describe("palette live roster authority", () => {
         initialRun: { status: "idle" },
       });
       let read = agents.ensureList();
-      const host = document.createElement("test-palette-warm-roster") as WarmRosterHost;
-      host.context = context;
-      document.body.append(host);
+      const host = new WarmRosterHost(context);
       host.draft.open();
       await host.placementReady.promise;
       try {

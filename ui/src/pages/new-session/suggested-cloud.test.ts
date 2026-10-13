@@ -60,6 +60,24 @@ describe("suggested Cloud adoption", () => {
     expect(place.suggestedCloudProfile.pending).toBe(false);
   });
 
+  it("keeps the adopted profile when an older catalog read finishes", async () => {
+    const { place, gateway, request } = await fixture(async () => ({ profile }));
+    const staleCatalog = Promise.withResolvers<unknown>();
+    request.mockImplementationOnce((method) => {
+      expect(method).toBe("environments.list");
+      return staleCatalog.promise;
+    });
+    const refreshing = gateway.refreshCloudProfiles();
+    await place.suggestedCloudProfile.adopt();
+    expect(place.cloudProfileId).toBe("cloud");
+
+    staleCatalog.resolve({ environments: [], profiles: [], suggestedProfile });
+    await refreshing;
+    expect(place.cloudProfileId).toBe("cloud");
+    expect(gateway.cloudProfiles.map((entry) => entry.id)).toEqual(["cloud"]);
+    expect(gateway.suggestedProfile).toBeUndefined();
+  });
+
   it("shows the adoption method's error and keeps the current selection", async () => {
     const { place, flow } = await fixture(async () => {
       throw new Error("Crabbox login expired");

@@ -13,7 +13,6 @@ import "../../components/tooltip.ts";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import { LitContent, solidContent } from "../../lit/solid-content.tsx";
 import {
   machineShapeText,
   type SessionMenuItemOptions,
@@ -28,18 +27,6 @@ import {
 } from "./discovery.ts";
 
 type NativeSessionMenuItem = Omit<SessionMenuItemOptions, "icon"> & { icon?: JSX.Element };
-
-export function renderSessionMenuItem(item: SessionMenuItemOptions, submitting: boolean) {
-  return solidContent(LegacySessionMenuItem, { item, submitting });
-}
-
-export function renderCloudProfileMenuItems(params: CloudProfileMenuItemsOptions) {
-  return solidContent(CloudProfileMenuItems, { params });
-}
-
-export function renderCloudChoiceMenuItems(params: CloudChoiceMenuItemsOptions) {
-  return solidContent(CloudChoiceMenuItems, { params });
-}
 
 function UnavailableReason(props: {
   reason: string;
@@ -249,18 +236,6 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
   );
 }
 
-function LegacySessionMenuItem(props: { item: SessionMenuItemOptions; submitting: boolean }) {
-  return (
-    <SessionMenuItem
-      item={{
-        ...props.item,
-        icon: props.item.icon ? <LitContent value={props.item.icon} /> : undefined,
-      }}
-      submitting={props.submitting}
-    />
-  );
-}
-
 export function CloudProfileMenuItems(props: { params: CloudProfileMenuItemsOptions }) {
   return (
     <>
@@ -467,7 +442,7 @@ function CloudConfiguration(props: {
   );
 }
 
-function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
+export function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
   return (
     <>
       <For each={props.params.choices} keyed={(choice) => choice.id}>
