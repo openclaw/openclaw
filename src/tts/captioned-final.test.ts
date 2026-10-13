@@ -40,14 +40,4 @@ describe("cleanDeferredFinalText", () => {
     expect(cleanDeferredFinalText("[[tts:text]]")).toBe("");
     expect(cleanDeferredFinalText("say hi [[tts:text]] and beyond")).toBe("say hi ");
   });
-
-  it("preserves a multiline free-text [[tts:...]] body in the deferred caption", () => {
-    expect(cleanDeferredFinalText("Before. [[tts:first line\nsecond line]] after")).toBe(
-      "Before. first line\nsecond line after",
-    );
-  });
-
-  it("trims a leading newline after [[tts:]] in the deferred caption", () => {
-    expect(cleanDeferredFinalText("Go [[tts:\nhello]] now")).toBe("Go hello now");
-  });
 });

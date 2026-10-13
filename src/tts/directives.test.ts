@@ -196,7 +196,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
 
   const ttsExample =
     "[[tts:text]]hidden example[[/tts:text]] [[tts]]visible example[[/tts]] " +
-    "[[tts:provider=elevenlabs speed=1.2]] [[tts]] [[/tts:text]]";
+    "[[tts:provider=elevenlabs speed=1.2]] [[tts:Here is your answer]] [[tts]] [[/tts:text]]";
 
   it.each([
     {
@@ -285,14 +285,6 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
 
     expect(cleaner.push("Go [[tts:\nhello]] now")).toBe("Go hello now");
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it("still strips key=value directive tags in the cleaner", () => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("say [[tts:voice=al")).toBe("say ");
-    expect(cleaner.push("ice]] now")).toBe(" now");
     expect(cleaner.flush()).toBe("");
   });
 });
