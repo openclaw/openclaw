@@ -11,6 +11,13 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+For runtime contributors, start with
+[database access in workers](/reference/database-schemas/worker-access): execution
+owners, admission once per load, scoped write receipts, memory-only final
+authority guards, and session actors. The
+[migration inventory](/reference/database-schemas/worker-access-inventory)
+records remaining main-thread call sites and the ratchet that prevents growth.
+
 PostgreSQL shared-state generation requires PostgreSQL 16+, preserves lazy feature
 fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
@@ -94,8 +101,8 @@ for ordering, rollback, and the writer families that still retain native guards.
 
 SQLite format, schema-version, integrity, canonical-index, and
 table-existence validation runs on a physical database's first admission.
-The admitted facts are shared with all workers and handles while any connection
-remains open. Final close retires those facts; a later reopen validates again. File identity uses
+The admitted facts are shared with all workers and handles for the process load,
+including reopens after idle close. File identity uses
 volume, inode, and stable birthtime captured once with `fstat` on the retained
 admission descriptor, not SQL. Admission lookups and established borrowers reuse
 those shared facts without checking the pathname again. Native open and reopen
@@ -115,9 +122,11 @@ Current-row authority checks remain at their effect boundaries. Cached rows insi
 an active SQLite snapshot use that snapshot's identity and the connection's local
 mutation revision. They never carry a current committed-write revision or become
 reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
-Closing a connection clears its prepared statements and row caches. Final close
-also retires physical-database admission, keeping only the host's identity descriptor
-until explicit retirement can safely close it without releasing sibling POSIX locks.
+Closing a connection clears its prepared statements and row caches; it does not
+require physical format validation on an idle reopen. The lifecycle owner retains
+the identity descriptor until explicit retirement can safely close it without
+releasing sibling POSIX locks. Replacement, repair, or explicit revocation
+invalidates the affected admission facts.
 
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The
