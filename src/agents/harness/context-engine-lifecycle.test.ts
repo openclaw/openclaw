@@ -115,6 +115,76 @@ describe("harness context engine lifecycle", () => {
     },
   );
 
+  it.each(["repair", "bounding"] as const)(
+    "falls back when plugin output fails during %s",
+    async (phase) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages = [textMessage("user", "Valid pipeline history", 1)];
+      const original = JSON.stringify(messages);
+      const malformed = textMessage("assistant", "Malformed plugin output", 2);
+      if (phase === "repair") {
+        Object.defineProperty(malformed, "content", {
+          get: () => {
+            throw new Error("synthetic repair failure");
+          },
+        });
+      } else {
+        const argumentsWithCycle: Record<string, unknown> = {};
+        argumentsWithCycle.self = argumentsWithCycle;
+        if (malformed.role !== "assistant") {
+          throw new Error("Expected assistant fixture");
+        }
+        malformed.content = [
+          { type: "toolCall", id: "cyclic_fixture", name: "exec", arguments: argumentsWithCycle },
+        ];
+      }
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async () => ({
+            messages: [malformed],
+            estimatedTokens: 0,
+            systemPromptAddition: "Invalid plugin instructions",
+          }),
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+        },
+      });
+      const warn = vi.fn();
+      try {
+        const result = await prepareHarnessContextEnginePrompt({
+          ...sessionParams,
+          contextEngine: lease.engine,
+          messages,
+          modelId: "test-model",
+          promptBudget: {
+            contextTokens: 100_000,
+            reserveTokens: 0,
+            systemPrompt: "Required instructions",
+            prompt: "next",
+          },
+          repairToolUseResultPairing: true,
+          isOpenAIResponsesApi: true,
+          warn,
+        });
+        expect(result.messages).toEqual(messages);
+        expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1024);
+        expect(JSON.stringify(messages)).toBe(original);
+        expect(result.systemPrompt).toBe("Required instructions");
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("context engine assemble failed, using pipeline messages:"),
+        );
+      } finally {
+        await lease.dispose();
+      }
+    },
+  );
+
   it.each([false, true])(
     "counts synthetic tool results in the byte cap (engine throws=%s)",
     async (throws) => {

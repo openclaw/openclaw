@@ -295,25 +295,28 @@ export async function prepareHarnessContextEnginePrompt(
   }
   return runWithHarnessSourceFence(params, async () => {
     const preassemblyMessages = params.messages.slice();
-    let assembled: AssembleResult;
-    try {
-      assembled = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
-    } catch (error) {
-      params.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
-      assembled = { messages: initial.messages, estimatedTokens: 0 };
-    }
     // Repair before the final byte bound: synthetic results also consume budget.
     // Keep both operations inside the retained source-authority fence.
-    const bounded = boundContextEngineAssembly(
-      {
-        ...assembled,
-        messages: params.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairingForModel(assembled.messages, params.isOpenAIResponsesApi)
-          : assembled.messages,
-      },
-      resolveContextEngineTranscriptByteLimit(contextEngine),
-      resolveAssemblyHistoryTokenBudget(params),
-    );
+    const prepareAssembly = (assembled: AssembleResult) =>
+      boundContextEngineAssembly(
+        {
+          ...assembled,
+          messages: params.repairToolUseResultPairing
+            ? sanitizeToolUseResultPairingForModel(assembled.messages, params.isOpenAIResponsesApi)
+            : assembled.messages,
+        },
+        resolveContextEngineTranscriptByteLimit(contextEngine),
+        resolveAssemblyHistoryTokenBudget(params),
+      );
+    let bounded: AssembleResult;
+    try {
+      bounded = prepareAssembly(
+        await assembleHarnessContextEngineWithinSourceScope(params, contextEngine),
+      );
+    } catch (error) {
+      params.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
+      bounded = prepareAssembly({ messages: initial.messages, estimatedTokens: 0 });
+    }
     const authority = bounded.promptAuthority ?? "assembled";
     return {
       messages: bounded.messages,
