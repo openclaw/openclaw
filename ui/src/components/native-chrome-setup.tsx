@@ -42,7 +42,7 @@ function NativeChromeSetupContent(_: object, host: HTMLElement) {
     if (projection?.read()?.device.platform !== "macos") {
       return [];
     }
-    return [...(capability.installChromeExtension ? ["install" as const] : [])];
+    return capability.installChromeExtension ? ["install"] : [];
   });
   const setup = async (action: NativeChromeExtensionSetupAction) => {
     if (!host.isConnected || !capability || pending || !actions().includes(action)) {
