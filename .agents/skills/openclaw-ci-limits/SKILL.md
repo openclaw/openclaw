@@ -305,10 +305,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   class-vCPU-minutes (1.17% of that broad run). Include that allowance with
   Node packing costs until native proof measures the new duration. No jobs,
   registrations, permissions, compiler checks, or hosted eligibility are added.
-  The package-boundary row has a 30-minute whole-job budget: three hosted
+  The package-boundary row has a 40-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
   One completed both compile and canary but still exceeded the job deadline.
+  Two hosted release validations then passed both checks (128 plugins) and
+  were cancelled at the former 30-minute limit.
   Other additional-check groups retain 20 minutes; compiler concurrency,
   complete inventory, receipt guards, canary, and routing remain unchanged.
 - Current fast plugin/channel contract families each share one checkout/setup.

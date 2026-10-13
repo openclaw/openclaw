@@ -4818,7 +4818,7 @@ setImmediate(() => {
   it("keeps the full extension package boundary in its own job budget", () => {
     const timeout = readCiWorkflow().jobs["check-additional-shard"]["timeout-minutes"];
     for (const [group, expected] of [
-      ["extension-package-boundary", 30],
+      ["extension-package-boundary", 40],
       ["runtime-topology-architecture", 20],
       ["plugin-sdk-api-diff", 20],
       ["boundaries", 20],
