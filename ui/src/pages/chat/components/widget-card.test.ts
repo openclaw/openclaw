@@ -214,7 +214,7 @@ describe("widget-card", () => {
     expect(canvas.querySelector("mcp-app-view")).toBeNull();
     expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
-      Array.from(canvas.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+      Array.from(canvas.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
     ).toEqual(["Copy as image", "Download as image"]);
 
     const app = mountWidget(
@@ -247,7 +247,7 @@ describe("widget-card", () => {
     );
     expect(app.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
-      Array.from(app.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+      Array.from(app.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
     ).toEqual(["Show raw details"]);
 
     const external = mountWidget(
@@ -258,7 +258,9 @@ describe("widget-card", () => {
       { allowExternalEmbedUrls: true, rawText: "external raw payload" },
     );
     expect(
-      Array.from(external.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+      Array.from(external.querySelectorAll('[role="menuitem"]'), (item) =>
+        item.textContent?.trim(),
+      ),
     ).toEqual(["Show raw details"]);
 
     const unknown = mountWidget({ kind: "unknown" } as never);

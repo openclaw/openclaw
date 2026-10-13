@@ -518,5 +518,441 @@
       "column": "node_worker_turns.error_text",
       "reason": "PostgreSQL text cannot hold NUL; the guard is enforced by the type."
     }
+  ],
+  "pendingCapabilities": [
+    {
+      "database": "agent",
+      "kind": "virtualTable",
+      "table": "session_transcript_fts",
+      "name": "session_transcript_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "text",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "session_id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "message_id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "role",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "timestamp",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "session_transcript_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts",
+      "name": "rank",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_config",
+      "name": "session_transcript_fts_config",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_config",
+      "name": "k",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_config",
+      "name": "v",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_config",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "session_transcript_fts_config",
+      "name": "sqlite_autoindex_session_transcript_fts_config_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_content",
+      "name": "session_transcript_fts_content",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c0",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c2",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c3",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_content",
+      "name": "c4",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_content",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_data",
+      "name": "session_transcript_fts_data",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_data",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_data",
+      "name": "block",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_data",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_docsize",
+      "name": "session_transcript_fts_docsize",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_docsize",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_docsize",
+      "name": "sz",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_docsize",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "session_transcript_fts_idx",
+      "name": "session_transcript_fts_idx",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_idx",
+      "name": "segid",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_idx",
+      "name": "term",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "session_transcript_fts_idx",
+      "name": "pgno",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "session_transcript_fts_idx",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "session_transcript_fts_idx",
+      "name": "sqlite_autoindex_session_transcript_fts_idx_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "virtualTable",
+      "table": "standing_intents_fts",
+      "name": "standing_intents_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts",
+      "name": "trigger_keywords",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts",
+      "name": "standing_intents_fts",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts",
+      "name": "rank",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_config",
+      "name": "standing_intents_fts_config",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_config",
+      "name": "k",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_config",
+      "name": "v",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_config",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "standing_intents_fts_config",
+      "name": "sqlite_autoindex_standing_intents_fts_config_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_data",
+      "name": "standing_intents_fts_data",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_data",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_data",
+      "name": "block",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_data",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_docsize",
+      "name": "standing_intents_fts_docsize",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_docsize",
+      "name": "id",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_docsize",
+      "name": "sz",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_docsize",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "internalTable",
+      "table": "standing_intents_fts_idx",
+      "name": "standing_intents_fts_idx",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_idx",
+      "name": "segid",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_idx",
+      "name": "term",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "column",
+      "table": "standing_intents_fts_idx",
+      "name": "pgno",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "primaryKey",
+      "table": "standing_intents_fts_idx",
+      "name": "pk",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "index",
+      "table": "standing_intents_fts_idx",
+      "name": "sqlite_autoindex_standing_intents_fts_idx_1",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "session_transcript_fts_rows",
+      "name": "session_transcript_fts_rows_after_delete",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "standing_intents",
+      "name": "standing_intents_fts_after_delete",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "standing_intents",
+      "name": "standing_intents_fts_after_insert",
+      "pendingCapability": "search"
+    },
+    {
+      "database": "agent",
+      "kind": "trigger",
+      "table": "standing_intents",
+      "name": "standing_intents_fts_after_update",
+      "pendingCapability": "search"
+    }
   ]
 }

@@ -240,6 +240,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
   it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const sweep = createDeferred();

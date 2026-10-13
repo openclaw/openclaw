@@ -12,7 +12,7 @@ export type MenuItem = {
   kind?: "item";
   id: string;
   label: string;
-  attributes?: JSX.HTMLAttributes<HTMLButtonElement> & {
+  attributes?: JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
   icon?: JSX.Element;

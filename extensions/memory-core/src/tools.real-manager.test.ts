@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type {
@@ -18,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
+import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
@@ -322,7 +322,7 @@ describe("memory_search real manager", () => {
     }
   });
 
-  it("reads published memory changes without synchronous diagnostic queries", async () => {
+  it("reads published memory changes without database diagnostic queries", async () => {
     const cfg = keywordConfig();
     const manager = await indexedManager(cfg);
     const tool = searchTool(cfg);
@@ -330,23 +330,22 @@ describe("memory_search real manager", () => {
     for (const marker of ["violetcompass", "ambercompass"]) {
       await fs.writeFile(path.join(fixture.paths.memory, "current.md"), `Remember ${marker}.`);
       await manager.sync({ reason: "published-memory-edit", force: true });
-      const db = Reflect.get(manager, "db") as DatabaseSync;
-      using prepare = vi.spyOn(db, "prepare");
+      using diagnostics = vi.spyOn(cpuRuntime, "runMemoryStatus");
       const result = await tool.execute(marker, { query: marker, corpus: "memory" });
 
       expect(result.details).toMatchObject({
         results: [expect.objectContaining({ snippet: expect.stringContaining(marker) })],
       });
-      expect(prepare).not.toHaveBeenCalled();
+      expect(diagnostics).not.toHaveBeenCalled();
     }
 
-    const diagnostics = manager.status();
+    const diagnostics = await manager.statusAsync();
     expect(diagnostics.files).toBeGreaterThan(0);
     expect(diagnostics.chunks).toBeGreaterThan(0);
     expect(diagnostics.sourceCounts).toEqual([
       expect.objectContaining({ source: "memory", files: diagnostics.files }),
     ]);
-    expect(manager.status({ includeCounts: false })).toMatchObject({
+    expect(await manager.statusAsync({ includeCounts: false })).toMatchObject({
       files: undefined,
       chunks: undefined,
       sourceCounts: undefined,
@@ -404,10 +403,21 @@ describe("memory_search real manager", () => {
 
   it("returns memory-file keyword matches at the deadline without cooling down healthy recall", async () => {
     const cfg = createConfig({ minScore: 0, vectorEnabled: false });
-    await indexedManager(cfg, undefined, "baseline");
+    const manager = await indexedManager(cfg, undefined, "baseline");
     const queryEntered = createDeferred<void>();
+    const partialStatusReady = createDeferred<void>();
     const releaseQuery = createDeferred<void>();
+    let embeddingStarted = false;
+    const statusAsync = manager.statusAsync.bind(manager);
+    vi.spyOn(manager, "statusAsync").mockImplementation(async (...args) => {
+      const status = await statusAsync(...args);
+      if (embeddingStarted) {
+        partialStatusReady.resolve();
+      }
+      return status;
+    });
     provider.beforeEmbedQuery = async () => {
+      embeddingStarted = true;
       queryEntered.resolve();
       await releaseQuery.promise;
     };
@@ -416,6 +426,7 @@ describe("memory_search real manager", () => {
     const execution = tool.execute("keyword-deadline", zebraQuery);
     try {
       await queryEntered.promise;
+      await partialStatusReady.promise;
       await vi.advanceTimersByTimeAsync(30_000);
       const result = await execution;
       expect(result.details).toMatchObject({
