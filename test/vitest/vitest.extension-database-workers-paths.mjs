@@ -62,6 +62,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/embedding-provider.test.ts",
+  "extensions/openai/realtime-voice-provider-routing.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",
