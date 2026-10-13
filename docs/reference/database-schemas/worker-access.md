@@ -462,6 +462,10 @@ participant records, including contribution counts and recency. The participant 
 updates those records in its existing transaction and publishes them on commit;
 rollback retains the previous facts. Cold, evicted, or invalidated actors use the
 canonical participant read. Participant updates remain independent of metadata CAS.
+Canonical repairs publish merged participant records through this same actor owner
+before projecting the repaired entry, including copies from another store. The next
+participant or membership-facts read sees the committed merge, and a later contribution
+builds on its count. Rolled-back repairs retain the previous participant facts.
 This changes no schema, retention, stored format, or update behavior.
 
 Collaboration writes reuse the captured agent executor without opening a Gateway
