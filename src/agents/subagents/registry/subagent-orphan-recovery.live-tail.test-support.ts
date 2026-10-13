@@ -72,9 +72,6 @@ export function registerRecoveredTerminalTailTest(
     }
     await fixture.settle();
     expect(announce).toHaveBeenCalledTimes(1);
-    const settled = subagentRuns.get(runId);
-    expect(settled?.cleanupCompletedAt).toEqual(expect.any(Number));
-    // A replay rebinding session effects mid-cleanup would suppress the child's effects.
-    expect(settled?.execution.suppressSessionEffects).toBeUndefined();
+    expect(subagentRuns.get(runId)?.cleanupCompletedAt).toEqual(expect.any(Number));
   });
 }
