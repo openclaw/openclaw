@@ -90,6 +90,19 @@ With the OpenShell backend, `mirror` mode still uses the local workspace as the 
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
+`image_generate`, `video_generate`, and `music_generate` also copy locally saved
+outputs into a private, Git-ignored directory under `media/inbound/` in the
+requesting sandbox. The tool result and asynchronous completion report a
+`Sandbox file` path for follow-up reads, edits, and shell processing. Channel
+delivery still uses the managed original. Each copy is limited to the smaller
+of the configured media size limit and 50 MiB. Remote-only video URLs are not
+downloaded for staging. If the workspace is read-only or staging fails, the
+result reports that the sandbox copy is unavailable; generation and delivery
+still succeed. Resetting or deleting the requesting session stops further sandbox
+copies and prevents completion delivery to a replacement session. If a configuration
+reload changes sandbox policy, workspace selection, or the media size limit before
+a copy, staging stops with the same warning while the original remains available.
+
 <Note>
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 
