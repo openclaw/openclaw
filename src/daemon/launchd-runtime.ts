@@ -414,6 +414,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
           domain: params.domain,
           actionHint: params.actionHint,
         }),
+        { cause: boot },
       );
     }
     if (boot.termination === "exit" && isLaunchctlOperationAlreadyInProgress(detail)) {
@@ -432,7 +433,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
       !isLaunchctlBootstrapPendingTeardown(boot) ||
       remainingMs <= 0
     ) {
-      throw new Error(`launchctl bootstrap failed: ${detail}`);
+      throw new Error(`launchctl bootstrap failed: ${detail}`, { cause: boot });
     }
     await sleep(
       Math.min(

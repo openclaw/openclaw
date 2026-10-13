@@ -550,13 +550,13 @@ describe("launchd bootstrap repair", () => {
     ]
   >([
     [
-      "already running",
-      "Service already loaded",
-      130,
+      "operation already in progress with loaded job",
+      "Bootstrap failed: 37: Operation already in progress",
+      37,
       "exit",
       true,
       "",
-      { ok: true, status: "already-loaded" },
+      { ok: true, status: "repaired" },
     ],
     ...(["exit", "timeout", "signal"] as const).map(
       (
