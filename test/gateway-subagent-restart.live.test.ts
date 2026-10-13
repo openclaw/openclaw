@@ -160,7 +160,7 @@ function inspectToolHistory(messages: readonly Record<string, unknown>[]) {
           continue;
         }
         const selectors =
-          block.name === "tool_call"
+          block.name === "dispatch_action"
             ? asOptionalRecord(prepareToolSearchDispatcherArguments(block.arguments))
             : undefined;
         if (
@@ -198,7 +198,7 @@ function inspectToolHistory(messages: readonly Record<string, unknown>[]) {
       persistedDetails?.persistedDetailsTruncated === true
         ? asOptionalRecord(JSON.parse(extractFirstTextBlock(message) ?? "null"))
         : persistedDetails;
-    const wrapped = message.toolName === "tool_call";
+    const wrapped = message.toolName === "dispatch_action";
     const name = wrapped ? asOptionalRecord(details?.tool)?.name : message.toolName;
     const result = wrapped ? asOptionalRecord(asOptionalRecord(details?.result)?.details) : details;
     if (typeof name !== "string" || !result) {

@@ -18,8 +18,10 @@ import {
 } from "../state/user-profile-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
-import { assertSqliteWriterBrokerAdmission } from "./sqlite-writer-admission-client.js";
-import { createSqliteWriterAdmissionService } from "./sqlite-writer-admission-service.js";
+import {
+  assertSqliteWriterBrokerAdmission,
+  createSqliteWriterAdmissionService,
+} from "./sqlite-writer-admission-service.test-support.js";
 import * as workerCpu from "./worker-cpu.js";
 
 const paths: string[] = [];

@@ -180,14 +180,18 @@ invalidation, and pruning. Operators can reclaim unused packages with
 the deployment owner is idle. Candidate cleanup removes only the work and
 staging trees. Staging uses reflinks where supported and ordinary copies
 otherwise; sealing, filesystem ownership, manifest validation, and directory
-publication remain unchanged. Build artifacts and validation results are never reused
-across commits.
+publication remain unchanged. The build account also retains the build owner's
+artifact cache at `cache/build-artifacts`. Input content hashes select reusable
+package, plugin, and Control UI outputs; copies use independent inodes and reflinks
+where available. A missing, changed, or incomplete cache entry rebuilds normally.
+This cache is disposable while the deployment owner is idle.
 
 The fresh build overlaps the Control UI's staged build and precompression with
 runtime finalization after the compiler and plugin builders finish. Both
 writers finish before final build metadata is emitted, including when either
-fails. All build checks still run; no CI result or cross-commit artifact cache
-is used to bypass them.
+fails. All build checks still run; cached compiler output never substitutes for a
+validation result. The Control UI refreshes release identity and its offline
+shell even when its bundles and precompressed assets are reused.
 
 Sealing makes every regular file read-only (preserving executable bits as `0555`),
 every directory `0555`, and leaves relative in-tree symlinks intact. The staging
@@ -203,8 +207,10 @@ The manifest binds the exact source SHA, build ID, schema declarations, official
 origin, and Control UI entrypoint SHA-256; validation also checks build stamps,
 asset presence, ownership, modes, and contained symlinks across the tree. This
 is a durable, owner-protected release, not a cryptographic digest of every file
-or protection against subsequent root writes. Sealing changes neither that
-integrity contract nor the manifest format.
+or protection against subsequent root writes. New builds also record their
+selected input hashes in `dist/build-cache-inputs.json` and the deployment
+manifest. Admission compares these records; older sealed releases without cache
+metadata remain supported. Sealing preserves the existing integrity contract.
 
 Release publication now prewarms Node's release-scoped compile cache before
 cutover, including reuse of an already published release. The bounded import

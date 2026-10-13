@@ -137,7 +137,7 @@ describe("memory flush writer availability", () => {
     "does not reintroduce harness execution tools outside the %s flush projection",
     (arm) => {
       const tools = runWithAgentRingZeroTools(
-        [persistenceTool("host", "openclaw"), persistenceTool("host", "tool_call")],
+        [persistenceTool("host", "openclaw"), persistenceTool("host", "dispatch_action")],
         () => {
           if (arm === "provider") {
             return assembleProviderFlush([persistenceTool("memory-provider")]).assembled;

@@ -4315,16 +4315,21 @@ td.data-table-key-col {
   font-size: 12px;
 }
 
-.agent-tools-group__preview > span {
+.agent-tools-group__preview > span,
+.agent-tool-title,
+.agent-tool-sub {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tools-group__preview > span {
   max-width: min(180px, 100%);
   padding: 2px 6px;
   border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--card) 70%, transparent);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-tools-group__counts {
@@ -4447,21 +4452,13 @@ td.data-table-key-col {
 .agent-tool-title {
   font-weight: 600;
   font-size: 13px;
-  min-width: 0;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-tool-sub {
   color: var(--muted);
   font-size: 12px;
   margin-top: 3px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .agent-tool-details {

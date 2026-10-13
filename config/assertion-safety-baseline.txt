@@ -1679,7 +1679,7 @@ src/cli/program/program-context.ts	2
 src/cli/program/register.agent-turn.ts	1
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
-src/cli/program/register.onboard.ts	27
+src/cli/program/register.onboard.ts	26
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	9
 src/cli/run-main.ts	1

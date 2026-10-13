@@ -445,16 +445,14 @@ openclaw-appearance-background .settings-background-preview .session-background_
   cursor: var(--cursor-action);
 }
 
-.settings-section__help-button > span {
+.settings-section__help-button > span,
+.settings-section__help-button svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
 .settings-section__help-button svg {
-  display: block;
-  width: 100%;
-  height: 100%;
   stroke-width: 1.75;
 }
 
