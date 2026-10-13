@@ -354,6 +354,8 @@ const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CLI_CONTAINER_BYPASS",
   "OPENCLAW_CONFIG_READONLY",
   "OPENCLAW_CONTAINER_HINT",
+  // Documented diagnostic opt-in; on Windows the generated gateway.cmd is its only home.
+  "OPENCLAW_GATEWAY_STARTUP_TRACE",
 ]);
 
 function collectExistingServiceEnvVars(

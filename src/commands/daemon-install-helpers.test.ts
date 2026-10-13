@@ -1287,6 +1287,46 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   });
 });
 
+describe("buildGatewayInstallPlan — operator opt-ins", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-opt-in-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    {
+      name: "preserves the documented startup trace opt-in",
+      key: "OPENCLAW_GATEWAY_STARTUP_TRACE",
+      kept: true,
+    },
+    {
+      name: "keeps the existing read-only config opt-in",
+      key: "OPENCLAW_CONFIG_READONLY",
+      kept: true,
+    },
+    {
+      name: "still drops other OpenClaw-prefixed keys",
+      key: "OPENCLAW_GATEWAY_RESTART_TRACE",
+      kept: false,
+    },
+  ])("$name across service regeneration", async ({ key, kept }) => {
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { HOME: "/from-service" } });
+
+    const plan = await buildNodePlan({
+      env: { HOME: tmpDir },
+      existingEnvironment: { [key]: "1", CUSTOM_TOOL_HOME: "/Users/test/.custom-tool" },
+    });
+
+    expect(plan.environment[key]).toBe(kept ? "1" : undefined);
+    expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
+  });
+});
+
 describe("gatewayInstallErrorHint", () => {
   it("returns platform-specific hints", () => {
     expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
