@@ -2904,7 +2904,7 @@ publish_release() (
 	run_build mkdir -m 0700 -- "$build_directory"
 	candidate_build_identity="$(proof stat-identity "$build_directory")"
 	# pnpm owns content integrity and pruning; imports must never share writable store inodes.
-	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$build_home/cache/store" PNPM_CONFIG_PACKAGE_IMPORT_METHOD=clone-or-copy PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true)
+	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$build_home/cache/store" "BUILD_ALL_CACHE_ROOT=$build_home/cache/build-artifacts" PNPM_CONFIG_PACKAGE_IMPORT_METHOD=clone-or-copy PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true)
 	run_build git init "$build_directory" >&2
 	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" fetch --depth=1 --no-tags \
 		"file://$mirror" "$target_sha" >&2

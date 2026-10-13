@@ -140,6 +140,15 @@ async function runSessionUpstreamMonitorTick(
   if (options.signal?.aborted) {
     return;
   }
+  const providers =
+    options.providers ??
+    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
+      (registration) => registration.provider,
+    );
+  if (!providers.some((provider) => provider.checkUpstreamActivity)) {
+    missingCounts.clear();
+    return;
+  }
   const dbOptions = {
     ...(options.env ? { env: options.env } : {}),
     ...(options.path ? { path: options.path } : {}),
@@ -157,11 +166,6 @@ async function runSessionUpstreamMonitorTick(
       missingCounts.delete(key);
     }
   }
-  const providers =
-    options.providers ??
-    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
-      (registration) => registration.provider,
-    );
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   for (const [catalogId, links] of linksByCatalog) {
     const provider = providerById.get(catalogId);

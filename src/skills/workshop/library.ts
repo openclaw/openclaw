@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
@@ -20,7 +21,6 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
 import { recordWorkshopChange } from "./changes.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
@@ -76,6 +76,7 @@ const MAX_DESCRIPTION_BYTES = 1024;
 const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
+const log = createSubsystemLogger("skills/workshop");
 
 function emptyForMissingDirectory(error: unknown): never[] {
   if (hasErrnoCode(error, "ENOENT")) {
@@ -318,7 +319,7 @@ async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>)
     : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
 }
 
-/** Serializes one skill's mutation, then publishes the snapshot bump and change row. */
+/** Serializes one skill's mutation, then refreshes discovery and records the change. */
 async function mutateSkill(
   ctx: WorkshopMutationContext,
   name: string,
@@ -345,10 +346,12 @@ async function mutateSkill(
     const { summary, versionId } = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
     const after = await snapshotArtifact();
     await pruneVersions(paths.versionsDir);
-    bumpSkillsSnapshotVersion({
-      reason: "workshop",
-      changedPath: path.join(paths.skillDir, SKILL_FILE),
-    });
+    try {
+      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+      await refreshSkillsDiscovery({ config: ctx.config, reason: "workshop" });
+    } catch (error) {
+      log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);
+    }
     const change: WorkshopChange = {
       id: randomUUID(),
       agentId: ctx.agentId,

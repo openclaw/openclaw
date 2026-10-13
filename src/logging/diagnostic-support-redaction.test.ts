@@ -250,7 +250,17 @@ describe("diagnostic support redaction", () => {
       { length: 40 },
       (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
     ).join("")}`;
+    const vendorToken = `gAAAA${"b".repeat(24)}`;
+    const vendorShapedDataUrl = `data:application/octet-stream;base64,${vendorToken}`;
     const cases = [
+      [
+        "project top-level /synthetic/skills/example/SKILL.md",
+        "project top-level /synthetic/skills/example/SKILL.md",
+      ],
+      ["vendor ghp_abcdefghij", "vendor ***"],
+      [`vendor ${vendorToken}`, "vendor gAAAAb…bbbb"],
+      [vendorShapedDataUrl, vendorShapedDataUrl],
+      ["é123456:fixtureonlyabcdefghij", "é123456…ghij"],
       [
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
         "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>&ok=1",
