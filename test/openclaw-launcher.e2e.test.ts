@@ -1851,7 +1851,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          import { enableOpenClawCompileCache } from "./cache-owner.mjs";
          const before = { ...process.env };
          // First enable for direct entry; ALREADY_ENABLED after the real launcher.
-         enableOpenClawCompileCache({ installRoot: ${JSON.stringify(fixtureRoot)} });
+         enableOpenClawCompileCache({ currentFile: ${JSON.stringify(path.join(fixtureRoot, mode === "source" ? "src/entry.ts" : "dist/entry.js"))}, installRoot: ${JSON.stringify(fixtureRoot)} });
          const parentDirectory = getCompileCacheDir() ?? null;
          const a = resolveA();
          const b = resolveB();
