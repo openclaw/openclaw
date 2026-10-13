@@ -196,7 +196,8 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
           event.event === "session.message" &&
           isRecord(event.payload) &&
           typeof event.payload.sessionKey === "string" &&
-          isRecord(event.payload.message)
+          isRecord(event.payload.message) &&
+          event.payload.message.role === "assistant"
         ) {
           const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
           messages.push(event.payload.message);
@@ -258,16 +259,23 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
           expect(messageText(partial)).toBe(prefix);
           expect(partial).not.toHaveProperty("stopReason");
           expect(partial).not.toHaveProperty("openclawRunError");
-          const notices = records.filter(
-            (message) => message.customType === "run-failed-before-reply",
-          );
-          expect(notices).toHaveLength(1);
-          expect(notices[0]).toMatchObject({
-            role: "custom",
-            openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
-          });
         }
-        expect(terminal.some((event) => event.state === "error")).toBe(true);
+        // Terminal failures publish chat.error after persistence; custom receipts live in history.
+        const notices = history.messages
+          .filter(isRecord)
+          .filter((message) => message.customType === "run-failed-before-reply");
+        expect(notices, "durable terminal failure receipt").toHaveLength(1);
+        expect(notices[0]).toMatchObject({
+          role: "custom",
+          openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
+        });
+        expect(terminal).toEqual([
+          expect.objectContaining({
+            runId: started.runId,
+            state: "error",
+            errorMessage: expect.stringMatching(/\S/),
+          }),
+        ]);
         const deltas = events.filter(
           (event): event is Extract<ChatEvent, { state: "delta" }> =>
             event.runId === started.runId && event.state === "delta",
