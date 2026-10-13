@@ -382,6 +382,7 @@ export async function preflightOpenClawDatabaseSchemas(
     if (
       !admissionTargets ||
       !admissionConfig ||
+      options.requireStartupMigrationReadiness ||
       !row.agentId ||
       !canIsolateAgentDatabase(admissionConfig, row.agentId)
     ) {
@@ -537,7 +538,7 @@ export async function preflightOpenClawDatabaseSchemas(
           throw schemaInspection.failure;
         }
         if (schemaInspection?.reason) {
-          if (admissionTargets) {
+          if (startup || (admissionTargets && !options.requireStartupMigrationReadiness)) {
             throw schemaInspection.failure ?? new Error(schemaInspection.reason);
           }
           const failure: IndeterminateOpenClawDatabase = {
@@ -565,15 +566,14 @@ export async function preflightOpenClawDatabaseSchemas(
             !admissionTargets ||
             !admissionConfig ||
             !row.agentId ||
-            !canIsolateAgentDatabase(admissionConfig, row.agentId)
-          ) {
-            inspection.incompatible.push(incompatible);
-          } else {
-            recordInspectionFailure(
+            !canIsolateAgentDatabase(admissionConfig, row.agentId) ||
+            !recordInspectionFailure(
               row,
               inspection,
               new OpenClawDatabaseSchemaPreflightError([incompatible]),
-            );
+            )
+          ) {
+            inspection.incompatible.push(incompatible);
           }
         }
         if (
