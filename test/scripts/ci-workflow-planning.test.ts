@@ -6427,6 +6427,12 @@ describe("ci workflow guards", () => {
             group: "plugin-sdk-api-diff",
             runner: "blacksmith-32vcpu-ubuntu-2404",
           });
+        } else if (row.group === "extension-package-boundary") {
+          expect(row).toEqual({
+            check_name: "check-additional-extension-package-boundary",
+            group: "extension-package-boundary",
+            runner: frozen ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
+          });
         } else {
           expect(readFrozenAdditionalCheckRows()).toContainEqual(row);
         }
