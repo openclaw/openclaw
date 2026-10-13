@@ -115,10 +115,8 @@ export function applyAnthropicThinkingOptions(
   profile: "provider" | "transport",
 ): SimpleStreamOptions["reasoning"] {
   const managed = profile === "transport";
-  const reasoning =
-    options?.reasoning === "off" && requiresClaudeAdaptiveThinking(model)
-      ? "low"
-      : options?.reasoning;
+  const coercedFromOff = options?.reasoning === "off" && requiresClaudeAdaptiveThinking(model);
+  const reasoning = coercedFromOff ? "low" : options?.reasoning;
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
     return reasoning;
@@ -131,6 +129,20 @@ export function applyAnthropicThinkingOptions(
     resolved.thinkingEnabled = Boolean(reasoning) || defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
       resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);
+      if (
+        coercedFromOff ||
+        (typeof resolved.maxTokens === "number" && resolved.maxTokens <= 1024)
+      ) {
+        const adaptiveLevel = managed && reasoning === "max" ? "high" : (reasoning ?? "low");
+        const adjusted = adjustMaxTokensForThinking(
+          resolved.maxTokens,
+          (managed ? resolvePositiveAnthropicTokenLimit(model.maxTokens) : model.maxTokens) ??
+            resolved.maxTokens,
+          adaptiveLevel,
+          options?.thinkingBudgets,
+        );
+        resolved.maxTokens = adjusted.maxTokens;
+      }
     }
     return reasoning;
   }

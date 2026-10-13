@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { requiresClaudeAdaptiveThinking } from "@openclaw/ai/internal/anthropic";
 import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -138,8 +139,12 @@ function resolveIsolatedStreamParams(
     return streamParams;
   }
   const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
-  if (answerTokenBudget !== undefined && model?.reasoning && thinkLevel !== "off") {
-    maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
+  if (answerTokenBudget !== undefined && model?.reasoning) {
+    if (thinkLevel !== "off") {
+      maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
+    } else if (requiresClaudeAdaptiveThinking(model)) {
+      maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "low").maxTokens;
+    }
   }
   return {
     ...streamParams,

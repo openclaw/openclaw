@@ -90,4 +90,35 @@ describe("isolated completion token budgets", () => {
       expect.objectContaining({ streamParams: { maxTokens: capability.expected } }),
     );
   });
+
+  it("reserves low thinking budget when thinkLevel is off on mandatory adaptive Claude models", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "claude-opus-5-5",
+      api: "anthropic-messages",
+      baseUrl: nativeAuthPlan.modelRoute.baseUrl,
+      reasoning: true,
+      maxTokens: 64_000,
+    };
+    mocks.resolveModelAsync.mockResolvedValue({ model });
+    mocks.prepareSimpleCompletionModel.mockResolvedValue({
+      model,
+      auth: { apiKey: "synthetic-key", mode: "api-key", source: "test" },
+    });
+    const dispatch = vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+    }));
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    await runIsolatedCompletion({
+      ...isolatedRequest(),
+      answerTokenBudget: 1024,
+      thinkLevel: "off",
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkLevel: "off",
+        streamParams: { maxTokens: 3072 },
+      }),
+    );
+  });
 });
