@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -15,13 +15,13 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 let signingKey: string;
 let allowedSigners: string;
 
-function fixture(transport: "auto" | "graphql" = "graphql") {
+function fixture(transport: "auto" | "graphql" = "graphql", signLocal = transport === "auto") {
   const f = makePublisherRepo();
   // Metadata is native fixture state, never part of the reviewed candidate.
   appendFileSync(join(f.repoDir, ".git/info/exclude"), "\n.local/\n");
   f.env.OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH = "";
   f.env.OPENCLAW_PR_PUSH_MODE = transport;
-  if (transport === "auto") {
+  if (signLocal) {
     f.git("config", "gpg.format", "ssh");
     f.git("config", "user.signingKey", signingKey);
     f.git("config", "gpg.ssh.allowedSignersFile", allowedSigners);
@@ -157,6 +157,16 @@ describePosix("correction publication authority handoff", () => {
         `GATES_MODE=remote_crabbox_aws\nHOSTED_GATES_TARGET_HEAD_SHA=''\nLAST_VERIFIED_HEAD_SHA=${hosted}\nFULL_GATES_HEAD_SHA=${hosted}\n`,
       );
       expect(readFileSync(join(f.local, "review.json"), "utf8")).toBe(before);
+      console.info(
+        JSON.stringify({
+          scenario: "owned publication",
+          transport,
+          status: result.status,
+          hosted,
+          local: f.candidate,
+          publicationEvents: readFileSync(join(f.local, "events"), "utf8"),
+        }),
+      );
     },
   );
 
@@ -190,6 +200,56 @@ describePosix("correction publication authority handoff", () => {
         `${transport === "auto" ? "push" : "graphql"}\n`,
       );
       expect(readFileSync(join(f.local, "review.json"), "utf8")).toBe(incomingReview);
+    },
+  );
+
+  it.each(
+    (["auto", "graphql"] as const).flatMap((transport) =>
+      (["foreign receipt", "withdrawn", "reassigned"] as const).map((fault) => ({
+        transport,
+        fault,
+      })),
+    ),
+  )(
+    "refuses $fault authority after $transport planning before any publication I/O",
+    ({ transport, fault }) => {
+      const f = fixture(transport);
+      const result = runCorrection(f, {
+        setup: [
+          "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
+          "pr_git() {",
+          '  if [ "$1" = verify-commit ] || [ "$*" = "log -1 --format=%b HEAD" ]; then',
+          "    echo planned > .local/authority-changed",
+          fault === "foreign receipt"
+            ? `    printf 'PUSH_PREP_HEAD_SHA=${f.sameTree}\\nPUSH_LOCAL_PREP_HEAD_SHA=${f.sameTree}\\nPUSHED_FROM_SHA=${f.source}\\nPUSH_REPLACED_HOSTED_ANCESTRY=false\\nPR_HEAD_SHA_AFTER_PUSH=${f.sameTree}\\n' > .local/prepare-push-result.env`
+            : `    jq '${fault === "withdrawn" ? '.state = "CLOSED"' : '.headRepository.nameWithOwner = "replacement/repo"'}' .local/remote-observation.json > .local/changed-observation.json`,
+          ...(fault === "foreign receipt"
+            ? []
+            : ["    mv .local/changed-observation.json .local/remote-observation.json"]),
+          "  fi",
+          '  fixture_git "$@"',
+          "}",
+        ],
+      });
+      expect(existsSync(join(f.local, "authority-changed"))).toBe(true);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      const refusal =
+        fault === "foreign receipt" ? "Correction review authority changed" : "PR identity changed";
+      expect(result.stdout + result.stderr).toContain(refusal);
+      const events = readFileSync(join(f.local, "events"), "utf8");
+      expect(events).toBe("");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      console.info(
+        JSON.stringify({
+          scenario: fault,
+          transport,
+          status: result.status,
+          refusal,
+          publicationEvents: events,
+          remoteUnchanged: true,
+        }),
+      );
     },
   );
 
@@ -271,7 +331,202 @@ describePosix("correction publication authority handoff", () => {
     expect(readFileSync(join(f.local, "prepare-push-result.env"), "utf8")).toContain(
       `PUSH_LOCAL_PREP_HEAD_SHA=${head}\n`,
     );
+    const originalNames = ["pr-meta.json", "pr-meta.env", "review.json"];
+    for (const name of originalNames) {
+      writeFileSync(join(f.local, `original-${name}`), readFileSync(join(f.local, name)));
+    }
+    const retainedContext = readFileSync(contextPath);
+    const retainedBinding = readFileSync(join(f.local, "prepare-baseline.json"));
+    const observed = runCorrection(f, {
+      command: "review_init 4242; review_checkout_pr 4242; review_artifacts_init 4242",
+      setup: ["pr_meta_json() { pr_gh pr view 4242; }"],
+    });
+    expect(observed.status, observed.stdout + observed.stderr).toBe(0);
+    f.git("checkout", "-q", "pr-4242-prep");
+    writeFileSync(join(f.repoDir, "ci-fix.txt"), "CI correction after baseline publication\n");
+    f.git("add", "ci-fix.txt");
+    f.git("commit", "-S", "-qm", "fix: baseline CI follow-up");
+    const followup = f.git("rev-parse", "HEAD");
+    const priorReview = readFileSync(reviewPath);
+    const liveMetadata = readFileSync(join(f.local, "pr-meta.json"));
+    const recovery =
+      "prepare_correction_review_init 4242 --recover-incoming " +
+      originalNames.map((name) => `.local/original-${name}`).join(" ");
+    // Backups alone are not authority: exact signed digests and history must replay.
+    appendFileSync(join(f.local, "original-pr-meta.json"), "\n");
+    expect(runCorrection(f, { command: recovery }).status).not.toBe(0);
+    expect(readFileSync(reviewPath)).toEqual(priorReview);
+    expect(existsSync(join(f.local, "correction-incoming-meta.json"))).toBe(false);
+    writeFileSync(
+      join(f.local, "original-pr-meta.json"),
+      readFileSync(join(f.local, "original-pr-meta.json")).subarray(0, -1),
+    );
+    const recovered = runCorrection(f, { command: recovery });
+    expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
+    const correction = JSON.parse(readFileSync(reviewPath, "utf8"));
+    expect(correction.pr.headSha).toBe(followup);
+    expect(correction.recommendation).toBe("NEEDS WORK");
+    expect(correction.correction.resolvedFindings).toEqual([{ id: "I1", resolution: "" }]);
+    Object.assign(correction, validReview(followup));
+    correction.pr.number = 4242;
+    correction.recommendation = "READY FOR /prepare-pr";
+    correction.issueValidation.status = "valid";
+    correction.correction.resolvedFindings[0].resolution =
+      "Reviewed original scope and the CI fix.";
+    writeFileSync(reviewPath, JSON.stringify(correction));
+    const valid = runCorrection(f, { command: "require_prepared_review 4242" });
+    expect(valid.status, valid.stdout + valid.stderr).toBe(0);
+    expect(readFileSync(contextPath)).toEqual(retainedContext);
+    expect(readFileSync(join(f.local, "prepare-baseline.json"))).toEqual(retainedBinding);
+    expect(readFileSync(join(f.local, "pr-meta.json"))).toEqual(liveMetadata);
+    expect(f.git("rev-parse", "HEAD")).toBe(followup);
   });
+
+  it.each(["auto", "graphql"] as const)(
+    "keeps original admission through a %s hosted review round",
+    (transport) => {
+      const f = fixture(transport, true);
+      const originalReview = readFileSync(join(f.local, "review.json"));
+      const originalMetadata = readFileSync(join(f.local, "pr-meta.json"));
+      const originalEnvironment = readFileSync(join(f.local, "pr-meta.env"));
+      // The immutable inputs are normally captured by prepare-correction-init.
+      writeFileSync(join(f.local, "correction-incoming-meta.json"), originalMetadata);
+      writeFileSync(join(f.local, "correction-incoming-meta.env"), originalEnvironment);
+      writeFileSync(join(f.local, "correction-original-review.json"), originalReview);
+      appendFileSync(
+        join(f.local, "prep-context.env"),
+        `PREP_INCOMING_META_OID=${f.git("hash-object", ".local/pr-meta.json")}\nPREP_INCOMING_ENV_OID=${f.git("hash-object", ".local/pr-meta.env")}\n`,
+      );
+      const context = readFileSync(join(f.local, "prep-context.env"));
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.candidate}\n`,
+      );
+      const published = runCorrection(f);
+      expect(published.status, published.stdout + published.stderr).toBe(0);
+      const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+      const initialized = runCorrection(f, {
+        command: "review_init 4242; review_checkout_pr 4242; review_artifacts_init 4242",
+        setup: ["pr_meta_json() { pr_gh pr view 4242; }"],
+      });
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+      const hostedMetadata = readFileSync(join(f.local, "pr-meta.json"));
+      f.git("checkout", "-q", "prep");
+      const noOpInit = runCorrection(f, { command: "prepare_correction_review_init 4242" });
+      expect(noOpInit.status, noOpInit.stdout + noOpInit.stderr).toBe(0);
+      const noOpPath = join(f.local, "correction-review.json");
+      const noOpReview = JSON.parse(readFileSync(noOpPath, "utf8"));
+      Object.assign(noOpReview, validReview(f.candidate));
+      noOpReview.pr.number = 4242;
+      noOpReview.recommendation = "READY FOR /prepare-pr";
+      noOpReview.issueValidation.status = "valid";
+      noOpReview.correction.resolvedFindings[0].resolution =
+        "Reviewed exact unchanged publication.";
+      writeFileSync(noOpPath, JSON.stringify(noOpReview));
+      const noOp = runCorrection(f);
+      expect(noOp.status, noOp.stdout + noOp.stderr).toBe(0);
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(hosted);
+      const publishedReview = validReview(hosted);
+      publishedReview.pr.number = 4242;
+      publishedReview.issueValidation.status = "valid";
+      publishedReview.findings.push({
+        id: "I1",
+        severity: "IMPORTANT",
+        title: "CI follow-up",
+        area: "reviewed.txt",
+        fix: "Repair current CI",
+      });
+      writeFileSync(join(f.local, "review.json"), JSON.stringify(publishedReview));
+      const hostedReview = readFileSync(join(f.local, "review.json"));
+      expect(JSON.parse(hostedMetadata.toString()).headRefOid).toBe(hosted);
+      f.git("checkout", "-q", "prep");
+      if (transport === "graphql") {
+        f.git("config", "gpg.format", "ssh");
+        f.git("config", "user.signingKey", signingKey);
+        f.git("config", "gpg.ssh.allowedSignersFile", allowedSigners);
+        // Preserve both the reviewed local commit and its verified hosted alias.
+        f.git("merge", "--no-ff", "-S", "-m", "retain hosted publication", hosted);
+      }
+      writeFileSync(join(f.repoDir, "ci-fix.txt"), "a real follow-up delta\n");
+      f.git("add", "ci-fix.txt");
+      f.git("commit", "-S", "-qm", "fix: CI follow-up");
+      const followup = f.git("rev-parse", "HEAD");
+      const receiptPath = join(f.local, "prepare-push-result.env");
+      const receipt = readFileSync(receiptPath);
+      rmSync(receiptPath);
+      expect(runCorrection(f, { command: "prepare_correction_review_init 4242" }).status).not.toBe(
+        0,
+      );
+      expect(f.git("rev-parse", "prep")).toBe(followup);
+      writeFileSync(receiptPath, receipt);
+      const foreignMeta = { ...JSON.parse(hostedMetadata.toString()), headRefOid: f.advance };
+      writeFileSync(join(f.local, "pr-meta.json"), JSON.stringify(foreignMeta));
+      const refused = runCorrection(f, { command: "refresh_prep_branch_for_reviewed_head 4242" });
+      expect(refused.status).not.toBe(0);
+      expect(f.git("rev-parse", "prep")).toBe(followup);
+      expect(readFileSync(join(f.local, "prep-context.env"))).toEqual(context);
+      writeFileSync(join(f.local, "pr-meta.json"), hostedMetadata);
+      const correction = runCorrection(f, { command: "prepare_correction_review_init 4242" });
+      expect(correction.status, correction.stdout + correction.stderr).toBe(0);
+      const reviewPath = join(f.local, "correction-review.json");
+      const review = JSON.parse(readFileSync(reviewPath, "utf8"));
+      expect(review.pr.headSha).toBe(followup);
+      expect(review.correction.incomingHeadSha).toBe(f.source);
+      expect(review.correction.resolvedFindings).toEqual([{ id: "I1", resolution: "" }]);
+      // An unfinished fresh review and old gates cannot publish the new head.
+      expect(runCorrection(f).status).not.toBe(0);
+      Object.assign(review, validReview(followup));
+      review.pr.number = 4242;
+      review.recommendation = "READY FOR /prepare-pr";
+      review.issueValidation.status = "valid";
+      review.correction.resolvedFindings[0].resolution = "Independently reviewed full follow-up.";
+      writeFileSync(reviewPath, JSON.stringify(review));
+      const unresolved = runCorrection(f, { command: "require_prepared_review 4242" });
+      expect(unresolved.status).not.toBe(0);
+      expect(unresolved.stderr).toContain("published review findings");
+      review.correction.publishedReview.resolvedFindings[0].resolution =
+        "Independently reviewed the hosted CI finding too.";
+      writeFileSync(reviewPath, JSON.stringify(review));
+      appendFileSync(join(f.local, "review.json"), "\n");
+      expect(runCorrection(f, { command: "require_prepared_review 4242" }).status).not.toBe(0);
+      writeFileSync(join(f.local, "review.json"), hostedReview);
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${followup}\n`,
+      );
+      const synced = runCorrection(f);
+      expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+      const nextHosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+      expect(f.git("rev-parse", `${nextHosted}^{tree}`)).toBe(
+        f.git("rev-parse", `${followup}^{tree}`),
+      );
+      expect(f.git("rev-parse", "prep")).toBe(followup);
+      expect(readFileSync(join(f.local, "prep-context.env"))).toEqual(context);
+      expect(readFileSync(join(f.local, "pr-meta.json"))).toEqual(hostedMetadata);
+      expect(readFileSync(join(f.local, "review.json"))).toEqual(hostedReview);
+      expect(readFileSync(join(f.local, "correction-incoming-review.json"))).toEqual(
+        originalReview,
+      );
+      expect(readFileSync(join(f.local, "prepare-push-result.env"), "utf8")).toContain(
+        `PUSHED_FROM_SHA=${hosted}\n`,
+      );
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+        transport === "auto" ? "push\npush\n" : "graphql\npush\n",
+      );
+      console.info(
+        JSON.stringify({
+          scenario: "hosted review continuation",
+          transport,
+          status: synced.status,
+          original: f.source,
+          hosted,
+          followup,
+          nextHosted,
+          publicationEvents: readFileSync(join(f.local, "events"), "utf8"),
+        }),
+      );
+    },
+  );
 
   it.each(["review", "other receipt", "selected receipt", "removed receipt"])(
     "rejects %s mutation while protected proof is running",

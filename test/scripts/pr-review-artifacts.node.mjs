@@ -462,6 +462,7 @@ function correctionFixture(t, incomingPaths = ["docs/incoming.md"]) {
     { id: "F1", severity: "IMPORTANT", title: "Fix behavior", area: "paths", fix: "Correct it" },
   ];
   const incomingFiles = {
+    "pr-meta.env": `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\n`,
     "review.json": JSON.stringify(review),
     "pr-meta.json": JSON.stringify({
       number: 42,

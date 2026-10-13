@@ -28,6 +28,25 @@ function fixture(approved = false) {
 }
 
 describePosix("native correction preparation", () => {
+  it.each(["metadata", "environment", "review", "missing", "symlink"])(
+    "rejects %s tampering in immutable incoming authority",
+    (kind) => {
+      const f = fixture(true);
+      const meta = join(f.root, ".local/correction-incoming-meta.json");
+      const env = join(f.root, ".local/correction-incoming-meta.env");
+      const review = join(f.root, ".local/correction-original-review.json");
+      if (kind === "missing" || kind === "symlink") {
+        rmSync(meta);
+        if (kind === "symlink") {
+          symlinkSync(join(f.root, ".local/pr-meta.json"), meta);
+        }
+      } else {
+        const path = kind === "metadata" ? meta : kind === "environment" ? env : review;
+        writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from("\n")]));
+      }
+      expect(f.run("require_prepared_review 42").status).not.toBe(0);
+    },
+  );
   it.each(["OPENCLAW_PR_GIT", "GIT_EXEC"])(
     "uses configured Git for correction review initialization and validation via %s",
     (selector) => {

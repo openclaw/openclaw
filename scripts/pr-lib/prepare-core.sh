@@ -43,6 +43,9 @@ retire_prep_evidence() {
     .local/correction-review.json \
     .local/correction-review.md \
     .local/correction-incoming-review.json \
+    .local/correction-incoming-meta.json \
+    .local/correction-incoming-meta.env \
+    .local/correction-original-review.json \
     .local/correction-incoming-review.md \
     .local/prepare-baseline.json \
     .local/gates-*.log; do
@@ -71,6 +74,9 @@ retire_prep_evidence() {
     .local/correction-review.json \
     .local/correction-review.md \
     .local/correction-incoming-review.json \
+    .local/correction-incoming-meta.json \
+    .local/correction-incoming-meta.env \
+    .local/correction-original-review.json \
     .local/correction-incoming-review.md \
     .local/prepare-baseline.json \
     .local/prepare-push-result.env \
@@ -172,6 +178,7 @@ refresh_prep_branch_for_reviewed_head() {
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
 
+  local PREP_REVIEW_MODE=ready
   # Capture the prepare context before review metadata overrides the same names.
   # shellcheck disable=SC1091
   source .local/prep-context.env
@@ -194,6 +201,12 @@ refresh_prep_branch_for_reviewed_head() {
     exit 1
   fi
   if [ "$recorded_source_head" = "$reviewed_head_sha" ]; then
+    return 0
+  fi
+
+  if [ "${PREP_REVIEW_MODE:-ready}" = correction ]; then
+    require_owned_correction_publication "$pr" "$(pr_git rev-parse "refs/heads/$prep_branch")" || return 1
+    echo "Retaining $prep_branch and original admission after owned correction publication."
     return 0
   fi
 
@@ -354,6 +367,13 @@ prepare_init() {
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
 
+  if [ "$review_mode" = correction ]; then
+    local incoming_metadata
+    incoming_metadata=$(node "$(dirname "$(review_artifacts_helper_path)")/correction-incoming.mjs" \
+      retain "$pr" "$reviewed_head_sha" "$incoming_json_oid") || return 1
+    printf '%s\n' "$incoming_metadata" >> .local/prep-context.env || return 1
+  fi
+
   if [ ! -f .local/prep.md ]; then
     cat > .local/prep.md <<EOF_PREP
 # PR $pr prepare log
@@ -375,10 +395,15 @@ EOF_PREP
 
 prepare_correction_review_init() {
   local pr="$1"
+  shift
+  if [ "$#" -gt 0 ]; then
+    [ "$#" -eq 4 ] && [ "$1" = --recover-incoming ] || return 2
+    shift
+  fi
   enter_worktree "$pr" false || return 1
   mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr" || return 1
-  run_prepared_correction_review "$pr" init || return 1
+  run_prepared_correction_review "$pr" init "$@" || return 1
   echo "Complete independent review of this exact correction in .local/correction-review.json (the validated summary is rendered from JSON)."
   echo "The incoming review is unchanged; gates and publication require the corrected-candidate READY review."
 }
@@ -461,6 +486,7 @@ resolve_prep_publication_target() {
   fi
   PREP_PUBLICATION_LEASE_SHA="$source_head"
   PREP_PUBLICATION_HEAD_SHA="$local_head"
+  PREP_PUBLICATION_OWNED_HEADS="$source_head"
   # A previous publication can advance authority only for this PR, branch,
   # and prepared source. Do not let sourced receipt fields replace context.
   local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
@@ -481,6 +507,7 @@ resolve_prep_publication_target() {
       return 1
     fi
   fi
+  PREP_PUBLICATION_OWNED_HEADS="$PREP_PUBLICATION_OWNED_HEADS $PREP_HEAD_SHA"
   local completed_head="$PREP_HEAD_SHA" completed_local="$LOCAL_PREP_HEAD_SHA"
   local selected_head="$PREP_HEAD_SHA" selected_local="$LOCAL_PREP_HEAD_SHA"
   local previous_result_head="" previous_result_local=""
@@ -501,6 +528,7 @@ resolve_prep_publication_target() {
     # recorded pair before selecting; equal GraphQL aliases need no self-ancestry.
     verify_prep_publication_order "$completed_head" "$completed_local" "$PUSH_PREP_HEAD_SHA" "$PUSH_LOCAL_PREP_HEAD_SHA" || return 1
     verify_prep_publication_order "$previous_result_head" "$previous_result_local" "$PUSH_PREP_HEAD_SHA" "$PUSH_LOCAL_PREP_HEAD_SHA" || return 1
+    PREP_PUBLICATION_OWNED_HEADS="$PREP_PUBLICATION_OWNED_HEADS $PUSHED_FROM_SHA $PUSH_PREP_HEAD_SHA"
     previous_result_head="$PUSH_PREP_HEAD_SHA"
     previous_result_local="$PUSH_LOCAL_PREP_HEAD_SHA"
     if [ -z "$selected_head" ] ||
@@ -523,6 +551,31 @@ resolve_prep_publication_target() {
     verify_prep_head_extends_hosted_head "$selected_head" "$local_head" || return 1
   fi
 }
+
+# A hosted review advances observation, never the original correction admission.
+# Reuse the publisher's receipt/ancestry/tree checks instead of a second lease policy.
+require_owned_correction_publication() (
+  local pr="$1" local_head="$2" reviewed_head
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+  source .local/prep-context.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] || return 1
+  reviewed_head=$(jq -er --argjson pr "$pr" \
+    'select(.number == $pr) | .headRefOid | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+    .local/pr-meta.json) || return 1
+  [ "$reviewed_head" != "$PR_HEAD_SHA_BEFORE" ] || return 0
+  jq -e --arg branch "$PR_HEAD" '.headRefName == $branch' .local/pr-meta.json >/dev/null || return 1
+  if { [ ! -f .local/prepare-push-result.env ] && [ ! -f .local/prepare-sync-result.env ]; } ||
+    ! resolve_prep_publication_target "$pr" "$local_head"; then
+    echo "Reviewed head is not this preparation's owned publication; retain evidence and reconcile." >&2
+    return 1
+  fi
+  # Finalization can advance the receipt before review-init observes the new head.
+  # Every accepted observation must still occur in the publisher's validated chain.
+  case " $PREP_PUBLICATION_OWNED_HEADS " in
+    *" $reviewed_head "*) return 0 ;;
+    *) echo "Reviewed head is absent from owned publication history." >&2; return 1 ;;
+  esac
+)
 
 verify_correction_publication_authority() {
   [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0

@@ -250,8 +250,10 @@ require_correction_review_recommendation() {
 
 run_prepared_correction_review() (
   local pr="$1" command="$2"
+  shift 2
   require_artifact .local/prep-context.env || return 1
   local PREP_REVIEW_MODE="" PREP_INCOMING_JSON_OID=""
+  local PREP_INCOMING_META_OID="" PREP_INCOMING_ENV_OID=""
   local PREP_BASELINE_REFRESH_HEAD="" PREP_BASELINE_REFRESH_OID=""
   local PR_NUMBER="" PR_HEAD_SHA_BEFORE="" PREP_BRANCH=""
   # shellcheck disable=SC1091
@@ -270,9 +272,11 @@ run_prepared_correction_review() (
     return 1
   fi
   validate_review_artifact_data || return 1
+  require_owned_correction_publication "$pr" "$head" || return 1
   node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
     "$command" "$pr" "$PR_HEAD_SHA_BEFORE" "$head" \
-    "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID"
+    "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID" \
+    "$PREP_INCOMING_META_OID" "$PREP_INCOMING_ENV_OID" "$@"
 )
 
 require_prepared_review() {

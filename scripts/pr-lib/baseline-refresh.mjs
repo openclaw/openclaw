@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { resolveIncoming } from "./correction-incoming.mjs";
 import { validateReviewArtifacts } from "./review-artifacts.mjs";
 import { worktreeEntry } from "./review-transition-state.mjs";
 
@@ -432,7 +433,7 @@ function proofInventory(archives) {
   );
 }
 
-function retainedAuthority(binding) {
+function retainedAuthority(binding, incomingFiles) {
   const { record, oid } = binding;
   exactKeys(record.authority, authorityPaths);
   if (!fs.lstatSync(record.archive).isDirectory()) {
@@ -477,7 +478,7 @@ function retainedAuthority(binding) {
     ) {
       throw new Error("Successor predecessor authority changed.");
     }
-    prior = retainedAuthority(predecessor);
+    prior = retainedAuthority(predecessor, incomingFiles);
     if (!context.equals(prior.boundContext)) {
       throw new Error("Successor source context does not retain its predecessor binding.");
     }
@@ -486,6 +487,15 @@ function retainedAuthority(binding) {
       throw new Error("Retained successor proof changed.");
     }
   }
+  const original = resolveIncoming({
+    pr: record.pr,
+    incoming: record.incomingHead,
+    reviewOid: record.incomingReviewOid,
+    metaOid: record.authority[".local/pr-meta.json"],
+    envOid: record.authority[".local/pr-meta.env"],
+    paths: incomingFiles,
+    read: readRegular,
+  });
   for (const path of authorityPaths) {
     const expected = record.authority[path];
     if (path === bindingPath) {
@@ -498,16 +508,19 @@ function retainedAuthority(binding) {
       throw new Error("Invalid retained authority object ID.");
     }
     if ([".local/pr-meta.json", ".local/pr-meta.env", ".local/review.json"].includes(path)) {
-      if (hash(readRegular(path)) !== expected) {
+      const index = [".local/pr-meta.json", ".local/pr-meta.env", ".local/review.json"].indexOf(
+        path,
+      );
+      if (original.oids[index] !== expected) {
         throw new Error(`Incoming authority changed: ${path}`);
       }
     } else if (expected !== "absent" && hash(retained(path)) !== expected) {
       throw new Error(`Retained preparation authority changed: ${path}`);
     }
   }
-  const meta = JSON.parse(readRegular(".local/pr-meta.json"));
+  const meta = original.meta;
   const review = JSON.parse(retained(".local/correction-review.json"));
-  const incoming = JSON.parse(readRegular(".local/review.json"));
+  const incoming = original.review;
   const required = incoming.findings.filter((finding) =>
     ["BLOCKER", "IMPORTANT"].includes(finding.severity),
   );
@@ -798,19 +811,28 @@ function checkSource(pr, source, cwd, root, lockRef, lockOid) {
   requireCheckout(source, source, `pr-${pr}-prep`, cwd, text("rev-parse", "--absolute-git-dir"));
 }
 
-export function baselineRefreshScope({
+export function baselineCorrectionAuthority({
   pr,
   incoming,
   incomingReviewOid,
   head,
   anchor,
   bindingOid,
+  metaOid,
+  envOid,
+  incomingFiles,
 }) {
   if (!anchor && !bindingOid) {
     if (present(bindingPath)) {
       throw new Error("Unbound baseline refresh evidence; retain and reconcile preparation.");
     }
-    return paths(incoming, head, false);
+    if (incomingFiles) {
+      throw new Error("Incoming recovery requires a signed baseline binding.");
+    }
+    return {
+      scope: paths(incoming, head, false),
+      original: resolveIncoming({ pr, incoming, reviewOid: incomingReviewOid, metaOid, envOid }),
+    };
   }
   const binding = bindingAt(anchor);
   if (
@@ -822,9 +844,20 @@ export function baselineRefreshScope({
   ) {
     throw new Error("Baseline refresh authority changed.");
   }
-  const retained = retainedAuthority({ ...binding, anchor });
+  const retained = retainedAuthority({ ...binding, anchor }, incomingFiles);
   git(["merge-base", "--is-ancestor", anchor, head]);
-  return [...retained.scope, ...paths(anchor, head)];
+  return {
+    scope: [...retained.scope, ...paths(anchor, head)],
+    original: resolveIncoming({
+      pr,
+      incoming,
+      reviewOid: incomingReviewOid,
+      metaOid: binding.record.authority[".local/pr-meta.json"],
+      envOid: binding.record.authority[".local/pr-meta.env"],
+      paths: incomingFiles,
+      read: readRegular,
+    }),
+  };
 }
 
 function create(pr, source, baseline, main, archive, snapshot, manifestPath, successor) {

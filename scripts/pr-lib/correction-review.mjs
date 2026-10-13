@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { baselineRefreshScope } from "./baseline-refresh.mjs";
+import { baselineCorrectionAuthority } from "./baseline-refresh.mjs";
+import { incomingHash, readIncomingFile, retainIncoming } from "./correction-incoming.mjs";
 import {
   createReviewArtifactTemplate,
   renderReviewMarkdown,
@@ -21,35 +22,7 @@ function readRegular(path) {
   return readFileSync(path, "utf8");
 }
 
-function incomingReview(pr, incoming, jsonOid) {
-  const reviewPath = ".local/review.json";
-  const review = JSON.parse(readRegular(reviewPath));
-  const prMeta = JSON.parse(readRegular(".local/pr-meta.json"));
-  const violations = validateReviewArtifacts({ review, prMeta });
-  if (violations.length) {
-    throw new Error(violations.join("\n"));
-  }
-  if (prMeta.number !== pr || prMeta.headRefOid !== incoming) {
-    throw new Error("Correction preparation does not match the incoming PR review.");
-  }
-  if (git("hash-object", "--no-filters", reviewPath) !== jsonOid) {
-    throw new Error(
-      "Incoming review changed after correction admission. Retain evidence and re-review.",
-    );
-  }
-  const findings = review.findings.filter((item) =>
-    ["BLOCKER", "IMPORTANT"].includes(item.severity),
-  );
-  if (review.recommendation !== "NEEDS WORK" || findings.length === 0) {
-    throw new Error("Correction admission requires NEEDS WORK with actionable findings.");
-  }
-  if (new Set(findings.map((item) => item.id)).size !== findings.length) {
-    throw new Error("Correction admission requires distinct finding IDs.");
-  }
-  return { prMeta, findings };
-}
-
-function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid) {
+function candidateMetadata(prMeta, incoming, head, changed) {
   if (lstatSync(".local/review-transition.json", { throwIfNoEntry: false })) {
     throw new Error(
       "Complete the retained native transition before correction review or publication.",
@@ -65,19 +38,22 @@ function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid) 
   }
   // Include both the incoming scope and every fixup path. Candidate metadata is
   // derived in memory; the live incoming-head metadata is never rewritten.
-  const changed = baselineRefreshScope({
-    pr: prMeta.number,
-    incoming,
-    incomingReviewOid: jsonOid,
-    head,
-    anchor,
-    bindingOid,
-  });
   const paths = new Set([...prMeta.files.map((file) => file.path), ...changed]);
   return { ...prMeta, headRefOid: head, files: [...paths].map((path) => ({ path })) };
 }
 
-function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindingOid) {
+function runCorrectionReview(
+  command,
+  pr,
+  incoming,
+  head,
+  jsonOid,
+  anchor,
+  bindingOid,
+  metaOid,
+  envOid,
+  incomingFiles,
+) {
   if (
     !["init", "validate"].includes(command) ||
     !Number.isSafeInteger(pr) ||
@@ -86,8 +62,75 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindi
   ) {
     throw new Error("Invalid correction-review command or PR number.");
   }
-  const { prMeta, findings } = incomingReview(pr, incoming, jsonOid);
-  const candidate = candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid);
+  if (incomingFiles && command !== "init") {
+    throw new Error("Incoming recovery only initializes fresh review.");
+  }
+  const { scope, original } = baselineCorrectionAuthority({
+    pr,
+    incoming,
+    incomingReviewOid: jsonOid,
+    head,
+    anchor,
+    bindingOid,
+    metaOid,
+    envOid,
+    incomingFiles,
+  });
+  const { meta: prMeta, findings } = original;
+  const candidate = candidateMetadata(prMeta, incoming, head, scope);
+  const liveMeta = JSON.parse(readIncomingFile(".local/pr-meta.json"));
+  const liveReviewBytes = readIncomingFile(".local/review.json");
+  const liveReview = JSON.parse(liveReviewBytes);
+  const identity = (meta) =>
+    JSON.stringify([
+      meta.number,
+      meta.url,
+      meta.baseRefName,
+      meta.headRefName,
+      meta.baseRepository?.id,
+      meta.baseRepository?.nameWithOwner,
+      meta.baseRepository?.url,
+      meta.headRepository?.id,
+      meta.headRepository?.nameWithOwner,
+      meta.headRepository?.url,
+      meta.headRepositoryOwner?.login,
+    ]);
+  if (identity(liveMeta) !== identity(prMeta)) {
+    throw new Error("Published review changed PR repository or branch identity.");
+  }
+  const liveViolations = validateReviewArtifacts({ review: liveReview, prMeta: liveMeta });
+  if (liveViolations.length) {
+    throw new Error(liveViolations.join("\n"));
+  }
+  const published = liveMeta.headRefOid !== incoming;
+  if (
+    !published &&
+    (incomingHash(liveReviewBytes) !== jsonOid ||
+      incomingHash(readIncomingFile(".local/pr-meta.json")) !== original.oids[0] ||
+      incomingHash(readIncomingFile(".local/pr-meta.env")) !== original.oids[1])
+  ) {
+    throw new Error(
+      "Incoming review changed after correction admission. Retain evidence and re-review.",
+    );
+  }
+  const publishedFindings = published
+    ? liveReview.findings.filter(({ severity }) => ["BLOCKER", "IMPORTANT"].includes(severity))
+    : [];
+  if (
+    published &&
+    (!["NEEDS WORK", "READY FOR /prepare-pr"].includes(liveReview.recommendation) ||
+      new Set(publishedFindings.map(({ id }) => id)).size !== publishedFindings.length)
+  ) {
+    throw new Error("Published review does not admit a correction round.");
+  }
+  // The shell caller validates the native local/hosted receipt. An identical-tree
+  // GraphQL alias need not be a local ancestor; later changed fixups must be.
+  if (
+    published &&
+    git("rev-parse", `${liveMeta.headRefOid}^{tree}`) !== git("rev-parse", `${head}^{tree}`)
+  ) {
+    execFileSync(gitExecutable, ["merge-base", "--is-ancestor", liveMeta.headRefOid, head]);
+  }
   const jsonPath = ".local/correction-review.json";
   const incomingJsonPath = ".local/correction-incoming-review.json";
   if (command === "init") {
@@ -97,7 +140,7 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindi
     for (const path of existing) {
       readRegular(path);
     }
-    if (existing.length) {
+    if (existing.includes(jsonPath)) {
       const archive = mkdtempSync(".local/correction-review-retained.");
       for (const path of existing) {
         copyFileSync(path, join(archive, path.split("/").at(-1)));
@@ -109,7 +152,17 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindi
       incomingReviewJsonOid: jsonOid,
       resolvedFindings: findings.map(({ id }) => ({ id, resolution: "" })),
     };
-    copyFileSync(".local/review.json", incomingJsonPath);
+    if (published) {
+      review.correction.publishedReview = {
+        headSha: liveMeta.headRefOid,
+        jsonOid: incomingHash(liveReviewBytes),
+        resolvedFindings: publishedFindings.map(({ id }) => ({ id, resolution: "" })),
+      };
+    }
+    if (incomingFiles) {
+      retainIncoming(original);
+    }
+    writeFileSync(incomingJsonPath, original.bytes[2]);
     writeFileSync(jsonPath, `${JSON.stringify(review, null, 2)}\n`);
     return;
   }
@@ -150,19 +203,50 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindi
   ) {
     throw new Error("The correction review must resolve every incoming BLOCKER/IMPORTANT finding.");
   }
+  if (published) {
+    const bound = review.correction?.publishedReview;
+    if (
+      bound?.headSha !== liveMeta.headRefOid ||
+      bound?.jsonOid !== incomingHash(liveReviewBytes) ||
+      !Array.isArray(bound.resolvedFindings) ||
+      bound.resolvedFindings.length !== publishedFindings.length ||
+      new Set(bound.resolvedFindings.map((item) => item?.id)).size !== publishedFindings.length ||
+      !publishedFindings.every(({ id }) =>
+        bound.resolvedFindings.some(
+          (item) =>
+            item?.id === id && typeof item.resolution === "string" && item.resolution.trim(),
+        ),
+      )
+    ) {
+      throw new Error(
+        "Correction review must bind and resolve the current published review findings.",
+      );
+    }
+  }
   process.stdout.write(renderReviewMarkdown(review));
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    const [command, pr, incoming, head, jsonOid, anchor, bindingOid, ...extra] =
+    const [command, pr, incoming, head, jsonOid, anchor, bindingOid, metaOid, envOid, ...files] =
       process.argv.slice(2);
-    if (extra.length || !jsonOid) {
+    if (![0, 3].includes(files.length) || !jsonOid) {
       throw new Error(
         "Expected command, PR, incoming/candidate heads and incoming review JSON object ID.",
       );
     }
-    runCorrectionReview(command, Number(pr), incoming, head, jsonOid, anchor, bindingOid);
+    runCorrectionReview(
+      command,
+      Number(pr),
+      incoming,
+      head,
+      jsonOid,
+      anchor,
+      bindingOid,
+      metaOid,
+      envOid,
+      files.length ? files : undefined,
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
