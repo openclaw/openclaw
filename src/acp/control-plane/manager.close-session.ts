@@ -89,9 +89,12 @@ export async function runManagerCloseSession(params: {
 
   let runtimeClosed = false;
   let runtimeNotice: string | undefined;
+  // Owner repair stays fatal unless this close is explicitly deleting the
+  // canonical row. A retained reset must not drop resume identifiers to bypass it.
+  const deletingMetadata = input.clearMeta === true;
+  const tolerateOwnerRepair = (error: unknown): boolean =>
+    deletingMetadata && isAcpOwnerRepairRequired(error);
   if (shouldSkipRuntimeClose) {
-    // Fast-reset discards the record; an owner-repair verdict from fresh-prep
-    // describes the record's provenance, not a reason to keep residue forever.
     input.assertActive?.();
     await tryPrepareFreshManagerRuntimeSession({
       deps: params.deps,
@@ -101,11 +104,11 @@ export async function runManagerCloseSession(params: {
       agentId,
       logPrefix: "acp close fast-reset",
     }).catch((freshError: unknown) => {
-      if (!isAcpOwnerRepairRequired(freshError)) {
+      if (!tolerateOwnerRepair(freshError)) {
         throw freshError;
       }
       logVerbose(
-        `acp close fast-reset: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; proceeding with discard`,
+        `acp close fast-reset: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; deleting metadata`,
       );
     });
     assertCurrent();
@@ -146,8 +149,8 @@ export async function runManagerCloseSession(params: {
       }
       input.assertActive?.();
       const ownerRepairDiscarding =
-        isAcpOwnerRepairRequired(acpError) &&
-        input.discardPersistentState &&
+        tolerateOwnerRepair(acpError) &&
+        input.discardPersistentState === true &&
         acpError.code === "ACP_SESSION_INIT_FAILED";
       if (
         input.allowBackendUnavailable &&
@@ -164,9 +167,6 @@ export async function runManagerCloseSession(params: {
         }
         assertCurrent();
         if (input.discardPersistentState) {
-          // Discard-close tolerates owner-repair verdicts from fresh-prep: the
-          // residue record is being destroyed, so its provenance verdict cannot
-          // block the teardown that would remove it.
           input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
@@ -177,11 +177,11 @@ export async function runManagerCloseSession(params: {
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           }).catch((freshError: unknown) => {
-            if (!isAcpOwnerRepairRequired(freshError)) {
+            if (!tolerateOwnerRepair(freshError)) {
               throw freshError;
             }
             logVerbose(
-              `acp close recovery: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; proceeding with discard`,
+              `acp close recovery: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; deleting metadata`,
             );
           });
           assertCurrent();

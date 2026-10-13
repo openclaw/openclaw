@@ -1,7 +1,9 @@
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 // Install manager and runtime mocks before loading the reset implementation.
 // oxfmt-ignore
 import {
+  acpManagerMocks,
   acpRuntimeMocks,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
@@ -111,3 +113,50 @@ test.each(["already retired", "caller retired"] as const)(
     }
   },
 );
+
+test("session delete removes local ACP metadata when owner repair blocks backend cleanup", async () => {
+  const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:main";
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+  const meta = {
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: "legacy-unqualified",
+    identity: {
+      state: "resolved" as const,
+      acpxRecordId: sessionKey,
+      acpxSessionId: "original-backend",
+      source: "ensure" as const,
+      lastUpdatedAt: Date.now(),
+    },
+    mode: "persistent" as const,
+    state: "idle" as const,
+    lastActivityAt: Date.now(),
+  };
+  seedCanonicalAcpSessionMeta({ sessionKey, meta });
+  const repairError = new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
+    detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+  });
+  acpManagerMocks.cancelSession.mockRejectedValue(repairError);
+  const cfg = { session: { store: storePath } };
+  const before = readAcpSessionEntry({ sessionKey })?.acp;
+
+  const reset = await closeAcpRuntimeForSession({
+    cfg,
+    agentId: "main",
+    sessionKey,
+    reason: "session-reset",
+  });
+  expect(reset).toMatchObject({ message: expect.stringContaining("owner repair required") });
+  expect(readAcpSessionEntry({ sessionKey })?.acp).toEqual(before);
+
+  const deleted = await closeAcpRuntimeForSession({
+    cfg,
+    agentId: "main",
+    sessionKey,
+    reason: "session-delete",
+  });
+  expect(deleted).toBeUndefined();
+  expect(readAcpSessionEntry({ sessionKey })?.acp).toBeUndefined();
+});

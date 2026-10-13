@@ -249,23 +249,27 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     const manager = new AcpSessionManager(deps);
     try {
       await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
-      // Non-discarding close must still reject: the residue record is retained
-      // and the owner-repair verdict protects it from silent mutation.
-      await expect(
-        manager.closeSession({
-          ...target,
-          reason: "reset",
-          clearMeta: true,
-          discardPersistentState: false,
-          allowBackendUnavailable: true,
-        }),
-      ).rejects.toBe(repairError);
-      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
-      // Discarding close proceeds: the residue record is being destroyed, so
-      // its provenance verdict cannot block teardown (issue #151859).
+      // Retained discard and ordinary close still reject. Owner repair must not
+      // become a way to rewrite resume identifiers while the row survives.
+      for (const close of [
+        { clearMeta: false, discardPersistentState: true },
+        { discardPersistentState: true },
+        { clearMeta: true, discardPersistentState: false },
+      ] as const) {
+        await expect(
+          manager.closeSession({
+            ...target,
+            reason: "reset",
+            ...close,
+            allowBackendUnavailable: true,
+          }),
+        ).rejects.toBe(repairError);
+        expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+      }
+      // Explicit metadata deletion proceeds past the verdict and removes the row.
       await manager.closeSession({
         ...target,
-        reason: "reset",
+        reason: "delete",
         clearMeta: true,
         discardPersistentState: true,
         allowBackendUnavailable: true,
