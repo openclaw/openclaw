@@ -21,10 +21,6 @@ import {
 } from "../agents/agent-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
-import type {
-  CodeModeNamespaceDescriptor,
-  SerializedCodeModeNamespaceValue,
-} from "../agents/code-mode-namespaces.js";
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
@@ -95,6 +91,7 @@ import {
   parseTriggerResult,
   scriptFailure,
   type CronScriptPayloadExecutionResult,
+  triggerStateNamespace,
 } from "./trigger-script-result.js";
 import { createCronTriggerRuntimeLifetime } from "./trigger-script-runtime-lifetime.js";
 import type {
@@ -349,23 +346,6 @@ async function prepareTriggerRuntime(
     }
   };
   return await withPluginRuntimeRegistryScope(pluginRegistry, prepare);
-}
-
-function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNamespaceDescriptor {
-  const entries: Array<[string, SerializedCodeModeNamespaceValue]> = [
-    ["state", { kind: "value", value: state }],
-  ];
-  if (streamBatch !== undefined) {
-    entries.push(["streamBatch", { kind: "value", value: streamBatch }]);
-  }
-  return {
-    id: "cron:trigger",
-    globalName: "trigger",
-    scope: {
-      kind: "object",
-      entries,
-    },
-  };
 }
 
 function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
