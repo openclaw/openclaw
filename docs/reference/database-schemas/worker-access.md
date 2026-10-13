@@ -135,6 +135,14 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Cold input preparation uses the turn planner instead of fetching a full actor
+replica first. The planner carries its recovery expectation into the input
+command; prepared, explicit, and warm replica expectations remain fixed across
+version retries. Transcript input and restart recovery still
+commit atomically under the existing writer FIFO, source checks, final host
+COMMIT authorization, and receipt settlement. Schemas, durability, and update
+behavior are unchanged.
+
 Session memory indexing is background work. It batches transcript changes after
 an idle gap, pauses while the agent is busy, and yields between bounded source
 batches to foreground work. Search reads the last indexed state; it does not
@@ -308,10 +316,12 @@ facts; cold or invalidated actors use the canonical snapshot read. Trajectory
 append and trim touch no session fields and preserve those receipts. Transcript
 bodies and byte limits remain SQL-owned bounded reads.
 
-Participant projections carry an autocommit read into the metadata CAS owner's
-unchanged immediate write transaction. Ordinary readers establish their own native
-snapshot. Concurrent participant updates remain independent of metadata CAS. These
-caches change no schema, retention, stored format, or update behavior.
+Participant reads and entry projections reuse the session actor's complete committed
+participant records, including contribution counts and recency. The participant writer
+updates those records in its existing transaction and publishes them on commit;
+rollback retains the previous facts. Cold, evicted, or invalidated actors use the
+canonical participant read. Participant updates remain independent of metadata CAS.
+This changes no schema, retention, stored format, or update behavior.
 
 ## Session and ancillary worker operations
 
@@ -4133,10 +4143,13 @@ admission can refuse dispatch or close can clean up the original handle. Host
 admission and physical-identity checks remain on the host.
 Checkpoint-only PASSIVE ticks preserve the connection's busy timeout without
 reading or changing it: SQLite does not invoke the busy handler for PASSIVE.
-After a complete tick, the WAL owner skips subsequent checkpoint-only work until
-an in-process write receipt changes. Sibling handles and workers share that receipt;
-blocked or failed checkpoints keep retrying when a reader may have released.
-Connections without a known write receipt continue checkpointing on every tick.
+After a complete tick, the WAL owner disarms its checkpoint-only timer until a
+local in-process write receipt schedules the next pass within ten seconds. Local
+sibling handles share the notification, and each native writer worker schedules
+its own maintenance. Later writes do not postpone a pending pass. Blocked or failed
+checkpoints keep retrying when a reader may have released. Connections without a
+known write receipt and explicit blocking checkpoint policies retain their timed
+cadence. Close removes the write notification along with the timer.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 
 Completed checkpoint-only passes publish their write revision through the existing
@@ -4150,6 +4163,10 @@ WAL work pauses so Doctor and update-recovery captures keep stable source bytes.
 Explicitly admitted maintenance remains available. The final maintenance client
 release resumes the same worker's normal ten-second checkpoint cadence; overlapping
 maintenance clients keep it paused until all release.
+When another process holds offline maintenance custody, the state owner check
+still refuses each scheduled pass. That refusal skips the pass without recording a
+checkpoint failure or warning; health keeps its last real observation and the next
+tick retries.
 
 The Gateway run loop retains the shared-state database cache, actor owner, and
 SQLite worker broker until the final lifecycle outcome is recorded. Orderly

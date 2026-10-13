@@ -30,7 +30,10 @@ export type {
   ResponsesServiceTierObservation,
 } from "../transports/openai-responses-contracts.js";
 
-export { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
+export {
+  independentResponsesRequest,
+  responsesRequestLifecycle,
+} from "../transports/openai-responses-request-lifecycle.js";
 export { bindResponsesInputMessage } from "../transports/openai-responses-replay-messages-internal.js";
 export {
   encodedModelRequestBodyStream,

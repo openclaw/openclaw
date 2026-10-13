@@ -77,6 +77,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
       onCaptureStart?: () => void;
+      onCaptureEnd?: () => void;
     },
     prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
@@ -429,6 +430,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
       );
     }
     assertCurrent(context);
+    if (claimed) {
+      context.onCaptureEnd?.();
+    }
     return captured;
   };
 }

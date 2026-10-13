@@ -77,28 +77,6 @@ type StatusMemorySearchManagerResolver = (params: {
   manager: StatusMemorySearchManager | null;
 }>;
 
-function shouldTryLocalStatusRpcFallback(params: {
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-}): params is {
-  gatewayMode: "local";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult;
-} {
-  // Only retry local loopback probes; remote endpoints should not receive an extra status RPC.
-  if (
-    params.gatewayMode !== "local" ||
-    !params.gatewayProbe ||
-    params.gatewayProbe.ok ||
-    !isLoopbackGatewayUrl(params.gatewayUrl)
-  ) {
-    return false;
-  }
-  const error = params.gatewayProbe.error?.toLowerCase() ?? "";
-  return error.includes("timeout") || params.gatewayProbe.auth?.capability === "unknown";
-}
-
 async function applyLocalStatusRpcFallback(params: {
   cfg: OpenClawConfig;
   configPath: string;
@@ -110,10 +88,18 @@ async function applyLocalStatusRpcFallback(params: {
   gatewayProbeDeadlineMs: number;
   enabled?: boolean;
 }): Promise<GatewayProbeResult | null> {
-  if (params.enabled === false) {
+  // Only retry ambiguous local loopback probes, never remote or origin-scoped endpoints.
+  if (
+    params.enabled === false ||
+    params.gatewayMode !== "local" ||
+    !params.gatewayProbe ||
+    params.gatewayProbe.ok ||
+    !isLoopbackGatewayUrl(params.gatewayUrl)
+  ) {
     return params.gatewayProbe;
   }
-  if (!shouldTryLocalStatusRpcFallback(params)) {
+  const error = params.gatewayProbe.error?.toLowerCase() ?? "";
+  if (!error.includes("timeout") && params.gatewayProbe.auth?.capability !== "unknown") {
     return params.gatewayProbe;
   }
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.

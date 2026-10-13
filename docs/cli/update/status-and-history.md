@@ -56,6 +56,12 @@ It describes the preferred selection for the observed configured channel, not ca
 An explicit update invocation can select a different target or install method.
 Older installed status commands cannot acquire this observation from candidate code.
 
+Root-owned, protected immutable layouts managed by an external deployment owner
+report a host-managed installation even without native adoption. Startup status
+does not run Git discovery or enable automatic updates for these layouts. Use the
+deployment owner to update them; native preparation and activation still require
+explicit adoption after the previous updater has stopped.
+
 For adopted immutable installations, the installation projection includes
 `activationEnabled` only when explicitly enabled. `activation` reports a
 retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`,

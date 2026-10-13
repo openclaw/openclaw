@@ -608,7 +608,8 @@ assert_single_listener() {
 	LISTENER_SNAPSHOT="$listing" EXPECTED_PID="$expected_pid" EXPECTED_PORT="$gateway_port" \
 		"$node_bin" -e '
 const lines = (process.env.LISTENER_SNAPSHOT ?? "").split("\n").filter(Boolean);
-if (lines.length < 1 || lines.length > 2) process.exit(2);
+if (!lines.length) process.exit(75);
+if (lines.length > 2) process.exit(2);
 const families = new Set();
 for (const line of lines) {
   const address = line.match(new RegExp("(?:^|\\s)(127\\.0\\.0\\.1|\\[::1\\]):" + process.env.EXPECTED_PORT + "(?:\\s|$)"))?.[1];
@@ -1168,13 +1169,21 @@ verification_step() {
 verify_convergence() {
 	local release="$1" expected_info="$2" scope="${3:-system}" expected_build channels gateway_json
 	local observed_process health_json health_status startup_json startup_status ready_json ready_status
-	local convergence_state channel_state timeout_ms verification_result_started
+	local convergence_state channel_state timeout_ms verification_result_started listener_exit
 	local -a probe_args channel_args
 	cpu_degraded_waived=0
 	profile_convergence=""
 	expected_build="$(INFO_JSON="$expected_info" verification_step convergence.expected-build "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.INFO_JSON).buildId)')" || return 1
 	verification_step convergence.release proof validate-release "$release" "$(basename "$release")" "$root_uid" sealed >/dev/null || return 1
-	verification_step convergence.generation capture_generation "$scope" || return 1
+	verification_step convergence.generation capture_service_generation "$scope" || return 1
+	if assert_single_listener "$service_pid"; then :; else
+		listener_exit=$?
+		# An empty socket table is normal while this bound generation starts.
+		((listener_exit == 75)) && return 75
+		verification_failure convergence.generation "$listener_exit" "$SECONDS" invalid-listener
+		fail 'Gateway does not own one exact loopback listener'
+		return 1
+	fi
 	verified_pid="$service_pid"
 	verified_generation="$service_generation"
 	if [[ "$scope" == system ]]; then
@@ -1418,7 +1427,7 @@ load_journal_witness() {
 }
 
 wait_for_live() {
-	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline
+	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline convergence_exit listener_wait_logged=0
 	local verification_owned_pid="${4:-}" verification_owned_generation="${5:-}" verification_owned_scope="$scope"
 	local +x cpu_degraded_waived=0
 	# Descriptor-less legacy recovery and no-journal checks can prove only fresh current state.
@@ -1441,6 +1450,12 @@ wait_for_live() {
 					"$(basename "$release")" "$verified_pid" "$verified_generation" "$scope" >&2
 			fi
 			return 0
+		else
+			convergence_exit=$?
+			if ((convergence_exit == 75 && listener_wait_logged == 0)); then
+				printf 'VERIFICATION_WAITING stage=convergence.listener outcome=not-bound\n' >&2
+				listener_wait_logged=1
+			fi
 		fi
 		sleep_seconds="${OPENCLAW_TEAM_RETRY_SECONDS:-2}"
 		((SECONDS < verification_deadline)) || break

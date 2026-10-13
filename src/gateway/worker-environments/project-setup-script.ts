@@ -1,3 +1,5 @@
+import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
+import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_MANIFEST_BYTES,
@@ -20,6 +22,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const manifestScript = ${JSON.stringify(REMOTE_WORKSPACE_MANIFEST_JS)};
 process.umask(0o077);
 const machineHome = fs.realpathSync(os.homedir());
+let setupPath = process.env.PATH;
 const env = { PATH: process.env.PATH, HOME: machineHome, LANG: "C.UTF-8", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: os.devNull, GIT_CONFIG_KEY_1: "core.fsmonitor", GIT_CONFIG_VALUE_1: "false", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 const ownedDirectory = (parent, name, create = false) => {
   const target = path.join(parent, name);
@@ -120,7 +123,7 @@ const runSetup = (script, workspaceDir, homeDir) => {
   return new Promise((resolve, reject) => {
     child = spawn(script, [], {
       cwd: workspaceDir,
-      env: { PATH: process.env.PATH, HOME: homeDir, LANG: "C.UTF-8", OPENCLAW_SOURCE_TREE_PATH: workspaceDir, OPENCLAW_WORKTREE_PATH: workspaceDir },
+      env: { PATH: setupPath, HOME: homeDir, LANG: "C.UTF-8", OPENCLAW_SOURCE_TREE_PATH: workspaceDir, OPENCLAW_WORKTREE_PATH: workspaceDir },
       detached: true,
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -209,6 +212,7 @@ const runSetup = (script, workspaceDir, homeDir) => {
   } else if (!fresh && previous.sourceManifestRef !== sourceManifestRef) {
     throw new Error("Prepared project pristine baseline changed");
   }
+  if (fresh || changed) setupPath = await (${PREPARE_REPOSITORY_NODE_JS})(workspaceDir, homeDir, machineHome) ?? setupPath;
   if ((fresh || changed) && input.setupRecipe && input.runSetupScript !== false) {
     const script = path.join(ownedDirectory(workspaceDir, ".openclaw"), "worktree-setup.sh");
     const stat = fs.lstatSync(script);
@@ -253,7 +257,7 @@ export function createProjectSetupScript(
   },
   inspectOnly = false,
 ): string {
-  return `set -eu
+  return `${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
 node <<'PROJECT_SETUP_SCRIPT'
 (${PREPARE_PROJECT_WORKSPACE_JS})(${JSON.stringify(input)}, ${inspectOnly})
   .then((result) => process.stdout.write(JSON.stringify(result ?? null)))

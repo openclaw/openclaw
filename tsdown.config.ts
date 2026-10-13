@@ -959,6 +959,10 @@ const configs: UserConfig[] = [
     "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
   }),
   workerDeployBuildConfig({
+    "worker/gateway-state-owner-heartbeat.worker":
+      "src/infra/gateway-state-owner-heartbeat.worker.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
   workerDeployBuildConfig({

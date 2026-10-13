@@ -32,7 +32,6 @@ import {
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
-import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -50,6 +49,7 @@ import {
 } from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -160,7 +160,7 @@ it.each([
       const agentId = "usage-test";
       const databasePath = openOpenClawAgentDatabase({ agentId }).path;
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(databasePath, { OPENCLAW_STATE_DIR: root });
+      revokeSqliteDatabaseAdmissionsForPath(databasePath);
       const cwd = retarget
         ? vi.spyOn(process, "cwd").mockReturnValue(path.dirname(databasePath))
         : undefined;

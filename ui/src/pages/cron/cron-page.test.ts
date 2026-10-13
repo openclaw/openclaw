@@ -14,7 +14,12 @@ import {
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
-import { createCronViewJob, scheduledJob, selectSegmented } from "./view.test-support.ts";
+import {
+  createCronViewJob,
+  openCronMenu,
+  scheduledJob,
+  selectSegmented,
+} from "./view.test-support.ts";
 import "./cron-page.tsx";
 
 afterEach(() => {
@@ -450,7 +455,7 @@ describe("CronPage editor state sync", () => {
     expect(Boolean(page.querySelector('[data-test-id="cron-new-task"]'))).toBe(false);
     expect(Boolean(page.querySelector('[data-test-id="cron-row-run-access-job"]'))).toBe(false);
     expect(Boolean(page.querySelector('[data-test-id="cron-row-toggle-access-job"]'))).toBe(false);
-    expect(Boolean(page.querySelector("wa-dropdown.cron-job-menu"))).toBe(false);
+    expect(Boolean(page.querySelector(".cron-job-menu"))).toBe(false);
 
     (page.querySelector('[data-test-id="cron-row-access-job"]') as HTMLElement).click();
     await waitForCronPage(() =>
@@ -821,6 +826,7 @@ describe("CronPage editor state sync", () => {
         (item) => item.textContent?.trim() === "Remove",
       );
     await waitForCronPage(() => expect(findRemoveButton()?.disabled).toBe(false));
+    await openCronMenu(page, ".cron-job-menu");
     findRemoveButton()?.click();
     const confirmActions = await waitForConfirmDialogActions();
     const confirmButton = Array.from(
@@ -904,11 +910,8 @@ describe("CronPage pacing", () => {
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
     const page = createPage(createContext(gateway), { render: true });
     await waitForCronPage(() => expect(page.querySelector(".cron-job-menu")).not.toBeNull());
-    page
-      .querySelector(".cron-job-menu")!
-      .dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: "clone" } }, bubbles: true }),
-      );
+    await openCronMenu(page, ".cron-job-menu");
+    page.querySelector<HTMLButtonElement>('.cron-job-menu [data-value="clone"]')!.click();
     await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
     expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe("Daily ping copy");
 

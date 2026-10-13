@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
@@ -65,6 +70,8 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   let closing = false;
   let needsSynchronization = true;
   let sessionRevision = 0;
+  let refreshRetryAt = 0;
+  let refreshRetryMs = 0;
   const views = new WeakMap<GatewayClient, { signature: string; revision: number }>();
   const sharingTargets = createMentionSharingTargets({
     getRuntimeConfig: () => params.getRuntimeConfig(),
@@ -300,18 +307,17 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     publishConnectedViews(connectedTargets);
   }
 
-  function scheduleExpiry(retryAfterMs?: number): void {
+  function scheduleExpiry(): void {
     if (
       closing ||
       scheduler.signal.aborted ||
-      (state.processed.size === 0 && retryAfterMs === undefined)
+      (state.processed.size === 0 && refreshRetryAt === 0)
     ) {
       return;
     }
     scheduler.schedule({
       id: `mentions:expiry:${params.gatewayInstanceId}`,
-      mode: "earliest",
-      ...(retryAfterMs === undefined ? { atMs: state.nextExpiryAt } : { delayMs: retryAfterMs }),
+      atMs: refreshRetryAt || state.nextExpiryAt,
       run: refresh,
     });
   }
@@ -320,16 +326,36 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     if (closing || scheduler.signal.aborted) {
       return;
     }
+    const started = performance.now();
+    let phase = "admission";
     try {
       await enqueue(async () => {
+        // Queued invalidations share the retry budget; foreground reads still retry immediately.
+        if (scheduler.now() < refreshRetryAt) {
+          return;
+        }
+        phase = "maintenance";
         await maintain();
         context.admission.assertCurrent();
-        await refreshConnectedViews();
+        phase = "sharing";
+        await prepareTargets();
+        phase = "publication";
+        publishConnectedViews(connectedTargets);
+        refreshRetryAt = 0;
+        refreshRetryMs = 0;
         scheduleExpiry();
       });
-    } catch {
-      log.warn("Unable to refresh the mention Inbox; current reads will retry.");
-      scheduleExpiry(60_000);
+    } catch (error) {
+      if (closing || scheduler.signal.aborted) {
+        return;
+      }
+      refreshRetryMs = Math.min(refreshRetryMs ? refreshRetryMs * 2 : 60_000, 15 * 60_000);
+      refreshRetryAt = scheduler.now() + refreshRetryMs;
+      log.warn(
+        `Unable to refresh the mention Inbox; current reads will retry. phase=${phase} error=${readErrorName(error) || "unknown"} code=${extractErrorCode(error) ?? "unknown"} elapsedMs=${Math.round(performance.now() - started)} retryAfterMs=${refreshRetryMs} cause=${formatErrorMessage(error, { includeCode: true })}`,
+        { source: context.admission.databasePath },
+      );
+      scheduleExpiry();
     }
   }
 

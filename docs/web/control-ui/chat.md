@@ -176,7 +176,7 @@ Side chat answers questions about the selected session and its project without e
 
 When the agent's primary model runs on a CLI runtime such as `claude-cli`, no utility model is set explicitly, and direct provider authentication is unavailable, Side chat answers through that same CLI runtime. Subscription-only installs need no provider API key. On that route each answer is a tool-free, one-shot side question that uses the bounded session snapshot and observer notes instead of the read-only session tools, and image questions are not supported. Installs with working direct provider authentication keep the direct route, including read-only tools and image support.
 
-Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
+Restoring the Side chat thread checks current session visibility without waiting for unrelated session writes. Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
 Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
 
@@ -442,7 +442,7 @@ Native Codex Code Mode calls show **run JavaScript** when no purpose is availabl
 
 Filesystem paths and credential-shaped values remain readable in tool activity and conversation text. Logs and diagnostic exports retain secret masking. Compact tool labels shorten macOS, Linux, and Windows home-directory prefixes to `~` while retaining the directory and filename.
 
-Retries stay in the working claw row: **Retrying…**, **Retrying in …s** when the runtime supplies a deadline, or **Trying fallback model…**. Attempt failures stay out of the conversation while automatic recovery continues. A terminal failure leaves one icon-backed notice in the thread, preserving any partial output. The latest failed run offers **Try again** (a continuation that checks completed work rather than replaying the original prompt) and **Change model**. Your unsent draft stays intact. **Details** exposes the safe failure diagnostic without starting another request.
+Retries stay in the working claw row: **Retrying…**, **Retrying in …s** when the runtime supplies a deadline, or **Trying fallback model…**. Attempt failures stay out of the conversation while automatic recovery continues. A terminal failure leaves one icon-backed notice in the thread, preserving any partial output. The latest failed run offers **Try again** (a continuation that checks completed work rather than replaying the original prompt) and **Change model**. Your unsent draft stays intact. If you reload or reconnect during a run, its terminal error refreshes the conversation automatically so the failure notice and recovery actions become available. **Details** exposes the safe failure diagnostic without starting another request.
 
 Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up. A run-error banner remains available when its durable thread notice has not loaded; once that notice is present, the duplicate banner is hidden.
 

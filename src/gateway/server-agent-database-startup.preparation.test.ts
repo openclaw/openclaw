@@ -26,6 +26,11 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// mock-isolation: This suite owns startup timers; filesystem observation has separate coverage.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
+}));
+
 // mock-isolation: Path resolution needs no auth database or credential loaders.
 vi.mock("../agents/auth-profiles/sqlite.js", () => ({
   resolveAuthProfileDatabasePath: (agentDir: string) =>

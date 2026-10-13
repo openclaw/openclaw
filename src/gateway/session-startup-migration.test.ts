@@ -28,6 +28,7 @@ import * as gatewayLock from "../infra/gateway-lock.js";
 import * as gatewayOwner from "../infra/gateway-owner-lease.js";
 import * as stateOwner from "../infra/gateway-state-owner.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -87,6 +88,13 @@ describe("runStartupSessionMaintenanceForTest", () => {
         for (let boot = 0; boot < 2; boot++) {
           await closeOpenClawAgentDatabasesAsync();
           closeOpenClawAgentDatabasesForTest(stateDir);
+          if (boot === 0) {
+            for (const agentId of agentIds) {
+              revokeSqliteDatabaseAdmissionsForPath(
+                resolveOpenClawAgentSqlitePath({ agentId, env }),
+              );
+            }
+          }
           started.mockClear();
           const log = makeLog();
           await runStartupSessionMaintenanceForTest({ cfg, env, log });

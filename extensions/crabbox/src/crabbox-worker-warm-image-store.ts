@@ -17,6 +17,10 @@ export type CrabboxState = Pick<OpenClawPluginApi["runtime"]["state"], "openKeye
 type WorkerNodeRuntimeIdentity = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
 >;
+export type WarmStartStatus = Parameters<
+  NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["reportStartStatus"]>
+>[0];
+export type WarmColdReason = Extract<WarmStartStatus, { mode: "cold" }>["reason"];
 
 export type WarmImageRecord = {
   checkpointId: string;
@@ -34,6 +38,7 @@ export type WarmImageRecord = {
 };
 
 export type WarmAllocationRecord = {
+  coldReason?: WarmColdReason;
   choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
   machineClass: string;
   /** Absent in existing Linux allocations. */
@@ -53,6 +58,7 @@ export type WarmAllocationRecord = {
 
 export type WarmProfileRecord = {
   version: 3;
+  latestColdReason?: WarmColdReason;
   /** Configured profile that most recently allocated from this key; display only. */
   profileId?: string;
   backend?: string;
@@ -378,6 +384,7 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
       id: string;
       projectKey?: string;
       availableImage?: WarmImageRecord;
+      coldReason?: WarmColdReason;
       displayFacts?: WarmProfileDisplayFacts;
       allocation: Omit<WarmAllocationRecord, "choice" | "imageGeneration">;
       assertCurrent: () => void;
@@ -422,10 +429,16 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
             : { kind: "cold" };
         const next = {
           ...record,
+          ...(choice.kind === "cold"
+            ? { latestColdReason: params.coldReason ?? "snapshot-unavailable" }
+            : {}),
           allocations: {
             ...record.allocations,
             [params.id]: {
               choice,
+              ...(choice.kind === "cold"
+                ? { coldReason: params.coldReason ?? "snapshot-unavailable" }
+                : {}),
               ...params.allocation,
               imageGeneration:
                 choice.kind === "checkpoint"
@@ -573,6 +586,7 @@ export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
     allocations: value.allocations,
     capture: crabboxWarmImageCaptureStatus(value),
     captureUnsupported: value.captureUnsupported,
+    latestColdReason: value.latestColdReason,
     retirement:
       value.operation?.type === "retire"
         ? { checkpointId: value.operation.checkpointId }

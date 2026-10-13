@@ -11,6 +11,7 @@ import {
   assertCodexSessionRuntimeOwnership,
   requireCodexSupervisionModelSelection,
 } from "./binding-connection.js";
+import { recordCodexTurnForkSettings } from "./client-fork-settings.js";
 import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
@@ -317,6 +318,7 @@ export async function prepareCodexAttemptTurnRequest(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      recordCodexTurnForkSettings(turnClient, turnStartParams);
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);

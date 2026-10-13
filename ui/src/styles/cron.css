@@ -1,7 +1,7 @@
 /* ── Automations (cron) page ─────────────────────────────────────────────────
  * Structure comes from the settings design language (settings.css); this file
  * only keeps the cron-specific escape hatches: the jobs table grid, stat grid,
- * run-history entries, and the details-based popover menus.
+ * run-history entries, and the owned popover menus.
  */
 
 .cron-page {
@@ -771,15 +771,6 @@
   padding: 0;
 }
 
-/* Invisible full-viewport hit area so clicking anywhere outside closes the menu. */
-.cron-job-menu[open] > .cron-job-menu__trigger::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  cursor: default;
-}
-
 .cron-job-menu__item {
   min-height: var(--menu-item-height);
   border: 0;
@@ -902,6 +893,12 @@
   white-space: nowrap;
 }
 
+.cron-filter-dropdown__trigger > .oc-menu-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .cron-filter-dropdown__trigger svg {
   width: 12px;
   height: 12px;
@@ -915,6 +912,11 @@
   align-items: center;
   color: var(--text);
   font-size: 13px;
+}
+
+.cron-filter-dropdown__option > .oc-menu-item__check {
+  order: 0;
+  margin-inline-start: 0;
 }
 
 /* Run entries: flat list separated by hairlines inside the group. */
@@ -1153,9 +1155,9 @@
   padding-bottom: var(--space-3);
 }
 
-/* Web Awesome popup surfaces own positioning, dismissal, and focus. */
-.cron-job-menu::part(menu),
-.cron-filter-dropdown__details::part(menu) {
+/* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
+.cron-job-menu > .oc-menu,
+.cron-filter-dropdown__details > .oc-menu {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
@@ -1163,10 +1165,10 @@
   box-shadow: var(--overlay-shadow);
 }
 
-.cron-job-menu::part(menu) {
+.cron-job-menu > .oc-menu {
   min-width: 170px;
 }
 
-.cron-filter-dropdown__details::part(menu) {
+.cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
 }

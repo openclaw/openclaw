@@ -10,6 +10,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -55,6 +56,38 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it("records raw Code Mode causes and correlation ids without a debug flag", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "error", consoleLevel: "silent", file });
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "0");
+    const cause = new TypeError("synthetic failure token=example-fixture-value");
+    logCodeModeFailure(cause, {
+      failurePhase: "bridge",
+      sessionId: "session-fixture",
+      sessionKey: "agent:fixture:main",
+      runId: "agent-run-fixture",
+      codeModeRunId: "cell-fixture",
+      toolCallId: "call-fixture",
+      workerId: "worker-fixture",
+      bridgeRequestId: "bridge:callValue:1",
+      bridgeDispatchStarted: true,
+    });
+    await testApi.flushFileLogQueueForTests();
+    const raw = fs.readFileSync(file, "utf8");
+    expect(raw).toContain(cause.message);
+    expect(raw).toContain("TypeError");
+    expect(raw).toContain("subsystem.test.ts");
+    for (const id of [
+      "session-fixture",
+      "agent-run-fixture",
+      "cell-fixture",
+      "call-fixture",
+      "worker-fixture",
+      "bridge:callValue:1",
+    ]) {
+      expect(raw).toContain(id);
+    }
+  });
   it.each([
     { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "[whatsapp] hello" },
     {

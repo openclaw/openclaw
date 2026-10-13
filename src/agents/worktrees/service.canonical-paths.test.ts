@@ -70,6 +70,7 @@ describe("ManagedWorktreeService canonical paths", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     resetConfigRuntimeState();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -289,6 +290,7 @@ describe("configured managed worktree root", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });

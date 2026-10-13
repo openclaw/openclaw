@@ -66,6 +66,7 @@ export function prepareEmbeddedRunTerminal(input: {
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { runParams, attempt } = input;
+  const replyDeliveryState = resolveSourceReplyDelivery(attempt, input.replyDeliveryState);
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
     attempt.terminal,
   );
@@ -176,7 +177,7 @@ export function prepareEmbeddedRunTerminal(input: {
       effective: effectiveModelRef,
       successfulToolNames: resolveSuccessfulToolNames(attempt),
       assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
-      sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
+      sourceReplyDelivered: replyDeliveryState === "delivered" ? true : undefined,
       rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef, runParams.config),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
@@ -212,7 +213,8 @@ export function prepareEmbeddedRunTerminal(input: {
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
-    didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
+    didDeliverSourceReplyViaMessageTool: replyDeliveryState === "delivered",
+    sourceReplyDeliveryState: replyDeliveryState,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
     agentId: runParams.agentId,
     runId: runParams.runId,
@@ -225,25 +227,30 @@ export function prepareEmbeddedRunTerminal(input: {
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
-  const payloadsWithToolMedia = mergeToolMedia(
-    {
-      payloads,
-      toolMediaUrls: attempt.toolMediaUrls,
-      // Preserve harness provenance through terminal delivery. Without it,
-      // message-tool-only routes silently drop native runtime artifacts.
-      hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
-      toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
-        attempt,
-        attempt.toolMediaUrls,
-        runParams.admittedRunContext?.operationalRunInstance,
-      ),
-      toolAudioAsVoice: attempt.toolAudioAsVoice,
-      toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
-      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-    },
-    runParams.admittedRunContext?.operationalRunInstance,
-  );
+  // Pending source custody also holds terminal media; committed mirrors and earlier inputs stay.
+  const payloadsWithToolMedia =
+    replyDeliveryState === "pending"
+      ? payloads
+      : mergeToolMedia(
+          {
+            payloads,
+            toolMediaUrls: attempt.toolMediaUrls,
+            // Preserve harness provenance through terminal delivery. Without it,
+            // message-tool-only routes silently drop native runtime artifacts.
+            hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
+            toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+              attempt,
+              attempt.toolMediaUrls,
+              runParams.admittedRunContext?.operationalRunInstance,
+            ),
+            toolAudioAsVoice: attempt.toolAudioAsVoice,
+            toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+            sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+          },
+          runParams.admittedRunContext?.operationalRunInstance,
+        );
   const recoveredFinalAssistantTextAfterPromptTimeout =
+    replyDeliveryState === "missing" &&
     timedOutDuringPrompt &&
     !timeoutFinal &&
     ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
@@ -294,7 +301,7 @@ export function prepareEmbeddedRunTerminal(input: {
   });
   return {
     agentMeta,
-    replyDeliveryState: input.replyDeliveryState ?? "missing",
+    replyDeliveryState,
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,

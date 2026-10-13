@@ -132,6 +132,7 @@ export async function executeUsageCostWorker(
     env,
     materializeArchive: (sourcePath) =>
       control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
+    listSqliteMetadataStores: () => input.archiveStorePaths,
     readSqliteMetadata: (storePath, read) => readStore(location.agentId, storePath, read),
     listSqliteInstances: async (agentId, storePath) => {
       const { listSessionTranscriptInstances } =

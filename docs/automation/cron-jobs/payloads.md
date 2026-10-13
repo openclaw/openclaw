@@ -95,6 +95,11 @@ jobs use the current operator read policy. Agent-created jobs retain their recor
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
 
+Scheduled agent turns can inspect their own job and remove it when finished,
+even without an interactive sender. This self-scoped `automations` tool does not
+grant administrator access or control over other jobs, and explicit tool-policy
+denials still apply.
+
 Manual runs use the same scheduled execution context as timer-fired runs after
 the request passes admission. Ending the chat turn or tool call that started a
 run does not expire the job's tool access. The job still uses its stored authority
