@@ -26,11 +26,11 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
 function senderAttributedTextMessage(
   text: string,
   sender: { senderId?: string; senderName?: string; senderUsername?: string },
-): AgentMessage {
+) {
   return {
     ...textMessage("user", text),
     __openclaw: sender,
-  } as AgentMessage;
+  };
 }
 
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
