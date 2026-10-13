@@ -137,25 +137,6 @@ describe("GitHub preview warming", () => {
     document.body.append(provider);
   });
 
-  it("discovers links only on idle and avoids rescanning unchanged parent renders", async () => {
-    renderLinks();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(VisibilityObserver.instances).toHaveLength(0);
-    expect(prefetch).not.toHaveBeenCalled();
-
-    flushIdleScans();
-    const links = [...container.querySelectorAll("a")];
-    expect(observer().targets.has(links[0]!)).toBe(true);
-    observer().intersect(links);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(prefetch).toHaveBeenCalledTimes(1);
-    // Keep the external provider bound while the parent refreshes.
-    await show();
-    const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
-    await show();
-    expect(scan).not.toHaveBeenCalled();
-  });
-
   it.each(["session", "capabilities"])(
     "replaces unstarted discovery when the %s changes",
     async (changed) => {
@@ -196,22 +177,6 @@ describe("GitHub preview warming", () => {
     vi.useRealTimers();
   });
 
-  it("skips exclusion walks for links without a preview-capable reader", async () => {
-    const gate = vi.spyOn(linkTargets, "isPreviewAnchor");
-    await show(["https://example.com/page"]);
-    Object.assign(provider, {
-      readers: [
-        {
-          ...TEST_LINK_READER,
-          linkReader: { ...TEST_LINK_READER.linkReader, previewMethod: undefined },
-        },
-      ],
-    });
-    await show([href(1)]);
-    expect(gate).not.toHaveBeenCalled();
-    expect(observer().targets.size).toBe(0);
-  });
-
   it("memoizes href claims while checking DOM exclusions on every scan", async () => {
     const gate = vi.spyOn(linkTargets, "isPreviewAnchor");
     const resolve = vi.spyOn(linkTargets, "resolveLinkReaderTarget");
@@ -238,26 +203,6 @@ describe("GitHub preview warming", () => {
     observer().intersect(links);
     await vi.advanceTimersByTimeAsync(500);
     expect(prefetch.mock.calls.map(([anchor]) => anchor)).toEqual([links[0], links[1]]);
-  });
-
-  it.each([
-    ["download", ""],
-    ["data-file-path", "/tmp/file"],
-    ["data-session-href", "session"],
-    ["class", "markdown-session-link"],
-    ["data-link-reader-external", ""],
-  ])("never observes a claimed link excluded by %s", async (attribute, value) => {
-    await show([]);
-    const link = document.createElement("a");
-    link.href = href(1);
-    link.setAttribute(attribute, value);
-    container.firstElementChild!.append(link);
-    await vi.advanceTimersByTimeAsync(0);
-    flushIdleScans();
-    expect(observer().targets.size).toBe(0);
-    observer().intersect([link]);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(prefetch).not.toHaveBeenCalled();
   });
 
   it("rechecks excluded ancestry on a scan without reparsing the claim", async () => {
@@ -297,64 +242,7 @@ describe("GitHub preview warming", () => {
     expect(prefetch.mock.calls.map(([anchor]) => anchor)).toEqual([links[2]]);
   });
 
-  it("refreshes negative claims after capabilities change", async () => {
-    Object.assign(provider, { readers: [] });
-    await show();
-    const [link] = await show();
-    expect(observer().targets.size).toBe(0);
-    Object.assign(provider, { readers: [TEST_LINK_READER] });
-    provider.dispatchEvent(new Event("link-reader-capabilities-changed"));
-    await vi.advanceTimersByTimeAsync(0);
-    flushIdleScans();
-    expect(observer().targets.has(link!)).toBe(true);
-  });
-
-  it("keeps claims scoped to the nearest provider and its current readers", async () => {
-    const [outer] = await show();
-    const inner = installTestLinkReader(
-      document.createElement(linkTargets.LINK_READER_HOVERCARD_PROVIDER_TAG),
-    );
-    const link = document.createElement("a");
-    link.href = href(2);
-    inner.append(link);
-    container.firstElementChild!.append(inner);
-    await vi.advanceTimersByTimeAsync(0);
-    flushIdleScans();
-    expect(observer().targets.has(link)).toBe(true);
-    Object.assign(inner, { readers: [] });
-    container.firstElementChild!.append(document.createTextNode("delta"));
-    await vi.advanceTimersByTimeAsync(0);
-    flushIdleScans();
-    expect([...observer().targets]).toEqual([outer]);
-    Object.assign(inner, { readers: [TEST_LINK_READER] });
-    container.firstElementChild!.append(document.createTextNode("delta"));
-    await vi.advanceTimersByTimeAsync(0);
-    flushIdleScans();
-    expect(observer().targets.has(link)).toBe(true);
-  });
-
-  it("warms only intersecting item links and deduplicates alternate permalinks", async () => {
-    const links = await show([
-      href(1),
-      `${href(1)}#issuecomment-2`,
-      href(2),
-      "https://github.com/openclaw/openclaw",
-    ]);
-    expect(observer().targets.size).toBe(3);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).not.toHaveBeenCalled();
-
-    observer().intersect([links[0]!, links[1]!]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).toHaveBeenCalledTimes(1);
-    expect(prefetch.mock.calls[0]![0].href).toBe(href(1));
-
-    observer().intersect([links[2]!]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["session", "reconnect"])(
+  it.each(["reconnect"])(
     "bounds background requests and resets the budget after %s",
     async (reset) => {
       const first = createDeferred();

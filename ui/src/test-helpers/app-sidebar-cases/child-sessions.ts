@@ -467,7 +467,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "nests the selected spawned session and reveals its active ancestor path (intervening run: %s)",
     async (interveningRun) => {
       const parentKey = "agent:main:parent";

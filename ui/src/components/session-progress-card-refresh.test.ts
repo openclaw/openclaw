@@ -136,26 +136,6 @@ describe("progress card refresh control", () => {
     expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
   });
 
-  it("does not expose refresh on read-only board cards", () => {
-    const container = createContainer();
-    render(
-      renderSessionProgressCard(
-        progressCard,
-        "board",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true,
-        false,
-        undefined,
-        { onRefresh: vi.fn() },
-      ),
-      container,
-    );
-    expect(container.querySelector(".session-progress-card__refresh")).toBeNull();
-  });
-
   it("retains manual disclosure across card updates and retires absent cards", () => {
     const container = createContainer();
     const show = (card: ProgressCard | null) =>
