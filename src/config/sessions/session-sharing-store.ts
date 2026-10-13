@@ -20,7 +20,6 @@ import {
 } from "./session-incognito-binding.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import {
-  hasSessionMemberInDatabase,
   listSessionMembersInDatabase,
   readSessionMembersInDatabase,
   type SessionMembersSnapshot,
@@ -110,20 +109,6 @@ export async function readSessionMembersInWorker(
     ({ reader, continuation }) =>
       reader.readMembers({ sessionKey: resolved.sessionKey, env, continuation }),
     { backing: true, dataOnly: true, lane: projectionLane },
-  );
-}
-
-export function isSessionMember(scope: SessionAccessScope, identityId: string): boolean {
-  const normalizedIdentityId = identityId.trim();
-  if (!normalizedIdentityId) {
-    return false;
-  }
-  const memory = readMemorySessionMembers(scope);
-  if (memory) {
-    return memory.members.some((member) => member.identityId === normalizedIdentityId);
-  }
-  return readSessionMembers(scope, false, (database, sessionKey) =>
-    hasSessionMemberInDatabase(database, sessionKey, normalizedIdentityId),
   );
 }
 

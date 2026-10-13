@@ -162,13 +162,6 @@ export function claimCronRunReceiptInDatabase(params: {
   const { handle } = params;
   const job = validateCurrentReceiptJob(params.job, params);
   assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
-  pruneTerminalReceipts(
-    params.database,
-    handle.storeKey,
-    handle.jobId,
-    job.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
-    params.receiptSchema,
-  );
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -251,8 +244,8 @@ export function finishCronRunReceiptInDatabase(params: {
   status: Exclude<CronRunReceiptStatus, "running">;
   finishedAtMs: number;
   error?: string;
-}): void {
-  executeSqliteQuerySync(
+}): boolean {
+  const completed = executeSqliteQuerySync(
     params.database,
     query(params.database)
       .updateTable("cron_run_receipts")
@@ -264,6 +257,9 @@ export function finishCronRunReceiptInDatabase(params: {
       .where("receipt_id", "=", params.handle.receiptId)
       .where("status", "=", "running"),
   );
+  if (!completed.numAffectedRows) {
+    return false;
+  }
   pruneTerminalReceipts(
     params.database,
     params.handle.storeKey,
@@ -271,4 +267,5 @@ export function finishCronRunReceiptInDatabase(params: {
     params.pendingReceiptId,
     params.receiptSchema,
   );
+  return true;
 }

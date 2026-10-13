@@ -1,6 +1,5 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -108,22 +107,14 @@ export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
   return owner.sidebarSessionStatusFilter() !== "active" || Boolean(ownerId || involvingMe);
 }
 
-export function sidebarSessionListQuery(
-  owner: SidebarSessionQueryOwner & {
-    readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
-  },
-  agentId: string,
-) {
+export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
-  const selfId = owner.sessionDataContext
-    ? gatewayPresentationScope(owner.sessionDataContext.gateway).displayUser?.id
-    : undefined;
   return {
     source: "sidebar",
     excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
-    agentId: ownerId && ownerId === selfId ? undefined : agentId,
+    agentId: ownerId ? undefined : agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     rowMode: "sidebar",

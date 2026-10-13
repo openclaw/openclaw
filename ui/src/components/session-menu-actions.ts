@@ -1,11 +1,10 @@
-import { ContextConsumer } from "@lit/context";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { applicationContext } from "../app/context.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
 import { SessionMenuSettings } from "./session-menu-settings.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
@@ -85,8 +84,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   categoryClearReturnsToGroups: false,
 };
 
-type SessionMenuActionsHost = ReactiveControllerHost &
-  HTMLElement & { updateComplete: Promise<unknown> };
+type SessionMenuActionsHost = SolidControllerHost & HTMLElement;
 
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
@@ -111,7 +109,8 @@ export type SessionMenuActionsState = {
 
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
-  private readonly context;
+  private readonly context = useOptionalApplication();
+  private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
   readonly ownerMenu: SessionOwnerMenu;
   readonly advanced;
 
@@ -121,11 +120,9 @@ export class SessionMenuActions {
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
   ) {
-    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    new SubscriptionsController(host).watchStore(() => this.context.value?.gateway);
     this.ownerMenu = new SessionOwnerMenu(host);
     this.advanced = new SessionMenuSettings(host, {
-      context: () => this.context.value,
+      context: () => this.context,
       readState: () => this.readState(),
       runAction: (action) => this.runAction(action),
     });
@@ -133,8 +130,7 @@ export class SessionMenuActions {
 
   get involvementAvailable(): boolean {
     return (
-      this.context.value?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities ===
-      true
+      this.gateway?.read().snapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true
     );
   }
 

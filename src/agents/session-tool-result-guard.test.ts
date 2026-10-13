@@ -47,6 +47,23 @@ function resultText(sm: SessionManager) {
 }
 
 describe("installSessionToolResultGuard", () => {
+  it("publishes run ownership before the first assistant continuation without adopting transcript-only edits", () => {
+    const live = call();
+    const { sm } = setup({
+      runId: "synthetic-run",
+      beforeMessageWriteHook: ({ message }) => ({
+        message: { ...message, content: [{ type: "text", text: "transcript-only" }] },
+      }),
+    });
+    sm.appendMessage(live);
+    expect(live).toMatchObject({ __openclaw: { runId: "synthetic-run" } });
+    expect(live.content).toEqual(call().content);
+    expect(messages(sm)[0]).toMatchObject({
+      __openclaw: { runId: "synthetic-run" },
+      content: [{ type: "text", text: "transcript-only" }],
+    });
+  });
+
   it("keeps the exec retention-loss disclosure through the session result cap", () => {
     const { sm } = setup({ maxToolResultChars: 4_000 });
     const output = buildExecForegroundResult({

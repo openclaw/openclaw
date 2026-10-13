@@ -518,22 +518,42 @@ suite.define(() => {
         await expectActivePanelLabel(page, "plugins-tab-plugins");
         const pluginInstallPresentation = await installButtonPresentation(page);
 
-        await page
+        const skillsTab = page
           .locator(".plugins-hub-tabs")
-          .getByRole("tab", { name: "Skills", exact: true })
-          .click();
+          .getByRole("tab", { name: "Skills", exact: true });
+        await skillsTab.focus();
+        await page.keyboard.press("Enter");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        await expect
+          .poll(() =>
+            page
+              .getByRole("searchbox", { name: "Search skills", exact: true })
+              .evaluate((input) => input === document.activeElement),
+          )
+          .toBe(true);
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
         await expectActivePanelLabel(page, "plugins-tab-skills");
         expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
         await captureScreenshot(page, `${label}-02-skills.png`);
 
-        await page.getByRole("tab", { name: "Skill workshop", exact: true }).click();
+        const workshopTab = page.getByRole("tab", { name: "Skill workshop", exact: true });
+        await workshopTab.focus();
+        await page.keyboard.press("Enter");
         await waitForControlUiRoute(page, {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.activeElement?.id ||
+                document.activeElement?.getAttribute("aria-label") ||
+                document.activeElement?.tagName,
+            ),
+          )
+          .toBe("plugins-tab-skill-workshop");
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skill-workshop");
         await expectActivePanelLabel(page, "plugins-tab-skill-workshop");

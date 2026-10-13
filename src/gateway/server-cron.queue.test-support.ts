@@ -93,7 +93,9 @@ export function registerGatewayCronQueueTests({
     });
   });
 
-  it("retries a failed scheduled activation using the committed request", async ({ signal }) => {
+  it("retries due work after scheduled claim and activation roll back together", async ({
+    signal,
+  }) => {
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:15:00.000Z");
     vi.setSystemTime(now);
@@ -119,13 +121,13 @@ export function registerGatewayCronQueueTests({
             )
             .all(storeKey, job.id);
         expect(receipts()).toEqual([]);
-        // Real request/activation writes; only this synthetic fault is injected.
+        // The scheduler commits the receipt and running state together.
         database.exec(`
           CREATE TRIGGER fail_gateway_cron_activation
           AFTER UPDATE OF state_json ON cron_jobs
           WHEN NEW.store_key = '${storeKey.replaceAll("'", "''")}'
             AND NEW.job_id = '${job.id}'
-            AND json_extract(OLD.state_json, '$.queuedAtMs') IS NOT NULL
+            AND json_extract(OLD.state_json, '$.runningAtMs') IS NULL
             AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
           BEGIN
             SELECT RAISE(ABORT, 'injected scheduled activation failure');
@@ -137,13 +139,12 @@ export function registerGatewayCronQueueTests({
         await expect(onCronTimer(cronState)).rejects.toThrow(
           "injected scheduled activation failure",
         );
-        const failedReceipts = receipts();
-        expect(failedReceipts).toHaveLength(1);
-        expect(failedReceipts[0]).toMatchObject({ status: "running" });
+        expect(receipts()).toEqual([]);
         const afterFailure = (await loadCronStore(cronState.deps.storePath)).jobs.find(
           (entry) => entry.id === job.id,
         );
-        expect(afterFailure?.state.queuedAtMs).toBe(now + 60_000);
+        expect(afterFailure?.state.nextRunAtMs).toBe(now + 60_000);
+        expect(afterFailure?.state.queuedAtMs).toBeUndefined();
         expect(afterFailure?.state.runningReceiptId).toBeUndefined();
         expect(afterFailure?.state.runningAtMs).toBeUndefined();
         expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
@@ -171,9 +172,7 @@ export function registerGatewayCronQueueTests({
         expect(afterTick?.state).toMatchObject({ lastRunStatus: "ok" });
         expect(afterTick?.state.queuedAtMs).toBeUndefined();
         expect(afterTick?.state.runningAtMs).toBeUndefined();
-        expect(receipts()).toEqual([
-          expect.objectContaining({ receipt_id: failedReceipts[0]?.receipt_id, status: "ok" }),
-        ]);
+        expect(receipts()).toEqual([expect.objectContaining({ status: "ok" })]);
       } finally {
         database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation");
       }

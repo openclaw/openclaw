@@ -358,10 +358,19 @@ suite.define(() => {
     "delivers PowerPoint and keeps persisted attachment failures replay-safe",
     { timeout: 180_000 },
     async () => {
+      const startedAt = performance.now();
+      // A suite deadline can expire without a Playwright locator stack.
+      const reportPhase = (phase: string) => {
+        console.info("[media-transcript]", {
+          phase,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+      };
       const gatewayOwner = createQaLiveLaneGateway();
       const proofDir = suite.artifactDir;
       const errors: unknown[] = [];
       try {
+        reportPhase("gateway-starting");
         const gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
           command: {
@@ -378,6 +387,7 @@ suite.define(() => {
           controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
           controlUiEnabled: false,
         });
+        reportPhase("gateway-ready");
         await writeFile(path.join(gateway.gateway.workspaceDir, "slides.pptx"), await createPptx());
         expect(await gateway.gateway.call("config.get", {})).toMatchObject({
           config: {
@@ -388,6 +398,7 @@ suite.define(() => {
             },
           },
         });
+        reportPhase("fixture-ready");
 
         await suite.withPage(
           {
@@ -411,6 +422,7 @@ suite.define(() => {
             );
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:qa:main"));
             await waitForControlUiGatewayReady(page);
+            reportPhase("page-connected");
             // Exercise media delivery only after the target session owns its composer;
             // cold startup can still replace the initial empty draft before this point.
             await page.waitForFunction(() => {
@@ -425,14 +437,17 @@ suite.define(() => {
                 !pane.state.chatLoading
               );
             });
+            reportPhase("composer-ready");
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill("Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
             await page.getByRole("button", { name: "Send message" }).click();
+            reportPhase("powerpoint-request-sent");
             const card = page.locator(".chat-assistant-attachment-card", {
               hasText: "slides.pptx",
             });
             await card.waitFor();
             const firstCardText = (await card.textContent()) ?? "";
+            reportPhase("powerpoint-card-visible");
             if (captureUiProof) {
               await page.screenshot({ path: path.join(proofDir, "01-pptx-result.png") });
             }
@@ -440,9 +455,11 @@ suite.define(() => {
               sessionKey: "agent:qa:main",
               limit: 20,
             });
+            reportPhase("powerpoint-history-read");
 
             await composer.fill("Reply exactly `Session healthy`");
             await page.getByRole("button", { name: "Send message" }).click();
+            reportPhase("success-replay-request-sent");
             let successPathHealthy = false;
             try {
               await expect
@@ -459,18 +476,22 @@ suite.define(() => {
                 .toBe(true);
               successPathHealthy = true;
             } catch {}
+            reportPhase("success-replay-checked");
             let failureCardVisible = firstCardText.includes("Not sent");
             let failurePathHealthy = false;
             if (successPathHealthy) {
               await composer.fill("Reply exactly `Missing file\nMEDIA:./missing-proof.txt`");
               await page.getByRole("button", { name: "Send message" }).click();
+              reportPhase("missing-file-request-sent");
               const failureCard = page.locator(".chat-assistant-attachment-card", {
                 hasText: "missing-proof.txt",
               });
               await failureCard.waitFor();
               failureCardVisible = ((await failureCard.textContent()) ?? "").includes("Not sent");
+              reportPhase("missing-file-card-visible");
               await composer.fill("Reply exactly `Session recovered`");
               await page.getByRole("button", { name: "Send message" }).click();
+              reportPhase("failure-replay-request-sent");
               try {
                 await expect
                   .poll(
@@ -486,16 +507,19 @@ suite.define(() => {
                   .toBe(true);
                 failurePathHealthy = true;
               } catch {}
+              reportPhase("failure-replay-checked");
             }
             const secondHistory = await gateway.gateway.call("chat.history", {
               sessionKey: "agent:qa:main",
               limit: 30,
             });
+            reportPhase("final-history-read");
             const stateDir = gateway.gateway.runtimeEnv.OPENCLAW_STATE_DIR;
             if (!stateDir) {
               throw new Error("QA Gateway state directory is unavailable");
             }
             const rawAssistantMessages = readRawAssistantMessages(stateDir);
+            reportPhase("persisted-transcript-read");
             const rawModelContent = rawAssistantMessages.flatMap((message) =>
               Array.isArray(message.content) ? message.content : [],
             );
@@ -532,12 +556,15 @@ suite.define(() => {
               pptxDelivered: true,
               successPathHealthy: true,
             });
+            reportPhase("verdict-checked");
           },
         );
       } catch (error) {
         errors.push(error);
       }
+      reportPhase("gateway-stopping");
       const stopped = await gatewayOwner.stop({ preserveToDir: path.join(proofDir, "gateway") });
+      reportPhase("gateway-stopped");
       errors.push(...stopped.errors);
       if (errors.length > 0) {
         throw new AggregateError(errors, "Control UI media transcript proof failed");

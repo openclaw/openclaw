@@ -75,6 +75,7 @@ type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"
 };
 
 class StartupMigrationLeaseConflictError extends Error {}
+export class StartupMigrationLeaseLostError extends Error {}
 
 function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
@@ -100,7 +101,7 @@ function writeStartupMigrationCheckpointDatabase<T>(
 
 function assertStartupMigrationLeaseOwned(expiresAt: number | undefined): void {
   if (expiresAt === undefined) {
-    throw new Error(
+    throw new StartupMigrationLeaseLostError(
       "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
     );
   }

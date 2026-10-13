@@ -208,7 +208,10 @@ export function projectWorkerSessionPlacement(
   failedRecoveryAction?: "restart" | "stop-first",
   workspaceResultReconciling = false,
   retryOnSend = false,
-  options: { workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall } = {},
+  options: {
+    workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
+    startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
+  } = {},
 ): SessionPlacement {
   const { inference, ...provenance } = identity ?? {};
   const timing = {
@@ -230,6 +233,7 @@ export function projectWorkerSessionPlacement(
       ...worker,
       ...(record.environmentId ? { environmentId: record.environmentId } : {}),
       ...workerRuntimeInstall,
+      ...(options.startStatus ? { startStatus: options.startStatus } : {}),
     };
   }
   const progress = {

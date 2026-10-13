@@ -212,6 +212,7 @@ export function installEmbeddedAttemptStreamGuards(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
+            `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -388,7 +389,8 @@ export function installEmbeddedAttemptStreamGuards(
       } as typeof options);
     };
   }
-  let diagnosticModelCallSeq = 0;
+  const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
+  const firstModelCallNumber = modelCallSequence.value + 1;
   let modelResponseTerminal = false;
   let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
@@ -415,7 +417,7 @@ export function installEmbeddedAttemptStreamGuards(
       : {}),
     trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
@@ -429,6 +431,10 @@ export function installEmbeddedAttemptStreamGuards(
     onStarted: (callId) => {
       activeModelCallId = callId;
       modelResponseTerminal = false;
+      if (modelCallSequence.value === firstModelCallNumber) {
+        input.setup.prepStages.mark("model-dispatch");
+        input.setup.emitPrepStageSummary("model-dispatch");
+      }
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,

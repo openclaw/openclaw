@@ -162,6 +162,9 @@ function registerNativeHookRelayInternal(
   params: RegisterNativeHookRelayParams,
   owner?: NativeHookRelayOwnerOptions,
 ): OwnedNativeHookRelayRegistrationHandle {
+  if (params.requirePreToolUse && !params.runBeforeToolCall) {
+    throw new Error("Required native PreToolUse relay needs a host runBeforeToolCall capability.");
+  }
   const { retention, approvalHost } = owner ?? {};
   const executionAdmission = snapshotNativeHookRelayExecutionAdmission(owner?.executionAdmission);
   pruneExpiredNativeHookRelays();
@@ -214,6 +217,7 @@ function registerNativeHookRelayInternal(
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
       preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
+      requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
       ...(params.signal ? { signal: params.signal } : {}),

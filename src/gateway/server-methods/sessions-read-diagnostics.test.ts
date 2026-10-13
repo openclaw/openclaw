@@ -98,9 +98,9 @@ function controlProjectionClock(afterRow?: () => void) {
         const presentation = recipient(...viewer);
         return {
           ...presentation,
-          present(...rowArgs: Parameters<typeof presentation.present>) {
+          snapshot(...rowArgs: Parameters<typeof presentation.snapshot>) {
             try {
-              return presentation.present(...rowArgs);
+              return presentation.snapshot(...rowArgs);
             } finally {
               presented();
               clock += 20;

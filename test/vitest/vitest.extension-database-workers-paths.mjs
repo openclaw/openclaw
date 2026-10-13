@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
@@ -44,6 +45,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/auth-requirement-matrix.test.ts",
   "extensions/codex/src/app-server/attempt-startup-computer-use.test.ts",
   "extensions/codex/src/app-server/side-question.app-consent.test.ts",
+  "extensions/codex/src/app-server/run-attempt.session-fork.test.ts",
   "extensions/codex/src/app-server/compact.cancellation.test.ts",
   "extensions/codex/src/app-server/compact.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.adoption.test.ts",
@@ -59,6 +61,7 @@ export const databaseWorkerExtensionTestFiles = [
   // Provider-owned embedding auth resolves shared-store ownership through the host broker.
   "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
+  "extensions/openai/embedding-provider.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",
@@ -239,6 +242,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/native-subagent-inventory.test.ts",
   "extensions/codex/src/app-server/run-attempt-connection.environment.test.ts",
   "extensions/codex/src/app-server/side-question.test.ts",
+  "extensions/codex/src/app-server/side-question.fork.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-background-outcome.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-config.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-followup-custody.test.ts",

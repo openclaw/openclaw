@@ -39,7 +39,7 @@ beforeEach(() => {
     ? createControlUiE2eArtifactDir("lazy-custom-element-recovery", railProofDirParent)
     : undefined;
 });
-const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime.ts";
+const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime-solid.tsx";
 const viewport = { height: 900, width: 1280 };
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 

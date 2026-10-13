@@ -24,6 +24,7 @@ import {
   listGitWorktrees,
   worktreePathExists,
   resolveGitRepositoryPaths,
+  requireGit,
   runGit,
 } from "./git.js";
 import { appendNameOrdinal, validateName } from "./name.js";
@@ -50,10 +51,22 @@ import type {
   WorktreeCreationPublication,
 } from "./types.js";
 
+export async function readWorktreeGitInventory(repoRoot: string, suppliedName?: string) {
+  const [branches, worktrees] = await Promise.all([
+    requireGit(repoRoot, ["for-each-ref", "--format=%(refname)", "refs/heads/openclaw/"]),
+    suppliedName === undefined ? listGitWorktrees(repoRoot) : [],
+  ]);
+  return {
+    branches: new Set(branches.split("\n")),
+    paths: new Set(worktrees.map((entry) => path.resolve(entry.path))),
+  };
+}
+
 export async function prepareWorktreeDestination(params: {
   env: NodeJS.ProcessEnv;
   configuredRoot?: string;
   repository: ResolvedRepository;
+  gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>;
   owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">;
   suppliedName?: string;
   suggestedName: string;
@@ -65,7 +78,7 @@ export async function prepareWorktreeDestination(params: {
   const root = path.join(await fs.realpath(configuredRoot), repository.fingerprint);
   const name = await resolveWorktreeName(
     env,
-    repository.repoRoot,
+    params.gitInventory,
     repository.fingerprint,
     root,
     params.owner,
@@ -362,58 +375,9 @@ export async function findWorktreeByName(
   );
 }
 
-async function nameIsUnavailable(
-  env: NodeJS.ProcessEnv,
-  repoRoot: string,
-  fingerprint: string,
-  root: string,
-  name: string,
-  owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
-): Promise<boolean> {
-  const worktreePath = path.join(root, name);
-  const registered = await findWorktreeByName(env, fingerprint, name);
-  if (
-    owner.ownerId &&
-    registered &&
-    registered.removedAt === undefined &&
-    worktreeOwnerMatches(registered, owner)
-  ) {
-    // Let createForRepository reuse the caller's live checkout; a collision here
-    // could mint a second checkout for one owner. Removed records stay collisions:
-    // restore is explicit-name/id only, so a generated name (title slug or random
-    // crustacean) must never silently resurrect a retired checkout.
-    return false;
-  }
-  if (
-    registered ||
-    (await readPendingWorktrees(env)).some(
-      ({ record }) => record.repoFingerprint === fingerprint && record.name === name,
-    ) ||
-    (await worktreePathExists(worktreePath))
-  ) {
-    return true;
-  }
-  const branch = `openclaw/${name}`;
-  const branchExists = await runGit(repoRoot, [
-    "show-ref",
-    "--quiet",
-    "--verify",
-    `refs/heads/${branch}`,
-  ]);
-  if (branchExists.code === 0) {
-    return true;
-  }
-  if (branchExists.code !== 1) {
-    throw commandError("git show-ref --verify", branchExists);
-  }
-  return (await listGitWorktrees(repoRoot)).some(
-    (entry) => path.resolve(entry.path) === path.resolve(worktreePath),
-  );
-}
-
 async function resolveWorktreeName(
   env: NodeJS.ProcessEnv,
-  repoRoot: string,
+  gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>,
   fingerprint: string,
   root: string,
   owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
@@ -421,13 +385,35 @@ async function resolveWorktreeName(
   suppliedName?: string,
 ): Promise<string> {
   if (suppliedName !== undefined) {
-    await requireNewWorktreeBranch(repoRoot, `openclaw/${suppliedName}`);
+    if (gitInventory.branches.has(`refs/heads/openclaw/${suppliedName}`)) {
+      throw new Error(`branch already exists: openclaw/${suppliedName}`);
+    }
     return suppliedName;
   }
   validateName(suggestedName);
   for (let ordinal = 1; ordinal <= 1_000; ordinal += 1) {
     const candidate = ordinal === 1 ? suggestedName : appendNameOrdinal(suggestedName, ordinal);
-    if (!(await nameIsUnavailable(env, repoRoot, fingerprint, root, candidate, owner))) {
+    const worktreePath = path.join(root, candidate);
+    const registered = await findWorktreeByName(env, fingerprint, candidate);
+    // Reuse the caller's live checkout, but never resurrect a retired inferred name.
+    if (
+      owner.ownerId &&
+      registered &&
+      registered.removedAt === undefined &&
+      worktreeOwnerMatches(registered, owner)
+    ) {
+      return candidate;
+    }
+    // External Git can change after discovery; native creation owns the final check.
+    if (
+      !registered &&
+      !(await readPendingWorktrees(env)).some(
+        ({ record }) => record.repoFingerprint === fingerprint && record.name === candidate,
+      ) &&
+      !(await worktreePathExists(worktreePath)) &&
+      !gitInventory.branches.has(`refs/heads/openclaw/${candidate}`) &&
+      !gitInventory.paths.has(path.resolve(worktreePath))
+    ) {
       return candidate;
     }
   }

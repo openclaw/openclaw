@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import {
   capturePluginRegistration,
   createRuntimeEnv,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -20,7 +18,7 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -157,30 +155,30 @@ describe("alibaba video generation provider", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alibaba-wan-auth-"));
 
     try {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "alibaba:standard": {
-              type: "api_key",
-              provider: "alibaba",
-              key: profileKey,
-            },
+      await expect(
+        updateAuthProfileStoreWithLock({
+          agentDir,
+          saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+          updater(store) {
+            store.profiles = {
+              "alibaba:standard": {
+                type: "api_key",
+                provider: "alibaba",
+                key: profileKey,
+              },
+            };
+            return true;
           },
-        },
-        agentDir,
-        { filterExternalAuthProfiles: false, syncExternalCli: false },
-      );
+        }),
+      ).resolves.not.toBeNull();
 
       expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {}, agentDir })).toBe(
         expected,
       );
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      // Saving the profile store opens the per-agent database under the temporary agent
-      // dir, and clearing the snapshots does not release it, so Windows fails the removal
-      // with EBUSY unless the cached handles are closed first.
-      closeOpenClawAgentDatabasesForTest();
+      // Release the worker's database handles before Windows removes the temporary directory.
+      await closeOpenClawAgentDatabasesAsync();
       await fs.rm(agentDir, { force: true, recursive: true });
     }
   });

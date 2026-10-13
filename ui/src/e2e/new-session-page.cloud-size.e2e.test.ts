@@ -14,8 +14,8 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each(["displayed", "explicitly selected"])(
-    "dispatches the %s default machine instead of delegating a different size",
+  it.each(["smaller", "configured", "explicit"])(
+    "dispatches the displayed %s machine instead of delegating a different size",
     async (choice) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
@@ -35,8 +35,15 @@ suite.define(() => {
                     providerId: "crabbox",
                     operatingSystems: [{ id: "linux", label: "Linux", default: true }],
                     machines: [
-                      { id: "small", label: "Small", os: "linux", cpu: 4, memoryGb: 8 },
-                      { id: "standard", label: "Standard", os: "linux", cpu: 32, memoryGb: 64 },
+                      {
+                        id: "standard",
+                        label: "Standard",
+                        os: "linux",
+                        cpu: 32,
+                        memoryGb: 64,
+                        default: choice === "configured",
+                      },
+                      { id: "small", label: "Small", os: "linux", cpu: 8, memoryGb: 16 },
                     ],
                   },
                 ],
@@ -51,22 +58,23 @@ suite.define(() => {
           await openEnvironmentPicker(page);
           const picker = page.locator("wa-popover.new-session-page__where-popover");
           await picker.getByRole("button", { name: "aws", exact: true }).click();
-          const small = picker.locator('[data-value="machine:small"]');
-          await expect.poll(() => small.getAttribute("aria-pressed")).toBe("true");
-          if (choice === "explicitly selected") {
-            await small.click();
+          const machineClass = choice === "smaller" ? "small" : "standard";
+          if (choice === "explicit") {
+            await picker.locator('[data-value="machine:standard"]').click();
           }
-          await captureUiProof(suite, page, "selected-cloud-size.png", {
+          const selected = picker.locator(`[data-value="machine:${machineClass}"]`);
+          await captureUiProof(suite, page, `selected-cloud-size-${choice}.png`, {
             surface: picker.locator(".new-session-page__cloud-configuration"),
-            content: [small],
+            content: [selected],
           });
+          await expect.poll(() => selected.getAttribute("aria-pressed")).toBe("true");
           await page.keyboard.press("Escape");
           await page.locator(".new-session-page__message").fill("Use the size shown in the picker");
           await page.getByRole("button", { name: "Start session" }).click();
           const dispatch = await gateway.waitForRequest("sessions.dispatch");
           if (captureUiProofEnabled) {
             await writeFile(
-              path.join(suite.artifactDir, "dispatch.json"),
+              path.join(suite.artifactDir, `dispatch-${choice}.json`),
               JSON.stringify(dispatch.params, null, 2),
             );
           }
@@ -75,7 +83,7 @@ suite.define(() => {
             agentId: "main",
             profileId: "aws",
             os: "linux",
-            machineClass: "small",
+            machineClass,
           });
         },
       );

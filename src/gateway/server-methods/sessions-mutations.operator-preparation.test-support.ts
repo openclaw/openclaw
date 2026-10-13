@@ -39,6 +39,7 @@ import * as creationTarget from "../session-create-target.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import * as patchDiscovery from "./sessions-patch-discovery.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export function registerSessionOperatorPreparationTests(fixture: {
@@ -124,16 +125,25 @@ export function registerSessionOperatorPreparationTests(fixture: {
           });
         const selectedTarget = createDeferredCore();
         const readTarget = creationTarget.readRequestedSessionCreateTarget;
+        const discoverTargets = patchDiscovery.discoverSessionPatchTargets;
         const targetReadSpy =
-          method === "sessions.create" && change === "target"
-            ? vi
-                .spyOn(creationTarget, "readRequestedSessionCreateTarget")
-                .mockImplementation(async (...args) => {
-                  const selected = await readTarget(...args);
-                  selectedTarget.resolve();
-                  return selected;
-                })
-            : undefined;
+          change !== "target"
+            ? undefined
+            : method === "sessions.create"
+              ? vi
+                  .spyOn(creationTarget, "readRequestedSessionCreateTarget")
+                  .mockImplementation(async (...args) => {
+                    const selected = await readTarget(...args);
+                    selectedTarget.resolve();
+                    return selected;
+                  })
+              : vi
+                  .spyOn(patchDiscovery, "discoverSessionPatchTargets")
+                  .mockImplementation(async (...args) => {
+                    const selected = await discoverTargets(...args);
+                    selectedTarget.resolve();
+                    return selected;
+                  });
         const responses: Parameters<RespondFn>[] = [];
         const handler =
           method === "sessions.create"
@@ -178,7 +188,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
               awaitGateBeforeSettlement(
                 selectedTarget.promise,
                 running,
-                "Handler settled before selecting the original creation target",
+                "Handler settled before selecting the original target",
               ),
               signal,
             );
