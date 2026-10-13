@@ -1,5 +1,4 @@
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
-import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -33,7 +32,11 @@ import {
   sessionPlacementUsesWorkerInference,
   withRequiredSessionPlacement,
 } from "../session-placement-admission.js";
-import { clearTurnSendLedgerForRun, type TurnSendLedgerScope } from "../tools/turn-send-ledger.js";
+import {
+  clearTurnSendLedgerForRun,
+  resolveNativeTurnSendLedgerScope,
+  type TurnSendLedgerScope,
+} from "../tools/turn-send-ledger.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -649,7 +652,8 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       // so no reservation is in flight. Two slot scopes can exist under this runId: a
       // native attempt's message/conversations_send tools key by agentSessionKey =
       // `sessionKey?.trim() || sessionId` (attempt-setup.ts) with main-session aliases folded,
-      // rebuilt here; a dispatched CLI
+      // rebuilt here (an embedded candidate also reports the native scope it prepared under
+      // its resolved agent id); a dispatched CLI
       // candidate's loopback grant instead writes under a canonicalized, possibly
       // agent-shifted scope this raw identity cannot reproduce, so that candidate's
       // settlement hands its exact prepared scope to this owner-held collection. A caller
@@ -659,15 +663,14 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       try {
         const releaseTurnSendLedgerScope =
           params.retainTurnSendLedgerScope ?? clearTurnSendLedgerForRun;
-        releaseTurnSendLedgerScope({
-          agentId: params.identity.agentId,
-          sessionKey: canonicalizeMainSessionAlias({
+        releaseTurnSendLedgerScope(
+          resolveNativeTurnSendLedgerScope({
             cfg: params.selection.cfg,
             agentId: params.identity.agentId,
             sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
+            runId: params.identity.runId,
           }),
-          runId: params.identity.runId,
-        });
+        );
         for (const scope of deferredTurnSendLedgerScopes) {
           releaseTurnSendLedgerScope(scope);
         }

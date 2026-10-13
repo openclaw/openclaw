@@ -499,7 +499,7 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
     const scope = { agentId, sessionKey: grantSessionKey, runId: params.runId };
     // Cron forwards isFinalFallbackAttempt to every CLI candidate, so it defaults to a
     // terminal candidate here; "omit" models an embedded/command-rpc dispatched candidate
-    // (run-entry.ts owns that terminal) or a tool-less direct run.
+    // or a direct runCliAgent call that never sets the flag.
     const finalFallback = params.isFinalFallbackAttempt ?? true;
     // SAFETY: settlePreparedCliRun reads only params.{cleanup*, sessionId, provider,
     // runId, isFinalFallbackAttempt}, turnSendLedgerScope, and — when the auth-profile
@@ -610,12 +610,18 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
     const runId = "run-fallback";
     commitSend(runId);
     const failure = new Error("candidate failed, another remains");
+    const deferredScopes: unknown[] = [];
 
     await expect(
       settlePreparedCliRun({
         // isFinalFallbackAttempt === false: runWithModelFallback will run another
-        // candidate that reuses this runId; the budget must survive to it.
-        context: makeContext({ runId, isFinalFallbackAttempt: false }),
+        // candidate that reuses this runId; the budget must survive to it, and the
+        // chain's owner collects the scope for its own terminal.
+        context: makeContext({
+          runId,
+          isFinalFallbackAttempt: false,
+          onDeferredTurnSendLedgerScope: (scope) => deferredScopes.push(scope),
+        }),
         run: async () => {
           throw failure;
         },
@@ -623,7 +629,39 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
     ).rejects.toBe(failure);
 
     expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+    expect(deferredScopes).toEqual([{ agentId, sessionKey: grantSessionKey, runId }]);
   });
+
+  it.each([
+    { label: "unset", isFinalFallbackAttempt: "omit" as const },
+    { label: "false", isFinalFallbackAttempt: false },
+  ])(
+    "clears its exact scope when no owner encloses it and the final flag is $label",
+    async ({ isFinalFallbackAttempt }) => {
+      // A direct runCliAgent call (or an embedded run with no enclosing owner) never reuses
+      // this runId after it returns, so with no owner callback it is the logical-run owner.
+      const runId = `run-ownerless-${String(isFinalFallbackAttempt)}`;
+      commitSend(runId);
+      const failure = new Error("ownerless cli run failed");
+
+      await settlePreparedCliRun({
+        context: makeContext({ runId, isFinalFallbackAttempt }),
+        run: async () => okResult,
+      });
+      expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+
+      commitSend(runId);
+      await expect(
+        settlePreparedCliRun({
+          context: makeContext({ runId, isFinalFallbackAttempt }),
+          run: async () => {
+            throw failure;
+          },
+        }),
+      ).rejects.toBe(failure);
+      expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+    },
+  );
 
   // A run success drives the auth-profile settlement branch, which is not wrapped in
   // the cleanup try/catch: if it throws, settlement exits exceptionally even though
@@ -654,6 +692,7 @@ describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
         context: makeContext({
           runId,
           isFinalFallbackAttempt: false,
+          onDeferredTurnSendLedgerScope: () => {},
           effectiveAuthProfileId: "profile-1",
           authProfileStore: throwingAuthProfileStore(),
         }),

@@ -22,7 +22,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-run
 import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { immediateEnqueue } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { runEmbeddedAgent } from "./run-orchestrator.js";
+import { runEmbeddedAgent } from "./run.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 

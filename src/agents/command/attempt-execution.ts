@@ -616,6 +616,7 @@ export async function runAgentAttempt(
           result = await runCliAgent({
             ...buildCommonRunParams(),
             diagnosticOwner,
+            onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
             sessionEntry: params.sessionEntry,
             storePath: params.storePath,
             persistAssistantTranscript:

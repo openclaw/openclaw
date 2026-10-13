@@ -201,12 +201,10 @@ async function retireCliRunMcpRuntime(
 //     its prepared canonical scope there, even when it is the final fallback attempt: that owner
 //     may retry a live model switch, or cron may run a continuation prompt, under the same runId,
 //     and it deletes the exact loopback-written slot it cannot rebuild from its raw identity.
-//   - Without an owner callback, only the final candidate of a flag-forwarding chain
-//     (isFinalFallbackAttempt === true) clears. A non-final candidate must not: a later
-//     candidate reuses this runId and must inherit the committed counts, and even a
-//     non-throwing candidate may be reclassified as retryable and followed by another one.
-// Clearing was previously gated on `!threw`, which wrongly treated a non-throwing but retryable
-// non-final candidate as terminal and wiped the counts the next candidate needed.
+//   - Without an owner callback nothing encloses this run, so it is its own logical-run owner
+//     and clears its exact scope here, whatever isFinalFallbackAttempt says. Every fallback
+//     chain that reuses a runId across candidates passes the callback, so a later candidate
+//     still inherits the committed counts.
 function releaseCliSettlementTurnSendLedgerScope(context: PreparedCliRunContext): void {
   const scope = context.turnSendLedgerScope;
   if (!scope) {
@@ -214,7 +212,7 @@ function releaseCliSettlementTurnSendLedgerScope(context: PreparedCliRunContext)
   }
   if (context.params.onDeferredTurnSendLedgerScope) {
     context.params.onDeferredTurnSendLedgerScope(scope);
-  } else if (context.params.isFinalFallbackAttempt === true) {
+  } else {
     clearTurnSendLedgerForRun(scope);
   }
 }

@@ -11,7 +11,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
