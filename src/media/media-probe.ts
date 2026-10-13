@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { MediaKind } from "@openclaw/media-core/constants";
-import { normalizeMimeType } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger as parsePositiveInteger,
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -267,34 +264,4 @@ type VideoDimensions = {
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
   const { width, height } = toMediaProbeResult(await probeMediaSource({ input: buffer }, "video"));
   return width && height ? { width, height } : undefined;
-}
-
-// Known audio containers only; M4A can keep duration after the media data, so it needs a seekable file.
-const SEEKABLE_AUDIO_PROBE_MIME_TYPES = new Set([
-  "audio/ogg",
-  "audio/opus",
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/m4a",
-  "audio/x-m4a",
-]);
-
-/** Positive audio duration in milliseconds for a known container; failures stay absent. */
-export async function probeAudioDurationMs(
-  buffer: Buffer,
-  contentType?: string,
-): Promise<number | undefined> {
-  if (!SEEKABLE_AUDIO_PROBE_MIME_TYPES.has(normalizeMimeType(contentType) ?? "")) {
-    return undefined;
-  }
-  try {
-    return await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "media-probe-" },
-      async (workspace) =>
-        (await probeMediaFile(await workspace.write("media", buffer), "audio")).durationMs,
-    );
-  } catch {
-    return undefined;
-  }
 }

@@ -765,7 +765,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
   ] as const)(
     "sends a rounded probed duration with $entry $method uploads",
     async ({ entry, method, contentType, asVoice }) => {
-      const probe = vi.spyOn(mediaRuntime, "probeAudioDurationMs").mockResolvedValue(12_600);
+      vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
       vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
         buffer: Buffer.from("audio-bytes"),
         kind: "audio",
@@ -778,9 +778,29 @@ describe("Telegram send recovery conformance over HTTP", () => {
       } else {
         await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
       }
-      expect(probe).toHaveBeenCalledWith(Buffer.from("audio-bytes"), contentType);
       expect(requests.map((request) => request.method)).toEqual([method]);
       expect(String(requests[0]!.fields.duration)).toBe("13");
+    },
+  );
+
+  it.each(["N/A", "0", "Infinity", new Error("ffprobe unavailable")])(
+    "still sends audio when duration probing yields %s",
+    async (result) => {
+      const probe = vi.spyOn(mediaRuntime, "runFfprobe");
+      if (result instanceof Error) {
+        probe.mockRejectedValue(result);
+      } else {
+        probe.mockResolvedValue(result);
+      }
+      await sendMessageTelegram("123", "", {
+        cfg,
+        api: bot.api,
+        mediaUrl: voicePath,
+        mediaLocalRoots: [fixture.mediaDir],
+        asVoice: true,
+      });
+      expect(requests.map((request) => request.method)).toEqual(["sendVoice"]);
+      expect(requests[0]!.fields.duration).toBeUndefined();
     },
   );
 
