@@ -21,7 +21,11 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { ExplicitSkillSelection } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
-import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import {
+  bumpSkillsSnapshotVersion,
+  markSkillsSupportingFilesChanged,
+  type SkillsSourceScope,
+} from "./refresh-state.js";
 import {
   materializeSkillResources,
   prepareSkillResourceDelivery,
@@ -703,6 +707,43 @@ it("restamps the edited bundle after a watcher reload and never re-hashes a carr
     expect(identityAfter).toBeTypeOf("string");
     expect(identityAfter).not.toBe(identityBefore);
     expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+  } finally {
+    f.release();
+  }
+});
+
+it("re-stamps through the scoped resource version an execution-root watcher publishes", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    const sourceScope: SkillsSourceScope = {
+      executionWorkspaceDir: path.join(f.host, "execution"),
+    };
+    registerActiveTracingBridge();
+    f.skillResources.readSkillFiles.mockClear();
+    const before = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway, {
+      sourceScope,
+    });
+    const identityBefore = before[0]?.bundleFingerprint;
+    expect(identityBefore).toBeTypeOf("string");
+    // Steady state reuses the cached walk: the same loaded version hashes once.
+    await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway, { sourceScope });
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+    // An execution-root support-file edit publishes under its source scope, and
+    // the unscoped version read cannot see it: the scoped read must drive the
+    // cache identity, or even a fresh preparation reuses the obsolete stamp.
+    await fs.writeFile(path.join(f.host, "skills", "guide", "check.sh"), "scoped watcher edit\n");
+    markSkillsSupportingFilesChanged({ workspaceDir: f.gateway, sourceScopes: [sourceScope] });
+    const after = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway, {
+      sourceScope,
+    });
+    expect(after[0]?.bundleFingerprint).toBeTypeOf("string");
+    expect(after[0]?.bundleFingerprint).not.toBe(identityBefore);
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(2);
   } finally {
     f.release();
   }

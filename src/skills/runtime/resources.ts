@@ -54,7 +54,7 @@ import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js
 import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
-import { getSkillsResourceVersion } from "./refresh-state.js";
+import { getSkillsResourceVersion, type SkillsSourceScope } from "./refresh-state.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
 import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
 
@@ -171,10 +171,20 @@ async function readDiscoveredBundleIdentity(
   }
 }
 
+/** Options that scope the identity lookup or re-derive carried stamps. */
+export type DiscoveredSkillIdentityOptions = {
+  /** Source scope the watcher records resource versions under. */
+  sourceScope?: SkillsSourceScope;
+  /** Recompute directory identities despite carried stamps; library pins and
+   * `node://` locators keep theirs. Reserved for a watcher-observed reload. */
+  recompute?: boolean;
+};
+
 /** Stamps the loaded-bundle identity onto discovered skills, by lookup per loaded version. */
 export async function stampDiscoveredSkillBundleIdentities(
   skills: readonly Skill[],
   workspaceDir?: string,
+  options?: DiscoveredSkillIdentityOptions,
 ): Promise<Skill[]> {
   if (
     !skills.length ||
@@ -213,23 +223,32 @@ export async function stampDiscoveredSkillBundleIdentities(
   };
   // The resource version is the watcher/reload signal: one identity per bundle
   // directory per loaded version, so a reload restamps and a steady state
-  // reuses the cached walk without re-hashing.
-  const version = getSkillsResourceVersion(workspaceDir ?? "");
+  // reuses the cached walk without re-hashing. The scoped read is a superset of
+  // the unscoped one: execution-root support edits publish under their source
+  // scope, and those bumps must invalidate identities inside that root.
+  const version = getSkillsResourceVersion(workspaceDir ?? "", options?.sourceScope);
   return await Promise.all(
     skills.map(async (skill) => {
       // Another producer's retained identity is trusted verbatim: worker
       // materialization, the session route, the transfer adapter, and library
-      // pins stamp their own, and discovery never re-hashes a carried stamp.
-      if (skill.bundleFingerprint) {
-        return skill;
-      }
+      // pins stamp their own, and discovery never re-hashes a carried stamp —
+      // except an explicit refresh after the resource version advanced, which
+      // recomputes directory identities for the watcher-observed reload.
       // node:// locators have no bundle directory on this host: omit.
       if (skill.filePath.startsWith("node://")) {
         return skill;
       }
+      const restamp = options?.recompute === true && skill.source !== "openclaw-library";
+      if (skill.bundleFingerprint && !restamp) {
+        return skill;
+      }
       const reader = resolveSourceReader(skill);
       if (!reader) {
-        return skill;
+        // A refresh after the resource version advanced cannot verify the
+        // carried stamp: omit it rather than keep a possibly stale identity.
+        return restamp && skill.bundleFingerprint
+          ? { ...skill, bundleFingerprint: undefined }
+          : skill;
       }
       let caches = discoveredBundleIdentityCaches.get(reader);
       if (!caches) {
