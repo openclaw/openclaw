@@ -1,5 +1,5 @@
 // Control UI tests prove locale chunk recovery through a real browser reconnect.
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { BrowserContext, Page, Route } from "playwright";
 import { expect, it } from "vitest";
@@ -54,22 +54,23 @@ async function reconnect(page: Page, gateway: MockGatewayControls): Promise<void
 
 suite.define(() => {
   it.each([
-    { name: "sv-SE", browserLocale: "sv-SE", savedLocale: false },
-    { name: "sv-FI", browserLocale: "sv-FI", savedLocale: false },
-    { name: "saved-sv", browserLocale: "en-US", savedLocale: true },
-  ])("loads Swedish in the browser for $name and after reload", async (scenario) => {
+    { name: "sv-SE", browserLocale: "sv-SE", savedLocale: null, expectedLocale: "sv" },
+    { name: "sv-FI", browserLocale: "sv-FI", savedLocale: null, expectedLocale: "sv" },
+    { name: "saved-sv", browserLocale: "en-US", savedLocale: "sv", expectedLocale: "sv" },
+    { name: "saved-fr", browserLocale: "sv-SE", savedLocale: "fr", expectedLocale: "fr" },
+  ])("preserves the browser or saved language for $name after reload", async (scenario) => {
     const context = await suite.browser.newContext({
       ...createControlUiE2eContextOptions(),
       locale: scenario.browserLocale,
     });
     const page = await context.newPage();
     if (scenario.savedLocale) {
-      await page.addInitScript(() => {
+      await page.addInitScript((savedLocale) => {
         if (!sessionStorage.getItem("swedish-locale-test.initialized")) {
-          localStorage.setItem("openclaw.i18n.locale", "sv");
+          localStorage.setItem("openclaw.i18n.locale", savedLocale);
           sessionStorage.setItem("swedish-locale-test.initialized", "1");
         }
-      });
+      }, scenario.savedLocale);
     }
     await installMockGateway(page);
 
@@ -77,11 +78,14 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       const picker = page.locator("#settings-language openclaw-select-picker");
       await picker.waitFor();
-      await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("sv");
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.lang))
+        .toBe(scenario.expectedLocale);
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
       const swedishOption = picker.locator('[role="option"][data-value="sv"]');
       await swedishOption.waitFor();
+      await swedishOption.scrollIntoViewIfNeeded();
       expect(await swedishOption.textContent()).toContain("Svenska");
       if (!scenario.savedLocale) {
         expect(
@@ -94,16 +98,25 @@ suite.define(() => {
       });
 
       await page.reload();
-      await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("sv");
-      const browserState = await page.evaluate(() => ({
-        navigatorLanguage: navigator.language,
-        documentLanguage: document.documentElement.lang,
-        savedLocale: localStorage.getItem("openclaw.i18n.locale"),
-      }));
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.lang))
+        .toBe(scenario.expectedLocale);
+      const browserState = {
+        ...(await page.evaluate(() => ({
+          navigatorLanguage: navigator.language,
+          documentLanguage: document.documentElement.lang,
+          savedLocale: localStorage.getItem("openclaw.i18n.locale"),
+        }))),
+        swedishTranslationMemoryPresent: existsSync(
+          new URL("../i18n/.i18n/sv.tm.jsonl", import.meta.url),
+        ),
+      };
       expect(browserState.navigatorLanguage).toBe(scenario.browserLocale);
-      expect(browserState.savedLocale).toBe(scenario.savedLocale ? "sv" : null);
+      expect(browserState.savedLocale).toBe(scenario.savedLocale);
+      expect(browserState.swedishTranslationMemoryPresent).toBe(false);
       await trigger.click();
       await swedishOption.waitFor();
+      await swedishOption.scrollIntoViewIfNeeded();
       await page.screenshot({
         path: path.join(artifacts, `${scenario.name}-picker-after-reload.png`),
       });
