@@ -1,9 +1,10 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import {
-  captureIncognitoSessionOperation,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ToolResultMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -56,11 +57,17 @@ export function createCliDispatchTranscriptRecorder(params: {
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     expectedWriterRunId: params.expectedWriterRunId,
   };
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    scope.agentId = incognito.actor.agentId;
-    scope.storePath = incognito.actor.path;
+  const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    scope.agentId = memory.agentId;
+    scope.storePath = memory.path;
   }
+  const selected = acquireSessionActorStorage(scope, {
+    lifetime: { assertCurrent() {}, assertReadable() {} },
+    authority: { assertCurrent() {}, authorize() {} },
+  });
+  // Attach a handler now; the FIFO reports acquisition failure with append failures.
+  void selected.catch(() => {});
 
   const enqueue = (build: () => AgentMessage) => {
     tail = tail.then(async () => {
@@ -72,9 +79,11 @@ export function createCliDispatchTranscriptRecorder(params: {
         });
       // Events accepted into this FIFO settle even when the run is stopped.
       // Keep their original actor; event callbacks need not retain its ambient scope.
-      await (incognito
-        ? withIncognitoSessionBinding({ actor: incognito.actor }, append)
-        : append());
+      const binding = await selected;
+      if (memory && !binding) {
+        return;
+      }
+      await (binding ? runWithSessionActorStorage(binding, append) : append());
     });
     // Transcript mirroring is best-effort; a failed append must not fail the
     // run or poison later appends in the chain.
@@ -181,6 +190,10 @@ export function createCliDispatchTranscriptRecorder(params: {
         appendAssistantSnapshot(finalText?.trim() || lastAssistantText.trim(), "stop");
       }
       await tail;
+      await selected.then(
+        (binding) => binding?.actor.release(),
+        () => {},
+      );
     },
   };
 }

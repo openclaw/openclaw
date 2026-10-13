@@ -259,13 +259,42 @@ export function readSessionTranscriptBoundedActiveContextCore(
     "maxEvents",
   );
   const read = (projection: CurrentTranscriptProjection): SessionTranscriptBoundedActiveContext => {
-    const db = getActiveTranscriptKysely(projection.database);
     const fence = options.ignoreReadFence
       ? undefined
       : resolveSqliteSessionTranscriptReadFence({
           database: projection.database,
           ...projection.resolved,
         });
+    const consume = (rows: Array<{ rawSeq: number; serializedBytes: number }>) => {
+      const consumed = options.onRead?.(projection, rows);
+      if (isPromiseLike(consumed)) {
+        void Promise.resolve(consumed).catch(() => {});
+        throw new Error("Transcript snapshot consumers must remain synchronous");
+      }
+    };
+    if (projection.version.rawSeq === null) {
+      const activeLeafEntryId = fence
+        ? fence.admission.effectiveParentId
+        : projection.state.leafEventId;
+      consume([]);
+      return {
+        version: projection.version,
+        activeLeafEntryId,
+        opaqueParents: activeLeafEntryId ? new Map([[activeLeafEntryId, null]]) : new Map(),
+        parents: new Map(),
+        firstKeptRanges: new Map(),
+        persistedSuffixStartSeq: 0,
+        boundaryCount: 0,
+        events: [],
+        cacheTtlProjectionPrefixes: [],
+        serializedBytes: 0,
+        totalEvents: 0,
+        transcriptMutationAt: projection.version.updatedAt,
+        truncated: false,
+        ...(!fence ? { completeActivePath: true as const } : {}),
+      };
+    }
+    const db = getActiveTranscriptKysely(projection.database);
     const transcript = db
       .selectFrom("transcript_events")
       .where("session_id", "=", projection.resolved.sessionId);
@@ -483,14 +512,10 @@ export function readSessionTranscriptBoundedActiveContextCore(
     if (boundary) {
       sizes.set(boundary.seq, boundary.serialized_bytes);
     }
-    const consumed = options.onRead?.(projection, [
+    consume([
       ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),
       ...contextSequences.map((rawSeq) => ({ rawSeq, serializedBytes: sizes.get(rawSeq)! })),
     ]);
-    if (isPromiseLike(consumed)) {
-      void Promise.resolve(consumed).catch(() => {});
-      throw new Error("Transcript snapshot consumers must remain synchronous");
-    }
     return {
       version,
       activeLeafEntryId,

@@ -31,7 +31,7 @@ export function createMediaRequesterReadMock(
   return {
     withSessionEntryReadOnlyInWorker: async (_scope, assertCurrent, consume) => {
       assertCurrent();
-      return consume({ ok: true, value: readEntry() }, { kind: "native", assertCurrent });
+      return consume({ ok: true, value: readEntry() }, { kind: "file", assertCurrent });
     },
   };
 }

@@ -12,7 +12,7 @@ import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state
 import { userProfilesDb } from "../../src/state/user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "../../src/state/user-profiles-schema.js";
 
-export type TeamShapeSession = { sessionKey: string; sessionId: string };
+type TeamShapeSession = { sessionKey: string; sessionId: string };
 
 export type TeamShapeSessionsOptions = {
   stateDir: string;

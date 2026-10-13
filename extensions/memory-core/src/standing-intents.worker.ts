@@ -10,6 +10,7 @@ import {
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
   getStandingIntentLifecycleDeadline,
+  hasNoActiveStandingIntents,
   invalidateStandingIntentLifecycle,
   listStandingIntentsInDatabase,
   maintainStandingIntentLifecycle,
@@ -67,6 +68,10 @@ export function bindSqliteWorkerBackend(
         value,
         nextDueAt: getStandingIntentLifecycleDeadline(db),
       });
+      // Absence survives until an owner write; there is no effect to transact or authorize.
+      if (command.type === "match" && hasNoActiveStandingIntents(db)) {
+        return result([]);
+      }
       return transact<
         StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]
       >(() => {
