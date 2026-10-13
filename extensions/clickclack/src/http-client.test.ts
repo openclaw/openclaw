@@ -2,7 +2,11 @@ import { createServer, type Server } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+import {
+  ClickClackHttpError,
+  createClickClackClient,
+  normalizeClickClackCorrelationId,
+} from "./http-client.js";
 
 const effectGate = vi.hoisted((): { prepare: (() => Promise<void>) | undefined } => ({
   prepare: undefined,
@@ -928,10 +932,17 @@ describe("ClickClack HTTP client", () => {
     }
   });
 
-  it.each([404, 503, 200])(
-    "bounds a slow upload HTTP %i error body while handing successful reads to the media owner",
-    async (status) => {
+  it.each([
+    { status: 404, callerCancelled: false },
+    { status: 503, callerCancelled: false },
+    { status: 200, callerCancelled: false },
+    { status: 404, callerCancelled: true },
+  ])(
+    "bounds a slow upload body (status=$status, callerCancelled=$callerCancelled)",
+    async ({ status, callerCancelled }) => {
       vi.useFakeTimers();
+      const caller = new AbortController();
+      const callerFailure = new Error("upload caller stopped");
       const receivedHeaders = createDeferred<AbortSignal>();
       let body: ReadableStreamDefaultController<Uint8Array> | undefined;
       const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -945,12 +956,12 @@ describe("ClickClack HTTP client", () => {
           },
         });
         receivedHeaders.resolve(signal);
-        return new Response(stream, { status });
+        return new Response(stream, { status, headers: { "Retry-After": "17" } });
       });
       const consume = vi.fn(async (response: Response) => [
         ...new Uint8Array(await response.arrayBuffer()),
       ]);
-      const request = createTestClient(fetchMock).consumeUpload("upl_slow", consume);
+      const request = createTestClient(fetchMock).consumeUpload("upl_slow", consume, caller.signal);
       const sending = request.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -964,13 +975,24 @@ describe("ClickClack HTTP client", () => {
           await vi.advanceTimersByTimeAsync(9_000);
           body?.enqueue(new Uint8Array([byte]));
         }
+        if (callerCancelled) caller.abort(callerFailure);
         await vi.advanceTimersByTimeAsync(3_000);
         expect(signal.aborted).toBe(status !== 200);
         if (status === 200) {
           body?.close();
           expect(await sending).toEqual({ value: [1, 2, 3, 4] });
+        } else if (callerCancelled) {
+          expect(await sending).toEqual({ error: callerFailure });
         } else {
-          expect(await sending).toMatchObject({ error: { name: "AbortError" } });
+          const result = await sending;
+          if (!("error" in result) || !(result.error instanceof ClickClackHttpError)) {
+            throw new Error("expected the observed ClickClack HTTP rejection");
+          }
+          expect(result.error.status).toBe(status);
+          expect(result.error.message).toBe(
+            `ClickClack ${status}: upload error details unavailable`,
+          );
+          expect(result.error.headers.get("Retry-After")).toBe("17");
         }
         expect(consume).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
       } finally {

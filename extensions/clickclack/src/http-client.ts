@@ -488,7 +488,15 @@ export function createClickClackClient(options: ClientOptions) {
           });
         });
         if (!response.ok) {
-          const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+          let detail: string;
+          try {
+            detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+          } catch {
+            // The status is authoritative even if its optional detail times out.
+            // Preserve caller cancellation instead of turning it into a remote rejection.
+            signal?.throwIfAborted();
+            detail = "upload error details unavailable";
+          }
           throw new ClickClackHttpError(
             response.status,
             redactToolPayloadText(detail),
