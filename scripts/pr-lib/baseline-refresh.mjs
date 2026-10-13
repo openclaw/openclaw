@@ -408,9 +408,8 @@ const retiredNames = [
   "correction-review.md",
   "correction-incoming-review.json",
   "correction-incoming-review.md",
-  "prepare-push-result.env",
-  "prepare-sync-result.env",
 ];
+const publicationNames = ["prepare-push-result.env", "prepare-sync-result.env"];
 
 function proofInventory(archives) {
   return Object.fromEntries(
@@ -497,6 +496,15 @@ function retainedAuthority(binding) {
     }
     if (!["absent"].includes(expected) && !oidPattern.test(expected)) {
       throw new Error("Invalid retained authority object ID.");
+    }
+    if (expected === "absent" && publicationNames.includes(path.slice(".local/".length))) {
+      const archived = join(record.archive, path.slice(".local/".length));
+      if (present(archived)) {
+        throw new Error(`Unexpected retained publication evidence: ${archived}`);
+      }
+      if (replayFiles) {
+        replayFiles[archived] = null;
+      }
     }
     if ([".local/pr-meta.json", ".local/pr-meta.env", ".local/review.json"].includes(path)) {
       if (hash(readRegular(path)) !== expected) {
@@ -671,6 +679,7 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
       for (const [path, encoded] of [
         [bindingPath, facts.binding],
         [".local/prep-context.env", facts.context],
+        ...Object.entries(facts.publication),
       ]) {
         const bytes = Buffer.from(encoded, "base64");
         if (facts.files[path] !== digest(bytes)) {
@@ -735,7 +744,7 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
   ) {
     throw new Error("Baseline transition binding changed.");
   }
-  for (const name of retiredNames) {
+  for (const name of [...retiredNames, ...publicationNames]) {
     const path = `.local/${name}`;
     if (
       fs.lstatSync(path, { throwIfNoEntry: false }) &&
@@ -744,6 +753,17 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
       throw new Error(`Active evidence changed during baseline transition: ${path}`);
     }
   }
+  // Publication records still describe the hosted branch after a local baseline
+  // change. Restore exact source receipts if an older interrupted transition
+  // retired them, while reviews and gates remain candidate-specific.
+  const publication = Object.fromEntries(
+    publicationNames.flatMap((name) => {
+      const path = `.local/${name}`;
+      return record.authority[path] === "absent"
+        ? []
+        : [[path, readRegular(join(record.archive, name)).toString("base64")]];
+    }),
+  );
 
   const files = replayFiles;
   const directories = replayDirectories;
@@ -774,6 +794,7 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
     paths: ownedPaths,
     binding: bytes.toString("base64"),
     context: boundContext.toString("base64"),
+    publication,
   };
   checkPrepared(facts, ...identity, false);
   process.stdout.write(JSON.stringify(facts));
@@ -1079,7 +1100,7 @@ function continueSigning(pr, oid, commitPath) {
 function checkSigning(pr, root, lockRef, lockOid) {
   const facts = JSON.parse(fs.readFileSync(0, "utf8"));
   for (const [path, expected] of Object.entries(facts.files)) {
-    if (digest(readRegular(path)) !== expected) {
+    if ((present(path) ? digest(readRegular(path)) : null) !== expected) {
       throw new Error("Signing evidence changed after replay.");
     }
   }
