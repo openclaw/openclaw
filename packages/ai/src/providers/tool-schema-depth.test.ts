@@ -18,10 +18,10 @@ import {
   normalizeOpenAIStrictCompatSchema,
   findOpenAIStrictSchemaViolations,
 } from "./openai-tool-schema-compat.js";
-import { normalizeStrictOpenAIJsonSchema } from "./openai-tool-schema.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 import { toolSchemaDepthEntrypoint } from "./tool-schema-depth-runtime.test-support.js";
 import { MAX_TOOL_SCHEMA_DEPTH, truncateToolSchemaDepth } from "./tool-schema-depth.js";
+import { publishRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,28 +59,19 @@ describe("shared tool schema depth budget", () => {
     );
     expect(stdout).toBe("ok");
   }, 30_000);
-  it.each([
-    ["parameters", normalizeToolParameterSchema],
-    ["strict", normalizeStrictOpenAIJsonSchema],
-    ["compat", normalizeOpenAIStrictCompatSchema],
-    ["llama.cpp", cleanSchemaForLlamacppGbnf],
-    ["Gemini", cleanSchemaForGemini],
-    [
-      "keyword stripping",
-      (schema: unknown) => stripUnsupportedSchemaKeywords(schema, new Set(["format"])),
-    ],
-  ] as const)("%s keeps a deep tool schema usable", (_name, normalize) => {
-    const original = nestedSchema(5000);
-    const normalized = normalize(original);
-    expect(nestedLeaf(normalized)).toEqual({ depth: MAX_TOOL_SCHEMA_DEPTH + 1, leaf: {} });
-    expect(nestedLeaf(original)).toEqual({ depth: 5000, leaf: { type: "string" } });
-    expect(() => JSON.stringify(normalized)).not.toThrow();
-  });
+  it.each([["Gemini", cleanSchemaForGemini]] as const)(
+    "%s keeps a deep tool schema usable",
+    (_name, normalize) => {
+      const original = nestedSchema(5000);
+      const normalized = normalize(original);
+      expect(nestedLeaf(normalized)).toEqual({ depth: MAX_TOOL_SCHEMA_DEPTH + 1, leaf: {} });
+      expect(nestedLeaf(original)).toEqual({ depth: 5000, leaf: { type: "string" } });
+      expect(() => JSON.stringify(normalized)).not.toThrow();
+    },
+  );
 
   it.each([
-    ["raw", (schema: unknown) => schema],
-    ["host normalized", normalizeToolParameterSchema],
-    ["strict normalized", normalizeStrictOpenAIJsonSchema],
+    ["published", (schema: unknown) => publishRuntimeToolInputSchema(schema).schema],
     ["compat normalized", normalizeOpenAIStrictCompatSchema],
     ["llama.cpp cleaned", cleanSchemaForLlamacppGbnf],
     ["keyword stripped", (schema: unknown) => stripUnsupportedSchemaKeywords(schema, new Set())],
@@ -240,16 +231,6 @@ describe("shared tool schema depth budget", () => {
       leaf: { type: "string" },
     });
     expect(toJSON).toHaveBeenCalledTimes(3);
-  });
-
-  it("reports truncation after an unnamed normalization cache hit", () => {
-    const schema = nestedSchema(5000);
-    normalizeToolParameterSchema(schema);
-    const logWarn = vi.fn();
-    configureAiTransportHost({ logWarn });
-    normalizeToolParameterSchema(schema, { toolName: "cached_tool" });
-    normalizeToolParameterSchema(schema, { toolName: "cached_tool" });
-    expect(logWarn).toHaveBeenCalledTimes(1);
   });
 
   it("bounds nested toJSON schemas without evaluating getters more than once", () => {

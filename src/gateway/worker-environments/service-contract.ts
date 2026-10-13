@@ -58,6 +58,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
+  startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   environmentId: string;
   providerId: string;
   profileId: string;

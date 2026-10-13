@@ -12,6 +12,7 @@ import {
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
+import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -369,7 +370,7 @@ function createReadTransport(
       };
       task = readPool(state, ownsAdmission()).startTask(
         () => {
-          const turn = acquireSqliteDatabaseAdmissionTurn(location);
+          const turn = acquireSqliteDatabaseAdmissionTurn(resolveSqliteDatabaseFilePath(location));
           if (!turn) {
             authority.assertCurrent();
             return request;

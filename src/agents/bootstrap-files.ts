@@ -98,14 +98,14 @@ export function makeBootstrapWarn(params: {
   sessionLabel: string;
   workspaceDir?: string;
   warn?: (message: string) => void;
-}): ((message: string) => void) | undefined {
+}): ((message: string, dedupeKey?: string) => void) | undefined {
   const warn = params.warn;
   if (!warn) {
     return undefined;
   }
   const workspacePrefix = params.workspaceDir ?? "";
-  return (message: string) => {
-    const key = `${workspacePrefix}\u0000${params.sessionLabel}\u0000${message}`;
+  return (message: string, dedupeKey?: string) => {
+    const key = dedupeKey ?? `${workspacePrefix}\u0000${params.sessionLabel}\u0000${message}`;
     if (!rememberBootstrapWarning(key)) {
       return;
     }

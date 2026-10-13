@@ -209,7 +209,7 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
       ({ signal }) =>
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
-          const relocated = path.join(root, "bundles", "installed");
+          const relocated = path.join(root, "dist", "worker");
           fs.mkdirSync(relocated, { recursive: true });
           await tar.extract({ file: preparedArchive, cwd: relocated });
           const result = await fixtureLifetime.track(

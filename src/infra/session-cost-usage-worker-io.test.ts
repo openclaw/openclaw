@@ -20,6 +20,13 @@ import {
   materializeSessionArchiveForRead,
 } from "../config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { resolveSqliteTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  appendTranscriptEventsInTransaction,
+  rewriteSqliteTranscriptEventRowsInTransaction,
+} from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -126,6 +133,15 @@ if (!isMainThread) {
         };
       }
     }
+    if (sql.includes('as "is_cold"') && sql.includes('"transcript_rewrite_watermarks"')) {
+      for (const method of ["all", "get", "iterate"]) {
+        const original = statement[method];
+        statement[method] = function(...args) {
+          record({ kind: "hot-watermark" });
+          return Reflect.apply(original, this, args);
+        };
+      }
+    }
     if (/^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql)) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
@@ -175,6 +191,7 @@ if (!isMainThread) {
           (line) =>
             JSON.parse(line) as
               | { kind: "transcript-stats" }
+              | { kind: "hot-watermark" }
               | { kind: "cache" }
               | { kind: "cache-row"; key: string; valueBytes: number }
               | { kind: "transcript"; method: string; start: number },
@@ -183,6 +200,101 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
+  it("rebuilds SQLite usage from committed batch generation facts without a separate watermark read", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const probe = await observeUsageWorkerReads(state.stateDir, []);
+      await probe.run(async () => {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        const scope = resolveSqliteTranscriptScope({
+          agentId: "main",
+          sessionKey: "agent:main:usage-rewrite",
+          sessionId: "usage-rewrite",
+          storePath: database.path,
+        });
+        const message = (id: string, parentId: string | null, tokens: number) => ({
+          type: "message",
+          id,
+          parentId,
+          timestamp: "2026-09-18T00:00:00Z",
+          message: {
+            role: "assistant",
+            usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens } },
+          },
+        });
+        const first = message("first", null, 1);
+        runOpenClawAgentWriteTransaction(
+          (owner) => {
+            writeSessionEntry(owner, scope.sessionKey, {
+              sessionId: scope.sessionId,
+              updatedAt: 1,
+            });
+            appendTranscriptEventsInTransaction(
+              owner,
+              scope,
+              [
+                { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+                first,
+                message("second", "first", 2),
+              ],
+              {
+                scheduleProjectionReconcile: false,
+              },
+            );
+          },
+          { agentId: scope.agentId, path: database.path },
+        );
+        const sessionFile = formatSqliteSessionFileMarker({
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          storePath: database.path,
+        });
+        const refresh = () =>
+          refreshCostUsageCacheForAgent({ agentId: "main", sessionFiles: [sessionFile] });
+        const cached = () =>
+          loadSessionCostSummariesFromCache({
+            agentId: "main",
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          });
+        await refresh();
+        expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
+        const generation = runOpenClawAgentWriteTransaction(
+          (owner) => {
+            const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
+              {
+                seq: 1,
+                expectedEventJson: JSON.stringify(first),
+                event: message("first", null, 8),
+              },
+            ]);
+            appendTranscriptEventsInTransaction(owner, scope, [message("third", "second", 4)], {
+              scheduleProjectionReconcile: false,
+            });
+            return rewritten;
+          },
+          { agentId: scope.agentId, path: database.path },
+        );
+        expect(generation).toEqual(expect.any(String));
+        await probe.clear();
+        await refresh();
+        expect(await cached()).toMatchObject({
+          summaries: [{ totalTokens: 14, totalCost: 14 }],
+          cacheStatus: { status: "fresh" },
+        });
+        const row = requireValue(
+          readSessionCostUsageRollupRows("main").find((entry) => entry.key === sessionFile),
+          "expected rewritten SQLite usage rollup",
+        );
+        expect(JSON.parse(row.valueJson)).toMatchObject({
+          checkpoint: { kind: "sqlite", generation, maxSeq: 3, eventCount: 4 },
+        });
+        const reads = await probe.read();
+        expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);
+        expect(reads.filter((entry) => entry.kind === "hot-watermark")).toEqual([]);
+      });
+    });
+  });
+
   it("returns uncached SQLite sessions as pending without reading transcript statistics", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });

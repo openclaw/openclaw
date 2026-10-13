@@ -43,6 +43,14 @@ The wait result also carries the run's `terminalReply` and, when available,
 reply reached the external source conversation. A2A announcements consume that
 fact instead of using display-history mirrors as delivery evidence.
 
+When a provider rejects a malformed tool call before dispatch, the built-in
+runner can continue once from the current transcript after earlier tools have
+settled. Earlier failed tools do not block this continuation when every failure
+carries host evidence that execution never started and its result already
+precedes the rejected response in the current turn. Failures that may have caused
+side effects, unfinished tools, and asynchronous work still block it; the
+continuation does not replay the original task or increase the retry budget.
+
 ## Queueing and concurrency
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
@@ -83,7 +91,7 @@ These run inside the agent loop or gateway pipeline:
 
 | Hook                                                    | Runs                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`                                  | Pre-session (no `messages`), to deterministically override provider/model before resolution.                                                                                                                                                                                                                                                                                                                        |
+| `before_model_resolve`                                  | Pre-session (no `messages`), to override provider/model before resolution using fixed rules.                                                                                                                                                                                                                                                                                                                        |
 | `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext`, or, on supported runtimes with a turn-scoped submitted tool surface, narrow it with `toolsAllow`. An empty `toolsAllow` submits no optional tools; omitted leaves the host-resolved surface unchanged. Unsupported runtimes reject restrictive values instead of ignoring them. |
 | `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                                                                                                                                        |
 | `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                                                                                                                                                     |
@@ -128,6 +136,7 @@ complete schema still enforces constraints such as `oneOf` exclusivity.
 - Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
+- A confirmed final send, reply, thread reply, or poll to the current source conversation ends the run loop in both automatic and message-tool delivery modes. An added reaction with explicit `final: true` on the current source message also ends it. Progress actions (`final: false`), reactions elsewhere, removals, and unconfirmed actions do not.
 
 ## Reply shaping
 
@@ -135,6 +144,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
+- A confirmed final messaging-tool reply to the current source remains completion evidence across provider retries. Progress-only, failed, partial, dry-run, and other-destination sends do not satisfy that requirement. A newly accepted steered input needs its own answer.
 - A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
 The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.
@@ -152,6 +162,16 @@ A confirmed delivery prevents duplicate generation. Pending delivery or continua
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
 ## Compaction and retries
+
+In Control UI chat, recovery stays beside the working indicator rather than
+creating a message for every failed attempt. Same-model retry status includes
+its attempt count and an absolute retry time for backoff display. Model fallback
+transitions remain available when reconnecting to an active run.
+
+Once recovery ends in failure, chat shows one run-owned failure notice. Useful
+partial text and media remain separate from that notice. Failed-attempt
+diagnostics stay in the raw transcript; display history collapses them by run
+identity, not by comparing error text.
 
 When an OpenAI Responses request hits its output limit while generating a tool
 call, the built-in harness finishes already admitted tools and retries from their

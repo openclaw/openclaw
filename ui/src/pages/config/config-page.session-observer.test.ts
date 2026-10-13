@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -13,12 +13,13 @@ import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
@@ -264,7 +265,10 @@ describe("ConfigPage navigation", () => {
         const module = await route.component();
         const provider = createApplicationContextProvider(completeConfigContext(context));
         document.body.append(provider);
-        render(module.render(data as ConfigRouteData), provider);
+        mountSolid(
+          () => createComponent(LitContent, { value: module.render(data as ConfigRouteData) }),
+          { container: provider },
+        );
         const page = expectDefined(
           provider.querySelector<HTMLElement>("openclaw-config-page"),
           "mounted config page",

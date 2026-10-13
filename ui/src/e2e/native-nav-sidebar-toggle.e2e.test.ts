@@ -74,7 +74,7 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
     const titlebarRequest = controlUiE2eBuiltModuleRequest(
-      "ui/src/components/macos-titlebar-controls.runtime.ts",
+      "ui/src/components/macos-titlebar-controls.runtime-solid.tsx",
     );
     const swipeRequest = controlUiE2eBuiltModuleRequest("ui/src/app/nav-drawer-swipe.runtime.ts");
 
@@ -243,8 +243,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    const sidebarToolbar = page.locator(".sidebar-session-toolbar");
-    const sidebarNewThread = sidebarToolbar.locator(".sidebar-new-session");
+    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
     await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
     await expect
       .poll(() =>

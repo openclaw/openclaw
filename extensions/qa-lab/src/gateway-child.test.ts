@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
+import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -10,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preserveQaGatewayDebugArtifacts } from "./gateway-child-artifacts.js";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import {
+  buildGatewayEnvironmentCaptureScript,
   readJsonLines,
   registerSourceGatewayHostLifelineTest,
   writePackagedGatewayFixture,
@@ -43,6 +45,11 @@ const qaTempPathState = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
+
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers/promises")>();
+  return { ...actual, setTimeout: vi.fn(actual.setTimeout) };
+});
 
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
@@ -191,15 +198,30 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
 });
 
 describe("waitForGatewayReady", () => {
-  it("does not accept a healthy listener as readiness", async () => {
+  it("waits for healthy readiness and configured agent admission", async () => {
     vi.useFakeTimers();
+    vi.mocked(sleep).mockImplementation(async (delay, value) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delay);
+      });
+      return value;
+    });
     const baseUrl = "http://127.0.0.1:43124";
     const release = vi.fn(async () => {});
     let ready = false;
+    let pending = true;
+    let settled = false;
 
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
       const status = url.endsWith("/healthz") || ready ? 200 : 503;
-      return { response: { ok: status === 200, status }, release };
+      const snapshot = {
+        ready,
+        agentDatabases: pending ? [{ code: "agent-database-inspection-pending" }] : [],
+      };
+      return {
+        response: { ok: status === 200, status, json: async () => snapshot },
+        release,
+      };
     });
 
     try {
@@ -208,6 +230,8 @@ describe("waitForGatewayReady", () => {
         logs: () => "startup logs",
         child: { exitCode: null, signalCode: null },
         timeoutMs: 1_000,
+      }).then(() => {
+        settled = true;
       });
 
       await vi.advanceTimersByTimeAsync(0);
@@ -216,7 +240,7 @@ describe("waitForGatewayReady", () => {
         `${baseUrl}/readyz`,
       ]);
       const healthRequest = requireSsrFetchCall();
-      expect(healthRequest.init?.method).toBe("HEAD");
+      expect(healthRequest.init?.method).toBe("GET");
       expect(healthRequest.init?.headers).toEqual({ connection: "close" });
       expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
       expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
@@ -224,16 +248,48 @@ describe("waitForGatewayReady", () => {
 
       ready = true;
       await vi.advanceTimersByTimeAsync(250);
+      expect(settled).toBe(false);
+      pending = false;
+      await vi.advanceTimersByTimeAsync(250);
 
       await expect(readiness).resolves.toBeUndefined();
       expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
         `${baseUrl}/readyz`,
         `${baseUrl}/readyz`,
+        `${baseUrl}/readyz`,
       ]);
-      expect(release).toHaveBeenCalledTimes(2);
+      expect(release).toHaveBeenCalledTimes(3);
     } finally {
+      vi.mocked(sleep).mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("reports terminal agent admission refusal without waiting for the deadline", async () => {
+    const refusal = {
+      agentId: "qa",
+      code: "agent-database-inspection-failed",
+      paths: ["/synthetic/agents/qa/agent/openclaw-agent.sqlite"],
+      reason: "Synthetic agent database is not ready for migration",
+      repairHint: "Run openclaw doctor --fix",
+    };
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ ready: false, agentDatabases: [refusal] }), {
+        status: 503,
+      }),
+      release,
+    });
+    await expect(
+      waitForGatewayReady({
+        baseUrl: "http://127.0.0.1:43124",
+        logs: () => "startup logs",
+        child: { exitCode: null, signalCode: null },
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow(JSON.stringify([refusal]));
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("bounds a stalled readiness probe by the remaining deadline", async () => {
@@ -637,23 +693,7 @@ describe("buildQaRuntimeEnv", () => {
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-env.json");
     vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "convex-maintainer-secret");
-    const captureScript = [
-      'const fs = require("node:fs");',
-      "const env = {",
-      "SAFE_VALUE: process.env.SAFE_VALUE,",
-      "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
-      "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: process.env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN,",
-      "OPENCLAW_QA_CONVEX_SECRET_CI: process.env.OPENCLAW_QA_CONVEX_SECRET_CI,",
-      "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER,",
-      '"BASH_FUNC_sudo%%": process.env["BASH_FUNC_sudo%%"],',
-      "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: process.env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL,",
-      "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
-      "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
-      "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
-      "OPENCLAW_DEV_SOURCE_ROOT: process.env.OPENCLAW_DEV_SOURCE_ROOT,",
-      "};",
-      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
-    ].join("\n");
+    const captureScript = buildGatewayEnvironmentCaptureScript(observedEnvPath);
 
     const owner = ownGateway();
     await expect(

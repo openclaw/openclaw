@@ -73,12 +73,13 @@ node-only credentials, configure the required profile and node as described in
 
 ### Crabbox profile
 
-In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. Changes apply without restarting the Gateway. To prepare an image after saving a profile, use **Snapshots → Build snapshot**. Saving does not start a build.
+In **Settings → Connections → Cloud environments**, expand **Advanced → Machines** to manage profiles. The profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The **Pool** line below Machines shows the ready-worker count and shared pool cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. Changes apply without restarting the Gateway. Saving does not start a build. Select a repository and use **Rebuild** when its recorded local project root and profile support preparation. Under **Machine → Change**, select the repository default profile; this edits `cloudWorkers.projectProfiles`.
 
 Snapshot retention is plugin-wide, separate from profile settings. Configure
 `plugins.entries.crabbox.config.warmImages.refreshAfter` (default `24h`, minimum
 `1h`), `retainUnused` (default `14d`, minimum `1d`), and `keepPrevious` (`0` or `1`,
-default `0`) in the **Snapshots → Retention policy** card or config. Durations
+default `0`) under **Advanced → Snapshot retention** or in config. The policy
+applies to all repositories. Durations
 accept whole minutes, hours, or days. Changes reload the Crabbox plugin without
 restarting the Gateway. See
 [Retention policy](/gateway/cloud-workers/warm-images#retention-policy) for the
@@ -129,7 +130,7 @@ Managed release archives stream into private staging files, bounded to 128 MiB, 
 
 The supported CLI is also required to inspect and stop existing leases. On hosts with restricted release-download access or managed-tool write permissions, provision the supported executable at the exact path used by existing profiles, or stage the managed distribution before rolling out an OpenClaw update. Supported executables and installed managed copies do not need release-download access. If neither is available, acquisition must succeed before lease inspection or teardown can continue; teardown stops heartbeats before attempting acquisition.
 
-Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning passes one deterministic canonical lease ID through `--lease-id`, keeps `--slug` as display metadata only, and always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop --id <canonical-id>`. After an ambiguous result, Gateway reconciliation repeats the same fixed-ID operation. Crabbox must return the exactly attested lease or fail closed; OpenClaw never falls back to slug adoption or replacement allocation.
+Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning passes one fixed lease ID through `--lease-id`, keeps `--slug` as display metadata only, and always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop --id <canonical-id>`. After an ambiguous result, Gateway reconciliation repeats the same fixed-ID operation. Crabbox must return the exactly attested lease or reject the operation; OpenClaw never falls back to slug adoption or replacement allocation.
 
 Provider support and backend-specific setup belong to [Crabbox](https://crabbox.sh/providers/index.html). Configure credentials, coordinator access, networking, and snapshots there rather than duplicating them in OpenClaw settings. The installed backend must satisfy OpenClaw's [cloud-worker lifecycle requirements](/gateway/cloud-workers#crabbox-provider-support).
 

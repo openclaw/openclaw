@@ -152,6 +152,7 @@ export function buildGatewaySessionSnapshot(params: {
     restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
+    usageReport: sessionRow.usageReport,
     lastChannel: sessionRow.lastChannel,
     lastTo: sessionRow.lastTo,
     lastAccountId: sessionRow.lastAccountId,

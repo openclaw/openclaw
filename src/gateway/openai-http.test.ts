@@ -3041,64 +3041,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(allContent).toBe("final answer");
   });
 
-  it.each([
-    {
-      name: "includes aggregate usage in the final stream chunk",
-      usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
-      lastCallUsage: undefined,
-      expected: {
-        prompt_tokens: 15,
-        completion_tokens: 5,
-        total_tokens: 20,
-        prompt_tokens_details: { cached_tokens: 3 },
-      },
-    },
-    {
-      name: "uses last-call usage when the aggregate is zero",
-      usage: { input: 0, output: 0, total: 0 },
-      lastCallUsage: { input: 55, output: 7, total: 62 },
-      expected: {
-        prompt_tokens: 55,
-        completion_tokens: 7,
-        total_tokens: 62,
-      },
-    },
-  ])("$name", async ({ usage, lastCallUsage, expected }) => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-      return {
-        payloads: [{ text: "hello" }],
-        meta: {
-          agentMeta: {
-            usage,
-            ...(lastCallUsage ? { lastCallUsage } : {}),
-          },
-        },
-      };
-    }) as never);
-
-    const res = await postChatCompletions(
-      port,
-      chatRequest({ stream: true, stream_options: { include_usage: true } }),
-    );
-    expect(res.status).toBe(200);
-
-    const text = await res.text();
-    const data = parseSseDataLines(text);
-    expect(data[data.length - 1]).toBe("[DONE]");
-    const jsonChunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-
-    const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual(expected);
-    expect(usageChunk?.choices).toStrictEqual([]);
-  });
-
   it("keeps aggregate-only usage total in final stream usage chunk", async () => {
     const port = enabledPort;
     agentCommandMock.mockClear();

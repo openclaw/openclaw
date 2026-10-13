@@ -238,6 +238,21 @@ function normalizeAssistantReplayBlockContent(
     }
     removedSilentText ||= isSilentText;
   }
+  const spoken = message.openclawDelivery?.tts?.text;
+  if (
+    spoken?.trim() &&
+    !sanitizedContent.some((block) => {
+      const record = asOptionalRecord(block);
+      return (
+        record?.type === "toolCall" ||
+        (record?.type === "text" && typeof record.text === "string" && record.text.trim())
+      );
+    })
+  ) {
+    // Restore speech only in model history; the stored and displayed turn stays unchanged.
+    sanitizedContent.push({ type: "text", text: spoken });
+    touched = true;
+  }
   if (!touched) {
     return message;
   }

@@ -213,7 +213,7 @@ it.each(["cached-writer", "admitted-read-only"] as const)(
   },
 );
 
-it.each(["cached-writer", "admitted-read-only"] as const)(
+it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
   "observes %s foreign commits without uncommitted rows or inherited discovery snapshots",
   async (source) => {
     const { env, database, admission, assertIsolation } = fixture(source === "cached-writer");
@@ -234,8 +234,28 @@ it.each(["cached-writer", "admitted-read-only"] as const)(
               "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL",
             );
             expect(() => maintenance.assertAdmission()).not.toThrow();
-            peer.exec("COMMIT");
-            expect(() => maintenance.assertAdmission()).toThrow(String(runId));
+            if (source === "cold-read-only") {
+              const observe = fs.lstatSync;
+              let pendingCommit = true;
+              const stat = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+                const observed = observe(...args);
+                // Commit after the last file observation used to select a cached revision.
+                if (pendingCommit && args[0] === `${database}-journal`) {
+                  pendingCommit = false;
+                  peer.exec("COMMIT");
+                }
+                return observed;
+              });
+              try {
+                expect(() => maintenance.assertAdmission()).toThrow(String(runId));
+                expect(pendingCommit).toBe(false);
+              } finally {
+                stat.mockRestore();
+              }
+            } else {
+              peer.exec("COMMIT");
+              expect(() => maintenance.assertAdmission()).toThrow(String(runId));
+            }
           },
           { env },
         );

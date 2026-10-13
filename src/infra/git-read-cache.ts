@@ -1,10 +1,13 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
 const MAX_CACHED_CHECKOUTS = 1_000;
+const log = createSubsystemLogger("git/read");
 
 export type GitReadOptions = {
   /** Refresh unversioned layouts; known revisions are always revalidated. */
@@ -19,6 +22,7 @@ type ReadEntry<T> = {
   controller: AbortController;
   subscribers: number;
   pending: boolean;
+  value?: T;
 };
 
 function subscribe<T>(
@@ -63,12 +67,14 @@ function createReadCache<Input, Output>(
   clone: (value: Output) => Output = structuredClone,
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
+  snapshot?: { empty: () => Output },
 ) {
   // Versioned reads retain only the current inputs/revision per checkout. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadEntry<Output>>();
   const pending = new Set<ReadEntry<Output>>();
   const revisions = new Map<AbortController, Promise<string | null>>();
+  let refreshTail: Promise<unknown> = Promise.resolve();
   let closed = false;
   const remove = (key: string, entry: ReadEntry<Output>) => {
     if (entries.get(key) === entry) {
@@ -104,8 +110,12 @@ function createReadCache<Input, Output>(
         (options.refresh && currentRevision === null) ||
         !entry ||
         entry.revision !== revisionKey ||
-        entry.expiresAt <= Date.now()
+        (entry.expiresAt <= Date.now() && (!snapshot || !entry.pending))
       ) {
+        if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
+          return clone(entry?.value ?? snapshot.empty());
+        }
+        const previousRefresh = refreshTail;
         const controller = new AbortController();
         const next: ReadEntry<Output> = {
           revision: revisionKey,
@@ -117,7 +127,17 @@ function createReadCache<Input, Output>(
           controller,
           subscribers: 0,
           pending: true,
-          promise: Promise.resolve().then(() => load(prepared, controller.signal)),
+          value: entry?.value,
+          promise: Promise.resolve().then(() =>
+            snapshot
+              ? runWithGatewayDetachedWorkContinuation(async () => {
+                  // Serialize display batches; the worker probes four checkouts concurrently.
+                  await previousRefresh;
+                  controller.signal.throwIfAborted();
+                  return load(prepared, controller.signal);
+                }, "runtime:project-discovery")
+              : load(prepared, controller.signal),
+          ),
         };
         pending.add(next);
         next.promise = next.promise.then(
@@ -125,6 +145,10 @@ function createReadCache<Input, Output>(
             next.pending = false;
             pending.delete(next);
             controller.signal.throwIfAborted();
+            if (snapshot) {
+              next.value = value;
+              next.expiresAt = Date.now() + freshnessMs;
+            }
             if (freshnessMs === 0) {
               remove(key, next);
             }
@@ -133,18 +157,33 @@ function createReadCache<Input, Output>(
           (error: unknown) => {
             next.pending = false;
             pending.delete(next);
-            next.expiresAt = 0;
-            remove(key, next);
+            if (snapshot) {
+              next.expiresAt = Date.now() + freshnessMs;
+            } else {
+              next.expiresAt = 0;
+              remove(key, next);
+            }
             throw error;
           },
         );
+        if (snapshot) {
+          refreshTail = next.promise.catch(() => {
+            if (!controller.signal.aborted) {
+              log.warn(
+                "Repository discovery refresh failed; retaining the previous project snapshot",
+              );
+            }
+          });
+        }
         // Replace at admission. An older completion updates only its own entry.
         entry = next;
       }
       entries.delete(key);
       entries.set(key, entry);
       pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
-      return subscribe(entry, clone, options.signal);
+      return snapshot
+        ? clone(entry.value ?? snapshot.empty())
+        : subscribe(entry, clone, options.signal);
     },
     async close(): Promise<void> {
       closed = true;
@@ -167,9 +206,20 @@ function createReadCaches() {
     identities: createReadCache(
       (input: GitReadOperations["repository.identities"]["input"], signal) =>
         runGitWorkerOperation({ type: "repository.identities", input }, { signal }),
-      // Identity includes Git config and worktree relocation inputs without a complete revision.
-      // Share only pending passes so later discovery always sees external changes.
-      0,
+      // Display-only discovery never delays a listing, even on a cold checkout set.
+      // External Git config/relocations have no complete revision: refresh in the background
+      // after one minute; checkout-set/environment changes select an independent snapshot.
+      60_000,
+      structuredClone,
+      undefined,
+      (input) =>
+        JSON.stringify([
+          input,
+          Object.entries(process.env)
+            .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+            .toSorted(([left], [right]) => left.localeCompare(right)),
+        ]),
+      { empty: () => [] },
     ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>

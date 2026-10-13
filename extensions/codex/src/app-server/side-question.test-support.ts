@@ -20,6 +20,17 @@ import {
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 
+export function codexHookCommand(config: unknown, key: string) {
+  const entries = (config as Record<string, unknown> | undefined)?.[key];
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  return (
+    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+  )
+    .at(0)
+    ?.hooks?.at(0);
+}
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
 const getSharedCodexAppServerClientMock = vi.fn();
@@ -56,6 +67,10 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
     getSharedCodexAppServerClientMock(...args),
+  retainSharedCodexAppServerClientByInstanceId: async () => ({
+    client: await getSharedCodexAppServerClientMock(),
+    release: vi.fn(),
+  }),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;

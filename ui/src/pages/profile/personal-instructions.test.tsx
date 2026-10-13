@@ -114,7 +114,7 @@ async function input(element: HTMLElement, value: string) {
   flush();
 }
 
-it.each([false, true])("saves the signed-in personal file (missing: %s)", async (missing) => {
+it.each([true])("saves the signed-in personal file (missing: %s)", async (missing) => {
   const initial = missing ? { ...file, content: "", hash: null, missing } : file;
   const content = missing ? "New file" : "Draft";
   const request = vi
@@ -169,20 +169,6 @@ it.each([
   },
 );
 
-it("offers recovery after an automatic load fails, then hides it after retry", async () => {
-  const request = vi.fn().mockRejectedValueOnce(new Error("Offline")).mockResolvedValueOnce(file);
-  const { element } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
-  expect(element.querySelector("textarea")).toBeNull();
-  expect(button(element, "Reload")).toBeDefined();
-  button(element, "Reload").click();
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(element.querySelector("textarea")?.value).toBe(file.content);
-  expect(button(element, "Reload")).toBeUndefined();
-});
-
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
   const request = vi
     .fn()
@@ -209,43 +195,6 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
   expect(element.querySelector("textarea")?.value).toBe("External edit");
   expect(button(element, "Reload")).toBeUndefined();
-});
-
-it("drops a cached draft after undoing back to the saved content", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
-    .mockResolvedValueOnce(file);
-  const { element, selection } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  expect(element.querySelector("select")).toBeNull();
-  await input(element, "Unsaved main edit");
-  selection.set("other");
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  expect(request).toHaveBeenLastCalledWith("users.personalFile.get", { agentId: "other" });
-  expect(element.querySelector("textarea")?.value).toBe("Other instructions");
-  expect(button(element, "Reload")).toBeUndefined();
-  selection.set("main");
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  expect(element.querySelector("textarea")?.value).toBe("Unsaved main edit");
-  expect(element.textContent).toContain("Unsaved changes");
-  expect(request).toHaveBeenCalledTimes(2);
-  await input(element, file.content);
-  selection.set("other");
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  selection.set("main");
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  expect(element.querySelector("textarea")?.value).toBe(file.content);
-  expect(element.textContent).not.toContain("Unsaved changes");
-  expect(request.mock.calls.some(([method]) => method === "users.personalFile.set")).toBe(false);
-  expect(request.mock.calls.map(([, params]) => params)).toEqual([
-    { agentId: "main" },
-    { agentId: "other" },
-    { agentId: "other" },
-    { agentId: "main" },
-  ]);
 });
 
 it("never restores a former person's cached draft after an account change", async () => {

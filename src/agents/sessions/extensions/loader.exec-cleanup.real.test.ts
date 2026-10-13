@@ -6,6 +6,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { isChildProcessTreeAlive } from "../../../process/child-process-tree.js";
 import { hasCommandProcessCleanupError } from "../../../process/exec-result.js";
+import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "../../../process/exec-spawn.js";
 import { createCommandTerminationController } from "../../../process/exec-termination.js";
 import * as commands from "../../../process/exec.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -88,7 +89,7 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       await withinTest(exited, signal);
       vi.setSystemTime(Date.now() + 5_000);
       await withinTest(forcedStop.promise, signal);
-      vi.setSystemTime(Date.now() + 300);
+      vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
       observed = await withinTest(outcome, signal);
       expect(denied).toBe(denyStop ? 1 : 0);
       if (denyStop) {

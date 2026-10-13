@@ -6,6 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
+  Response as OpenAIResponse,
   ResponseCreateParamsStreaming,
   ResponseCompactionItem,
   ResponseInput,
@@ -202,7 +203,15 @@ export const responsesPromptObserver = {
 
 const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
 export type ResponsesServiceTierObservation =
-  | { requestedTier: string; responseTier: string; rejected?: false }
+  | {
+      requestedTier: string;
+      responseTier: string;
+      rejected?: false;
+      responseId?: string;
+      responseModel?: string;
+      inputTokens?: number;
+      cachedTokens?: number;
+    }
   | { requestedTier: string; rejected: true };
 type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
 
@@ -224,7 +233,12 @@ export const responsesServiceTierObserver = {
     const observer = options && responsesServiceTierObserver.get(options);
     observer?.({ requestedTier, rejected: true });
   },
-  observe(options: object | undefined, requestedTier: unknown, responseTier: unknown): void {
+  observe(
+    options: object | undefined,
+    requestedTier: unknown,
+    responseTier: unknown,
+    response?: Pick<OpenAIResponse, "id" | "model" | "usage">,
+  ): void {
     const observer = options && responsesServiceTierObserver.get(options);
     if (
       observer &&
@@ -233,7 +247,16 @@ export const responsesServiceTierObserver = {
       typeof responseTier === "string" &&
       /^[a-z0-9_-]{1,64}$/i.test(responseTier)
     ) {
-      observer({ requestedTier, responseTier });
+      observer({
+        requestedTier,
+        responseTier,
+        ...(response && {
+          responseId: response.id,
+          responseModel: response.model,
+          inputTokens: response.usage?.input_tokens,
+          cachedTokens: response.usage?.input_tokens_details?.cached_tokens,
+        }),
+      });
     }
   },
 };

@@ -335,6 +335,14 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
   });
   return {
     completed,
+    diagnostics: () => ({
+      pending: [...pending.values()].map(({ method }) => method),
+      completed: completed.slice(-16).map(({ request, response }) => ({
+        method: request.method,
+        ok: response.ok,
+        errorCode: response.error?.code,
+      })),
+    }),
     async waitFor(matches: (rpc: BackgroundWorkRpc) => boolean, after = 0) {
       const found = createDeferred<BackgroundWorkRpc>();
       const check = () => {

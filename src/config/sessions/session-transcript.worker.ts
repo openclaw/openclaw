@@ -593,6 +593,10 @@ serveOwnedWorkerTasks(
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
+      if (request.kind === "session-entries") {
+        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return { entries: await prepareSessionMemoryEntries(request.entries) };
+      }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {

@@ -11,6 +11,17 @@ import type { AcpSessionRow } from "./session-meta-read.types.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
 
+export function bindAcpSessionIdentity(identity: SessionAcpMeta["identity"]) {
+  return {
+    identity_json: identity ? JSON.stringify(identity) : null,
+    // JavaScript trim uses the same 25 code points as the legacy SQLite resume expressions.
+    resume_agent_session_id:
+      typeof identity?.agentSessionId === "string" ? identity.agentSessionId.trim() : null,
+    resume_acpx_session_id:
+      typeof identity?.acpxSessionId === "string" ? identity.acpxSessionId.trim() : null,
+  };
+}
+
 export function bindAcpSessionMeta(params: {
   sessionKey: string;
   sessionId?: string;
@@ -26,7 +37,7 @@ export function bindAcpSessionMeta(params: {
     backend: params.meta.backend,
     agent: params.meta.agent,
     runtime_session_name: params.meta.runtimeSessionName,
-    identity_json: params.meta.identity ? JSON.stringify(params.meta.identity) : null,
+    ...bindAcpSessionIdentity(params.meta.identity),
     mode: params.meta.mode,
     runtime_options_json: params.meta.runtimeOptions
       ? JSON.stringify(params.meta.runtimeOptions)

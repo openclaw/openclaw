@@ -27,7 +27,7 @@ it.each([
   },
   {
     surface: "identity",
-    load: () => import("../features/github-connections/github-identity-view.ts"),
+    load: () => import("../features/github-connections/github-identity-view.tsx"),
   },
 ])("loads GitHub fallback copy at the cold $surface boundary", async ({ load, surface }) => {
   const { en, manager } = await loadI18n({

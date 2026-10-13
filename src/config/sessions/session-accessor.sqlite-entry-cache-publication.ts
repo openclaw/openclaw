@@ -58,7 +58,6 @@ export {
 export type {
   PreparedSessionEntryChanges,
   SessionEntryPublicationSource,
-  SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
 export function bindPreparedSessionEntryPublication(

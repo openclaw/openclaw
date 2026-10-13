@@ -104,22 +104,23 @@ export function withDeferredPluginConfigRollback(
 }
 
 /** Ordinary writes consume canonical config; only migration owners supply pending facts. */
-export function readConfigWritePendingMigrations(
+export async function readConfigWritePendingMigrations(
   configPath: string,
   env?: NodeJS.ProcessEnv,
   preparedPending?: readonly DeferredPluginMigration[],
-): readonly DeferredPluginMigration[] | undefined {
+): Promise<readonly DeferredPluginMigration[] | undefined> {
   const completion = configMigrationCompletion.getStore();
   if (!completion || completion.configPath !== configPath) {
     return preparedPending;
   }
   completion.assertCurrent();
-  const pending = readDeferredPluginMigrations({ env });
   if (completion.published) {
-    return pending;
+    return await readDeferredPluginMigrationsAsync({ env });
   }
-  assertPendingGeneration(pending, completion.expectedPending);
-  return pending.filter((entry) => !completion.resolvedPluginIds.includes(entry.pluginId));
+  // Publication asserts this generation inside its write transaction; reading it here only repeats that.
+  return completion.expectedPending.filter(
+    (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+  );
 }
 
 export class DeferredPluginMigrationConflictError extends Error {

@@ -43,11 +43,13 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
 
+An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
+
 Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together.
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
-Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows.
+Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -75,7 +77,7 @@ Person hovercards keep their **Recent sessions** selection and order stable whil
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
-**My sessions** lists your sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
+**My sessions** and specific-owner selections list that owner’s sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
 
 In **My sessions**, choosing an agent from the switcher resumes that agent's newest loaded active conversation from your list, or opens its Home when none is loaded. Agent unread indicators and Home activity use the same current list; Home controls keep their separate main-session behavior.
 
@@ -96,6 +98,8 @@ Closed Terminal, Browser, and Desktop panels initialize when you open them rathe
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+
+Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
 New Session keeps previously fetched model choices selectable while their catalog
 refreshes in the background. Before the first catalog arrives, it does not turn a
@@ -298,6 +302,10 @@ Auth is supplied during the WebSocket handshake via:
 
 Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The login screen and **Settings → Gateway** use one **Gateway secret** field: paste the token or type the password. After a successful connection, the UI keeps the secret in session storage for the current browser tab and Gateway origin only when the Gateway reports token auth. Passwords stay in memory and are never persisted. After pairing, the browser can use its stored per-device token on later connections.
 
+When a plugin embeds the Control UI through [remote ingress](/plugins/sdk-gateway-ingress), its live grant admits the browser's signed device identity without a shared credential. The browser saves the returned device token for later connections and retries once without it if it is rejected. Embedded pages stay connected to the serving Gateway, hide Gateway URL and shared-secret controls, and do not register a service worker. Connection failures remain visible in the app without a token/password login screen.
+
+An embedder that supplies linked Gateways adds them to the identity menu's **Gateway** section. Select a Gateway to switch the embedded page, choose **Set as primary** when available, or open **Gateway settings…** in the host. The host owns the list, primary choice, and navigation. Native window actions, native Gateway keyboard shortcuts, and native reconnect actions are unavailable in embedded mode.
+
 If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
 
 Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
@@ -329,7 +337,7 @@ agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in
+The accented rail **+** below the workspace mark, labeled **New conversation**, opens an agent menu with avatars and names in
 the same order as the groups; choosing an agent opens New session for that agent.
 Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
 agent for chat. Choose a named agent tile in the workspace menu to leave team

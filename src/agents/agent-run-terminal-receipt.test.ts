@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   formatAgentRunRouteChange,
   type AgentRunTerminalReceipt,
@@ -32,6 +37,146 @@ describe("isProviderModelRerouted", () => {
         "run-1",
       ),
     ).toBeUndefined();
+  });
+
+  describe("with a configured model row declaring response model equivalence", () => {
+    const declaredConfig = (
+      provider: string,
+      modelId: string,
+      overrides: Partial<ModelDefinitionConfig> = {},
+    ): OpenClawConfig => ({
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "https://endpoint.example/v1",
+            models: [
+              {
+                id: modelId,
+                name: modelId,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+                responseModelEquivalent: true,
+                ...overrides,
+              },
+            ],
+          },
+        },
+      },
+    });
+    const requested = { provider: "broker", model: "team/chat" };
+    const config = declaredConfig("broker", "team/chat");
+
+    it("keeps the endpoint's concrete response model from producing a model-switch fact", () => {
+      const effective = { ...requested, responseModel: "upstream-model-2026-10-01" };
+      expect(isProviderModelRerouted(requested, effective, config)).toBe(false);
+      expect(isProviderModelRerouted(requested, effective)).toBe(true);
+    });
+
+    it.each([
+      { provider: "broker", model: "team/utility", responseModel: "upstream-model" },
+      { provider: "other-broker", model: "team/chat", responseModel: "upstream-model" },
+    ])("retains a fallback to $provider/$model", (effective) => {
+      expect(isProviderModelRerouted(requested, effective, config)).toBe(true);
+    });
+
+    it.each([false, undefined])("requires an explicit true declaration (%s)", (value) => {
+      expect(
+        isProviderModelRerouted(
+          requested,
+          { ...requested, responseModel: "upstream-model" },
+          declaredConfig("broker", "team/chat", { responseModelEquivalent: value }),
+        ),
+      ).toBe(true);
+    });
+
+    it.each([{}, declaredConfig("broker", "team/chat", { responseModelEquivalent: false })])(
+      "ignores a declaration contributed only to runtime config",
+      (source) => {
+        expect(
+          isProviderModelRerouted(
+            requested,
+            { ...requested, responseModel: "upstream-model" },
+            captureRuntimeConfigWithSource(config, source),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it("ignores a catalog-authored row", () => {
+      expect(
+        isProviderModelRerouted(
+          requested,
+          { ...requested, responseModel: "upstream-model" },
+          declaredConfig("broker", "team/chat", { metadataSource: "models-add" }),
+        ),
+      ).toBe(true);
+    });
+
+    it("keeps bundled provider policy authoritative", () => {
+      const openaiRequested = { provider: "openai", model: "gpt-5.6" };
+      const effective = { ...openaiRequested, responseModel: "gpt-5.6-luna" };
+      expect(isProviderModelRerouted(openaiRequested, effective)).toBe(true);
+      expect(
+        isProviderModelRerouted(openaiRequested, effective, declaredConfig("openai", "gpt-5.6")),
+      ).toBe(true);
+    });
+
+    it.each([
+      { origin: "bundled" as const },
+      { origin: "global" as const, trustedOfficialInstall: true },
+    ])("ignores declarations for official owners without a policy artifact ($origin)", (owner) => {
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "cohere", providers: ["cohere"], ...owner }],
+      });
+      withPluginMetadataSnapshotScope(snapshot, () => {
+        const cohere = { provider: "cohere", model: "command-a" };
+        expect(
+          isProviderModelRerouted(
+            cohere,
+            { ...cohere, responseModel: "different-model" },
+            declaredConfig("cohere", "command-a"),
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it.each([
+      { provider: "azure-openai-responses", origin: "bundled" as const, rerouted: true },
+      {
+        provider: "azure-openai-responses",
+        origin: "global" as const,
+        trustedOfficialInstall: true,
+        rerouted: true,
+      },
+      { provider: "partner-chat", origin: "global" as const, rerouted: false },
+    ])(
+      "respects $origin catalog alias ownership for $provider",
+      ({ rerouted, provider, ...owner }) => {
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "catalog-owner",
+              providers: ["catalog-provider"],
+              modelCatalog: { aliases: { [provider]: { provider: "catalog-provider" } } },
+              ...owner,
+            },
+          ],
+        });
+        withPluginMetadataSnapshotScope(snapshot, () => {
+          const alias = { provider, model: "team/chat" };
+          expect(
+            isProviderModelRerouted(
+              alias,
+              { ...alias, responseModel: "upstream-model" },
+              declaredConfig(provider, alias.model),
+            ),
+          ).toBe(rerouted);
+        });
+      },
+    );
   });
 
   it.each([

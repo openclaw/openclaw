@@ -94,8 +94,6 @@ export class SidebarMenusController implements ReactiveController {
     ReturnType<typeof globalThis.setTimeout>
   >();
   private menuRenderer: SidebarMenusRenderer | null = null;
-  // Popup rendering pulls Web Awesome menu code out of startup JS. It preloads
-  // at idle and is requested immediately by the first menu interaction.
   private readonly menuRendererImport = createIdleImport(
     () => import("./sidebar-menus-render.ts"),
     (renderer) => {
@@ -119,7 +117,6 @@ export class SidebarMenusController implements ReactiveController {
     if (this.pluginActionLifetime.signal.aborted) {
       this.pluginActionLifetime = new AbortController();
     }
-    this.menuRendererImport.schedule();
   }
 
   hostDisconnected(): void {

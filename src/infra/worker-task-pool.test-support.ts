@@ -34,16 +34,18 @@ serveWorkerTasks<PoolFixtureResult>(
       assert.ok(typeof input.exitCode === "number");
       process.exit(input.exitCode);
     }
+    let counters: Int32Array | undefined;
+    if (input.counters) {
+      assert.ok(input.counters instanceof SharedArrayBuffer);
+      counters = new Int32Array(input.counters);
+      Atomics.add(counters, 0, 1);
+    }
+    // Publish dispatch before a notification can trigger host-side cancellation.
     for (let index = 0; index < Number(input.notifications ?? 0); index++) {
       channel?.notify({ label: input.label, index });
     }
-    if (input.counters) {
-      assert.ok(input.counters instanceof SharedArrayBuffer);
-      const counters = new Int32Array(input.counters);
-      Atomics.add(counters, 0, 1);
-      if (input.wait) {
-        Atomics.wait(counters, 1, 0);
-      }
+    if (input.wait && counters) {
+      Atomics.wait(counters, 1, 0);
     }
     let relayedBufferBytes: number | undefined;
     if (input.consumeInput) {

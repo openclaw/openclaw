@@ -144,7 +144,7 @@ describeControlUiE2e("Plugin overview", () => {
           .getByRole("button", { name: "Actions for Add context to prompts", exact: true })
           .click();
         const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
-        await permissionRow.locator('wa-dropdown-item[value="reset"]').click();
+        await permissionRow.getByRole("menuitem", { name: "Reset value", exact: true }).click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
         await gateway.waitForRequest("plugins.inspect", { after: resetInspections });
         const writes = await gateway.getRequests("config.set");
@@ -155,7 +155,9 @@ describeControlUiE2e("Plugin overview", () => {
         await permission.waitFor();
         await expect.poll(() => permission.isChecked()).toBe(true);
         expect(
-          await permissionRow.locator('wa-dropdown-item[value="reset"]').getAttribute("disabled"),
+          await permissionRow
+            .getByRole("menuitem", { name: "Reset value", exact: true, includeHidden: true })
+            .getAttribute("disabled"),
         ).not.toBeNull();
         await captureScreenshot(page, `direct-settings-${entry}-permissions.png`, "viewport");
         expect(new URL(page.url()).pathname).toBe(`/plugins/${plugin.catalogId}`);

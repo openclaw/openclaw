@@ -136,7 +136,11 @@ it("preserves error-turn media after a later reply", () => {
     __openclaw: { runId: "run-retry", media },
   });
   const recovered = assistant({ stopReason: "stop", __openclaw: { runId: "run-retry" } });
-  expect(project([user, failed, recovered])).toEqual([user, { ...failed, content: [] }, recovered]);
+  expect(project([user, failed, recovered])).toEqual([
+    user,
+    { role: "assistant", content: [], __openclaw: { runId: "run-retry", media } },
+    recovered,
+  ]);
 });
 
 const managedUrl = "./attachment-catalog-tiny/demo.jpg";

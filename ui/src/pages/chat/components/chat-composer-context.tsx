@@ -40,6 +40,9 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
       continue;
     }
+    if (readCostRecord(readCostRecord(message.usage)?.usageReport)?.state === "unavailable") {
+      return null;
+    }
     const directCost = readCostRecord(message.cost);
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
     const stats: ProviderCostStats = {};

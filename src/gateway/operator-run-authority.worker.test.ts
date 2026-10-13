@@ -4,11 +4,15 @@ import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureSkillLibrarySchema } from "../skills/library/store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -30,6 +34,59 @@ import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
+
+it("prepares a warm skill library without DDL after the tool caller's initiating request closes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = ensureProfileForEmail("warm-library@example.test");
+    const database = openOpenClawStateDatabase();
+    database.db.exec(getOpenClawStateFeatureSchemaSql("skill_library_entries"));
+    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] });
+    const context = createContext();
+    const request = expectDefined(
+      await captureGatewayOperatorRunAuthority({ client, context }),
+      "request authority",
+    );
+    const releaseTool = expectDefined(request.authority.retain, "tool retention")();
+    client.internal = { operatorRunAuthority: request.authority };
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "libraryProof.prepare",
+          scope: "operator.write",
+          profileAccess: "independent",
+          owner: { kind: "core", area: "skills" },
+          handler: ({ respond }: GatewayRequestHandlerOptions) => {
+            ensureSkillLibrarySchema({ database }, () => request.authority.assertCurrent());
+            respond(true, { profileId: request.authority.profileId });
+          },
+        },
+      ]);
+    const schemaMutations: string[] = [];
+    const observation = observeHostDataSql((sql, db) => {
+      if (db === database.db && classifySqliteMutation(sql, "batch").mainSchemaChange) {
+        schemaMutations.push(sql);
+      }
+    });
+    try {
+      request.release();
+      await withPluginRuntimeGatewayRequestScope(
+        { client, context, isWebchatConnect: () => false },
+        () =>
+          dispatchGatewayMethodInProcess(
+            "libraryProof.prepare",
+            {},
+            { disableSyntheticClient: true, requireScopedClient: true },
+          ),
+      ).then((result) => expect(result).toEqual({ profileId: profile.id }));
+      request.authority.assertCurrent();
+      expect(schemaMutations).toEqual([]);
+    } finally {
+      observation.restore();
+      releaseTool();
+      request.release();
+    }
+  });
+});
 
 it("preserves the live operator source through principal capture without trusting copied labels", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -264,6 +264,19 @@ file log levels.
 
 ### Provider request failures
 
+Model transport failures emit `Model request failed` at warning level with the
+provider, model, available status, code, type, message, error body, and request
+and response IDs. File logs preserve these error fields before transcript
+redaction and clipping; generated response content and request payloads are not
+included. Treat these local logs as sensitive. Log exports retain their existing
+redaction policy.
+
+Embedded attempts also log `Assistant attempt failed`, including the saved error
+fields, before choosing recovery. Request validation and content-policy failures
+stop unchanged model retries and fallback. Context limits use the existing
+compaction recovery. Retired transcript input is terminal: changing models cannot
+restore its admission, and the original rejection remains visible in diagnostics.
+
 Anthropic-compatible HTTP failures preserve the HTTP status separately from a
 bounded, redacted response body. JSON error bodies are parsed before diagnostic
 redaction and preview truncation, so a long proxy error does not lose its status
@@ -351,7 +364,8 @@ Available flags:
   and message text may still be present.
 - `OPENCLAW_DEBUG_SSE=events`: emit first-event and stream-completion timing.
 - `OPENCLAW_DEBUG_SSE=peek`: also emit the first five redacted SSE event
-  payloads, capped per event.
+  payloads, capped per event, on transports that support payload peeking.
+  Responses transports remain metadata-only.
 - `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
   including bounded activation facts, the final visible surface, and names of
   provider-native tools filtered because code mode owns the tool surface.
@@ -364,8 +378,8 @@ enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
-uses `debug` by default. Responses with a non-2xx status or at least one second
-of elapsed time remain at `info`, and transport failures remain warnings.
+uses `debug` by default. Responses with a non-2xx status remain at `info`,
+and transport failures remain warnings.
 `[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
 at `debug` (or `info` with the targeted flags), rather than as provider failures.
 The requesting layer owns the final cancellation or timeout outcome; an SDK can
@@ -374,6 +388,19 @@ reasons and failures without a caller abort remain warnings.
 Elapsed time includes local-service preparation and waiting for response headers,
 but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
+
+Embedded model requests attach the raw `sessionKey`, `runId`, numbered
+`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+use lossless JSON escaping so control characters cannot forge log lines; their
+values are not redacted. The request sequence
+continues across same-run retries. Fetch response logs include the HTTP
+`httpRequestId` when supplied by the provider. Responses SSE and WebSocket
+`stream_start` / `stream_done` logs record the actual requested tier and
+`max_output_tokens`; completion also records the response ID, served tier,
+provider-reported output and reasoning token counts, stream duration, total
+request elapsed time, and terminal/incomplete reason. Unknown usage stays
+`unknown`, not zero. These metadata fields contain no prompt or response text;
+raw identifiers are retained locally and follow normal redaction at log egress.
 
 `[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
 reports dropping invalidated thinking from replay. It includes the mismatch
@@ -424,6 +451,19 @@ and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
 
 ### Embedded attempt preparation
+
+The `model-dispatch` prep summary extends `stream-ready` through history
+sanitization, provider validation, history windowing, context-engine assembly
+(including memory preparation), prompt building, prompt projection, and compaction
+preflight. It ends at the first provider invocation, including a compaction request
+when one is needed. These are elapsed checkpoints, not CPU measurements.
+
+With timeline logging enabled, `provider.request.serialized` marks completion of
+native request-body encoding, before the transport consumes those bytes. Its
+`runId` and `spanId` match `provider.request.started`; the gap isolates request
+projection, worker admission, and serialization after provider invocation.
+The mark does not assert that the socket has sent bytes. A local mock provider's
+request arrival can measure the remaining transport interval without model time.
 
 Embedded `prep stages` summaries separate two tool-preparation intervals:
 
@@ -777,7 +817,7 @@ Nested durations overlap their parent phases; do not add them to the parent tota
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
 import and registration timings.
 
-Desktop permission narrowing and canonical session checks remain on their required
+Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel
 maintenance, pairing diagnostics, and restored-subagent activation run after
 readiness. Retired plugin captures join the existing post-ready idle cleanup.
@@ -968,12 +1008,12 @@ The object aggregates observations across the pruning pass:
   calls and their requested page counts. Requested pages are not confirmed
   reclaimed pages.
 - `queryMs` covers existing archive-presence, candidate, unpublished-name, and
-  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  freelist reads. `rowDeletionMs` covers the archive row-deletion
   transaction.
 - `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
-  existing file-removal outcomes. `removedFiles` counts successful canonical and
-  legacy removals. `missingFiles` counts canonical removal attempts that return
-  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  existing file-removal outcomes. `removedFiles` counts successful current-layout and
+  legacy removals. `missingFiles` counts current-layout removal attempts that return
+  `ENOENT`. Other current-layout failures and all unsuccessful legacy removals count
   under `failedRemovals`; the legacy count includes missing paths, non-files,
   and stat or removal failures.
 - `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
@@ -1065,7 +1105,10 @@ without final statistics. An aborted call does not prove the backend released
 its slot. No additional server polling is performed.
 
 Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
-session's previous request) and `promptTokens` when reported by the provider.
+session's previous request), `responseId`, `sessionId`, and `promptTokens` when
+reported by the provider. The previous/current wire summaries include the
+requested `serviceTier` so tier switches can be distinguished from cache loss
+on an unchanged route.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
 other request parameters. It names the first differing segment or `prefix-match`
@@ -1073,12 +1116,22 @@ when the previous prefix is unchanged. A match does not prove provider cache
 availability or retention. Unsupported transports and missing baselines report
 `unavailable`.
 
-Only hashes are retained, within the existing 512-entry diagnostic tracker.
+Prompt content is retained only as hashes, within the existing 512-entry
+diagnostic tracker.
 History comparison keeps the first 512 message hashes and one remaining-tail
 hash. A changed tail reports `message-tail:512`; a growing or shrinking tail
 reports `unverified-after:512` because its earlier prefix cannot be verified.
 Background sessions sharing a provider cache key keep separate diagnostic
 baselines. No prompt content or digest values appear in these warnings.
+
+OpenAI service-tier rejection and downgrade records include the requested model,
+account route, run/session IDs, original requested tier, and final wire-request
+tier. Terminal responses also include the served tier, response ID/model, total
+input tokens (including cached input), and cached tokens when reported. Each
+downgraded request is logged even when the account-catalog observation is
+unchanged. Join its response ID to a prompt-cache warning to inspect the same
+completion; a downgrade alone does not prove a cache miss. These are raw file-log
+fields and follow the usual redaction rules at egress.
 
 ### Console styles
 

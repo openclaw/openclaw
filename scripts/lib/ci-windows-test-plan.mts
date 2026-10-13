@@ -162,7 +162,7 @@ function addTimingSeconds(total: number, seconds: number): number {
 function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>>): string[] {
   const targets = [1, 2].flatMap((part) => {
     const script = scripts[`test:windows:ci:${part}`];
-    const match = script?.match(/^node --import \S+ scripts\/test-projects\.mts (.+)$/u);
+    const match = script?.match(/^node scripts\/test-projects\.mts (.+)$/u);
     const files = match?.[1]?.trim().split(/\s+/u);
     if (!files?.length || files.some((file) => !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
       throw new Error(`Windows CI part ${part} must declare explicit test-projects file targets`);

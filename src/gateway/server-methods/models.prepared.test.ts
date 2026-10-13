@@ -30,7 +30,7 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 it("retains the model-list projection until its catalog facts change", async () => {
   await withOpenClawTestState(
@@ -57,10 +57,22 @@ it("retains the model-list projection until its catalog facts change", async () 
       let currentConfig = config;
       context.getRuntimeConfig = () => currentConfig;
       const params = { agentId: "main", view: "all" as const };
+      const client: GatewayClient = {
+        internal: { syntheticClient: true },
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "test", version: "1", platform: "test", mode: "test" },
+          role: "operator",
+          scopes: ["operator.read"],
+          caps: ["model-selection-policy"],
+        },
+      };
       const expected = await modelsListResult.buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: "main",
         params,
+        includeManualSelection: true,
       });
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
       let current = true;
@@ -84,7 +96,7 @@ it("retains the model-list projection until its catalog facts change", async () 
           req: { type: "req", id: "prepared", method: "models.list", params },
           params,
           context,
-          client: null,
+          client,
           isWebchatConnect: () => false,
           respond: (ok, value, error) => {
             if (!ok) {
@@ -99,6 +111,9 @@ it("retains the model-list projection until its catalog facts change", async () 
       try {
         await harness.runtime.refresh();
         expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
+        await expect(
+          harness.runtime.read({ agentId: "main", includeModels: false }),
+        ).resolves.toMatchObject({ commands: [{ name: "command-1-1" }] });
         const enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
         const resolvePolicy = vi.spyOn(
           providerPolicySurface,
@@ -130,7 +145,12 @@ it("retains the model-list projection until its catalog facts change", async () 
         setRuntimeConfigSnapshot(currentConfig, currentConfig);
         harness.setConfig(currentConfig);
         harness.setOwner({ ...owner, config: currentConfig });
+        harness.setSkillsVersion(2);
         await harness.runtime.refresh();
+        await expect(
+          harness.runtime.read({ agentId: "main", includeModels: false }),
+        ).resolves.toMatchObject({ commands: [{ name: "command-2-1" }] });
+        expect(harness.buildCommands).toHaveBeenCalledTimes(2);
         expect(await read()).toEqual(expected);
         expect(prepareProjection).toHaveBeenCalledOnce();
         harness.setSkillsVersion(2);
@@ -149,6 +169,27 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(await read()).toMatchObject({ refreshFailed: true });
         expect(await read()).not.toHaveProperty("pendingProviders");
         expect(prepareProjection).toHaveBeenCalledOnce();
+        currentConfig = {
+          ...currentConfig,
+          agents: {
+            ...currentConfig.agents,
+            defaults: {
+              ...currentConfig.agents?.defaults,
+              modelPolicy: { allow: ["test/first"] },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(currentConfig, currentConfig);
+        harness.setConfig(currentConfig);
+        harness.setOwner({ ...owner, config: currentConfig });
+        await harness.runtime.refresh();
+        expect(await read()).toMatchObject({
+          models: expect.arrayContaining([
+            expect.objectContaining({ id: "first", manualSelectionAllowed: true }),
+            expect.objectContaining({ id: "model-1", manualSelectionAllowed: false }),
+          ]),
+        });
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
         current = false;
         await expect(read()).rejects.toThrow("Model catalog changed while preparing this result");
         const replacement = {
@@ -161,7 +202,7 @@ it("retains the model-list projection until its catalog facts change", async () 
           models: expect.arrayContaining([expect.objectContaining({ id: "second" })]),
         });
         await Promise.all(Array.from({ length: 8 }, read));
-        expect(prepareProjection).toHaveBeenCalledTimes(2);
+        expect(prepareProjection).toHaveBeenCalledTimes(3);
         expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
         prepareProjection.mockRestore();

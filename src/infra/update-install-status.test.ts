@@ -1,10 +1,14 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveStartupInstallStatus } from "./update-install-status.js";
+import {
+  prepareStartupUpdateInstall,
+  resolveStartupInstallStatus,
+} from "./update-install-status.js";
 
 const mocks = vi.hoisted(() => ({
   root: vi.fn(),
@@ -21,8 +25,51 @@ vi.mock("./update-global.js", () => ({ detectGlobalInstallManagerForRoot: async 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
+
+it.each(["root", "current", "release"] as const)(
+  "initializes an externally managed immutable %s without taking update ownership",
+  async (spelling) => {
+    const root = await fs.realpath(dirs.make("openclaw-update-external-immutable-"));
+    const sha = "a".repeat(40);
+    const release = path.join(root, "releases", sha);
+    await fs.mkdir(release, { recursive: true, mode: 0o755 });
+    await fs.mkdir(path.join(release, ".git"));
+    await fs.symlink(`releases/${sha}`, path.join(root, "current"));
+    const lstat = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stat = lstat(...args);
+      // Synthetic layout retains its inode/mode checks under an unprivileged test runner.
+      if (stat && String(args[0]).startsWith(root)) {
+        Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
+      }
+      return stat;
+    });
+    mocks.root.mockResolvedValue(
+      spelling === "root" ? root : spelling === "current" ? path.join(root, "current") : release,
+    );
+    const signal = new AbortController().signal;
+
+    const prepared = await prepareStartupUpdateInstall(
+      () => resolveStartupInstallStatus(false, signal),
+      "dev",
+      signal,
+    );
+
+    expect(prepared.installStatus.status).toMatchObject({
+      installKind: "host",
+      installOwner: { owner: "immutable-deployer" },
+      packageManager: "unknown",
+    });
+    expect(prepared.installStatus.status.error).toBeUndefined();
+    expect(prepared.readOnlySchedule).toEqual({ channel: "dev", autoEnabled: false });
+    expect(mocks.git).not.toHaveBeenCalled();
+    expect(await fs.readdir(root)).toEqual(["current", "releases"]);
+    expect(await fs.readlink(path.join(root, "current"))).toBe(`releases/${sha}`);
+  },
+);
 
 it.each(["recover", "exhaust", "abort"] as const)(
   "settles a startup Git probe after a timeout (%s)",

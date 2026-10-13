@@ -114,6 +114,20 @@ tool inputs beyond existing OpenClaw trajectory policy.
 
 ## Debugging
 
+Bridge rejections are logged at error level under `agents/code-mode`, including
+when the guest catches the rejection. The server record preserves the original
+error class, message, and stack head before guest projection and output limits.
+It includes session, agent-run, Code Mode run, outer tool-call, bridge-request,
+and executor worker identifiers when available. No debug flag is required. File
+logs retain the raw diagnostic; log exports apply their normal redaction.
+
+Node worker heap exhaustion reports `runtime_unavailable` with the configured
+heap allowance and guidance to paginate results or retain less guest data.
+Check completed actions before retrying: worker termination does not undo
+dispatched tools. Worker lifecycle retirement reason `failure` records native
+worker failure, including heap exhaustion; it is separate from an ordinary
+tool rejection reported with `failurePhase: "bridge"`.
+
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
 from the submitted JavaScript, excluding internal wrappers and headless setup,
 including after `wait`. Internal wrapper and controller frames are

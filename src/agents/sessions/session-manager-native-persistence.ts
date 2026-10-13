@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
+  assertSessionTranscriptInitialWriter,
   getOwnedSessionTranscriptInitialWriter,
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
@@ -73,7 +74,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     if (!initialWriter) {
       return;
     }
-    initialWriter.assertActive();
+    assertSessionTranscriptInitialWriter(initialWriter, scope);
     if (!initialWriter.committedFence && inheritedWriter !== initialWriter) {
       throw new SessionTranscriptWriterClaimReboundError();
     }

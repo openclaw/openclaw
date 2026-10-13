@@ -79,7 +79,7 @@ function createPackageSourceFixture(prefix: string) {
   return sourceDir;
 }
 
-function createSelectedPluginPackageFixture() {
+function createSelectedPluginPackageFixture(runtimeExtension = ".js") {
   const sourceDir = createPackageSourceFixture("openclaw-selected-plugin-source-");
   const outputDir = tempDirs.make("openclaw-selected-plugin-output-");
   const packageJson = {
@@ -103,7 +103,7 @@ function createSelectedPluginPackageFixture() {
     peerDependenciesMeta: { peer: { optional: true } },
     openclaw: {
       extensions: ["./index.ts"],
-      build: { bundledDist: false },
+      build: { bundledDist: false, workerEntries: ["./worker.ts"] },
       release: { publishToNpm: true },
     },
   };
@@ -112,12 +112,15 @@ function createSelectedPluginPackageFixture() {
     "extensions/demo/package.json": JSON.stringify(pluginPackage),
     "extensions/demo/openclaw.plugin.json": '{"id":"demo","configSchema":{"type":"object"}}',
     "extensions/demo/index.ts": "export {};",
+    "extensions/demo/worker.ts": "export {};",
     "dist/extensions/demo/package.json": JSON.stringify({
       ...pluginPackage,
-      openclaw: { ...pluginPackage.openclaw, extensions: ["./index.js"] },
+      openclaw: { ...pluginPackage.openclaw, extensions: [`./index${runtimeExtension}`] },
     }),
     "dist/extensions/demo/openclaw.plugin.json": '{"id":"demo","configSchema":{"type":"object"}}',
-    "dist/extensions/demo/index.js": 'export { value } from "../../shared-runtime.js";',
+    [`dist/extensions/demo/index${runtimeExtension}`]:
+      'export { value } from "../../shared-runtime.js";',
+    [`dist/extensions/demo/worker${runtimeExtension}`]: "export {};",
     "dist/extensions/demo/node_modules/host-native/index.js": "not portable",
     "dist/extensions/other/index.js": "not selected",
     "dist/shared-runtime.js": "export const value = 42;",
@@ -337,10 +340,14 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
-  it.each([false, true])(
-    "packs explicitly selected plugin runtime and dependencies without changing the ordinary package (linked dependencies=%s)",
-    async (linkedDependencies) => {
-      const { sourceDir, outputDir, files } = createSelectedPluginPackageFixture();
+  it.each([
+    { linkedDependencies: false, runtimeExtension: ".js" },
+    { linkedDependencies: true, runtimeExtension: ".js" },
+    { linkedDependencies: false, runtimeExtension: ".mjs" },
+  ])(
+    "packs explicitly selected plugin runtime and dependencies without changing the ordinary package ($runtimeExtension, linked dependencies=$linkedDependencies)",
+    async ({ linkedDependencies, runtimeExtension }) => {
+      const { sourceDir, outputDir, files } = createSelectedPluginPackageFixture(runtimeExtension);
       if (linkedDependencies) {
         const builtDependency = path.join(
           sourceDir,
@@ -373,7 +380,9 @@ describe("package-openclaw-for-docker", () => {
       expect(fs.readFileSync(path.join(packedRoot, ".openclaw-lifecycle-pending"), "utf8")).toBe(
         "pending\n",
       );
-      expect(fs.existsSync(path.join(packedRoot, "dist/extensions/demo/index.js"))).toBe(true);
+      expect(
+        fs.existsSync(path.join(packedRoot, `dist/extensions/demo/index${runtimeExtension}`)),
+      ).toBe(true);
       expect(fs.existsSync(path.join(packedRoot, "dist/shared-runtime.js"))).toBe(true);
       expect(fs.existsSync(path.join(packedRoot, "dist/extensions/other/index.js"))).toBe(false);
       expect(fs.existsSync(path.join(packedRoot, "dist/extensions/demo/node_modules"))).toBe(false);
@@ -387,7 +396,7 @@ describe("package-openclaw-for-docker", () => {
         JSON.parse(
           fs.readFileSync(path.join(packedRoot, "dist/postinstall-inventory.json"), "utf8"),
         ),
-      ).toContain("dist/extensions/demo/index.js");
+      ).toContain(`dist/extensions/demo/index${runtimeExtension}`);
       expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(
         files["package.json"],
       );
@@ -540,13 +549,19 @@ describe("package-openclaw-for-docker", () => {
 
   it.each([
     { failure: "missing-entry", metadata: {} },
+    { failure: "missing-worker", metadata: {} },
     { failure: "stale-metadata", metadata: { version: "2026.7.1" } },
     { failure: "stale-peer-dependencies", metadata: { peerDependencies: { missing: "1.0.0" } } },
     { failure: "stale-peer-meta", metadata: { peerDependenciesMeta: {} } },
   ])("rejects $failure in a selected built plugin", async ({ failure, metadata }) => {
     const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
-    if (failure === "missing-entry") {
-      fs.rmSync(path.join(sourceDir, "dist/extensions/demo/index.js"));
+    if (failure === "missing-entry" || failure === "missing-worker") {
+      fs.rmSync(
+        path.join(
+          sourceDir,
+          `dist/extensions/demo/${failure === "missing-worker" ? "worker" : "index"}.js`,
+        ),
+      );
     } else {
       fs.writeFileSync(
         path.join(sourceDir, "dist/extensions/demo/package.json"),
@@ -565,7 +580,7 @@ describe("package-openclaw-for-docker", () => {
         bundlePlugins: ["demo"],
         runCaptureImpl,
       }),
-    ).rejects.toThrow(failure === "missing-entry" ? /ENOENT/ : /does not match source metadata/);
+    ).rejects.toThrow(failure.startsWith("missing-") ? /ENOENT/ : /does not match source metadata/);
     expect(runCaptureImpl).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(
       files["package.json"],
@@ -601,12 +616,11 @@ describe("package-openclaw-for-docker", () => {
     "rejects selected plugin dependency $spec without resolving a replacement",
     async ({ spec, error }) => {
       const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
-      pluginPackage.dependencies.shared = spec;
       for (const prefix of ["extensions", "dist/extensions"]) {
-        fs.writeFileSync(
-          path.join(sourceDir, prefix, "demo/package.json"),
-          JSON.stringify(pluginPackage),
-        );
+        const packagePath = path.join(sourceDir, prefix, "demo/package.json");
+        const metadata: typeof pluginPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+        metadata.dependencies.shared = spec;
+        fs.writeFileSync(packagePath, JSON.stringify(metadata));
       }
       await expect(
         packOpenClawPackageForDocker(sourceDir, outputDir, {

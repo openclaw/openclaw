@@ -1,9 +1,19 @@
 import { responsesServiceTierObserver } from "@openclaw/ai/internal/openai";
 import { createAssistantMessageEventStream, type Model, type StreamFn } from "@openclaw/llm-core";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createPreparedAccountCatalogAccess } from "../../../agents/prepared-model-runtime.catalog-auth.js";
 import { createOpenAIServiceTierObservationWrapper } from "./openai-service-tier-observation.js";
 import { createOpenAIFastModeWrapper } from "./openai.js";
+
+const log = vi.hoisted(() => ({ info: vi.fn() }));
+// mock-isolation: Capture records without opening process-global file/console sinks.
+vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
+beforeEach(() => log.info.mockClear());
+const attribution = {
+  runId: "run-fixture",
+  sessionId: "session-fixture",
+  accountRoute: "profile:openai:fixture",
+};
 
 const model: Model = {
   id: "fixture",
@@ -55,6 +65,7 @@ it("keeps requesting Ultrafast after a downgrade and clears it on the first hono
   const wrapped = createOpenAIServiceTierObservationWrapper(
     createOpenAIFastModeWrapper(base, "ultrafast"),
     (_model, observation) => record({ ...route, ...observation }),
+    attribution,
   );
   for (const tier of ["priority", "priority", "ultrafast"]) {
     responseTier = tier;
@@ -65,6 +76,7 @@ it("keeps requesting Ultrafast after a downgrade and clears it on the first hono
   }
   expect(payloads).toEqual(Array.from({ length: 3 }, () => ({ service_tier: "ultrafast" })));
   expect(previous).toHaveBeenCalledTimes(3);
+  expect(log.info).toHaveBeenCalledTimes(2);
 });
 
 it("attributes a successful slower retry to the original rejected tier without altering overrides", async () => {
@@ -74,15 +86,38 @@ it("attributes a successful slower retry to the original rejected tier without a
     captured = options;
     return createAssistantMessageEventStream();
   };
-  const wrapped = createOpenAIServiceTierObservationWrapper(base, record);
+  const wrapped = createOpenAIServiceTierObservationWrapper(base, record, attribution);
   const replacement = { service_tier: "ultrafast" };
   await wrapped(model, { messages: [] }, { onPayload: async () => replacement });
   responsesServiceTierObserver.reject(captured, "ultrafast");
   responsesServiceTierObserver.reject(captured, "priority");
-  responsesServiceTierObserver.observe(captured, "default", "default");
+  responsesServiceTierObserver.observe(captured, "default", "default", {
+    id: "resp-fixture",
+    model: "fixture-served",
+    usage: {
+      input_tokens: 12_000,
+      input_tokens_details: { cached_tokens: 8_000, cache_write_tokens: 0 },
+      output_tokens: 100,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 12_100,
+    },
+  });
   expect(record).toHaveBeenLastCalledWith(model, {
     requestedTier: "ultrafast",
     responseTier: "default",
+  });
+  expect(log.info).toHaveBeenLastCalledWith(expect.stringContaining("served as default"), {
+    ...attribution,
+    model: "fixture",
+    provider: "openai",
+    requestedTier: "ultrafast",
+    wireRequestedTier: "default",
+    responseTier: "default",
+    requestId: undefined,
+    responseId: "resp-fixture",
+    responseModel: "fixture-served",
+    inputTokens: 12_000,
+    cachedTokens: 8_000,
   });
   expect(await captured?.onPayload?.({}, model)).toBe(replacement);
   expect(replacement.service_tier).toBe("ultrafast");

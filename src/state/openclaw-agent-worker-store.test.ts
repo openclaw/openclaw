@@ -13,6 +13,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
@@ -52,7 +53,6 @@ import type {
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
 import { waitForFixtureEntry } from "./openclaw-agent-worker-store.wait.test-support.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -208,7 +208,7 @@ it("retains a warm executor through a fallback wait between publication generati
     beginGatewayShutdownCleanup();
     await lifetime.release();
     expect(db.isOpen).toBe(false);
-    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+    expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
   } finally {
     resume.resolve();
     await Promise.allSettled([publication]);
@@ -276,7 +276,7 @@ it.each([false, true])(
       await execution?.release();
       expect(db.isOpen).toBe(false);
       expect(readLeases()).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
     } finally {
       await worker.close();
       await execution?.release();
@@ -309,10 +309,9 @@ it.each([false, true])(
       const exec = vi.spyOn(db, "exec");
       await closeOpenClawAgentDatabasesAsync(root);
       expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(
-        pinned ? 0 : 1,
-      );
+      // Retirement may change lock policy, but must not run host-thread data SQL.
+      expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 0"]]);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(!pinned);
       resetGatewayWorkAdmission();
       const reopened = openOpenClawAgentDatabase(options);
       expect(reopened.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
@@ -383,10 +382,10 @@ it("records a clean sibling receipt while an admitted worker publication still o
       );
       expect(healthy.db.isOpen).toBe(false);
       expect(readLeases(healthy.path)).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(healthy.path)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(healthy.path)).toBe(true);
       expect(db.isOpen).toBe(true);
       expect(readLeases(heldPath)).toHaveLength(2);
-      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(0);
+      expect(readSqliteDatabaseCleanClose(heldPath)).toBe(false);
       expect(closed).toBe(false);
       expect(captureAgentDatabaseCloseFence(healthy)).toBeDefined();
       const later = { agentId: "late", path: path.join(root, "late.sqlite") };
@@ -417,7 +416,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       await withinTest(closing, signal);
       expect(db.isOpen).toBe(false);
       expect(readLeases(heldPath)).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(heldPath)).toBe(true);
       expect(captureAgentDatabaseCloseFence(healthy)).toBeUndefined();
       expect(openOpenClawAgentDatabase(later).db.isOpen).toBe(true);
     } finally {

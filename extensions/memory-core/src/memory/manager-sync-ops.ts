@@ -44,7 +44,10 @@ import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
-import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
+import {
+  hasTargetedSessionSyncParams,
+  MemoryBackgroundRebuildInterruptedError,
+} from "./manager-sync-control.js";
 import { MEMORY_SYNC_DEFERRED, type MemorySyncOutcome } from "./manager-sync-outcome.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
@@ -316,6 +319,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit
         // CLI index request still retries immediately.
+        this.requestSessionIndexRetry();
         return MEMORY_SYNC_DEFERRED;
       }
       needsFullReindex =
@@ -400,10 +404,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             needsFullReindex = true;
             this.beginSyncProviderGeneration();
             await this.runInPlaceReindex(progress);
+          } else {
+            this.requestSessionIndexRetry(true);
           }
           return;
         }
         if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
+          this.requestSessionIndexRetry();
           this.syncOutcomes.recordActiveFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
@@ -463,6 +470,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     this.sessionsDirty =
       sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
     if (failure) {
+      this.requestSessionIndexRetry(true);
       this.syncOutcomes.recordActiveFailure(failure.error);
     }
     return true;
@@ -677,7 +685,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,
       });
-      this.recordFullReindexFailure(withEmbeddings);
+      if (!(err instanceof MemoryBackgroundRebuildInterruptedError)) {
+        this.recordFullReindexFailure(withEmbeddings);
+      }
       throw err;
     } finally {
       try {

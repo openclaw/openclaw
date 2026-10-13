@@ -266,6 +266,9 @@ export const SessionRowSchema = Type.Object(
     previousSessionId: Type.Optional(Type.String()),
     inputTokens: Type.Optional(Type.Number()),
     outputTokens: Type.Optional(Type.Number()),
+    usageReport: Type.Optional(
+      Type.Object({ state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]) }),
+    ),
     totalTokens: Type.Optional(Type.Number()),
     totalTokensFresh: Type.Optional(Type.Boolean()),
     contextTokens: Type.Optional(Type.Number()),

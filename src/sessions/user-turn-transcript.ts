@@ -2,11 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   bindSessionPendingInputSources,
-  stageSessionPendingInput,
   withSessionPendingInputPersistence,
-  resolveSessionTranscriptRuntimeTarget,
   type TranscriptEntryAnchor,
-  type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { readWithdrawnSessionPendingInputId } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
@@ -21,6 +18,7 @@ import {
   registerUserTurnTranscriptAdmissionOwner,
   inheritUserTurnPromptReactionSource,
 } from "./user-turn-transcript-admission.js";
+import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
   capturePersistedModelPromptProjection,
@@ -39,7 +37,6 @@ import {
 } from "./user-turn-transcript.metadata.js";
 import {
   admittedUserTurnResult,
-  persistUserTurnTranscript,
   resolveCommittedUserTurnTranscript,
   type CommittedUserTurnTranscript,
 } from "./user-turn-transcript.persistence.js";
@@ -112,7 +109,7 @@ export function createUserTurnTranscriptRecorder(
   let admissionWrite: Promise<void> | undefined;
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
-  let pendingInput: Awaited<ReturnType<typeof stageSessionPendingInput>>;
+  let pendingInput: Awaited<ReturnType<typeof stageUserTurnPendingInput>>;
   const processing = createUserTurnProcessingCompletion(
     () => pendingInput,
     params.pendingInputSources,
@@ -376,7 +373,7 @@ export function createUserTurnTranscriptRecorder(
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
       ) => {
         const persist = () =>
-          persistUserTurnTranscript({
+          persistUserTurnInput(recorder, {
             ...resolvedTarget,
             logicalTurnId,
             message: candidate,
@@ -497,29 +494,23 @@ export function createUserTurnTranscriptRecorder(
           if (!candidate || !target || persistedResult || runtimePersisted) {
             return false;
           }
-          const config = target.config as SessionTranscriptTurnPersistOptions["config"];
-          const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(target, config);
-          pendingInput = await stageSessionPendingInput(
-            { ...target, ...runtimeTarget },
-            {
-              ...options,
-              requestFingerprint: params.pendingInputRequestFingerprint,
-              trackCompletion: params.trackInputCompletion,
-              replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
-              message: candidate,
-              config,
-              onCommitted: (receipt) => {
-                pendingInput = receipt;
-                message = receipt.message;
-                resolvedMessagePromise = Promise.resolve(message);
-              },
-              prepareMessageAfterIdempotencyCheck: (next) =>
-                preparePersistedUserTurnMessageForTranscriptWrite(next, {
-                  ...target,
-                  beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
-                }),
+          pendingInput = await stageUserTurnPendingInput(recorder, target, {
+            ...options,
+            requestFingerprint: params.pendingInputRequestFingerprint,
+            trackCompletion: params.trackInputCompletion,
+            replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
+            message: candidate,
+            onCommitted: (receipt) => {
+              pendingInput = receipt;
+              message = receipt.message;
+              resolvedMessagePromise = Promise.resolve(message);
             },
-          );
+            prepareMessageAfterIdempotencyCheck: (next) =>
+              preparePersistedUserTurnMessageForTranscriptWrite(next, {
+                ...target,
+                beforeMessageWrite: params.beforeMessageWrite ?? target.beforeMessageWrite,
+              }),
+          });
           if (!pendingInput) {
             return false;
           }

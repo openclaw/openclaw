@@ -108,7 +108,7 @@ describe("acquireFileLock", () => {
       try {
         expect(second.lockPath).toBe(first.lockPath);
         await first.release();
-        await expect(fs.access(first.lockPath)).resolves.toBeUndefined();
+        await fs.access(first.lockPath);
         await second.release();
         await expect(fs.access(first.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {

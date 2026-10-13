@@ -142,6 +142,12 @@ Post-install Doctor also accepts older updaters, including `2026.8.2`, that do n
 provide an update run ID. Its commands retain invocation-specific custody without
 requiring an environment-variable workaround.
 
+When the installed `2026.9.2` updater runs the candidate's early Doctor check,
+shared-state and agent schema changes are rehearsed on private copies. Plugin
+inspection cannot publish native admission metadata to live state during this
+check. A refused rehearsal leaves live database schemas unchanged for package
+rollback; successful checks defer migration to the fresh post-core updater.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
@@ -215,6 +221,13 @@ report and `openclaw update status --json`. Shared reports preserve that code an
 recovery guidance while removing private paths and process IDs. These checks run
 in the installed updater: a new candidate cannot repair an older driver's refusal
 before package replacement, or recover detail an older report already discarded.
+
+Package-swap reports distinguish `package-recovery-permissions-unsafe` (recovery
+artifact permissions or link count) from `managed-handoff-lease-identity-changed`
+(a recorded lease database path, file, or parent directory changed). Shared
+reports retain these closed reason codes while redacting private diagnostics.
+Other package failures keep the `global-install-failed` reason. These diagnostics
+do not change refusal, backup, or rollback behavior and require an updated driver.
 
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
@@ -621,6 +634,13 @@ node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
 Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
+
+If publication never started and the previous package is still installed, repair
+verifies its full tree fingerprint and unchanged launchers under the same device
+mapping, then settles the operation as `publication-not-started`. The candidate
+is retained as evidence; the installed package is unchanged. A previous package
+with unfinished publication intent or launcher receipts still requires its
+original recovery owner and is not silently archived.
 
 For an already installed candidate, repair requires the staging path to be absent,
 consistent device-number changes with matching object inodes,

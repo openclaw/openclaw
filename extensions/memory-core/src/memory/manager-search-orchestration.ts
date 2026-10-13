@@ -350,7 +350,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         searchSyncEnabled &&
         !capacitySyncInFlight &&
         !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
-        (this.dirty || this.sessionsDirty)
+        this.dirty
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {

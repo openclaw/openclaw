@@ -2,13 +2,14 @@ import { mountOpenClawApp } from "./app/app-root.tsx";
 import "./styles.css";
 import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
+import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   scheduleStaleChunkReload,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
-import { kbdStyles } from "./components/kbd-styles.ts";
+import kbdStyles from "./components/kbd.css?inline";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -27,7 +28,7 @@ if (!unsupportedControlUiBrowser) {
   // Share the exact keyboard-hint rules with shadow roots without making renderers
   // depend on bundler-only CSS imports (they are also imported by Node consumers).
   const keyboardHintStyles = document.createElement("style");
-  keyboardHintStyles.textContent = kbdStyles.cssText;
+  keyboardHintStyles.textContent = kbdStyles;
   document.head.append(keyboardHintStyles);
 
   for (const [selector, asset] of [
@@ -44,7 +45,15 @@ if (!unsupportedControlUiBrowser) {
   installStaleChunkReloadListener();
   installMissingStylesheetRecovery();
 
-  if (isProd && "serviceWorker" in navigator) {
+  if (isRemoteControlUiIngress() && window.parent !== window) {
+    void import("./app/native-gateways.runtime.ts")
+      .then(({ nativeGatewaysCapability }) => nativeGatewaysCapability())
+      .catch((error: unknown) => {
+        console.warn("OpenClaw embedder Gateway switcher failed to load.", error);
+      });
+  }
+
+  if (isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
     const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
     swUrl.searchParams.set("v", currentControlUiBuildId);
     if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
@@ -73,7 +82,7 @@ if (!unsupportedControlUiBrowser) {
       .catch((error: unknown) => {
         console.warn("OpenClaw service worker registration failed.", error);
       });
-  } else if (!isProd && "serviceWorker" in navigator) {
+  } else if (!isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
     // Unregister any leftover dev SW to avoid stale cache issues.
     void navigator.serviceWorker.getRegistrations().then((registrations) => {
       for (const r of registrations) {

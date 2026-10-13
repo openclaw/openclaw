@@ -10,6 +10,7 @@ import { formatErrorMessage } from "./errors.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { compareSemverStrings } from "./update-check.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
@@ -34,7 +35,7 @@ function matchesIdentity(
 
 const failureFamilies = {
   recovery: ["managed-service-handoff-failed", "update-recovery-pending"],
-  package: ["global-install-failed", "runtime-verification-failed"],
+  package: ["global-install-failed", "runtime-verification-failed", ...PACKAGE_REFUSAL_CODES],
   acquisition: [
     "fetch-failed",
     "no-release-tag",

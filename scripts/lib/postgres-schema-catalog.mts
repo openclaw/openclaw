@@ -365,6 +365,20 @@ type Table = {
 };
 export type Catalog = { schema: string; tables: Table[]; objects: Item[]; notes: string[] };
 
+export function portTables(data: Catalog) {
+  return data.tables.map((table) => ({
+    ...table,
+    identities: table.columns
+      .filter((column) => column.identity)
+      .map((column) => ({
+        column: column.name,
+        autoIncrement: tokens(
+          data.objects.find((item) => item.kind === "table" && item.table === table.name)!.source,
+        ).some((token) => keyword(token, "AUTOINCREMENT")),
+      })),
+  }));
+}
+
 function indexExpressions(indexSource: string, cols: Map<string, string>): string {
   const ts = tokens(indexSource);
   const on = ts.findIndex((token) => keyword(token, "ON"));

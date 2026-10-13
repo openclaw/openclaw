@@ -80,6 +80,9 @@ export function createInternalAgentTurnFacade(
         context,
         methodRegistry,
       });
+      // Turn admission owns its own authority; this pre-dispatch check transfers no custody.
+      authorization.sessionMutationAuthorization?.release?.();
+      authorization.sessionAccessAuthority?.release();
       throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
       entry?.assertOpen();
       if (authorization.error) {
@@ -363,6 +366,8 @@ export function createInternalAgentTurnFacade(
               context,
               methodRegistry,
             });
+            authorization.sessionMutationAuthorization?.release?.();
+            authorization.sessionAccessAuthority?.release();
             throwIfGatewayDispatchAborted(method, signal);
             entry?.assertOpen();
             if (authorization.error) {

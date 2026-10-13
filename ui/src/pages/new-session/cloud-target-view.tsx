@@ -249,10 +249,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
   );
 }
 
-export function LegacySessionMenuItem(props: {
-  item: SessionMenuItemOptions;
-  submitting: boolean;
-}) {
+function LegacySessionMenuItem(props: { item: SessionMenuItemOptions; submitting: boolean }) {
   return (
     <SessionMenuItem
       item={{
@@ -470,7 +467,7 @@ function CloudConfiguration(props: {
   );
 }
 
-export function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
+function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
   return (
     <>
       <For each={props.params.choices} keyed={(choice) => choice.id}>

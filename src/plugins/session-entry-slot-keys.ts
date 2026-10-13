@@ -138,6 +138,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "queueDrop",
   "inputTokens",
   "outputTokens",
+  "usageReport",
   "totalTokens",
   "pendingFinalDelivery",
   "pendingDeliveryNotice",

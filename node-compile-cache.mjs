@@ -76,8 +76,18 @@ export function enableOpenClawCompileCache({ directory, env = process.env }) {
   }
 }
 
-export function resolveOpenClawCompileCacheDirectory({ installRoot, env = process.env }) {
+export function resolveOpenClawCompileCacheDirectory({
+  installRoot,
+  env = process.env,
+  foregroundGateway = false,
+  prewarm = false,
+}) {
   if (env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+    return undefined;
+  }
+  // Cold cache persistence runs after output on Node and Bun. Pay that cost only
+  // for a long-lived Gateway, explicit prewarming, or a caller-requested cache.
+  if (!prewarm && !foregroundGateway && env.NODE_COMPILE_CACHE === undefined) {
     return undefined;
   }
   const packagePath = path.join(installRoot, "package.json");

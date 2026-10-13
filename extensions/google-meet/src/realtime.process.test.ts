@@ -1,6 +1,6 @@
 // Google Meet realtime tests cover real local command-pair substitute processes.
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -128,17 +128,36 @@ function writeSigtermResistantBridgeCommand(): string {
   writeFileSync(
     scriptPath,
     [
-      "process.on('SIGTERM', () => {",
-      "  process.stderr.write('sigterm\\n');",
-      "});",
+      "process.stderr.write(`starting:${process.argv[2]}\\n`);",
       "process.stdin.resume();",
-      "setTimeout(() => process.stderr.write(`ready:${process.argv[2]}\\n`), 50);",
+      "setTimeout(() => {",
+      "  process.on('SIGTERM', () => {",
+      "    process.stderr.write('sigterm\\n');",
+      "  });",
+      "  process.stderr.write(`ready:${process.argv[2]}\\n`);",
+      "}, 50);",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
     { mode: 0o755 },
   );
   return scriptPath;
+}
+
+async function waitForBridgeReady(
+  stderr: NonNullable<ChildProcess["stderr"]>,
+  role: "capture" | "play",
+  signal: AbortSignal,
+): Promise<void> {
+  let pending = "";
+  for await (const [chunk] of on(stderr, "data", { signal, close: ["end", "close"] })) {
+    const lines = (pending + String(chunk)).split("\n");
+    pending = lines.pop() ?? "";
+    if (lines.includes(`ready:${role}`)) {
+      return;
+    }
+  }
+  throw new Error(`Bridge ${role} closed before readiness`);
 }
 
 function makeRecordingSpawn(): MeetRealtimeAudioSpawn {
@@ -288,7 +307,7 @@ describe("local Meet realtime transport process stream errors", () => {
 
   it.skipIf(process.platform === "win32")(
     "waits for SIGTERM-resistant bridge processes and shares the stop promise",
-    async () => {
+    async ({ signal: testSignal }) => {
       const bridgeScript = writeSigtermResistantBridgeCommand();
       const transport = createLocalMeetingRealtimeAudioTransport({
         inputCommand: [process.execPath, bridgeScript, "capture"],
@@ -304,7 +323,10 @@ describe("local Meet realtime transport process stream errors", () => {
       if (!inputProcess || !outputProcess || !inputProcess.stderr || !outputProcess.stderr) {
         throw new Error("Expected Google Meet bridge to spawn stderr-backed child processes");
       }
-      await Promise.all([once(inputProcess.stderr, "data"), once(outputProcess.stderr, "data")]);
+      await Promise.all([
+        waitForBridgeReady(inputProcess.stderr, "capture", testSignal),
+        waitForBridgeReady(outputProcess.stderr, "play", testSignal),
+      ]);
       const originalInputKill = inputProcess.kill.bind(inputProcess);
       const originalOutputKill = outputProcess.kill.bind(outputProcess);
       const inputKillSpy = vi

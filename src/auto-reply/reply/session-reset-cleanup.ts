@@ -1,4 +1,5 @@
 import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
+import { clearEmbeddedSessionForkSnapshot } from "../../agents/embedded-agent-runner/session-fork.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -163,6 +164,9 @@ export function clearSessionResetRuntimeState(
   opts.assertCurrent();
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
   clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
+  if (opts.activeReplySessionId) {
+    clearEmbeddedSessionForkSnapshot(opts.activeReplySessionId);
+  }
   const cleared = clearSessionLifecycleQueues({
     keys,
     agentId: opts.agentId,

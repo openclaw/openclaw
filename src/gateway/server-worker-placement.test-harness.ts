@@ -71,8 +71,6 @@ export function admitWorkerStopChat(params: {
         entry,
         readSource,
       },
-      assertSessionTargetCurrent: () => {},
-      releaseSessionTarget: () => {},
       legacyKey: undefined,
       expectedLeafEntryId: undefined,
       sessionRoutingChanged: () => false,

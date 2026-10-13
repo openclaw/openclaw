@@ -25,6 +25,7 @@ const cleanups: Array<() => void | Promise<void>> = [];
 type LaneController = ReturnType<typeof createEmbeddedRunLaneController>;
 
 async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
+  setRuntimeConfigSnapshot(overrides.config ?? {});
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
   const runId = overrides.runId ?? "attempt-controls-run";
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lane-controls-test");
@@ -85,7 +86,6 @@ async function holdLane(controller: LaneController) {
 beforeEach(() => {
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
-  setRuntimeConfigSnapshot({});
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
 });

@@ -22,6 +22,7 @@ import {
   neutralizeMarkdownFences,
   selectInboundHistoryContext,
 } from "./channel-prompt-context.js";
+import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
@@ -71,15 +72,21 @@ function refreshActiveGoalContextText(
   if (!activeGoalContext) {
     return retained.join("\n\n");
   }
-  if (insertionIndex === undefined) {
-    const anchorIndex = retained.findLastIndex((block) => block.startsWith("Current message:"));
-    insertionIndex = anchorIndex >= 0 ? anchorIndex : retained.length;
-  }
-  retained.splice(Math.min(insertionIndex, retained.length), 0, activeGoalContext);
+  const markerIndex = retained.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  // A thread marker can precede a separate inline current-message header.
+  const anchorIndex =
+    markerIndex >= 0
+      ? markerIndex
+      : retained.findLastIndex((block) => block.startsWith("Current message:"));
+  insertionIndex = Math.min(
+    insertionIndex ?? retained.length,
+    anchorIndex >= 0 ? anchorIndex : retained.length,
+  );
+  retained.splice(insertionIndex, 0, activeGoalContext);
   return retained.join("\n\n");
 }
 
-/** Refreshes only a previously injected goal line when a queued turn is admitted. */
+/** Refreshes the captured goal when a queued turn is admitted. */
 export function refreshActiveGoalContext(
   context: CurrentInboundPromptContext | undefined,
   sessionEntry: SessionEntry | undefined,

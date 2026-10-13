@@ -8,6 +8,7 @@ import type {
   SessionCapability,
   SessionConnectionScope,
   SessionListSnapshot,
+  SessionListScope,
 } from "../sessions/session-capability.ts";
 import { selectableAgentsList } from "./display.ts";
 import { agentRosterCards } from "./roster-activity.ts";
@@ -24,6 +25,7 @@ type RosterActivitySnapshot = {
 };
 type RosterBinding = {
   connection: SessionConnectionScope;
+  query: SessionListScope;
   observation?: ReturnType<SessionCapability["observeList"]>;
   snapshot: SessionListSnapshot;
   requested: boolean;
@@ -167,16 +169,7 @@ class RosterActivityStore {
     if (!this.binding) {
       const binding: RosterBinding = {
         connection,
-        snapshot: { result: null, agentId: null, loading: false, error: null },
-        requested: false,
-        metadataLoading: false,
-        metadataError: null,
-      };
-      this.binding = binding;
-      // The capability owns one bounded window, including its enriched pages,
-      // mutation receipts, event reconciliation, and refresh pacing.
-      binding.observation = this.context.sessions.observeList(
-        {
+        query: {
           source: "agent-roster",
           rowMode: "compact",
           includeDerivedTitles: true,
@@ -187,13 +180,20 @@ class RosterActivityStore {
           limit: ROSTER_SESSION_LIMIT,
           pageSize: SESSIONS_LIST_TRANSCRIPT_LIMIT,
         },
-        (snapshot) => {
-          if (this.isCurrent(binding)) {
-            binding.snapshot = snapshot;
-            this.project();
-          }
-        },
-      );
+        snapshot: { result: null, agentId: null, loading: false, error: null },
+        requested: false,
+        metadataLoading: false,
+        metadataError: null,
+      };
+      this.binding = binding;
+      // The capability owns one bounded window, including its enriched pages,
+      // mutation receipts, event reconciliation, and refresh pacing.
+      binding.observation = this.context.sessions.observeList(binding.query, (snapshot) => {
+        if (this.isCurrent(binding)) {
+          binding.snapshot = snapshot;
+          this.project();
+        }
+      });
       if (!this.isCurrent(binding)) {
         binding.observation.dispose();
         return;
@@ -226,6 +226,7 @@ class RosterActivityStore {
     if (binding.request) {
       return binding.request;
     }
+    const initial = !binding.requested;
     binding.requested = true;
     binding.metadataLoading = true;
     binding.metadataError = null;
@@ -241,7 +242,11 @@ class RosterActivityStore {
         }
         // Membership has no dependency on agent display metadata. Keep its single
         // managed window moving while names and avatars hydrate independently.
-        const membership = binding.observation?.refresh().catch(() => undefined);
+        const membership = (
+          initial
+            ? this.context.sessions.refreshList(binding.query)
+            : binding.observation?.refresh()
+        )?.catch(() => undefined);
         try {
           const raw = await this.context.agents.ensureList();
           if (!this.isCurrent(binding)) {

@@ -420,6 +420,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
           );
 
           output.usage = {
+            usageReport: {
+              state:
+                typeof usage.total_input_tokens === "number" &&
+                typeof usage.total_output_tokens === "number"
+                  ? "available"
+                  : "unavailable",
+            },
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
             cacheRead,

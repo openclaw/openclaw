@@ -162,7 +162,18 @@ describe("applyGroupGating allowlist drop warning", () => {
     await applyGroupGating(makeUnmentioned("mention-a@g.us", "work"));
 
     expect(warn).toHaveBeenCalledTimes(3);
-    expect(first.groupHistories.get(first.groupHistoryKey)).toHaveLength(2);
+    expect(first.groupHistories.get(first.groupHistoryKey)?.map((entry) => entry.body)).toEqual([
+      "What up",
+      "What up",
+    ]);
+    expect(first.logVerbose).toHaveBeenCalledWith(expect.stringContaining("no mention detected"));
+    expect(
+      JSON.stringify([
+        first.logVerbose.mock.calls,
+        first.replyLogger.debug.mock.calls,
+        warn.mock.calls,
+      ]).toLowerCase(),
+    ).not.toContain("what up");
     expect(warn.mock.calls[0]?.[1]).toContain(
       'channels.whatsapp.groups["mention-a@g.us"].requireMention',
     );

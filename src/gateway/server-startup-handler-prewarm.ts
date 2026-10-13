@@ -27,7 +27,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
         }
       },
     },
-    { name: "connection", load: () => import("./server/ws-connection/message-handler.js") },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
       load: async (isCancelled) => {

@@ -17,6 +17,7 @@ import {
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -273,8 +274,9 @@ it("overlaps config discovery with schema admission and drains both before repor
       configPath,
       JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
     );
-    openOpenClawStateDatabase({ env: process.env });
+    const { path: databasePath } = openOpenClawStateDatabase({ env: process.env });
     await closeOpenClawStateDatabaseAsync();
+    revokeSqliteDatabaseAdmissionsForPath(databasePath);
     const env = { ...process.env };
     const stateDir = env.OPENCLAW_STATE_DIR;
     const schemaEntered = createDeferred();
@@ -351,6 +353,7 @@ it("shares startup validation and discovery reads, then releases them before rea
     const options = { env: process.env };
     const { path: databasePath } = openOpenClawStateDatabase(options);
     await closeOpenClawStateDatabaseAsync();
+    revokeSqliteDatabaseAdmissionsForPath(databasePath);
     const writer = new DatabaseSync(databasePath);
     const family = () =>
       ["", "-wal", "-shm"].map((suffix) => {

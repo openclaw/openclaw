@@ -35,7 +35,10 @@ import {
   resolveNextResponsesEncryptedContentAttempt,
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
-import { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
+import {
+  independentResponsesRequest,
+  responsesRequestLifecycle,
+} from "../transports/openai-responses-request-lifecycle.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { CompletedResponse } from "../transports/openai-responses-stream-types-internal.js";
 import {
@@ -487,7 +490,11 @@ export const streamOpenAICodexResponses: StreamFunction<
                   .byteLength,
               }),
             );
-            if (transport === "auto" && options?.sessionId) {
+            if (
+              transport === "auto" &&
+              options?.sessionId &&
+              !independentResponsesRequest.has(options)
+            ) {
               addCodexWebSocketSseFallback(
                 websocketState.sseFallbacks,
                 options.sessionId,
@@ -532,21 +539,24 @@ export const streamOpenAICodexResponses: StreamFunction<
 
         let attemptResponse: Response;
         try {
+          const requestFetch = independentResponsesRequest.has(options)
+            ? transportHost.buildModelFetch(model)
+            : (buildManagedModelFetch(model, transportHost) ?? fetch);
+          if (!requestFetch) {
+            throw new Error("Independent ChatGPT requests require a host model fetch");
+          }
           const lifecycle = responsesRequestLifecycle.get(options);
           if (lifecycle) {
             await lifecycle.beforeDispatch(activeSignal);
             activeSignal?.throwIfAborted();
             lifecycle.assertCurrent();
           }
-          attemptResponse = await (buildManagedModelFetch(model, transportHost) ?? fetch)(
-            resolveCodexUrl(model.baseUrl),
-            {
-              method: "POST",
-              headers: sseHeaders,
-              body: sseBody,
-              signal: activeSignal,
-            },
-          );
+          attemptResponse = await requestFetch(resolveCodexUrl(model.baseUrl), {
+            method: "POST",
+            headers: sseHeaders,
+            body: sseBody,
+            signal: activeSignal,
+          });
         } catch (error) {
           if (error instanceof Error) {
             if (
@@ -697,6 +707,9 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   } satisfies OpenAICodexResponsesOptions;
   copyResponsesCompactRequest(options, resolvedOptions);
   responsesPromptObserver.copy(options, resolvedOptions);
+  if (independentResponsesRequest.has(options)) {
+    independentResponsesRequest.set(resolvedOptions);
+  }
   const lifecycle = responsesRequestLifecycle.get(options);
   if (lifecycle) {
     responsesRequestLifecycle.set(resolvedOptions, lifecycle);
@@ -1191,10 +1204,11 @@ async function processWebSocketStream(
   onRequestSent?: (request: RequestBody) => void,
   activitySignal?: AbortSignal,
 ): Promise<CompletedResponse | null | undefined> {
+  // Independent requests must neither consume nor replace the parent's cached continuation.
   const { socket, entry, release } = await acquireWebSocket(
     state,
     authority,
-    options?.sessionId,
+    independentResponsesRequest.has(options) ? undefined : options?.sessionId,
     options?.signal,
   );
   let keepConnection = true;

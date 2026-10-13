@@ -19,7 +19,7 @@ import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
+import { agentCliCommand } from "./agent-via-gateway.js";
 import {
   createExplicitSystemAgentConfig,
   createGatewayNormalCloseError,
@@ -197,12 +197,14 @@ function rejectOnGatewayAbort(signal: AbortSignal | undefined, onAbort?: () => P
 }
 
 type GatewaySignalAbort = (
-  request: (
-    method: string,
-    params?: unknown,
-    opts?: { timeoutMs?: number | null },
-  ) => Promise<unknown>,
+  request: (method: string, params?: unknown, opts?: GatewayAbortCall["opts"]) => Promise<unknown>,
 ) => Promise<void>;
+
+type GatewayAbortCall = {
+  method: string;
+  params: unknown;
+  opts?: { timeoutMs?: number | null };
+};
 
 async function waitForAgentCommandCall(expectedCalls = 1) {
   await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(expectedCalls));
@@ -210,6 +212,19 @@ async function waitForAgentCommandCall(expectedCalls = 1) {
 
 async function waitForGatewayCall(expectedCalls = 1) {
   await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls));
+}
+
+async function abortGatewayCommand(
+  run: Promise<unknown>,
+  started: Promise<void>,
+  signals: ReturnType<typeof createSignalProcess>,
+) {
+  await Promise.race([run, started]);
+  expect(callGateway).toHaveBeenCalledTimes(1);
+  vi.useFakeTimers();
+  signals.emit("SIGTERM");
+  await vi.runAllTimersAsync();
+  await run;
 }
 
 function mockMessages(mock: unknown): string[] {
@@ -260,7 +275,6 @@ function resetAgentCliCommandMocksForTest() {
   startOneShotDiagnosticsExporters.mockReset();
   startOneShotDiagnosticsExporters.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   // Each test observes a fresh mock generation, even after the real module was
   // warmed; a single hoisted factory would hide later unexpected imports.
   vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
@@ -279,7 +293,7 @@ afterEach(() => {
   vi.doUnmock("./agent/session.runtime.js");
   vi.unstubAllEnvs();
   configureExecutionIdentityAdmissionSink(() => false)();
-  agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
+  vi.useRealTimers();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
 
@@ -1015,11 +1029,8 @@ describe("agentCliCommand", () => {
   it("retries same-connection abort before falling back to a new Gateway call", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const sameConnectionAborts: Array<{
-        method: string;
-        params: unknown;
-        opts?: { timeoutMs?: number | null };
-      }> = [];
+      const gatewayStarted = createDeferredCore();
+      const sameConnectionAborts: GatewayAbortCall[] = [];
       callGateway.mockImplementation(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
         if (request.method === "agent") {
@@ -1027,6 +1038,7 @@ describe("agentCliCommand", () => {
           expect(params.idempotencyKey).toBe("pre-accepted-run");
           const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
+          gatewayStarted.resolve();
           return await rejectOnGatewayAbort(signal, async () => {
             await onSignalAbort?.(async (method, paramsValue, opts) => {
               sameConnectionAborts.push({ method, params: paramsValue, opts });
@@ -1046,10 +1058,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await waitForGatewayCall();
-      signals.emit("SIGTERM");
-
-      await run;
+      await abortGatewayCommand(run, gatewayStarted.promise, signals);
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(sameConnectionAborts).toHaveLength(3);
@@ -1069,11 +1078,8 @@ describe("agentCliCommand", () => {
   it("falls back to a new Gateway call when the same-connection abort is not confirmed", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const sameConnectionAborts: Array<{
-        method: string;
-        params: unknown;
-        opts?: { timeoutMs?: number | null };
-      }> = [];
+      const gatewayStarted = createDeferredCore();
+      const sameConnectionAborts: GatewayAbortCall[] = [];
       let fallbackAbort: Record<string, unknown> | undefined;
       callGateway.mockImplementation(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
@@ -1082,6 +1088,7 @@ describe("agentCliCommand", () => {
           expect(params.idempotencyKey).toBe("pre-accepted-run");
           const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
+          gatewayStarted.resolve();
           return await rejectOnGatewayAbort(signal, async () => {
             await onSignalAbort?.(async (method, paramsLocal, opts) => {
               sameConnectionAborts.push({ method, params: paramsLocal, opts });
@@ -1103,10 +1110,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await waitForGatewayCall();
-      signals.emit("SIGTERM");
-
-      await run;
+      await abortGatewayCommand(run, gatewayStarted.promise, signals);
       expect(callGateway).toHaveBeenCalledTimes(2);
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(sameConnectionAborts).toHaveLength(5);
@@ -1133,11 +1137,8 @@ describe("agentCliCommand", () => {
   it("preserves backend admin authority for model override fallback aborts", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const sameConnectionAborts: Array<{
-        method: string;
-        params: unknown;
-        opts?: { timeoutMs?: number | null };
-      }> = [];
+      const gatewayStarted = createDeferredCore();
+      const sameConnectionAborts: GatewayAbortCall[] = [];
       let fallbackAbort: Record<string, unknown> | undefined;
       callGateway.mockImplementation(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
@@ -1149,6 +1150,7 @@ describe("agentCliCommand", () => {
           const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
           onAccepted?.({ status: "accepted", runId: "run-model-fallback" });
+          gatewayStarted.resolve();
           return await rejectOnGatewayAbort(signal, async () => {
             await onSignalAbort?.(async (method, params, opts) => {
               sameConnectionAborts.push({ method, params, opts });
@@ -1170,10 +1172,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await waitForGatewayCall();
-      signals.emit("SIGTERM");
-
-      await run;
+      await abortGatewayCommand(run, gatewayStarted.promise, signals);
       expect(callGateway).toHaveBeenCalledTimes(2);
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(sameConnectionAborts).toHaveLength(5);

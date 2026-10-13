@@ -359,9 +359,7 @@ suite.define(() => {
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(chatColor);
     await page.locator(".chat-pane__nav-toggle").first().click();
-    await page
-      .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-      .click();
+    await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
 

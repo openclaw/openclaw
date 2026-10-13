@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import {
+  retireSqliteDatabaseWriteScopes,
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
@@ -30,10 +31,8 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
 import { clearSqliteSessionEntryPreservingWindows } from "./session-accessor.sqlite-entry-clear.js";
-import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readExactSessionEntryRow,
-  readSessionEntryTargetRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
@@ -54,7 +53,10 @@ import {
   parseSessionEntryJson as parseSessionEntryRow,
 } from "./session-accessor.sqlite-status.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  replaceSessionActorStoredEntry,
+} from "./session-actor-transaction.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
@@ -83,10 +85,7 @@ import {
   projectCanonicalSessionEntryShape,
   stripRuntimeOnlySessionSkillsFields,
 } from "./store-entry-shape.js";
-import {
-  normalizeStoreSessionKey,
-  resolveDeliveryProvenCanonicalSessionKey,
-} from "./store-entry.js";
+import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   parseReadableSqliteSessionEntryRow,
@@ -100,42 +99,12 @@ export {
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-inventory.js";
 export {
+  normalizeLifecycleTarget,
+  readLifecycleTargetSnapshot,
   readSessionIdentitySnapshot,
   readSessionEntrySelectionSnapshot,
+  resolveLifecyclePrimaryEntry,
 } from "./session-accessor.sqlite-entry-snapshot.js";
-
-export function resolveLifecyclePrimaryEntry(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
-  target: { canonicalKey: string; storeKeys: string[] },
-  options: { allowCanonicalMove?: boolean; includeWindowFacts?: true } = {},
-): SqliteLifecycleTargetSnapshot[number] | undefined {
-  const row = readSessionEntryTargetRow(database, target, options);
-  return row?.entry ? captureSessionEntrySnapshot({ entry: row.entry, row: row.row }) : undefined;
-}
-
-export function readLifecycleTargetSnapshot(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
-  target: { canonicalKey: string; storeKeys: string[] },
-  options: { allowCanonicalMove?: boolean; includeWindowFacts?: true } = {},
-): SqliteLifecycleTargetSnapshot {
-  const normalized = normalizeLifecycleTarget(target);
-  const row = resolveLifecyclePrimaryEntry(database, normalized, options);
-  return row ? [row] : [];
-}
-
-export function normalizeLifecycleTarget(target: {
-  canonicalKey: string;
-  storeKeys: readonly string[];
-}): {
-  canonicalKey: string;
-  storeKeys: string[];
-} {
-  const canonicalKey = normalizeStoreSessionKey(target.canonicalKey);
-  return {
-    canonicalKey,
-    storeKeys: uniqueStrings([canonicalKey, ...target.storeKeys.map(normalizeStoreSessionKey)]),
-  };
-}
 
 export function deleteSessionEntryRows(
   database: OpenClawAgentDatabase,
@@ -171,6 +140,7 @@ export function deleteSessionEntryRows(
             .orderBy("session_key", "asc"),
         ).rows
       : [];
+  const ownedSessionIds: string[] = [];
   for (const window of windows) {
     const survivingNode = survivingNodes.find((node) => {
       if (node.current_session_id === window.session_id) {
@@ -197,6 +167,8 @@ export function deleteSessionEntryRows(
           postimage.window = { ...postimage.window, session_key: survivingNode.session_key };
         }
       }
+    } else {
+      ownedSessionIds.push(window.session_id);
     }
   }
   const remainingWindow = options.deleteOwnedWindows
@@ -232,6 +204,10 @@ export function deleteSessionEntryRows(
           database.db,
           db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
         );
+        retireSqliteDatabaseWriteScopes(database.db, [
+          sessionKey,
+          ...ownedSessionIds.map(sqliteSessionIdWriteScope),
+        ]);
       }
     },
   );
@@ -286,6 +262,7 @@ export function deleteLegacySessionEntryRows(
         db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
       ),
     );
+    retireSqliteDatabaseWriteScopes(database.db, [legacyKey]);
     options.postimages?.delete(legacyKey);
     const canonicalPostimage = options.postimages?.get(sessionKey);
     if (canonicalPostimage) {
@@ -347,6 +324,7 @@ export function writeSessionEntry(
     consumePendingReset?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
+    observeConversation?: boolean;
     routeContext?: ConversationRouteContext | null;
   } = {},
 ): SessionEntry {
@@ -564,10 +542,14 @@ export function writeSessionEntry(
         });
       }
       const boundSessionRoot = bindSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
-      const conversation = prepareSessionConversationForWrite({
+      const preparedWindow = options.canonicalPreviousWindow ?? canonicalFacts?.window;
+      const { conversation, primaryConversationId } = prepareSessionConversationForWrite({
         database,
         entry: normalizedEntry,
         previousEntry,
+        canonicalPreviousEntry,
+        previousWindow: actor?.window ?? preparedWindow?.row,
+        observeConversation: options.observeConversation || options.allowStoredAliases,
         ...(options.routeContext !== undefined ? { routeContext: options.routeContext } : {}),
         sessionScope: boundSessionRoot.session_scope,
       });
@@ -578,19 +560,14 @@ export function writeSessionEntry(
           updatedAt,
         );
       }
-      const boundSessionRow = {
-        ...boundSessionRoot,
-        primary_conversation_id:
-          conversation?.role === "primary" ? conversation.identity.conversationRef : null,
-      };
       const retainWindowOwner = canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId;
       const window = prepareSessionEntryWindowRow({
-        boundSessionRow,
+        boundSessionRow: { ...boundSessionRoot, primary_conversation_id: primaryConversationId },
         database,
         entry: normalizedEntry,
         previousEntry,
         retainOwner: retainWindowOwner,
-        prepared: options.canonicalPreviousWindow ?? canonicalFacts?.window,
+        prepared: preparedWindow,
         stagedTranscriptUpdatedAt: actor
           ? undefined
           : readStagedSessionTranscriptUpdatedAt(database, normalizedEntry.sessionId),
@@ -700,12 +677,11 @@ export function writeSessionEntry(
       })
     : undefined;
   if (actor && persistedEntry && row) {
-    actor.entryRows.set(sessionKey, {
-      entry: structuredClone(persistedEntry),
+    replaceSessionActorStoredEntry(actor, sessionKey, {
+      entry: persistedEntry,
       row,
+      window: written.window.postimage,
     });
-    actor.hot.entry = structuredClone(persistedEntry);
-    actor.window = written.window.postimage;
   }
   if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
     const stagedTranscript = readStagedSessionTranscriptAuthority(database)

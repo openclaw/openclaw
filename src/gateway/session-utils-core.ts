@@ -94,11 +94,14 @@ export function resolveEstimatedSessionCostUsd(params: {
   model?: string;
   entry?: Pick<
     SessionEntry,
-    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
+    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "usageReport"
   >;
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
+  if (params.entry?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
   const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );

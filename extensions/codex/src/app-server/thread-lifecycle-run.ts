@@ -40,6 +40,7 @@ import {
   prepareCodexThreadRequestContext,
   publishCodexThreadInferenceBinding,
   resolveCodexThreadAgentDir,
+  type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -80,7 +81,7 @@ export async function startOrResumeThread(
       });
       if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
         throw new Error(
-          "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
+          "Saved Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
         );
       }
     }
@@ -108,6 +109,8 @@ export async function startOrResumeThread(
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
+    // Rotation changes the physical binding, not this attempt's admitted tier.
+    let serviceTierAdmission: CodexThreadRequestContext["serviceTierAdmission"] | undefined;
     const prepareRequestContext = async () => {
       const context = await prepareCodexThreadRequestContext(params, {
         binding,
@@ -116,9 +119,11 @@ export async function startOrResumeThread(
         clientId,
         config: callerConfig,
         preflight,
+        serviceTierAdmission,
         assertCurrent: assert,
         throwIfAborted,
       });
+      serviceTierAdmission = context.serviceTierAdmission;
       // Managed requests own a parent-local carrier. Only uncovered connections
       // put refreshable instructions in native thread state; recompute after route changes.
       params.refreshableInstructions = params.inferenceRoute

@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as diagnostics from "../logging/code-mode-diagnostic.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -12,6 +14,7 @@ import {
 import { jsonResult, ToolInputError } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
+afterEach(() => vi.restoreAllMocks());
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
   it.each([
@@ -165,6 +168,58 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
 });
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures", (executor) => {
+  it("rejects NUL shell commands as actionable input errors through the real exec tool", async () => {
+    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+    const shell = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, shell] });
+    const exec = expectDefined(tools[0], "exec");
+    const details = resultDetails(
+      await exec.execute("nul-command", { code: 'await exec({command: "printf bad\\0command"});' }),
+    );
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      replaySafe: false,
+    });
+    expect(details.error).toContain("NUL bytes. Remove them and retry.");
+  });
+
+  it("logs the original bridge cause even when the guest catches it", async () => {
+    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+    const failure = new TypeError("synthetic failure ".repeat(200));
+    const { ctx, config, tools } = createCodeModeHarness({
+      codeMode: { executor, maxOutputBytes: 128 },
+    });
+    const target = pluginToolWithExecute("failure_fixture", "Failure fixture", async () => {
+      throw failure;
+    });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+    const exec = expectDefined(tools[0], "exec");
+    expect(
+      resultDetails(
+        await exec.execute("logged-failure", {
+          code: "try { await failure_fixture({}); } catch {} return true;",
+        }),
+      ),
+    ).toMatchObject({ status: "completed", value: true });
+    expect(log).toHaveBeenCalledWith(
+      failure,
+      expect.objectContaining({
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        runId: ctx.runId,
+        toolCallId: "logged-failure",
+        codeModeRunId: expect.any(String),
+        failurePhase: "bridge",
+        bridgeRequestId: "bridge:callValue:1",
+        bridgeMethod: "callValue",
+        workerId: expect.stringMatching(/^code-mode-(?:node|quickjs):/),
+      }),
+    );
+  });
+
   function runWithSpawnFixture(code: string, execute: () => Promise<unknown> = async () => ({})) {
     const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
     const target = pluginToolWithExecute("spawn_fixture", "Spawn-shaped fixture", async () =>

@@ -79,6 +79,7 @@ import {
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import {
@@ -1056,6 +1057,7 @@ describe("session accessor seam", () => {
           "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
         )
         .run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt }), updatedAt);
+      markCanonicalSessionValidationPending(database, [sessionKey]);
       closeOpenClawAgentDatabasesForTest();
     };
     for (const [storedKey, canonicalKey] of [

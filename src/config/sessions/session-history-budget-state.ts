@@ -113,7 +113,7 @@ export function deferPhysicalBudgetForCheckpoint(
     afterNs: checkpoint?.observedAtNs ?? process.hrtime.bigint(),
     completedAtNs: 0n,
   };
-  state.checkpointBlocked = { checkpoint };
+  state.checkpointBlocked = { checkpoint, warned: state.checkpointBlocked?.warned };
 }
 
 export function getBudgetKickState(
@@ -165,6 +165,7 @@ export function recordPhysicalBudgetOutcome(
     return;
   }
   state.checkpointGate = undefined;
+  state.checkpointBlocked = undefined;
   if (result.totalBytesAfter <= result.maxBytes) {
     state.blockedUntil = undefined;
     if (result.overBudget) {

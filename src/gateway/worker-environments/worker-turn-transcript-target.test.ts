@@ -119,7 +119,7 @@ it("preadmits cloud transcript guards and retains their handle through turn sett
       });
       const database = agentDatabase.openOpenClawAgentDatabase(options);
       database.db.exec("CREATE TABLE cloud_admission_fixture(value TEXT)");
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       const nativeClaim = execution.captureGenerationClaim();
       const turn = { ...target, sessionTarget: { ...target } };
       let active = true;

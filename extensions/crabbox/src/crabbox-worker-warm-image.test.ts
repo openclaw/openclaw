@@ -157,6 +157,10 @@ describe("Crabbox profile warm images", () => {
     fs.mkdirSync(workspace, { recursive: true });
     fs.mkdirSync(path.dirname(npmCache), { recursive: true });
     fs.mkdirSync(bin);
+    const runtimeNode = path.join(home, ".openclaw-worker", "runtime-node", "node");
+    fs.mkdirSync(path.dirname(runtimeNode), { recursive: true });
+    fs.symlinkSync(process.execPath, runtimeNode);
+    fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
     fs.mkdirSync(path.dirname(envFile), { recursive: true });
     fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
     fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
@@ -220,6 +224,7 @@ describe("Crabbox profile warm images", () => {
       await stopNode();
     }
     expect(fs.existsSync(runtime)).toBe(true);
+    expect(fs.readlinkSync(runtimeNode)).toBe(process.execPath);
     expect(fs.existsSync(path.join(home, ".openclaw", "cloud-workers"))).toBe(false);
     expect(fs.existsSync(sshWorkspace)).toBe(false);
     expect(fs.existsSync(envFile)).toBe(false);

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { parseJsonPreservingUnsafeIntegers } from "openclaw/plugin-sdk/json-unsafe-integers";
 import type {
   AssistantMessage,
   TextContent,
@@ -62,7 +61,7 @@ import {
   type OllamaToolCall,
   type OllamaToolCallNameOptions,
 } from "./stream-messages.js";
-import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+import { parseNdjsonStream, type OllamaChatResponse } from "./stream-ndjson.js";
 import type { OllamaLocalService } from "./stream-registration.js";
 import { normalizeOllamaToolCallName, wrapOllamaToolNames } from "./tool-name-aliases.js";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
@@ -266,27 +265,6 @@ interface OllamaTool {
   };
 }
 
-interface OllamaChatResponse extends Record<string, unknown> {
-  model: string;
-  created_at: string;
-  message: {
-    role: "assistant";
-    content: string;
-    thinking?: string;
-    reasoning?: string;
-    tool_calls?: OllamaToolCall[];
-  };
-  done: boolean;
-  done_reason?: string;
-  total_duration?: number;
-  load_duration?: number;
-  prompt_eval_count?: number;
-  prompt_eval_cached_count?: number;
-  prompt_eval_duration?: number;
-  eval_count?: number;
-  eval_duration?: number;
-}
-
 function safeJsonLength(value: unknown): number {
   try {
     const serialized = JSON.stringify(value);
@@ -438,6 +416,7 @@ export function buildAssistantMessage(
       output: outputTokens,
       cacheRead: cacheRead ?? 0,
       cacheTelemetry: { state: cacheRead === undefined ? "unavailable" : "available" },
+      usageReport: { state: contextUsage ? "available" : "unavailable" },
       totalTokens: promptTokens + outputTokens,
       ...(contextUsage ? { contextUsage } : {}),
     },
@@ -455,74 +434,6 @@ export function buildAssistantMessage(
     ];
   }
   return message;
-}
-
-export async function* parseNdjsonStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<OllamaChatResponse> {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let buffer = "";
-  let pendingRecordBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        yield parseOllamaNdjsonRecord(trimmed);
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) {
-      yield parseOllamaNdjsonRecord(buffer.trim());
-    }
-  } finally {
-    // Start cancellation best-effort; do not await it — a pending cancel
-    // must not stall releaseLock() and keep the reader locked.
-    void reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-}
-
-function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
-  let parsed: unknown;
-  try {
-    parsed = parseJsonPreservingUnsafeIntegers(value);
-  } catch {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  if (typeof parsed.error === "string") {
-    const status =
-      typeof parsed.status === "number" && Number.isFinite(parsed.status)
-        ? parsed.status
-        : undefined;
-    throw Object.assign(
-      new Error(status === undefined ? parsed.error : `${status}: ${parsed.error}`),
-      {
-        ...(status === undefined ? {} : { status }),
-        body: parsed,
-      },
-    );
-  }
-  if (!isRecord(parsed.message) || typeof parsed.done !== "boolean") {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
-  return parsed as OllamaChatResponse;
 }
 
 function resolveOllamaChatUrl(baseUrl: string): string {

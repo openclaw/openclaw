@@ -111,7 +111,7 @@ suite.define(() => {
       const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
         [
           {
-            selector: ".sidebar-session-toolbar .sidebar-new-session",
+            selector: ".sidebar-rail .sidebar-new-session",
             params: { agent: agentId },
           },
           {
@@ -129,7 +129,7 @@ suite.define(() => {
             section: `catalog:${catalogId}`,
             params: { agent: agentId, catalog: catalogId },
           },
-          { selector: ".shell-chrome-controls__new-thread", params: { agent: agentId } },
+          { selector: ".sidebar-rail .sidebar-new-session", params: { agent: agentId } },
         ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
@@ -182,7 +182,7 @@ suite.define(() => {
         }
       }
 
-      await page.locator(".shell-chrome-controls__new-thread").click();
+      await page.locator(".sidebar-rail .sidebar-new-session").click();
       await waitForControlUiRoute(page, {
         routeId: "new-session",
         pathname: `${basePath}/new`,

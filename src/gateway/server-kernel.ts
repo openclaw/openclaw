@@ -136,10 +136,11 @@ async function createGatewayKernelWithSdkHost(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
-  // Publish before bootstrap creates catalog consumers; later downloads use explicit adoption.
-  await prepareRemoteModelCatalogStartupSnapshot();
-  // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
-  const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
+  // Join catalog publication and retained cancellation code before bootstrap owns resources.
+  const [, { cancelPreparedModelRuntimeRefresh }] = await Promise.all([
+    prepareRemoteModelCatalogStartupSnapshot(),
+    import("../agents/prepared-model-runtime.js"),
+  ]);
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {
     cancelPreparedModelRuntimeRefresh();

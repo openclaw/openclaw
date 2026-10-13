@@ -24,6 +24,9 @@ message alone cannot restore missing sender authority.
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
 provider reports an error and the turn settles before shutdown discovers it.
+The next visible message preserves an interrupted turn's recovery claim even
+when its saved status is failed, timed out, or killed. Recovery resumes the
+interrupted work before the new message takes foreground ownership.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
@@ -78,7 +81,7 @@ rejects same-ID retries against retained newer receipts before execution. This
 includes queued or interrupted inputs and consumed collected-input receipts.
 Consumed receipts remain excluded from pending counts. Individually consumed
 inputs have already left the pending-input store and retain normal transcript
-idempotency. Upgrading again restores matching unconsumed-input recovery through
+duplicate prevention. Upgrading again restores matching unconsumed-input recovery through
 fresh authentication and admission, provided the session and accepted input have
 not been changed or removed. Already-consumed input remains consumed. Do not
 delete receipts or change message IDs merely to bypass a downgrade conflict.
@@ -465,6 +468,14 @@ when a busy gateway defers only the channel restart. This keeps stale sockets fr
 waiting for their normal expiry without interrupting an active reply or agent
 startup when a busy event loop caused the timer gap.
 
+Sleep and backward wall-clock adjustments do not by themselves revoke state
+ownership. After a heartbeat gap, the Gateway verifies its lock's physical
+identity and acquisition bytes before renewing it. A removed or replaced lock,
+or a renewal that still fails, fences state access. Locally authorized recovery
+still restarts the Gateway when the fenced database cannot supply the stored
+restart intent; raw unauthorized restart signals retain their existing policy.
+No configuration or database migration is needed when updating to this behavior.
+
 The macOS app and Linux companion cooperate with a local gateway by preparing a
 short suspension lease before the host sleeps and resuming it after wake. Remote
 gateways are not suspended when the app host sleeps. A deliberate suspension
@@ -808,7 +819,7 @@ model selection instead direct you to **Resume in new session** in WebChat.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
-retain bounded durable idempotency tombstones, allowing a reconnecting outbox
+retain bounded durable completion markers, allowing a reconnecting outbox
 to retire them without re-executing the request.
 
 When a pending final has no remaining queue owner and its delivery outcome is
@@ -895,6 +906,11 @@ For native children with completion notifications disabled, recovery sends a
 private continuation to the original parent when its saved session identity still
 matches. Normal successful completion stays quiet. A reset or cancellation does
 not authorize a continuation into a replacement parent session.
+If the child session was reset or replaced, recovery settles the old task with
+that reason and notifies its original parent without changing the replacement
+child session. A quiet child's original parent receives this private outcome too.
+Resetting the parent retires that old task's pending notice without attempting
+to stop the replacement child session or its descendants.
 Cancelled turns can retain a cleanup lease briefly. That lease does not make them
 restart candidates; an immediate Gateway restart preserves their terminal outcome.
 Finished executions whose final reply is still pending retain their recovery
