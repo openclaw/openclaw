@@ -22,6 +22,10 @@ Use a checkout with dependencies installed. The normal dev launcher may build
 missing/stale runtime artifacts; on hosts that prohibit builds, prepare the
 checkout on the authorized benchmark host. Generation itself does not need a
 Gateway build. Never point another running Gateway at a directory being seeded.
+Package-manager caches are isolated too: Corepack or pnpm version shims may
+download the pinned package manager into the fresh HOME. For offline launch,
+put a directly installed copy of the repository's pinned pnpm version on PATH.
+The launcher intentionally does not reuse an operator's package-manager cache.
 
 ## Shape and repeatability
 

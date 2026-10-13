@@ -85,6 +85,9 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
     ...createGatewayBenchEnv(path.join(stateDir, "home"), configPath, { startupTrace: false }),
     OPENCLAW_STATE_DIR: stateDir,
     TMPDIR: path.join(stateDir, "tmp"),
+    TMP: path.join(stateDir, "tmp"),
+    TEMP: path.join(stateDir, "tmp"),
+    USERPROFILE: path.join(stateDir, "home"),
     OPENCLAW_SKIP_CHANNELS: "1",
     // Dev builds inspect service ownership; never select the host's default Gateway.
     OPENCLAW_PROFILE: profile,

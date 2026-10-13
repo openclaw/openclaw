@@ -119,7 +119,6 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
   }> = [];
   const gitEnv = {
     ...process.env,
-    DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_AUTHOR_NAME: "Synthetic Fixture",
