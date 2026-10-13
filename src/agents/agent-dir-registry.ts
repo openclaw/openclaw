@@ -40,18 +40,22 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
-      observeOwnedDirectory(path.dirname(child), (filename) => {
-        if (filename === undefined || filename === basename) {
-          if (
-            filename === undefined &&
-            resolveIdentityPathViaExistingAncestorSync(pathname) === key
-          ) {
-            return;
+      observeOwnedDirectory(
+        path.dirname(child),
+        (filename) => {
+          if (filename === undefined || filename === basename) {
+            if (
+              filename === undefined &&
+              resolveIdentityPathViaExistingAncestorSync(pathname) === key
+            ) {
+              return;
+            }
+            preparedPaths.delete(pathname);
+            prepared.close();
           }
-          preparedPaths.delete(pathname);
-          prepared.close();
-        }
-      }),
+        },
+        { recoveryIntervalMs: 30_000 },
+      ),
     );
   }
   for (const [oldestPath, oldest] of preparedPaths) {

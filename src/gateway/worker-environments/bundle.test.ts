@@ -20,7 +20,7 @@ import {
   resolveWorkerNpmInstallationArtifact,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
-import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
+import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
@@ -399,85 +399,93 @@ describe("worker bundle producer", () => {
     });
   });
 
-  it("retains a persisted provisioning bundle until its environment terminates", async () => {
-    await withTestDir({ prefix: "openclaw-worker-bundle-provisioning-" }, async (root) => {
-      const packageRoot = path.join(root, "package");
-      const cacheDir = path.join(root, "cache");
-      const databasePath = path.join(root, "state", "openclaw.sqlite");
-      await writeFixture(packageRoot, "export const value = 1;\n");
-      const admitted = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      const admittedBytes = await fs.readFile(admitted.tarballPath);
-      const project = { key: "project", root, baseCommit: "a".repeat(40) };
-      const preparation = createWorkerProjectPreparationIdentity({
-        namespace: "bundle-retention-test",
-        providerId: "fixture",
-        profileId: "test",
-        profileSnapshot: { settings: {} },
-        project,
-        target: { machineClass: "small", platform: "linux" },
-        artifacts: {
-          nodeBootstrapSha256: "b".repeat(64),
-          enabledPluginIds: [],
-          workerBundleHash: admitted.bundleHash,
-          workerArchiveSha256: admitted.tarballSha256,
-          openclawVersion: admitted.openclawVersion,
-          protocolFeatures: [...admitted.protocolFeatures],
-        },
-      });
-      try {
-        const store = await createWorkerEnvironmentStore({
-          database: openOpenClawStateDatabase({ path: databasePath }),
-        });
-        await store.createIntent({
-          environmentId: "preparing",
+  it.each([false, true])(
+    "retains a persisted provisioning bundle until its environment terminates (empty=%s)",
+    async (empty) => {
+      await withTestDir({ prefix: "openclaw-worker-bundle-provisioning-" }, async (root) => {
+        const packageRoot = path.join(root, "package");
+        const cacheDir = path.join(root, "cache");
+        const databasePath = path.join(root, "state", "openclaw.sqlite");
+        await writeFixture(packageRoot, "export const value = 1;\n");
+        const admitted = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+        const admittedBytes = await fs.readFile(admitted.tarballPath);
+        const project = { key: "project", root, baseCommit: "a".repeat(40) };
+        const preparation = createWorkerPreparationIdentity({
+          namespace: "bundle-retention-test",
           providerId: "fixture",
           profileId: "test",
-          provisionOperationId: "prepare-project",
-          profileSnapshot: { settings: {}, project: { ...project, preparation } },
+          profileSnapshot: { settings: {} },
+          project: empty ? undefined : project,
+          target: { machineClass: "small", platform: "linux" },
+          artifacts: {
+            nodeBootstrapSha256: "b".repeat(64),
+            enabledPluginIds: [],
+            workerBundleHash: admitted.bundleHash,
+            workerArchiveSha256: admitted.tarballSha256,
+            openclawVersion: admitted.openclawVersion,
+            protocolFeatures: [...admitted.protocolFeatures],
+          },
         });
-        await store.transition({
-          environmentId: "preparing",
-          from: "requested",
-          to: "provisioning",
-        });
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
+        try {
+          const store = await createWorkerEnvironmentStore({
+            database: openOpenClawStateDatabase({ path: databasePath }),
+          });
+          await store.createIntent({
+            environmentId: "preparing",
+            providerId: "fixture",
+            profileId: "test",
+            provisionOperationId: "prepare-project",
+            profileSnapshot: {
+              settings: {},
+              ...(empty
+                ? { runtimePreparation: { source: "empty", ...preparation } }
+                : { project: { ...project, preparation } }),
+            },
+          });
+          await store.transition({
+            environmentId: "preparing",
+            from: "requested",
+            to: "provisioning",
+          });
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
 
-        await writeFixture(packageRoot, "export const value = 2;\n");
-        const successor = createWorkerBundleProducer({
-          packageRoot,
-          cacheDir,
-          cacheOwnership: "exclusive",
-        });
-        const current = await successor.prepare();
-        expect(current.bundleHash).not.toBe(admitted.bundleHash);
-        const reopened = await createWorkerEnvironmentStore({
-          database: openOpenClawStateDatabase({ path: databasePath }),
-        });
-        expect(reopened.get("preparing")).toMatchObject({
-          state: "provisioning",
-          bootstrapReceipt: null,
-        });
-        const retained = () =>
-          listRetainedWorkerBundleHashes({ environments: reopened.list(), placements: [] });
+          await writeFixture(packageRoot, "export const value = 2;\n");
+          const successor = createWorkerBundleProducer({
+            packageRoot,
+            cacheDir,
+            cacheOwnership: "exclusive",
+          });
+          const current = await successor.prepare();
+          expect(current.bundleHash).not.toBe(admitted.bundleHash);
+          const reopened = await createWorkerEnvironmentStore({
+            database: openOpenClawStateDatabase({ path: databasePath }),
+          });
+          expect(reopened.get("preparing")).toMatchObject({
+            state: "provisioning",
+            bootstrapReceipt: null,
+          });
+          const retained = () =>
+            listRetainedWorkerBundleHashes({ environments: reopened.list(), placements: [] });
 
-        await successor.prune(retained);
-        await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
+          await successor.prune(retained);
+          await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
 
-        await reopened.transition({
-          environmentId: "preparing",
-          from: "provisioning",
-          to: "failed",
-        });
-        await successor.prune(retained);
-        await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
-      } finally {
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
-      }
-    });
-  });
+          await reopened.transition({
+            environmentId: "preparing",
+            from: "provisioning",
+            to: "failed",
+          });
+          await successor.prune(retained);
+          await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+        } finally {
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
+        }
+      });
+    },
+  );
 
   it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-crash-cleanup-" }, async (root) => {

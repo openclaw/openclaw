@@ -46,7 +46,7 @@ afterEach(() => {
 });
 
 it("owns demand, queued GC batches, and disable/re-enable through the existing heartbeat", async () => {
-  const clock = createGatewaySchedulerClock(Date.now());
+  const clock = createGatewaySchedulerClock(0);
   const scheduler = createTestGatewayScheduler(clock.clock);
   const now = vi.spyOn(performance, "now").mockReturnValue(100);
   const durations: number[] = [];

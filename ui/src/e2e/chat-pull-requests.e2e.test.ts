@@ -872,7 +872,7 @@ describeControlUiE2e("session pull request chips", () => {
     expect(
       await page.getByRole("button", { name: "Publication account", exact: true }).count(),
     ).toBe(0);
-    expect(await page.locator(".chat-pr wa-dropdown, .chat-pr wa-popover").count()).toBe(0);
+    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
     expect(await page.locator(".chat-prs").textContent()).not.toContain("reclaim the workspace");
     await page.getByRole("button", { name: "Publish PR" }).click();
     const request = await gateway.waitForRequest("sessions.github.publish");

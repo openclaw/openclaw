@@ -367,14 +367,7 @@
     },
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
-      "text": "Open in editor"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
+      "kind": "object-property",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
       "text": "Open in editor"
