@@ -6,6 +6,7 @@ import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
+  formatCompactCount,
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
@@ -436,5 +437,26 @@ describe("renderPluginCatalogResults", () => {
     expect(container.querySelector(".plugin-download-count")).toBeNull();
     available.querySelector<HTMLButtonElement>("button")!.click();
     expect(props.onInstall).toHaveBeenCalledWith("available");
+  });
+});
+
+describe("formatCompactCount", () => {
+  it.each([
+    [999, "999"],
+    [1_500, "1.5k"],
+    [12_345, "12.3k"],
+    [99_960, "100k"],
+    [150_400, "150k"],
+    [999_499, "999k"],
+    [999_500, "1m"],
+    [999_950, "1m"],
+    [999_999, "1m"],
+    [1_049_999, "1m"],
+    [2_500_000, "2.5m"],
+    [999_499_999, "999m"],
+    [999_500_000, "1b"],
+    [2_500_000_000, "2.5b"],
+  ])("formats %s as %s", (value, expected) => {
+    expect(formatCompactCount(value)).toBe(expected);
   });
 });

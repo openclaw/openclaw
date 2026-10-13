@@ -194,6 +194,13 @@ These grants are session-only. They do not create or update device pairing
 records and do not trigger device scope-upgrade requests. Token, password, and
 no-auth connections do not carry a verified identity and never receive a grant.
 
+Each connection receiving additional identity scopes emits an `info` security
+audit record with the verified identity, added scopes, authentication method,
+and connection id. Reconnects retain their own records so the log can account
+for every application of the grant. Keep `logging.level` at `info` or more
+verbose to retain these records; applying a configured session grant is not a
+warning. This connection log is separate from the [activity audit ledger](/gateway/audit).
+
 ## Automatic device approval
 
 Trusted-proxy auth can optionally use the proxy identity as the approval boundary for new browser and native UI operator devices and same-key scope upgrades:

@@ -17,7 +17,6 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 /** Keep the admitted physical owner and host authority until the combined write settles. */
 export function trimSessionTranscriptInWorker(
@@ -87,9 +86,6 @@ export function trimSessionTranscriptInWorker(
           published.current,
           published.prepared,
         );
-      }
-      if (candidate.projectionNeedsReconcile) {
-        startSessionTranscriptIndexReconcile({ ...database, preferredSessionId: scope.sessionId });
       }
       return candidate.result;
     },

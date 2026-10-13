@@ -518,6 +518,12 @@ same byte counts and Worker coverage counts, plus `workerHeaps`: the five larges
 individual fresh Worker heaps as `{script, heapUsed, heapTotal}` (bytes), using the same
 bounded script names.
 
+Session transcript database lanes retire after five idle minutes, releasing their
+isolate heaps along with retained readers. A request resets the lane's idle
+deadline; active reads and host callbacks finish before retirement. The next
+request recreates the lane's workers through normal database admission. The
+separate SQLite handle retention window remains 30 minutes.
+
 `openclaw_worker_started_total{script="..."}` and
 `openclaw_worker_retired_total{script="...",reason="..."}` expose cumulative
 starts and confirmed native exits through the same heartbeat. Retirement reasons

@@ -793,7 +793,7 @@ describe("config form renderer", () => {
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
   });
 
-  it.each([true, false])("renders section help only with a docs URL: %s", (hasDocs) => {
+  it.each([true, false])("renders section help only with a docs URL: %s", async (hasDocs) => {
     renderAnalyzedFormFixture(container, rootAnalysis, {
       uiHints: hasDocs
         ? { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } }
@@ -821,10 +821,25 @@ describe("config form renderer", () => {
     );
     expect(link.textContent?.trim()).toBe("Learn more");
     expect(link.classList.contains("learn-more-link")).toBe(true);
-    const popover = expectElement(link.closest("wa-popover"), "section help popover");
+    const popover = expectElement(link.closest('[role="dialog"]'), "section help popover");
     expect(button.getAttribute("aria-controls")).toBe(popover.id);
+    expect(popover.getAttribute("aria-label")).toBe("Help for Gateway");
     expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+
+    const { userEvent } = await import("vitest/browser");
+    button.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(popover.matches(":popover-open")).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    const hidden = new Promise<void>((resolve) => {
+      popover.addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
+    await userEvent.keyboard("{Escape}");
+    await hidden;
+    expect(popover.matches(":popover-open")).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
   });
 });

@@ -7,10 +7,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   authProfileSourceExists,
   captureAuthProfileFileIdentity,
-  closeAuthProfileFileState,
   readAuthProfileDatabaseIdentity,
   noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
@@ -22,9 +22,9 @@ import {
 } from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   runtimeAuthProfileRowsCache.clear();
-  closeAuthProfileFileState();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -312,14 +312,14 @@ it("retires observations with the database owner", async () => {
   expect(() => captureAuthProfileFileIdentity(databasePath).assertCurrent()).not.toThrow();
 });
 
-it("keeps physical file authority through logical snapshot reset", () => {
+it("keeps physical file authority through logical snapshot reset", async () => {
   const directory = temporary.make("auth-file-logical-reset-");
   const databasePath = path.join(directory, "openclaw-agent.sqlite");
   fs.writeFileSync(databasePath, "synthetic database");
   const captured = captureAuthProfileFileIdentity(databasePath);
   clearRuntimeAuthProfileStoreSnapshots();
   expect(() => captured.assertCurrent()).not.toThrow();
-  closeAuthProfileFileState();
+  await closeOpenClawStateDatabaseAsync();
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
 });
 
