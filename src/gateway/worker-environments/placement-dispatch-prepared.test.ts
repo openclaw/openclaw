@@ -66,6 +66,7 @@ async function preparedHarness(
     reserve?: boolean;
     protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
+    emptyWorkspace?: boolean;
     repository?: SessionRepositoryWorkspaceRecord;
     recipe?: EnvironmentRecipe;
     lifecycleFailure?: boolean;
@@ -100,46 +101,53 @@ async function preparedHarness(
       ),
   });
   const environmentId = reserve ? "prepared-spare" : harness.ready.environmentId;
+  const preparation = {
+    key: PREPARATION_KEY,
+    cacheKey: "a".repeat(64),
+    contractVersion: 1,
+    target: { machineClass: "standard", platform: "linux", arch: "x64" },
+    artifacts: {
+      nodeBootstrapSha256: "f".repeat(64),
+      enabledPluginIds: [],
+      workerBundleHash: support.BUNDLE_HASH,
+      workerArchiveSha256: "b".repeat(64),
+      openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
+      protocolFeatures,
+    },
+  };
   const intent: WorkerProviderPreparedIntent = {
     providerId: "fake",
     preparationKey: PREPARATION_KEY,
     profileSnapshot: {
       settings: { region: "test" },
       executionMode,
-      project: {
-        key: "d".repeat(64),
-        baseCommit: options.repository?.baseCommit ?? "e".repeat(40),
-        ...(options.repository
-          ? {
-              source: {
-                kind: "repository",
-                url: options.repository.url,
-                repositoryId: "R_dispatch_fixture",
-                owner: {
-                  agent: { agentId: REQUEST.agentId, provenance: null },
-                  identity: { source: "anonymous" },
-                },
+      ...(options.emptyWorkspace
+        ? { runtimePreparation: { ...preparation, source: "empty" } }
+        : {
+            project: {
+              key: "d".repeat(64),
+              baseCommit: options.repository?.baseCommit ?? "e".repeat(40),
+              ...(options.repository
+                ? {
+                    source: {
+                      kind: "repository",
+                      url: options.repository.url,
+                      repositoryId: "R_dispatch_fixture",
+                      owner: {
+                        agent: { agentId: REQUEST.agentId, provenance: null },
+                        identity: { source: "anonymous" },
+                      },
+                    },
+                  }
+                : { root: "/gateway/workspace" }),
+              preparation: {
+                ...preparation,
+                ...(options.recipe
+                  ? { recipe: options.recipe, setupRecipe: options.recipe.identity }
+                  : {}),
               },
-            }
-          : { root: "/gateway/workspace" }),
-        preparation: {
-          key: PREPARATION_KEY,
-          cacheKey: "a".repeat(64),
-          contractVersion: 1,
-          ...(options.recipe
-            ? { recipe: options.recipe, setupRecipe: options.recipe.identity }
-            : {}),
-          target: { machineClass: "standard", platform: "linux", arch: "x64" },
-          artifacts: {
-            nodeBootstrapSha256: "f".repeat(64),
-            enabledPluginIds: [],
-            workerBundleHash: support.BUNDLE_HASH,
-            workerArchiveSha256: "b".repeat(64),
-            openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
-            protocolFeatures,
-          },
-        },
-      },
+            },
+          }),
     },
   };
   const store = support.testState.store;
@@ -421,11 +429,16 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
   });
 
-  it.each(["worker-turn", "remote-exec"] as const)(
-    "consumes the existing environment and binds its workspace for %s",
-    async (executionMode) => {
+  it.each(
+    (["worker-turn", "remote-exec"] as const).flatMap((executionMode) =>
+      [false, true].map((emptyWorkspace) => ({ executionMode, emptyWorkspace })),
+    ),
+  )(
+    "consumes the existing environment for $executionMode (empty workspace: $emptyWorkspace)",
+    async ({ executionMode, emptyWorkspace }) => {
       const { harness, placements, store, ready, request } = await preparedHarness({
         executionMode,
+        emptyWorkspace,
       });
       vi.mocked(harness.environments.schedulePreparedRefill).mockImplementation(() => {
         expect(placements.get(request.sessionId)?.state).toBe("active");
@@ -441,17 +454,29 @@ describe("prepared worker dispatch", () => {
       });
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
+      expect(store.get(ready.environmentId)?.lastActivatedAtMs).toBe(1_000);
       expect(store.getCredential(ready.environmentId)).toMatchObject({
         sessionId: request.sessionId,
         ownerEpoch: active.activeOwnerEpoch,
       });
-      expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
-        harness.log.indexOf("sync"),
-      );
+      if (emptyWorkspace) {
+        expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
+      } else {
+        expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
+          harness.log.indexOf("sync"),
+        );
+      }
       expect(harness.environments.schedulePreparedRefill).toHaveBeenCalledWith(ready.environmentId);
       const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]?.value;
       expect(tunnel?.syncWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: request.sessionKey }),
+        expect.objectContaining({
+          sessionKey: request.sessionKey,
+          source: {
+            kind: "local",
+            path: "/gateway/workspace",
+            ...(emptyWorkspace ? {} : { projectKey: "d".repeat(64) }),
+          },
+        }),
       );
     },
   );

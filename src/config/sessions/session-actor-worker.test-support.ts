@@ -24,6 +24,7 @@ import type {
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
+import { commitSessionLifecycleProjection } from "./session-lifecycle-projection.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
@@ -135,6 +136,11 @@ function createFixture() {
     patchEntry(input: Parameters<typeof commitSessionEntryPatch>[0]) {
       return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
         commitSessionEntryPatch(input, context),
+      );
+    },
+    commitLifecycle(input: Parameters<typeof commitSessionLifecycleProjection>[0]) {
+      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+        commitSessionLifecycleProjection(input, context),
       );
     },
     receipt(): unknown {

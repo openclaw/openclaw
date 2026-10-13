@@ -98,6 +98,8 @@ function createMaintenanceRuntime(params: {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
     read: vi.fn(),
     version: vi.fn(() => 0),
+    invalidate: vi.fn(),
+    nextSweepAtMs: () => Infinity,
     sweep: vi.fn().mockResolvedValue(undefined),
   });
   runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -128,9 +130,18 @@ function createMaintenanceRuntime(params: {
     getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
+      subscribeChanges: (
+        listener: Parameters<WorkerSessionPlacementStore["subscribeChanges"]>[0],
+      ) => params.preservationStore?.subscribeChanges(listener) ?? (() => {}),
       workspaceResultInstanceId: () => "gateway-test",
-      get: (sessionId: string) =>
+      getAsync: async (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
+      getManyAsync: async (sessionIds: readonly string[]) =>
+        new Map(
+          params.placements
+            .filter((placement) => sessionIds.includes(placement.sessionId))
+            .map((placement) => [placement.sessionId, placement]),
+        ),
       listAsync: async () => params.placements,
       listForReconcileAsync: async (sessionKey?: string) =>
         params.preservationStore
@@ -151,7 +162,7 @@ function createMaintenanceRuntime(params: {
               assertCurrent: () => {},
               release: () => {},
             },
-      retireSessionPlacement: vi.fn(),
+      retireSessionPlacementAsync: vi.fn(async () => {}),
       pruneOrphanedWorkspaceReconciliations: async () => {
         await params.onRecovery?.();
         if (params.recoveryError) {

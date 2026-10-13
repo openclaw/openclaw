@@ -14,7 +14,7 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";

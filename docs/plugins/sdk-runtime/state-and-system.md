@@ -25,6 +25,22 @@ Memory Core's private shadow-index owner uses
 `memory-core-host-engine-storage` facade before draining its private queue and
 closing the connection.
 
+Memory Core's publication worker uses `stageMemoryIndexSchemaExtension(db)` from
+the private `memory-core-host-engine-schema` facade before replacing derived
+indexes in a managed transaction. Successful commit republishes the already
+admitted memory table contracts, so a clean restart can reuse their seal without
+repeating schema setup. Full-index publication supplies the replacement's FTS
+availability; a missing required index leaves admission invalid for repair.
+Rollback publishes no replacement receipt, and an unclean restart still performs
+normal integrity and schema admission.
+
+Memory Core's `MemorySearchManager.statusAsync({ includeCounts: false })` returns
+in-process provider and index facts without database diagnostics. Query callers
+can pass the same option to `readMemorySearchManagerStatus`; file, chunk, source,
+storage, and embedding-cache counts are omitted by the built-in manager.
+Calling `statusAsync()` retains the full diagnostic result, and legacy managers
+keep the existing synchronous fallback.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>

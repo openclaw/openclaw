@@ -3,7 +3,10 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
@@ -33,6 +36,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -311,19 +315,8 @@ it("commits aliased worker membership and participant facts before publishing, a
         participantLifecycle(event);
       }
     });
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const queries: string[] = [];
-    const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, args) {
-            queries.push(receiver.sourceSQL);
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
-    });
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const sql = observeHostDataSql();
     try {
       expect(
         await addSessionMember(scope, {
@@ -393,15 +386,12 @@ it("commits aliased worker membership and participant facts before publishing, a
         sessionKey: scope.sessionKey,
         facts: { kind: "member", identityId: "guest", present: false },
       });
-      expect(
-        queries.filter((sql) => /\b(session_members|session_participants)\b/.test(sql)),
-      ).toEqual([]);
+      expect(sql.queries).toEqual([]);
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main" })).toBeUndefined();
     } finally {
       stop();
       stopLifecycle();
-      for (const method of methods) {
-        method.mockRestore();
-      }
+      sql.restore();
     }
     expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
   });

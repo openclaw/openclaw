@@ -14,7 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
-import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -139,6 +139,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: scheduler.now() + (immediate ? 0 : everyMs),
       everyMs,
+      phase: "maintenance",
       run,
     });
   };
@@ -288,6 +289,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: mediaScheduler.now(),
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      phase: "maintenance",
       run,
     });
   };
@@ -300,15 +302,12 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
   });
-  schedulePeriodic(
-    "device-pair-setup",
-    60_000,
-    () =>
-      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
-        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      }),
-    true,
-  );
+  startDevicePairSetupMaintenance({
+    scheduler,
+    onError: (error) => {
+      params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+    },
+  });
 
   const skillUsageCleanup = registerSkillUsageTracking();
 

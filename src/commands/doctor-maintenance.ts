@@ -32,6 +32,7 @@ import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
   readDoctorGatewayOwnerLease,
+  readOfflineAppOwnedDoctorInspection,
 } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -448,13 +449,23 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         const { maybeStopManagedServiceBeforeMutableUpdate } =
           await import("../cli/update-cli/update-command-service-maintenance.js");
         inspectingActivation = true;
-        const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateInstallKind: "package",
-          root: params.root,
-          shouldRestart: true,
-          jsonMode: true,
-          phase: "inspect",
-        });
+        let inspection: PreManagedServiceStop;
+        try {
+          inspection = await maybeStopManagedServiceBeforeMutableUpdate({
+            updateInstallKind: "package",
+            root: params.root,
+            shouldRestart: true,
+            jsonMode: true,
+            phase: "inspect",
+          });
+        } catch (error) {
+          const offlineApp = await readOfflineAppOwnedDoctorInspection(error, env);
+          if (!offlineApp) {
+            throw error;
+          }
+          inspection = offlineApp;
+          warn(offlineApp.serviceMutationSkipMessage);
+        }
         assertDoctorMaintenanceInspection(inspection, env);
         serviceUpdateVerdict = inspection.serviceUpdateVerdict;
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
