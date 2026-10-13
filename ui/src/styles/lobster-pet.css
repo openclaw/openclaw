@@ -135,6 +135,8 @@ openclaw-lobster-pet .lobster-bottle {
   top: var(--lobster-pet-menu-y);
   width: 1px;
   height: 1px;
+  padding: 0;
+  border: 0;
   opacity: 0;
   pointer-events: none;
 }

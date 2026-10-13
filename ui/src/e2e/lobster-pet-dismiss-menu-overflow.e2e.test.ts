@@ -245,6 +245,7 @@ suite.define(() => {
           );
         }, point);
         await page.locator(".lobster-pet-dismiss-menu__panel").waitFor();
+        await page.clock.runFor(150);
 
         const measurement = await measureDismissMenu(page);
 
