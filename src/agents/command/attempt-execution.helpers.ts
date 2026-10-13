@@ -63,11 +63,11 @@ export function resolveCommandReplyExpectation(params: {
   ) {
     return "required";
   }
-  const provenanceKind = params.opts.inputProvenance?.kind;
-  if (provenanceKind === "internal_system") {
+  const provenance = params.opts.inputProvenance;
+  if (provenance?.kind === "internal_system" && provenance.sourceTool === "cron_failure_repair") {
     return "optional";
   }
-  if (provenanceKind !== "inter_session") {
+  if (provenance?.kind !== "inter_session") {
     return !isDeliverableMessageChannel(params.messageChannel ?? "") ? "required" : undefined;
   }
   const chatType = normalizeChatType(params.sessionEntry?.chatType);

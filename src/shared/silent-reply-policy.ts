@@ -4,8 +4,6 @@ export type SilentReplyPolicy = "allow" | "disallow";
 export type SilentReplyConversationType = "direct" | "group" | "internal";
 export type SilentReplyPolicyShape = {
   group?: SilentReplyPolicy;
-  direct?: SilentReplyPolicy;
-  internal?: SilentReplyPolicy;
 };
 
 /** Classifies a reply context for silent-reply policy from explicit type, session key, or surface. */
@@ -36,9 +34,8 @@ export function resolveSilentReplyPolicyFromPolicies(params: {
   defaultPolicy?: SilentReplyPolicyShape;
   surfacePolicy?: SilentReplyPolicyShape;
 }): SilentReplyPolicy {
-  const type = params.conversationType;
-  if (type === "group" || type === "direct" || type === "internal") {
-    return params.surfacePolicy?.[type] ?? params.defaultPolicy?.[type] ?? "disallow";
+  if (params.conversationType !== "group") {
+    return "disallow";
   }
-  return "disallow";
+  return params.surfacePolicy?.group ?? params.defaultPolicy?.group ?? "disallow";
 }

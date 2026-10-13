@@ -50,19 +50,4 @@ describe("resolveSilentReplyPolicyFromPolicies", () => {
       }),
     ).toBe("disallow");
   });
-
-  it("honors direct and internal policy overrides when configured", () => {
-    expect(
-      resolveSilentReplyPolicyFromPolicies({
-        conversationType: "direct",
-        defaultPolicy: { direct: "allow" },
-      }),
-    ).toBe("allow");
-    expect(
-      resolveSilentReplyPolicyFromPolicies({
-        conversationType: "internal",
-        surfacePolicy: { internal: "allow" },
-      }),
-    ).toBe("allow");
-  });
 });

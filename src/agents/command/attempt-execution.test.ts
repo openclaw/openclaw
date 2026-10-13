@@ -52,26 +52,40 @@ function formatClaudeCliFallbackPrelude(
 }
 
 describe("resolveCommandReplyExpectation", () => {
-  it("treats internal_system turns and policy-allowed inter_session turns on webchat as optional", () => {
+  it("treats cron_failure_repair internal_system turns and policy-allowed group inter_session turns on webchat as optional", () => {
     expect(
       resolveCommandReplyExpectation({
         cfg: {},
         sessionKey: "agent:main:main",
         messageChannel: "webchat",
-        opts: { inputProvenance: { kind: "internal_system" } },
+        opts: { inputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" } },
       }),
     ).toBe("optional");
     expect(
       resolveCommandReplyExpectation({
-        cfg: { agents: { defaults: { silentReply: { internal: "allow", direct: "allow" } } } },
-        sessionKey: "agent:main:main",
+        cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
+        sessionKey: "agent:main:group:ops",
+        sessionEntry: { chatType: "group" },
         messageChannel: "webchat",
         opts: { inputProvenance: { kind: "inter_session" } },
       }),
     ).toBe("optional");
   });
 
-  it("keeps direct user turns, default inter_session webchat turns, and subagent completions as required", () => {
+  it("keeps main_session_restart_recovery, direct user turns, disallowed inter_session turns, and subagent completions as required", () => {
+    expect(
+      resolveCommandReplyExpectation({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        messageChannel: "webchat",
+        opts: {
+          inputProvenance: {
+            kind: "internal_system",
+            sourceTool: "main_session_restart_recovery",
+          },
+        },
+      }),
+    ).toBe("required");
     expect(
       resolveCommandReplyExpectation({
         cfg: {},
@@ -90,8 +104,9 @@ describe("resolveCommandReplyExpectation", () => {
     ).toBe("required");
     expect(
       resolveCommandReplyExpectation({
-        cfg: { agents: { defaults: { silentReply: { internal: "allow", direct: "allow" } } } },
+        cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
         sessionKey: "agent:main:subagent:worker-1",
+        sessionEntry: { chatType: "group" },
         messageChannel: "webchat",
         opts: { inputProvenance: { kind: "inter_session" } },
       }),
