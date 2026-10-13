@@ -4097,7 +4097,6 @@
 ["src/cli/config-cli-runner.supplied-intent.test.ts","../runtime.js","8304d521f6c041e480852a2cc73c4d3c9bde0932c2ad7e1a744cbc55e4fbcef3",1]
 ["src/cli/config-cli-runner.supplied-intent.test.ts","../utils.js","fe9f7c18542252865b28316fd7fffa6444db6d199db25e1a4d63a61ca596edfb",1]
 ["src/cli/config-cli-runner.supplied-intent.test.ts","./command-format.js","69273fcabe4836a35ce7cb56158e9e7e9e3198ea6c69f4ae827a18290d3e6164",1]
-["src/cli/config-cli-runner.supplied-intent.test.ts","./config-cli-model-normalization.js","25693d046431686a2e230e46faad9363a6974a0490b33818a83082677839b54b",1]
 ["src/cli/config-cli-runner.supplied-intent.test.ts","./config-cli-validation.js","d1696f4a47a3eea017bc67fa9c2a2e560b859a22e6794185b0ccd4f16d9e5f78",1]
 ["src/cli/config-cli-runner.supplied-intent.test.ts","./config-set-dryrun.js","48ac7040eb724259b7cd6ed04169e3457dd203fd9800ccbfd30296ae04890e0f",1]
 ["src/cli/config-cli-runner.supplied-intent.test.ts","./one-shot-exit.js","5dffda8084165cc246ea4b789f83f7e8d62946d1c4c18efe381f25e3026fcde7",1]

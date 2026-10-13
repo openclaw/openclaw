@@ -6,7 +6,10 @@ import {
   loadPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { normalizeConfigMutationModelRefs } from "./config-cli-model-normalization.js";
+import {
+  normalizeConfigMutationModelRefs,
+  shouldNormalizeConfigMutationProviderCatalogs,
+} from "./config-cli-model-normalization.js";
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
@@ -33,12 +36,12 @@ const modelFixture = (id: string): ModelDefinitionConfig => ({
   contextWindow: 8192,
   maxTokens: 4096,
 });
-const catalogConfig = (): OpenClawConfig => ({
+const catalogConfig = (id = " latest "): OpenClawConfig => ({
   models: {
     providers: {
       custom: {
         baseUrl: "https://example.test/v1",
-        models: [modelFixture(" latest "), modelFixture("other")],
+        models: [modelFixture(id), modelFixture("other")],
       },
     },
   },
@@ -60,6 +63,91 @@ describe("config mutation model normalization", () => {
       }),
     ).toBeDefined();
     expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
+  });
+
+  it("leaves an untouched provider catalog alone while normalizing core agent refs", () => {
+    const config = {
+      ...catalogConfig(),
+      agents: { defaults: { model: " openai/example " } },
+    };
+    const result = normalizeConfigMutationModelRefs(config, { normalizeProviderCatalogs: false });
+    expect(result.models).toBe(config.models);
+    expect(result.agents?.defaults?.model).toBe("openai/example");
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    {
+      name: "gateway mode",
+      patch: { gateway: { mode: "local" } },
+      path: ["gateway", "mode"],
+      expected: false,
+    },
+    {
+      name: "agent model",
+      patch: { agents: { defaults: { model: "openai/example" } } },
+      path: ["agents", "defaults", "model"],
+      expected: false,
+    },
+    {
+      name: "agent workspace",
+      patch: { agents: { defaults: { workspace: "/new-workspace" } } },
+      path: ["agents", "defaults", "workspace"],
+      expected: false,
+    },
+    {
+      name: "explicit catalog write",
+      patch: {},
+      path: ["models", "providers", "custom", "models"],
+      expected: true,
+    },
+    { name: "model parent write", patch: {}, path: ["models"], expected: true },
+    {
+      name: "plugin load path",
+      patch: { plugins: { load: { paths: ["/new-plugin-root"] } } },
+      path: ["plugins", "load", "paths"],
+      expected: true,
+    },
+    {
+      name: "plugin activation",
+      patch: { plugins: { entries: { custom: { enabled: false } } } },
+      path: ["plugins", "entries", "custom", "enabled"],
+      expected: true,
+    },
+    {
+      name: "channel activation",
+      patch: { channels: { telegram: { enabled: true } } },
+      path: ["channels", "telegram", "enabled"],
+      expected: true,
+    },
+  ])("selects catalog normalization for $name", ({ patch, path, expected }) => {
+    const before = catalogConfig();
+    const after = { ...before, ...patch } as OpenClawConfig;
+    expect(
+      shouldNormalizeConfigMutationProviderCatalogs({
+        before,
+        after,
+        touchedPaths: [path],
+        env: {
+          HOME: "/isolated-home",
+          OPENCLAW_STATE_DIR: "/isolated-state",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+      }),
+    ).toBe(expected);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
+  });
+
+  it("normalizes catalog values changed indirectly by a parent operation", () => {
+    const before = catalogConfig();
+    const after = catalogConfig("changed");
+    expect(
+      shouldNormalizeConfigMutationProviderCatalogs({
+        before,
+        after,
+        touchedPaths: [],
+      }),
+    ).toBe(true);
   });
 
   it.each(["defaults", "entries", "list"] as const)(

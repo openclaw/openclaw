@@ -228,13 +228,17 @@ function normalizeProviderCatalogs(
 export function normalizeSubmittedConfigModelRefs(
   cfg: OpenClawConfig,
   modelIdNormalizationPolicies?: ModelIdNormalizationPolicySource,
+  options: { normalizeProviderCatalogs?: boolean } = {},
 ): OpenClawConfig {
   let next = cfg;
   const agents = normalizeAgentScopes(cfg.agents);
   if (agents !== cfg.agents) {
     next = { ...next, agents: agents as OpenClawConfig["agents"] };
   }
-  const models = normalizeProviderCatalogs(cfg.models, modelIdNormalizationPolicies);
+  const models =
+    options.normalizeProviderCatalogs === false
+      ? cfg.models
+      : normalizeProviderCatalogs(cfg.models, modelIdNormalizationPolicies);
   if (models !== cfg.models) {
     next = { ...next, models: models as OpenClawConfig["models"] };
   }
