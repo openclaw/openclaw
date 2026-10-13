@@ -214,7 +214,7 @@ function evictCachedHandleForIntegrityAdmission(f: Fixture) {
   if (!database) {
     throw new Error("Fixture lost its cached handle before eviction");
   }
-  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  closeCachedOpenClawAgentDatabase(database);
   expect(database.db.isOpen).toBe(false);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
@@ -477,7 +477,7 @@ it("reacquires the split lifecycle writer after archive materialization with ret
     if (!cached) {
       throw new Error("Fixture lost its cached handle before materialization");
     }
-    closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+    closeCachedOpenClawAgentDatabase(cached);
     expect(cached.db.isOpen).toBe(false);
   };
   const work = own(
@@ -547,7 +547,7 @@ it.each([false, true])(
         throw new Error("Fixture lost its cached handle before native deletion preparation");
       }
       // Evict the handle without revoking the lifecycle operation's captured execution owner.
-      closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+      closeCachedOpenClawAgentDatabase(cached);
       expect(cached.db.isOpen).toBe(false);
       invalidateOpenClawAgentDatabaseValidation(f.databasePath);
       clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);

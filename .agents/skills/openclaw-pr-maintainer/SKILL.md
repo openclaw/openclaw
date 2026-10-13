@@ -37,7 +37,7 @@ gh issue view <issue> --repo openclaw/openclaw \
 - **Real defect:** reproduce → repair owning invariant → prove path/siblings. Simplification over symptom guard; size/LOC ≠ correctness gate.
 - **Useful PR:** improve editable branch; unsafe → authorized credited replacement before closure. Replaced ancestry → maintainer-owned replacement, never squash contributor PR.
 - **Uncertain/product decision:** state gap; no speculative merge/automatic out-of-scope close.
-- Proof + source-trust/host route: `$openclaw-testing`, [landing](references/landing.md#red-main-and-inherited-failures). Local focused proof → ready PR; PR CI = broad proof. Boxes only for uncovered environment needs, immediate grant; queues → local trusted proof, never untrusted local execution. Optional live gaps → meaningful boundary proof + limitation; explicit live, external API, authenticated-risk proof mandatory. Mocks/skips/old head ≠ live.
+- Proof + source-trust/host route: `$openclaw-testing`, [landing](references/landing.md#red-main-and-inherited-failures). Focused proof → ready PR; PR CI = broad proof. Prefer bounded local proof on a qualified, available host. Deliberate remote proof can cover expensive checks or environment gaps; queues → stop task-owned allocation, use PR CI or a safe local scope, preserve uncovered requirements. Never execute untrusted source locally. Optional live gaps → meaningful boundary proof + limitation; explicit live, external API, authenticated-risk proof mandatory. Mocks/skips/old head ≠ live.
 - Behavioral changes: [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary) + `$test-audit`. Requested behavior and repo standards: check separately.
 
 ## CODEOWNERS review

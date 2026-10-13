@@ -103,6 +103,7 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/workflows/ci.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-qa-smoke-scope.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
   });
 

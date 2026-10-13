@@ -4084,7 +4084,7 @@ esac
   it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
     "pins Testbox policy independently of configured refs and payload arguments: %j",
     (...refs) => {
-      const { output } = runSuccessfulDefaultWrapper(
+      const { output, result } = runSuccessfulDefaultWrapper(
         [
           "run",
           "--provider",
@@ -4115,6 +4115,8 @@ esac
         ]),
       );
       expect(output.args.at(-1)).toContain("historical-source");
+      expect(result.stderr).toContain("use PR CI or a safe local scope");
+      expect(result.stderr).not.toContain("pass another --provider");
     },
   );
 

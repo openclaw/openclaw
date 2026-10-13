@@ -11,10 +11,17 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+For runtime contributors, start with
+[database access in workers](/reference/database-schemas/worker-access): execution
+owners, admission once per load, scoped write receipts, memory-only final
+authority guards, and session actors. The
+[migration inventory](/reference/database-schemas/worker-access-inventory)
+records remaining main-thread call sites and the ratchet that prevents growth.
+
 PostgreSQL shared-state generation requires PostgreSQL 16+, preserves lazy feature
 fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
-for catalog equivalence and the explicit v22 pending-promotion exceptions.
+for catalog equivalence and the portable v22 identity columns.
 
 The Gateway process is the single owner of every OpenClaw database and its state.
 Its workers and native handles share that ownership. Committed write receipts
@@ -27,6 +34,12 @@ keep a transaction when their results require one consistent snapshot.
 CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
+
+Admitted updater mutation guards read current recovery rows directly rather than
+starting a synchronous snapshot subprocess for every effect. Explicit
+artifact-preserving inspection still uses private snapshots. Initial recovery
+admission, finalization checks, executor authority, and refusal of newly committed
+recovery remain unchanged; no recovery decision is cached across an await.
 
 Agent deletion status is loaded on first admission and retained per agent in the
 physical shared database's process-owned facts. Journal writers publish pending,
@@ -174,6 +187,16 @@ transaction, which publishes the new schema facts on commit; rollback cannot
 publish a schema that did not commit. Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
+
+Audit lifecycle bindings, node-worker launch companions, worker placement moves,
+skill-library and worker-environment preparation, goal receipts, Board preparation,
+and memory origin/provenance preparation reuse these admitted objects even on
+their first use of a warm connection. Redundant DDL would revoke retained profile
+authority, so an existing table is not recreated just to prepare a store. Retired
+memory triggers are removed only when present; imported memory rows still receive
+their existing provenance backfill. Private update and Windows workspace lease
+owners likewise create their table only when missing. No schema version, stored
+shape, upgrade, or downgrade behavior changes.
 
 Shared-state bootstrap checks native table options once after installing the
 canonical schema. When every ordinary table is already STRICT, it skips legacy

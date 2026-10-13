@@ -4,7 +4,7 @@
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "schemaVersions": {
-      "state": 21,
+      "state": 22,
       "agent": 26
     }
   },
@@ -869,6 +869,10 @@
     },
     "./plugin-sdk/gateway-config-runtime": {
       "default": "./dist/plugin-sdk/gateway-config-runtime.js"
+    },
+    "./plugin-sdk/gateway-ingress": {
+      "types": "./dist/plugin-sdk/gateway-ingress.d.ts",
+      "default": "./dist/plugin-sdk/gateway-ingress.js"
     },
     "./plugin-sdk/gateway-method-runtime": {
       "types": "./dist/plugin-sdk/gateway-method-runtime.d.ts",
@@ -2095,6 +2099,7 @@
     "test:docker:published-driver-update": "bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-upgrade-survivor": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
+    "test:ci-failed": "node --import ./scripts/tsx.mjs scripts/ci-failed-tests.mts",
     "test:docker:rerun": "node --import ./scripts/tsx.mjs scripts/docker-e2e-rerun.mts",
     "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:selected-plugins": "bash scripts/e2e/docker-selected-plugins.sh",

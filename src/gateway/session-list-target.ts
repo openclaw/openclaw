@@ -1,8 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   isCronSessionDisplayKey,
+  isSubagentSessionRow,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
 import type { materializeSessionRow } from "./session-utils-row.js";
@@ -33,15 +34,7 @@ export function readSessionListSelectionFacts(
       subject: entry?.subject,
       classification: entry?.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
     }),
-    isSubagent:
-      isSubagentSessionKey(key) ||
-      // Visible spawned conversations use dashboard keys even without a sidebar group.
-      // Lineage alone must not hide the session where the human follows the work.
-      Boolean(
-        entry?.spawnedBy &&
-        !parsed?.rest.toLowerCase().startsWith("dashboard:") &&
-        !normalizeOptionalString(entry.category),
-      ),
+    isSubagent: isSubagentSessionRow(key, entry),
     isPhantom:
       entry?.updatedAt == null &&
       !normalizeOptionalString(entry?.sessionId) &&

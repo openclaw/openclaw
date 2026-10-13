@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   NODE_PERMISSION_STATES,
   type NodePermissionRequest,
@@ -9,11 +9,13 @@ import {
   createNativeDeviceSettingsCapability,
   type NativeDeviceSettingsCapability,
 } from "../../../app/native-device-settings.ts";
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../../test-helpers/native-device-settings.ts";
-import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatPermissionCard } from "./chat-permission-card.tsx";
+import { renderChatPermissionCard } from "./chat-divider.ts";
 
 let capability: NativeDeviceSettingsCapability | null;
 afterEach(() => {
@@ -22,7 +24,29 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function fixture(state: NodePermissionRequest["state"], ids = ["screenRecording"]) {
+async function mountPermissionCard(
+  request: NodePermissionRequest,
+  onRetry?: (message: string) => void,
+  context?: ApplicationContext,
+) {
+  const container = context
+    ? createApplicationContextProvider(context)
+    : document.createElement("div");
+  document.body.append(container);
+  const view = mountSolid(() => <LitContent value={renderChatPermissionCard(request, onRetry)} />, {
+    container,
+  });
+  onTestFinished(async () => {
+    view.unmount();
+    container.remove();
+    await Promise.resolve();
+  });
+  await container.querySelector<SolidBridgeElement<object>>("openclaw-chat-permission-card")!
+    .updateComplete;
+  return view;
+}
+
+async function fixture(state: NodePermissionRequest["state"], ids = ["screenRecording"]) {
   const snapshot = createNativeDeviceSettingsSnapshot();
   snapshot.device.nodeId = "node-mac";
   snapshot.revision = 1;
@@ -44,7 +68,6 @@ function fixture(state: NodePermissionRequest["state"], ids = ["screenRecording"
   capability = createNativeDeviceSettingsCapability();
   // SAFETY: the leaf consumes only nativeDeviceSettings; no other application owner is used.
   const context = { nativeDeviceSettings: capability } as ApplicationContext;
-  const provider = createSolidApplicationContextProvider(context);
   const request: NodePermissionRequest = {
     nodeId: "node-mac",
     nodeName: "Example Mac",
@@ -53,9 +76,7 @@ function fixture(state: NodePermissionRequest["state"], ids = ["screenRecording"
     state,
   };
   const retry = vi.fn();
-  const view = mountSolid(() => <ChatPermissionCard request={request} onRetry={retry} />, {
-    wrapper: provider.wrapper,
-  });
+  const view = await mountPermissionCard(request, retry, context);
   return {
     view,
     post,
@@ -77,7 +98,7 @@ it.each(NODE_PERMISSION_STATES)(
   async (state) => {
     const toggle = state === "disabled-in-openclaw";
     const name = toggle ? "Computer Control" : "Screen Recording";
-    const f = fixture(state, toggle ? ["computerControl"] : ["screenRecording"]);
+    const f = await fixture(state, toggle ? ["computerControl"] : ["screenRecording"]);
     const button = f.view.getByRole("button", {
       name: state === "restart-required" ? "Relaunch OpenClaw" : `Grant ${name}`,
     });
@@ -95,7 +116,7 @@ it.each(NODE_PERMISSION_STATES)(
 );
 
 it("keeps a multi-permission request blocked until both the toggle and OS grants are effective", async () => {
-  const f = fixture("disabled-in-openclaw", [
+  const f = await fixture("disabled-in-openclaw", [
     "computerControl",
     "accessibility",
     "screenRecording",
@@ -128,8 +149,8 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
   expect(f.view.getByRole("button", { name: "Try again" })).toBeTruthy();
 });
 
-it("does not treat camera and location OS grants as enabling their OpenClaw toggles", () => {
-  const f = fixture("disabled-in-openclaw", ["cameraEnabled", "camera", "location"]);
+it("does not treat camera and location OS grants as enabling their OpenClaw toggles", async () => {
+  const f = await fixture("disabled-in-openclaw", ["cameraEnabled", "camera", "location"]);
   f.snapshot.permissions.entries = [
     { id: "camera", status: "granted" },
     { id: "location", status: "granted" },
@@ -142,8 +163,11 @@ it("does not treat camera and location OS grants as enabling their OpenClaw togg
 
 it.each([false, true])(
   "separates camera enumeration enablement from capture authorization (capture=%s)",
-  (capture) => {
-    const f = fixture("disabled-in-openclaw", ["cameraEnabled", ...(capture ? ["camera"] : [])]);
+  async (capture) => {
+    const f = await fixture("disabled-in-openclaw", [
+      "cameraEnabled",
+      ...(capture ? ["camera"] : []),
+    ]);
     f.snapshot.capabilities.cameraEnabled = false;
     f.snapshot.permissions.entries = [{ id: "camera", status: "notDetermined" }];
     f.publish();
@@ -160,7 +184,7 @@ it.each([false, true])(
 );
 
 it("shows app guidance for another node and rejects a stale local node action", async () => {
-  const f = fixture("denied");
+  const f = await fixture("denied");
   const resolve = capability!.resolvePermission!;
   f.snapshot.device.nodeId = "other-node";
   f.publish();
@@ -171,7 +195,7 @@ it("shows app guidance for another node and rejects a stale local node action", 
 });
 
 it("shows grant failures and never claims success", async () => {
-  const f = fixture("denied");
+  const f = await fixture("denied");
   f.post.mockRejectedValueOnce(new Error("Permission request was cancelled"));
   f.view.getByRole("button", { name: "Grant Screen Recording" }).click();
   await waitForSolid(() =>
@@ -180,17 +204,13 @@ it("shows grant failures and never claims success", async () => {
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
 });
 
-it("shows the Mac app destination in a browser without a native capability", () => {
-  const view = mountSolid(() => (
-    <ChatPermissionCard
-      request={{
-        nodeId: "remote",
-        command: "screen.capture",
-        capabilities: ["screenRecording"],
-        state: "denied",
-      }}
-    />
-  ));
+it("shows the Mac app destination in a browser without a native capability", async () => {
+  const view = await mountPermissionCard({
+    nodeId: "remote",
+    command: "screen.capture",
+    capabilities: ["screenRecording"],
+    state: "denied",
+  });
   expect(view.getByText(/Settings → This Mac → Permissions/)).toBeTruthy();
   expect(view.queryByRole("button")).toBeNull();
 });

@@ -192,7 +192,7 @@ export async function runSessionCompactionIfNeeded(params: {
       abortSignal: params.abortSignal,
     });
 
-  const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
+  const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
   const memoryFlushPlan = resolveMemoryFlushPlanForRun({
     cfg: params.cfg,
     contextWindowTokens,
@@ -688,7 +688,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
   const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
-  const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
+  const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
   let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
     memoryFlushResolution = resolveMemoryFlushPlanForRun({ cfg: params.cfg, contextWindowTokens });

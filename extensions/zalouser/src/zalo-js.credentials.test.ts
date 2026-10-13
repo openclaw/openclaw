@@ -377,9 +377,7 @@ describe("zalouser credential persistence", () => {
         await expect(
           access(resolveLegacyZalouserCredentialsPath(profile, { OPENCLAW_STATE_DIR: stateDir })),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(
-          access(path.join(stateDir, "state", "openclaw.sqlite")),
-        ).resolves.toBeUndefined();
+        await access(path.join(stateDir, "state", "openclaw.sqlite"));
         await expect(logoutZaloProfile(profile)).resolves.toMatchObject({
           cleared: true,
           loggedOut: true,

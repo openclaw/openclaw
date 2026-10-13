@@ -335,9 +335,7 @@ describe("show_widget", () => {
       expect(result.resultText).toMatch(
         /Pair a canvas-capable device|Retry the requested presentation destination/u,
       );
-      await expect(
-        access(resolveCanvasDocumentDir(stateDir, result.viewId)),
-      ).resolves.toBeUndefined();
+      await access(resolveCanvasDocumentDir(stateDir, result.viewId));
     },
   );
 

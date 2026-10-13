@@ -94,6 +94,8 @@ When a channel supplies history, it wraps it with:
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
+Thread starter and thread history notes use the same current-message marker after their context, keeping the request separate from earlier messages. Queued turns insert newly active goals before this marker. The marker is runtime context and does not change the saved user message. Ambient room events omit it and keep their optional-response policy.
+
 For non-direct chats (groups/channels/rooms), the current message body is prefixed with the sender label, matching the style used for history entries. Directive stripping only applies to the current-message section, so history stays intact. Channels that wrap history should set `BodyForCommands` (or the legacy `CommandBody` / `RawBody`) to the original message text and keep `Body` as the combined prompt.
 
 History buffers are pending-only: they include group messages that did not trigger a run (for example, mention-gated messages) and exclude messages already in the session transcript. Structured history, reply, forwarded, and channel metadata render as untrusted user-role context blocks during prompt assembly.
@@ -159,7 +161,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those current fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
 - Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 

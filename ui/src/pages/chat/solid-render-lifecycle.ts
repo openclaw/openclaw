@@ -9,13 +9,10 @@ import {
 export type SolidRenderLifecycle<T> = RenderLifecycle & {
   readonly snapshot: Accessor<T>;
   readonly commitGeneration: number;
-  /** The next committed DOM, followed by a browser frame; not child/overlay settlement. */
-  afterLayout(effect: AfterCommitEffect, onCancel?: () => void): () => void;
 };
 
 type CommitTask = {
   generation: number;
-  phase: "commit" | "layout";
   started: boolean;
   run(this: void): void;
   cancel(this: void): void;
@@ -31,7 +28,6 @@ export function createSolidRenderLifecycle<T>(options: {
   let requestedGeneration = 0;
   let committedRequest = -1;
   let commitGeneration = 0;
-  let layoutFrame: number | undefined;
   const tasks = new Set<CommitTask>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const frame = createParkedProjection(
@@ -50,11 +46,7 @@ export function createSolidRenderLifecycle<T>(options: {
     }
   };
 
-  const enqueue = (
-    phase: CommitTask["phase"],
-    effect: AfterCommitEffect,
-    onCancel?: () => void,
-  ): (() => void) => {
+  const enqueue = (effect: AfterCommitEffect, onCancel?: () => void): (() => void) => {
     if (disposed) {
       onCancel?.();
       return () => {};
@@ -70,7 +62,6 @@ export function createSolidRenderLifecycle<T>(options: {
     };
     const task: CommitTask = {
       generation: requestedGeneration + 1,
-      phase,
       started: false,
       run() {
         if (!tasks.has(task)) {
@@ -113,26 +104,18 @@ export function createSolidRenderLifecycle<T>(options: {
     return task.cancel;
   };
 
-  const runTasks = (phase: CommitTask["phase"]) => {
+  const runTasks = () => {
     for (const task of Array.from(tasks)) {
       if (disposed || !untrack(options.presented)) {
         break;
       }
-      if (!task.started && task.phase === phase && task.generation <= committedRequest) {
+      if (!task.started && task.generation <= committedRequest) {
         task.run();
       }
     }
   };
-  const cancelLayoutFrame = () => {
-    if (layoutFrame !== undefined) {
-      cancelAnimationFrame(layoutFrame);
-      layoutFrame = undefined;
-    }
-  };
-
   onCleanup(() => {
     disposed = true;
-    cancelLayoutFrame();
     for (const task of Array.from(tasks)) {
       task.cancel();
     }
@@ -141,7 +124,6 @@ export function createSolidRenderLifecycle<T>(options: {
     () => ({ frame: frame(), presented: options.presented() }),
     (next) => {
       if (!next.presented) {
-        cancelLayoutFrame();
         // Pending work waits for reveal; already-started foreground work retires.
         for (const task of Array.from(tasks)) {
           if (task.started) {
@@ -153,18 +135,7 @@ export function createSolidRenderLifecycle<T>(options: {
       committedRequest = next.frame.generation;
       commitGeneration += 1;
       notifyRenderLifecycleForTest(options.host, "commit");
-      runTasks("commit");
-      if (
-        layoutFrame === undefined &&
-        Array.from(tasks).some(
-          (task) => !task.started && task.phase === "layout" && task.generation <= committedRequest,
-        )
-      ) {
-        layoutFrame = requestAnimationFrame(() => {
-          layoutFrame = undefined;
-          runTasks("layout");
-        });
-      }
+      runTasks();
     },
   );
 
@@ -174,7 +145,6 @@ export function createSolidRenderLifecycle<T>(options: {
       return commitGeneration;
     },
     invalidate,
-    afterCommit: (effect, onCancel) => enqueue("commit", effect, onCancel),
-    afterLayout: (effect, onCancel) => enqueue("layout", effect, onCancel),
+    afterCommit: enqueue,
   };
 }

@@ -345,6 +345,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
               webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
               sandboxToolPolicy: params.setup.sandbox?.tools,
               authStore: attempt.authProfileStore,
+              preparedRequesterPolicy: runtimeCapabilityProfile.policy,
               pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
             }).kind === "managed";
         },

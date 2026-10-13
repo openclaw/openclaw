@@ -25,7 +25,7 @@ export type TelegramMediaRef = {
   fileName?: string;
   stickerMetadata?: StickerMetadata;
   sourceMessageId?: string;
-  unavailable?: { reason: "oversize"; limitMb: number } | { reason: "download-failed" };
+  unavailable?: { reason: "oversize"; limit: string } | { reason: "download-failed" };
 };
 
 export type TelegramChannelIngressResolver = (

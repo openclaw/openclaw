@@ -38,6 +38,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/qa-lab/src/gateway-child.test.ts",
   "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
   "extensions/codex/src/app-server/auth-refresh-authority.integration.test.ts",
+  "extensions/codex/src/app-server/responses-oauth.authority.test.ts",
   "extensions/codex/src/app-server/auth-bridge.test.ts",
   "extensions/codex/src/app-server/isolated-completion.auth-boundary.test.ts",
   "extensions/codex/src/app-server/auth-requirement-matrix.test.ts",

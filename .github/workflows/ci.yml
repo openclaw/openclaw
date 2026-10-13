@@ -2854,6 +2854,9 @@ jobs:
                 echo "Current CI targets must provide src/plugins/plugin-module-generation.test.ts." >&2
                 exit 1
               fi
+              if [[ -f src/infra/sqlite-existing-database.bun.test.ts ]]; then
+                OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test src/infra/sqlite-existing-database.bun.test.ts
+              fi
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -4070,6 +4073,16 @@ jobs:
           done
           finish_static_checks
 
+      - name: Run shared central lint
+        if: ${{ !cancelled() && matrix.shared_central_lint_selection_json }}
+        env:
+          NARROW_CHECK_PATHS_JSON: ${{ needs.preflight.outputs.narrow_check_paths_json }}
+          CI_LINT_SELECTION_JSON: ${{ matrix.shared_central_lint_selection_json }}
+          RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        shell: bash
+        run: *run_changed_lint
+
       - &save_hosted_sdk_step
         name: Save hosted SDK boundary cache
         if: success() && runner.environment == 'github-hosted' && matrix.stripe == 1 && !matrix.lint_selection_json
@@ -4222,7 +4235,7 @@ jobs:
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
-    timeout-minutes: ${{ (matrix.group == 'extension-package-boundary' || matrix.group == 'plugin-sdk-api-diff') && 30 || 20 }}
+    timeout-minutes: ${{ matrix.group == 'extension-package-boundary' && 40 || matrix.group == 'plugin-sdk-api-diff' && 30 || 20 }}
     env:
       CHECKOUT_BASE_SHA: ${{ matrix.group == 'guards' && (github.event_name == 'pull_request' || needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:

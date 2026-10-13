@@ -173,7 +173,14 @@ export function claimCronRunReceiptInDatabase(params: {
     params.database,
     query(params.database)
       .insertInto("cron_run_receipts")
-      .values({
+      .values((eb) => ({
+        cursor_id: eb
+          .selectFrom("cron_run_receipts")
+          .select((inner) =>
+            inner(inner.fn.coalesce(inner.fn.max<number>("cursor_id"), inner.val(0)), "+", 1).as(
+              "cursor_id",
+            ),
+          ),
         receipt_id: handle.receiptId,
         store_key: handle.storeKey,
         job_id: handle.jobId,
@@ -187,7 +194,7 @@ export function claimCronRunReceiptInDatabase(params: {
         started_at_ms: handle.startedAtMs,
         finished_at_ms: null,
         error_text: null,
-      }),
+      })),
   );
   return { ...handle };
 }

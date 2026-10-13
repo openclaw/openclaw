@@ -51,7 +51,7 @@ existing explicit primary model; `models auth login --set-default` and
 - Example model: `anthropic/claude-opus-5-5`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Preferred Claude CLI config keeps the model ref canonical and selects the CLI
+- Preferred Claude CLI config keeps the model ref in its standard form and selects the CLI
   backend separately: `anthropic/claude-opus-5-5` with
   model-scoped `agentRuntime.id: "claude-cli"`. Legacy
   `claude-cli/claude-opus-4-7` refs still work for compatibility.
@@ -86,7 +86,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
 - Sign in with `openai` auth and use `openai/gpt-6-astra` for a fresh subscription-backed setup. Select `openai/gpt-5.5` explicitly if that Codex workspace does not expose Astra.
 - Use provider/model `agentRuntime.id: "openclaw"` to keep an otherwise eligible route on the built-in runtime. With runtime unset or `auto`, only an exact official HTTPS Responses/ChatGPT-compatible route with no authored provider request override may select Codex implicitly.
-- Legacy Codex GPT refs are legacy state, not a live provider route. Use canonical `openai/*` refs for new agent config, and run `openclaw doctor --fix` to migrate `codex/*` and `openai-codex/*` refs while preserving their native Codex semantics with model-scoped `agentRuntime.id: "codex"`. Existing explicit canonical `openai/gpt-5.5` selections are not upgraded.
+- Legacy Codex GPT refs are legacy state, not a live provider route. Use standard `openai/*` refs for new agent config, and run `openclaw doctor --fix` to migrate `codex/*` and `openai-codex/*` refs while preserving their native Codex semantics with model-scoped `agentRuntime.id: "codex"`. Existing explicit `openai/gpt-5.5` selections are not upgraded.
 
 ```json5
 {
@@ -163,7 +163,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
   as ADC credentials; do not paste an OAuth access token. See
   [Google provider setup](/providers/google).
 - `google-gemini-cli`: optional local runtime for an explicitly configured
-  canonical `google/*` model.
+  standard `google/*` model.
 
 OpenClaw does not create Gemini CLI OAuth or Antigravity OAuth profiles. Connect
 Google through an AI Studio API key or Vertex AI. If you explicitly choose the
@@ -181,7 +181,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 - Auth: `ZAI_API_KEY`
 - Example model: `zai/glm-5.2`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
-  - Model refs use the canonical `zai/*` provider ID.
+  - Model refs use the standard `zai/*` provider ID.
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
 
 ### Vercel AI Gateway
@@ -237,7 +237,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
     API-key onboarding writes explicit M3 and M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
   </Accordion>
   <Accordion title="NVIDIA">
-    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
+    Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the normalized key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
     Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; OAuth and API-key setup use the curated `xai/grok-4.7` default. Existing primary models stay pinned. Run `openclaw doctor --fix` to repair retired `xai/auto` selections on the native API and subscription routes. API keys still work via `XAI_API_KEY` or plugin config. Grok `web_search` reuses the same auth profile before API-key fallback. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.

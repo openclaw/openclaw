@@ -652,6 +652,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       ...scope,
       activeSessionKey: sessionKey,
       expectedRevision: snapshot.revision,
+      databaseSource: snapshot.databaseSource,
       sessionEntry: prepared.entry,
       commitGuard: () => {
         params.assertCurrent?.();

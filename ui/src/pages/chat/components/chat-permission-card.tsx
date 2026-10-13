@@ -6,7 +6,7 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 
-export function ChatPermissionCard(props: {
+function ChatPermissionCard(props: {
   request: NodePermissionRequest;
   onRetry?: (message: string) => void;
 }) {
