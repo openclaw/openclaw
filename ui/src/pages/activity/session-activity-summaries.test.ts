@@ -173,6 +173,7 @@ it("backfills newly visible sessions after the current batch settles", async () 
 it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
   "resumes recap generation after %s finishes in a hidden tab",
   async (heldMethod) => {
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const documentEvents = new EventTarget();
     const pageEvents = new EventTarget();
     let visibilityState = heldMethod === "sessions.list" ? "hidden" : "visible";
@@ -189,7 +190,6 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
           };
     const { promise: pending, resolve: finish } = createDeferred<unknown>();
     let held = false;
-    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
       if (method === heldMethod && !held) {
         held = true;

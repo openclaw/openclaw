@@ -8,6 +8,7 @@ import { markGatewayIngressTransport, readGatewayIngressTransport } from "./ingr
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createRemoteControlUiTransport } from "./remote-control-ui-transport.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import type { RemoteControlUiIngressContext } from "./server/client-identity-types.js";
 import { startWebSocketKeepalive } from "./websocket-keepalive.js";
 
@@ -17,7 +18,7 @@ afterEach(async () => {
 });
 
 function websocketServer() {
-  const server = new WebSocketServer({ noServer: true });
+  const server = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
   cleanups.push(
     () =>
       new Promise<void>((resolve) => {

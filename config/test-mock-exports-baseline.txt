@@ -7113,7 +7113,6 @@
 ["src/gateway/server-methods/exec-approval.agent-runtime.test.ts","../../infra/command-analysis/explain.js","101db6a18de6916b079dd0ff31caeaaccee4ea564edf050e726d4fa4eedadcc4",1]
 ["src/gateway/server-methods/github-personal-authorization.test.ts","../../agents/tools/gateway-caller-context.js","d8d1c95394d50102379e9e24c3f3fc55c5ed0d7b16297e70f8eb8e9fae543c0b",1]
 ["src/gateway/server-methods/github-personal-authorization.test.ts","../operator-role-policy.js","cda82cd545ebd3cf28a5df3c3fe15fb79394dfbd18c1fd1f7c5ca1b5002eb20c",1]
-["src/gateway/server-methods/github-personal-authorization.test.ts","../session-sharing.js","a38cceb7a51a2ae1e8b38fa28416a134b2a03d0573befaa83ae83d99173f09ba",1]
 ["src/gateway/server-methods/lazy-core-handlers.test.ts","../../agents/sandbox/context.js","fd849c79771b7ab1d5e899356a234b10980216c0187ae32d607f2790fc53536c",1]
 ["src/gateway/server-methods/lazy-core-handlers.test.ts","../../auto-reply/reply/conversation-label-generator.js","2bbd5c189dc1a0ee8914db0496c8797a524bb068e141a5b61268384b83a214d0",1]
 ["src/gateway/server-methods/lazy-core-handlers.test.ts","../../auto-reply/reply/stage-sandbox-media.js","679fd75062acf03a6e471b7e899b89e70957ede06b075bc2d04fdc3ff49259fc",1]

@@ -13,6 +13,7 @@ import { authorizeControlUiReadHttpGatewayConnect } from "./auth.js";
 import { prepareGatewayIngressAttribution } from "./ingress-attribution.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -29,7 +30,7 @@ afterEach(async () => {
 });
 
 function fixture() {
-  const ws = new WebSocketServer({ noServer: true });
+  const ws = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
   const host: GatewayControlUiIngressHost = {
     controlUiBasePath: "/claw",
     getResolvedAuth: () => ({

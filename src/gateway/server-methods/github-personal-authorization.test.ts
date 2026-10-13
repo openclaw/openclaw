@@ -77,6 +77,7 @@ vi.mock("../operator-role-policy.js", () => ({
   resolveOperatorRolePolicyForAssignment: () =>
     mocks.roleScopes ? { scopes: mocks.roleScopes } : null,
 }));
+// mock-isolation: Selected-session authorization is supplied directly, without initializing sharing storage.
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
 }));
