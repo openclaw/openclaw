@@ -360,6 +360,19 @@ export const cronHandlers: GatewayRequestHandlers = {
         currentJob: jobToUpdate,
         patch,
       });
+      const creatorScope = callerScope ? { ...callerScope, manageAll: undefined } : undefined;
+      if (
+        callerScope?.manageAll &&
+        (captureRuntimeAuthority || patch.payload?.toolsAllow?.length) &&
+        (!captureRuntimeAuthority ||
+          jobToUpdate.owner?.sessionKey !== callerScope.sessionKey ||
+          !cronJobMatchesCallerScope({ job: jobToUpdate, callerScope: creatorScope }) ||
+          !cronCreateMatchesCallerScope({ job: nextJob, callerScope: creatorScope }))
+      ) {
+        throw new TypeError(
+          `Cannot authorize toolsAllow: ${patch.payload?.toolsAllow?.join(", ") ?? ""}. Recreate the automation from a fresh authenticated owner turn; management access cannot replace creator authority.`,
+        );
+      }
       if (
         touchesToolRuntime &&
         requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
@@ -381,12 +394,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       captureRuntimeAuthority ||
       callerScope?.toolsAllowProvenance
         ? {
-            // Management access preserves the job's existing execution ceiling.
             ...(touchesToolRuntime
               ? {
-                  scheduledToolPolicy: callerScope?.manageAll
-                    ? null
-                    : resolveCronScheduledToolPolicyForCaller(callerScope),
+                  scheduledToolPolicy:
+                    callerScope?.manageAll && !captureRuntimeAuthority
+                      ? null
+                      : resolveCronScheduledToolPolicyForCaller(callerScope),
                   toolsAllowExecTarget: callerScope?.toolsAllowExecTarget,
                 }
               : {}),
