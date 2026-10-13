@@ -470,7 +470,7 @@ export async function verifyCliBackendAnnounceContinuity({
       userTexts.find((text) => findCarriedCompletion(text, announce.completionReply)),
       "an unowned login must not replay the completion exchange",
     ).toBeUndefined();
-    expect(followUpInput).toContain("occurred outside this Claude session");
+    expect(followUpInput).toContain("recorded in this chat since your last reply here");
     return;
   }
   expect(carried, "follow-up input lacks the completion record").toBeDefined();

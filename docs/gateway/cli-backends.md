@@ -398,18 +398,20 @@ different MCP configuration. When the next ordinary turn resumes the bound sessi
 OpenClaw reads the completion replies saved in the session transcript since that
 session's last ordinary Claude reply (with each completion prompt when the
 transcript saved it) and prepends them to that turn as a marked context block
-that names each one as a delivered completion event with its source tool
+that names each one as a recorded completion event with its source tool
 (newest 8, each capped at 2,000 characters). Nothing
 new is stored: the context comes from the canonical transcript, so restarts,
-upgrades, and rollbacks keep the same behavior. A completion that resumed the
-bound session itself can appear once more as quoted context. The separate turn's
-tool restrictions are unchanged. A fresh session recovers the same exchange from
+upgrades, and rollbacks keep the same behavior. The block does not claim where
+the completion ran: a completion that only drifted in prompt content resumes
+the bound session itself, and then appears once more as quoted context. The
+separate turn's tool restrictions are unchanged. A fresh session recovers the same exchange from
 saved history instead, and chat history shows each turn once.
 Like saved-history recovery, this replay requires the
 [history account boundary](#history-account-boundaries) of the resuming turn. An
 opaque native login, an identity-less OAuth credential, or a changed account gets
 no saved text; the turn gets only the metadata-only session-gap note, which counts
-the completion turns and adds the `sessions_history` hint when that tool is
+the completion turns as messages recorded since the session's last reply (possibly
+already in the session) and adds the `sessions_history` hint when that tool is
 available.
 
 ### History account boundaries

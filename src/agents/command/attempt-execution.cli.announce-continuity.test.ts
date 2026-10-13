@@ -442,7 +442,9 @@ describe("Claude CLI completion announce continuity", () => {
     const resumedContext = await readNativeTranscript(next.sessionId);
     expect(resumedContext).toContain(CHILD_RESULT);
     expect(resumedContext).toContain(ANNOUNCE_REPLY);
-    expect(next.prompt).toContain("Completion events delivered to you in a separate session");
+    expect(next.prompt).toContain(
+      "Completion events recorded in this conversation since your last reply here",
+    );
 
     // The carried exchange enters the native session once.
     const later = await runTurn({ runId: "run-requester-3", body: "Thanks." });
@@ -462,7 +464,9 @@ describe("Claude CLI completion announce continuity", () => {
     expect(next.prompt).not.toContain(CHILD_RESULT);
     expect(next.prompt).not.toContain(ANNOUNCE_REPLY);
     // Content stays withheld, but the resumed session learns the exchange exists.
-    expect(next.prompt).toContain("1 messages occurred outside this Claude session");
+    expect(next.prompt).toContain(
+      "1 messages recorded in this chat since your last reply here (possibly already in this session)",
+    );
   });
 
   it.each([

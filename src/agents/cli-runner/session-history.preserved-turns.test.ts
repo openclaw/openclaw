@@ -107,7 +107,7 @@ describe("preserved Claude turns", () => {
       });
       expect(withheld.unseenTurns).toBeUndefined();
       expect(withheld.sessionGapContext).toBe(
-        '[OpenClaw: 5 messages occurred outside this Claude session from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:08.000Z, using "claude-cli/test-model". Their contents are not included here.]',
+        '[OpenClaw: 5 messages recorded in this chat since your last reply here (possibly already in this session) from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:08.000Z, using "claude-cli/test-model". Their contents are not included here.]',
       );
 
       // The next ordinary reply means the bound session has now seen them.

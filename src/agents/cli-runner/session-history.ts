@@ -568,13 +568,17 @@ function renderClaudeSessionGap(
     return undefined;
   }
   // An empty Claude reply has no saved assistant row, so the next turn may repeat this note.
+  const replies = classifyClaudeReplies(entries);
   const lastClaude =
-    classifyClaudeReplies(entries).findLast(
-      (reply) => !options.countPreservedTurns || reply.kind === "ordinary",
-    )?.index ?? -1;
+    replies.findLast((reply) => !options.countPreservedTurns || reply.kind === "ordinary")?.index ??
+    -1;
   if (!options.freshSession && lastClaude < 0) {
     return undefined;
   }
+  // A counted completion handoff may have resumed this very session, so say neither.
+  const countsPreservedTurns =
+    !options.freshSession &&
+    replies.some((reply) => reply.index > lastClaude && reply.kind === "preserved");
   const gap = entries
     .slice(options.freshSession ? 0 : lastClaude + 1)
     .filter(
@@ -604,7 +608,9 @@ function renderClaudeSessionGap(
       : "";
   const description = options.freshSession
     ? "earlier messages in this chat"
-    : "messages occurred outside this Claude session";
+    : countsPreservedTurns
+      ? "messages recorded in this chat since your last reply here (possibly already in this session)"
+      : "messages occurred outside this Claude session";
   return `[OpenClaw: ${gap.length} ${description} from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
 }
 

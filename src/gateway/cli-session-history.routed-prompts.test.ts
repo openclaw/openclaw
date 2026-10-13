@@ -22,9 +22,11 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 describe("routed CLI prompts in chat history", () => {
   it.each(
     ["string", "text block"].flatMap((shape) =>
-      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
-        (description) => ({ shape, description }),
-      ),
+      [
+        "messages occurred outside this Claude session",
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+        "earlier messages in this chat",
+      ].map((description) => ({ shape, description })),
     ),
   )(
     "preserves unmatched routed $shape provenance beneath $description context",
