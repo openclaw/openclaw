@@ -529,7 +529,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       const runRead = async (
         input: Extract<
           SessionHistoryWorkerInput,
-          { kind: "session-store-target" | "session-target-inventory" }
+          { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
         >,
         inputBytes: number,
       ) => {
@@ -587,25 +587,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             },
             candidates: capturedCandidates,
           };
-          const reply = await runWithSqliteDatabaseAdmissionTurn(
-            admissionPaths,
-            () =>
-              lane.pool.run(
-                () => {
-                  assertCurrent();
-                  dispatched = true;
-                  lane.nativeSequence++;
-                  return { kind: "combined-store-topology", request: preparedRequest };
-                },
-                {
-                  inputBytes: JSON.stringify(preparedRequest).length * 2,
-                  timeoutMs: 60_000,
-                },
-              ),
-            admissionFamilies,
+          const result = await runRead(
+            { kind: "combined-store-topology", request: preparedRequest },
+            JSON.stringify(preparedRequest).length * 2,
           );
-          const result =
-            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||

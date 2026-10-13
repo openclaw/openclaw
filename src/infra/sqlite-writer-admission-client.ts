@@ -12,42 +12,7 @@ import {
   currentSqliteWorkerOperationAdmission as currentAdmission,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
-import {
-  readSqliteWorkerRequestCustody,
-  type SqliteWorkerRequestCustodyDescriptor,
-} from "./sqlite-worker-request-custody.js";
-import type { SqliteWriterAdmissionConnection } from "./sqlite-writer-admission-contract.js";
-
-/** This checks broker custody only; other authority owners and final COMMIT remain required. */
-export function assertSqliteWriterBrokerAdmission(
-  connection: SqliteWriterAdmissionConnection,
-  custody: SqliteWorkerRequestCustodyDescriptor,
-): void {
-  const current = () =>
-    Atomics.load(connection.lifetime, 0) === 1 && readSqliteWorkerRequestCustody(custody);
-  if (!current()) {
-    throw new SqliteWorkerError("SQLite broker admission is revoked", "closed");
-  }
-  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  const deadline = process.hrtime.bigint() + 30_000_000_000n;
-  connection.port.postMessage({ custody, decision }, []);
-  while (Atomics.load(decision, 0) === 0) {
-    const remainingMs = Number(deadline - process.hrtime.bigint()) / 1e6;
-    if (remainingMs <= 0) {
-      // A late service reply cannot turn an expired request into a grant.
-      Atomics.compareExchange(decision, 0, 0, 3);
-    } else {
-      Atomics.wait(decision, 0, 0, remainingMs);
-    }
-  }
-  const result = Atomics.load(decision, 0);
-  if (result === 3) {
-    throw new SqliteWorkerAdmissionTimeoutError();
-  }
-  if (result !== 1 || !current()) {
-    throw new SqliteWorkerError("SQLite broker admission is revoked", "closed");
-  }
-}
+import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;

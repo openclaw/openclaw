@@ -185,6 +185,8 @@ Before an isolated run starts, OpenClaw checks reachable local endpoints for con
 
 Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
+The local check opens and closes a TCP connection without sending HTTP requests or provider credentials, so authenticated local servers do not log spurious `/models` authorization failures. TLS, authentication, and model errors are handled by inference. Endpoints routed through a managed proxy defer connectivity checks to inference instead of testing a direct connection.
+
 ### Command payloads
 
 Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.

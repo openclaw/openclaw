@@ -1,6 +1,7 @@
 import { etc } from "@noble/ed25519";
 import {
   ConnectErrorDetailCodes,
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
@@ -257,7 +258,7 @@ export class GatewayBrowserClient {
       },
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
-      handshake: { mode: "fallback", timeoutMs: 750 },
+      handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
       nowMs: () =>
         typeof performance !== "undefined" && typeof performance.now === "function"

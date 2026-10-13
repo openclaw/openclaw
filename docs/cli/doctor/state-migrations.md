@@ -384,3 +384,35 @@ If the installed plugin still has not reported migration completion, run
 remaining warning to the plugin maintainer. Repeating a package update alone
 does not prove that the plugin migrated its retained state. Keep the retained
 state and config inputs until the migration owner reports completion.
+
+## Plugin migration recovery coverage
+
+The message that pre-repair state was retained at a `manifest.json` path confirms
+that Doctor saved a recovery copy. It is informational: keep that copy for manual
+recovery; no repair is needed just because the copy exists.
+
+A warning that a plugin's migration recovery coverage is unknown means the plugin
+has not declared its additional recovery resources. It does not mean data was
+lost or that the plugin's shared SQLite records were excluded. This warning can
+reappear on each new recovery inventory until the plugin supplies a declaration.
+Deleting an old recovery copy does not fix it.
+
+Update the plugin to a version with migration backup support. Until then, keep a
+separate backup of its configured data before relying on recovery, and ask its
+maintainer to add backup support. Plugin authors should declare external files
+and databases through `collectBackupResources`; an explicit empty list is
+appropriate for migrations that change only core-captured state or have no data
+resources. See the [plugin migration contract](/plugins/sdk-migration/compatibility-policy).
+
+Bundled Canvas and Memory Core migrations declare their legacy data sources.
+Crabbox's shared SQLite records are core-captured; the retired Workboard check
+leaves its legacy rows unchanged. QMD retirement removes only empty directories
+and disposable stale coordination locks, so it has no additional data to retain.
+These declarations prevent misleading missing-inventory warnings without hiding
+warnings about failed migrations or unresolved state.
+
+Declarations apply when the installed Doctor or updater creates a new recovery
+copy. They do not add resources to an original capture already created by an
+older installed updater. Keep those retained copies, and do not assume an older
+capture includes newly declared external resources. A recovery copy is evidence
+for manual recovery; its existence alone does not guarantee automatic rollback.

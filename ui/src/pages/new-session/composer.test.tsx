@@ -1,4 +1,3 @@
-import { html, render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -11,16 +10,12 @@ import {
 } from "../../lib/chat/commands.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
-import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import {
   composerContext,
   renderComposer,
   resetComposerTestFixtures,
 } from "./composer.test-support.ts";
-import { renderNewSessionComposer } from "./composer.ts";
-import { renderNewSessionBody } from "./draft-body.ts";
-import { NewSessionModelControl } from "./model-control.ts";
 
 function composerTextarea(composer: HTMLElement): HTMLTextAreaElement {
   const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
@@ -60,43 +55,6 @@ describe("new-session submission preview", () => {
     expect(drop.defaultPrevented).toBe(true);
     expect(attachmentDraft.attachments).toEqual([]);
     expect(attachmentDraft.reads.pendingReads).toBe(0);
-  });
-
-  it.each([
-    { userId: "profile-alex", placement: "gutter" },
-    { userId: null, placement: "footer" },
-  ])("immediately shows the own-user avatar in the $placement", ({ userId, placement }) => {
-    const container = document.createElement("div");
-    const avatarUrl = "/api/users/profile-alex/avatar?v=1";
-    render(
-      renderNewSessionBody({
-        error: null,
-        pendingMessage: buildLocalUserMessage({
-          createdAt: 1,
-          text: "Hello from Alex",
-          sender: {
-            identity: { type: "profile", id: "profile-alex" },
-            name: "Alex",
-            profileAvatarUrl: avatarUrl,
-          },
-        }),
-        userId,
-        submitting: true,
-        renderDraft: () => html``,
-        onOpenImage: () => {},
-      }),
-      container,
-    );
-
-    const group = container.querySelector(".chat-group.user");
-    const avatar = group?.querySelector(
-      placement === "gutter"
-        ? ":scope > .chat-avatar-slot img"
-        : ":scope > .chat-group-footer > .chat-group-footer__meta .chat-author-avatar img",
-    );
-    expect(avatar?.getAttribute("src")).toBe(avatarUrl);
-    expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
-    expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
   });
 });
 
@@ -550,7 +508,7 @@ describe("new-session composer keyboard submission", () => {
       message: "Existing draft",
       dictationActive: true,
       dictationPreview: "Existing draft spoken words",
-      dictationStatus: html`<div class="agent-chat__dictation-status">Listening…</div>`,
+      dictationStatus: <div class="agent-chat__dictation-status">Listening…</div>,
       onSubmit,
     });
     const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
@@ -649,25 +607,7 @@ describe("new-session composer sizing lifecycle", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     expect(onInput).toHaveBeenCalledWith("typed");
     const readsAfterInput = scrollHeightReads;
-    render(
-      renderNewSessionComposer({
-        agentId: "main",
-        attachmentDraft: first.attachmentDraft,
-        canSubmit: true,
-        context: undefined,
-        draftOwnerKey: "draft:one",
-        isCatalogTarget: true,
-        message: "typed",
-        modelControl: new NewSessionModelControl(() => undefined),
-        requiresModifier: false,
-        requestUpdate: () => undefined,
-        submitting: false,
-        textareaController,
-        onInput,
-        onSubmit: () => undefined,
-      }),
-      first.container,
-    );
+    first.rerenderWithMessage("typed");
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
@@ -675,25 +615,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(disconnect).not.toHaveBeenCalled();
     expect(scrollHeightReads).toBe(readsAfterInput);
 
-    render(
-      renderNewSessionComposer({
-        agentId: "main",
-        attachmentDraft: first.attachmentDraft,
-        canSubmit: true,
-        context: undefined,
-        draftOwnerKey: "draft:one",
-        isCatalogTarget: true,
-        message: "restored programmatically",
-        modelControl: new NewSessionModelControl(() => undefined),
-        requiresModifier: false,
-        requestUpdate: () => undefined,
-        submitting: false,
-        textareaController,
-        onInput,
-        onSubmit: () => undefined,
-      }),
-      first.container,
-    );
+    first.rerenderWithMessage("restored programmatically");
     await Promise.resolve();
 
     expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);

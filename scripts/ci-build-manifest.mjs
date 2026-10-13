@@ -1341,7 +1341,7 @@ const additionalChecks = [
   {
     check_name: "check-additional-extension-package-boundary",
     group: "extension-package-boundary",
-    runner: "blacksmith-32vcpu-ubuntu-2404",
+    runner: frozenTarget ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
   },
   {
     check_name: "check-additional-runtime-topology-architecture",
