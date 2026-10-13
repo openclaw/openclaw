@@ -1,3 +1,4 @@
+import type { Block, KnownBlock } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -5,8 +6,22 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import type { SlackSendResult } from "./send.js";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
+
+export type SlackSendResult = {
+  messageId: string;
+  channelId: string;
+  /** Workspace of the validated transport client; channelId stays platform-native. */
+  teamId?: string;
+  receipt: MessageReceipt;
+  threadTs?: string;
+  meta?: {
+    slackQuestionActionIds: string[];
+    slackQuestionMessageId?: string;
+    [SLACK_QUESTION_FINALIZATION_BLOCKS]?: (Block | KnownBlock)[];
+  };
+};
 
 /** Scope physical channel IDs with the workspace attested by the sending client. */
 export function qualifySlackSendResult<T extends { channelId?: string; teamId?: string }>(
