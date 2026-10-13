@@ -19,12 +19,15 @@ import type {
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import { withSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
+  resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -32,6 +35,8 @@ import type {
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
+import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
@@ -122,6 +127,23 @@ async function loadReplySessionInitializationEntriesAsync(
   source?: DatabasePathIdentity,
 ): Promise<Record<string, SessionEntry>> {
   assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
+  const memory = captureMemoryExactSessionReader(params);
+  if (memory) {
+    const entries: Record<string, SessionEntry> = {};
+    const currentKey = normalizeStoreSessionKey(params.sessionKey);
+    const keys = new Set([currentKey, ...(params.relatedSessionKeys ?? [])]);
+    for (const key of keys) {
+      const sessionKey = normalizeStoreSessionKey(key);
+      const entry = memory.read(sessionKey);
+      if (entry) {
+        entries[sessionKey] = entry;
+        if (sessionKey === currentKey && entry.parentSessionKey) {
+          keys.add(entry.parentSessionKey);
+        }
+      }
+    }
+    return entries;
+  }
   if (!supportsOpenClawAgentDatabaseExecution(database)) {
     return loadReplySessionInitializationEntries(params);
   }
@@ -332,6 +354,7 @@ export async function commitReplySessionInitialization(params: {
     }
   }
   let staleCommit: SessionEntry | null | undefined;
+  let usedMemoryBackend = false;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
   const descriptor: ReplySessionInitializationUpsertDescriptor = {
@@ -342,43 +365,47 @@ export async function commitReplySessionInitialization(params: {
     retiredEntry: params.retiredEntry,
   };
   let preparedUpserts: ReturnType<typeof resolveReplySessionInitializationUpserts> | undefined;
+  const buildEntry = async (
+    commitEntry: SessionEntry | undefined,
+    readEntry: (key: string) => SessionEntry | undefined,
+  ) => {
+    if (!needsPreparationSnapshot) {
+      for (const key of [
+        sessionKey,
+        ...(params.relatedSessionKeys ?? []),
+        commitEntry?.parentSessionKey,
+      ]) {
+        if (!key) {
+          continue;
+        }
+        const entry = readEntry(key);
+        if (entry) {
+          store[normalizeStoreSessionKey(key)] = entry;
+        }
+      }
+    }
+    preparedUpserts = resolveReplySessionInitializationUpserts(descriptor, commitEntry);
+    if (preparedUpserts.kind === "stale") {
+      staleCommit = preparedUpserts.currentEntry ? { ...preparedUpserts.currentEntry } : null;
+      return null;
+    }
+    committedSessionEntry = preparedUpserts.entry;
+    if (!beforeEntryMutationDone) {
+      await params.beforeEntryMutation?.({
+        ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
+        sessionEntry: committedSessionEntry,
+      });
+      beforeEntryMutationDone = true;
+    }
+    return committedSessionEntry;
+  };
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey,
       ...(!needsPreparationSnapshot ? { relatedSessionKeys: params.relatedSessionKeys ?? [] } : {}),
       ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundary ? { resetBoundary: params.resetBoundary } : {}),
-      buildEntry: async ({ currentEntry: commitEntry, readEntry }) => {
-        if (!needsPreparationSnapshot) {
-          for (const key of [
-            sessionKey,
-            ...(params.relatedSessionKeys ?? []),
-            commitEntry?.parentSessionKey,
-          ]) {
-            if (!key) {
-              continue;
-            }
-            const entry = readEntry(key);
-            if (entry) {
-              store[normalizeStoreSessionKey(key)] = entry;
-            }
-          }
-        }
-        preparedUpserts = resolveReplySessionInitializationUpserts(descriptor, commitEntry);
-        if (preparedUpserts.kind === "stale") {
-          staleCommit = preparedUpserts.currentEntry ? { ...preparedUpserts.currentEntry } : null;
-          return null;
-        }
-        committedSessionEntry = preparedUpserts.entry;
-        if (!beforeEntryMutationDone) {
-          await params.beforeEntryMutation?.({
-            ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
-            sessionEntry: committedSessionEntry,
-          });
-          beforeEntryMutationDone = true;
-        }
-        return committedSessionEntry;
-      },
+      buildEntry: ({ currentEntry: commitEntry, readEntry }) => buildEntry(commitEntry, readEntry),
     },
   ];
   if (params.retiredEntry) {
@@ -393,7 +420,7 @@ export async function commitReplySessionInitialization(params: {
     const mutation = {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
-      maintenanceOverride: params.maintenanceConfig,
+      skipMaintenance: true,
       storePath,
       upserts,
       commitGuard: () => {
@@ -403,6 +430,88 @@ export async function commitReplySessionInitialization(params: {
     };
     const mutate = async () => {
       const bindCreation = params.bindCreation;
+      const assertCurrent = () => params.commitGuard?.();
+      const memoryMutation = await withSessionActorStorage(
+        { ...params, storePath },
+        {
+          authority: { assertCurrent, authorize: assertCurrent },
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          create: true,
+        },
+        async (memory) => {
+          const readEntry = (key: string) =>
+            memory.actor.storage.readCurrent(
+              { type: "session.entry.read", input: { sessionKey: normalizeStoreSessionKey(key) } },
+              memory.authority,
+            );
+          if (!needsPreparationSnapshot) {
+            currentEntry = readEntry(sessionKey);
+          }
+          const nextEntry = await buildEntry(currentEntry, (key) =>
+            normalizeStoreSessionKey(key) === sessionKey ? currentEntry : readEntry(key),
+          );
+          if (!nextEntry) {
+            return true;
+          }
+          const commit = async (assertCreationCurrent?: () => void) => {
+            const result = readSessionActorStorageResult(
+              await memory.actor.storage.mutate(
+                {
+                  type: "session.lifecycle.reset",
+                  input: {
+                    expected: currentEntry,
+                    nextEntry,
+                    routeContext: params.routeContext,
+                    resetBoundary: params.resetBoundary,
+                    ...(params.retiredEntry
+                      ? {
+                          relatedReplacements: [
+                            {
+                              sessionKey: params.retiredEntry.key,
+                              expected: store[params.retiredEntry.key],
+                              entry: params.retiredEntry.entry,
+                            },
+                          ],
+                        }
+                      : {}),
+                  },
+                },
+                {
+                  ...memory.authority,
+                  assertCurrent() {
+                    memory.authority.assertCurrent();
+                    assertCreationCurrent?.();
+                  },
+                },
+              ),
+            );
+            committedSessionEntry = result.nextEntry;
+          };
+          if (bindCreation) {
+            await withSessionEntryCreationPublication(
+              {
+                agentId: memory.agentId,
+                sessionKey,
+                file: {
+                  kind: "actor",
+                  path: memory.path,
+                  agentId: memory.agentId,
+                  databaseIdentity: memory.actor.target.database.incarnation,
+                  assertCurrent: () => memory.actor.assertCurrent(),
+                },
+              },
+              (operation) => commit(bindCreation(operation)),
+            );
+          } else {
+            await commit();
+          }
+          return true;
+        },
+      );
+      if (memoryMutation) {
+        usedMemoryBackend = true;
+        return;
+      }
       if (bindCreation) {
         if (currentEntry || !source?.key.startsWith("file:")) {
           throw new Error("The original absent session no longer has its prepared creation source");
@@ -457,7 +566,7 @@ export async function commitReplySessionInitialization(params: {
     if (
       !(
         error instanceof SqliteSessionMutationConflictError &&
-        error.operationLabel === "session maintenance"
+        error.operationLabel === "session.lifecycle.reset"
       ) &&
       (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
         error.sessionKey !== sessionKey)
@@ -477,6 +586,16 @@ export async function commitReplySessionInitialization(params: {
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);
+  }
+  if (!usedMemoryBackend) {
+    // Reply preparation shares ordinary writes' maintenance owner, never forced cleanup.
+    kickSessionEntryMaintenanceAfterWrite({
+      activeSessionKey: params.activeSessionKey,
+      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(captured),
+      maintenanceConfig: params.maintenanceConfig,
+      scope: { ...captured, path: database.path },
+      storePath,
+    });
   }
   store[sessionKey] = committedSessionEntry;
   if (params.retiredEntry) {

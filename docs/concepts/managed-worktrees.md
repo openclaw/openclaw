@@ -374,6 +374,11 @@ projection, runtime selection, archive placement checks, commit, cron effects, a
 response preparation. These timings separate foreground metadata work from
 background Git cleanup; nested phases can overlap.
 
+Archive preparation reads the selected session without reserving its database's
+writer, so unrelated queued writes do not delay stopping that session. Committed
+policy changes invalidate the prepared source. The archive mutation still joins
+the writer queue and rechecks the current session and permissions before committing.
+
 Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
@@ -447,6 +452,8 @@ An orphan retired without a snapshot no longer appears in `worktrees list` and c
 Run-end cleanup records its outcome on the worktree record: lossless removal, retention because the checkout is busy, dirty, unpushed, or has provisioned-file drift, or failure with an error reason. Inspect the recorded outcome with `openclaw worktrees list --json` or `worktrees.list`.
 
 Ordinary forced checkout removal first renames the captured file tree, then lets Git remove the original registration. File deletion runs serially in the background, so cleanup can release the checkout name without waiting for every file to be unlinked. A deletion failure logs the retained directory for manual cleanup; a crash before background deletion starts can leave a sibling `.openclaw-removing-*` directory for inspection. Non-force lossless removal and explicit interrupted-removal recovery keep Git's final check and joined file deletion.
+
+Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
 
 If checkout deletion fails or is interrupted, OpenClaw preserves the completed capture at `refs/openclaw/removals/<id>`. A later removal refuses to replace that capture with files from a possibly partial checkout. Preserve the remaining files, recorded branch, snapshot refs, and shared-state database for recovery. Inspect the original removal error and Git worktree registration before attempting cleanup; do not repeatedly force removal or prune registrations. A normal completed removal, successful restore, or snapshot expiry clears this recovery ref. A failure after checkout removal can leave its branch retained and require operator reconciliation before restore can recreate that branch.
 

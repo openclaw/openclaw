@@ -99,7 +99,6 @@ export function readPendingInput(database: OpenClawAgentDatabase, input: Pending
   );
 }
 
-/** Incognito uses this same kernel in its process-held owner until the actor cutover. */
 export function mutatePendingInput(
   input: PendingInputMutation,
   { writeTransaction, admit }: Pick<AgentWorkerOperationContext, "writeTransaction" | "admit">,

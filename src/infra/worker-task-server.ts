@@ -5,6 +5,7 @@ import {
   type WorkerTaskChannel,
   type WorkerTaskControl,
 } from "@openclaw/worker-runtime/worker";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
 import {
   applyAgentDatabaseReaderRequest,
@@ -118,7 +119,11 @@ export function serveOwnedWorkerTasks<Output>(
         }
         databaseAdmissionPort ??= context.databaseAdmissionPort;
       },
-      onIdle: scheduleWorkerIdleGc,
+      onIdle() {
+        // Later tasks can load additional modules; an empty native flush does no I/O.
+        scheduleOpenClawCompileCacheFlush();
+        scheduleWorkerIdleGc();
+      },
       onRetire() {
         cancelWorkerIdleGc();
         try {

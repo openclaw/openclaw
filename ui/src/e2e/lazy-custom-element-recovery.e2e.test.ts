@@ -878,7 +878,7 @@ suite.define(() => {
           await expect
             .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
             .toBe(true);
-          await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await page.locator(".new-session-page__message").waitFor({ state: "visible" });
           expect(held.requests()).toBe(1);
@@ -927,8 +927,8 @@ suite.define(() => {
         await retryThroughReload(page, error);
         const toolbar = page.locator(".macos-titlebar-controls");
         await toolbar.waitFor({ state: "visible" });
-        await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
-        await toolbar.getByRole("button", { name: "New session", exact: true }).click();
+        await page.locator(".sidebar-session-toolbar__collapse").click();
+        await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
         await page.locator(".new-session-page__message").waitFor({ state: "visible" });
         expect(await error.count()).toBe(0);

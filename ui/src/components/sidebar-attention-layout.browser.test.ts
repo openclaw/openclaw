@@ -221,7 +221,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       </div>
       <nav class="macos-titlebar-controls">
         ${Array.from(
-          { length: 5 },
+          { length: 2 },
           () => '<button class="topbar-icon-btn macos-titlebar-controls__button"></button>',
         ).join("")}
       </nav>
@@ -278,9 +278,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
       shell.append(nativeChrome);
       document.documentElement.classList.add("openclaw-native-web-chrome");
-      expect(
-        attention.getBoundingClientRect().left - nativeChrome.getBoundingClientRect().right,
-      ).toBe(4);
+      expect(attention.getBoundingClientRect().left).toBe(chrome.getBoundingClientRect().right + 8);
+      expect(nativeChrome.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        attention.getBoundingClientRect().right + 8,
+      );
       expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
       expect(getComputedStyle(inbox).boxShadow).toBe("none");
       expect(getComputedStyle(inbox).backdropFilter).toBe("none");

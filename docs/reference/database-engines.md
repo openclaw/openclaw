@@ -59,7 +59,9 @@ Existing SQLite workboard data cannot switch engines yet. Keep that installation
 on SQLite until the future `openclaw database port` tool is available; selecting
 PostgreSQL refuses the existing store instead of copying, replacing, or ignoring
 its data. Omitting `database` preserves the SQLite default, so ordinary updates
-require no configuration or data migration.
+require no configuration or data migration. The port command remains disabled;
+enablement depends on PostgreSQL-aware backup, update recovery, target engine
+admission, and the offline port orchestration and verification work.
 
 ## Isolation and durability
 
@@ -105,13 +107,58 @@ switch. See the canonical
 [`admission scope`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/admission-scope.ts)
 and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/open.ts).
 
-Back up both the local anchor and its PostgreSQL schema as a matched set. Stop
-the Gateway while taking or restoring that pair, and include the SQLite stores
-that still hold the rest of the installation. A local anchor backup alone does
-not contain PostgreSQL rows. See [Backups](/install/backups) for SQLite snapshot
-requirements; PostgreSQL backup and restore remain operator-managed.
+Use `openclaw backup create` to capture PostgreSQL stores together with the
+SQLite stores that still hold the rest of the installation. PostgreSQL backup
+requires the Gateway stopped. If it is running, the command refuses: “stop
+through the service owner, then rerun.” It never stops the Gateway automatically.
+This requirement also applies to generic local snapshots and Git backups when
+their selected source is PostgreSQL. `openclaw backup sqlite` refuses a PostgreSQL
+anchor and directs you to `openclaw backup create`.
+
+A PostgreSQL backup contains a portable SQLite export image, the original anchor,
+and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapshot,
+then applies the existing user-backup sanitizer before compaction and hashing.
+The manifest records the backup profile, engine, store UUID, schema versions,
+active fragments, allocation facts, artifact sizes, and hashes. It never records
+the connection DSN. Preserve the complete matched set: an anchor alone contains
+no PostgreSQL rows. Existing format-1 SQLite backups remain readable.
+
+PostgreSQL restore verifies the matched set, loads a fresh owned namespace, and
+publishes its matching anchor only after verification. Keep the displaced
+namespace until recovery is confirmed. User backups follow the usual
+sanitization and credential-exclusion policy; they are not exact updater recovery
+captures. See [Backups](/install/backups) and [Backup CLI](/cli/backup).
+
+## Updates and target compatibility
+
+Updates preserve each store's physical engine. Before database mutation, the
+installed updater captures PostgreSQL rows and their matching anchor without
+sanitization, alongside the existing exact SQLite captures. Recovery restores
+PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
+migrated namespace remains available until recovery is confirmed. Changed state
+or uncertain custody prevents automatic restore and retains the captures for
+recovery. An update never silently ports a store or falls back to SQLite.
+
+Release packages declare supported engines in the optional
+`openclaw.databaseEngines` array in `package.json`, next to
+`openclaw.updateAdmissionProtocol`. An absent array means `["sqlite"]`; the
+admission protocol remains `1`. Only installations with a physical non-SQLite
+store use this additional check. A target without `postgres` is refused before
+mutation with a remedy: reverse-port to SQLite with the current compatible binary,
+or stay on the current version. Reverse-port is not available yet because the
+port command remains disabled. SQLite-only installations keep their existing
+admission behavior. The installed driver owns this check; a candidate cannot
+repair an older driver. See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
+
+Startup checks the fixed `recovery/database-port/manifest.json` under the selected
+state directory before CLI config snapshots and again after acquiring fresh
+Gateway or embedded-writer custody. An absent manifest or valid completed
+manifest permits startup. An incomplete, unreadable, malformed, or unknown
+manifest refuses startup and identifies the recovery artifact. These checks do
+not open a database. The port command and its recovery actions are not yet
+available; keep the manifest and its captured originals intact.
 
 Fresh stores bootstrap from generated PostgreSQL DDL at the current store schema
 version. PostgreSQL forward migrations are not available until schema lockstep
@@ -129,12 +176,14 @@ PostgreSQL text cannot contain NUL characters. Values containing NUL fail with a
 engine error. Search/vector capabilities remain store-specific; selecting an
 engine does not add PostgreSQL support to an unported store.
 
-| Failure                                 | Next step                                                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Missing or unresolved connection secret | Configure `database.postgres.connection` and verify the SecretRef provider is available to the Gateway. |
-| Unreachable PostgreSQL server           | Check the DSN, network access, role permissions, and server availability.                               |
-| Store UUID mismatch                     | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.            |
-| Newer or otherwise mismatched schema    | Use the matching OpenClaw version or restore its matching backup; do not force a downgrade.             |
+| Failure                                  | Next step                                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Missing or unresolved connection secret  | Configure `database.postgres.connection` and verify the SecretRef provider is available to the Gateway.       |
+| Unreachable PostgreSQL server            | Check the DSN, network access, role permissions, and server availability.                                     |
+| Store UUID mismatch                      | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.                  |
+| Newer or otherwise mismatched schema     | Use the matching OpenClaw version or restore its matching backup; do not force a downgrade.                   |
+| Gateway running during PostgreSQL backup | Stop through the service owner, then rerun the backup command.                                                |
+| Update target lacks PostgreSQL support   | Stay on the current version; once available, reverse-port with the current compatible binary before retrying. |
 
 ## Observe database work
 

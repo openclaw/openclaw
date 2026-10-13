@@ -231,6 +231,8 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     try {
       await expect(searchSessionTranscripts(request, database)).rejects.toMatchObject({
         code: "timeout",
+        message: expect.stringMatching(/narrow the session selection/),
+        cause: expect.objectContaining({ code: "timeout" }),
       });
       expect(slowUnavailable).toHaveBeenCalledTimes(1);
     } finally {

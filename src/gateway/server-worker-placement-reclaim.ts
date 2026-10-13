@@ -7,7 +7,6 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   closeSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -23,7 +22,6 @@ import {
   type WorkerPlacementSessionRuntime,
 } from "./server-worker-placement-session-target.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
@@ -50,12 +48,6 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       sessionKey,
       agentId,
     });
-    const metadata = captureSessionEntryMetadataRead({
-      sessionKey,
-      agentId,
-      storePath: target.storePath,
-    });
-    const nativeIncognito = !metadata && isIncognitoSessionKey(target.canonicalKey);
     const assertRoutingCurrent = captureSessionMutationRouting(
       config,
       () =>
@@ -82,8 +74,12 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         );
       }
     };
+    const metadata = captureSessionEntryMetadataRead(
+      { sessionKey: target.canonicalKey, agentId: target.agentId, storePath: target.storePath },
+      assertActive,
+    );
     try {
-      if (!metadata && !nativeIncognito) {
+      if (!metadata) {
         await withSessionEntryReadOnlyInWorker(
           {
             agentId: target.agentId,
@@ -126,16 +122,6 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     }
     const readCurrentTarget = () => {
       assertActive();
-      if (nativeIncognito) {
-        return resolveGatewaySessionStoreTargetWithStore({
-          cfg: getRuntimeConfig(),
-          key: sessionKey,
-          agentId,
-          preserveQualifiedAddress: true,
-          clone: false,
-          exactRead: true,
-        });
-      }
       if (!metadata) {
         assertRoutingCurrent(getRuntimeConfig());
       }

@@ -20,6 +20,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import {
   createSessionRolloverSpawnLineage,
   SESSION_ROLLOVER_LINEAGE_CASES,
@@ -48,11 +49,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -124,6 +121,13 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
 }));
+
+// Keep the fixture caller visible when a nested database admission fails.
+const previousStackTraceLimit = Error.stackTraceLimit;
+Error.stackTraceLimit = 64;
+afterAll(() => {
+  Error.stackTraceLimit = previousStackTraceLimit;
+});
 
 const suiteRoot = useSessionStoreTempDirs(afterAll, "openclaw-session-suite-").make();
 let suiteCase = 0;
@@ -393,8 +397,7 @@ describe("initSessionState guarded initialization", () => {
           storePath,
         });
       } finally {
-        await closeOpenClawAgentDatabasesAsync(stateDir);
-        closeOpenClawAgentDatabasesForTest(stateDir);
+        memorySessionActorOwners.closeDatabase({ agentId, path: storePath });
       }
     });
   });

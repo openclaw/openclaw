@@ -253,7 +253,9 @@ describe("renderChatComposer controls", () => {
         onToggleRealtimeTalk,
         submitDisabledReason: t("chat.thread.loading"),
       });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+      );
       const microphone = button(container, t("chat.composer.startVoiceInput"));
       const talk = button(container, t("chat.composer.realtimeTalkCapability"));
       microphone.click();

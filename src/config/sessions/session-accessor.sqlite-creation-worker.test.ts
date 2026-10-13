@@ -360,7 +360,7 @@ it("does not initialize a transcript or invoke follow-up when creation rejects",
   });
 });
 
-it.each(["incognito", "maintenance", "alias replacement"] as const)(
+it.each(["maintenance", "alias replacement"] as const)(
   "retains valid native %s creation through follow-up",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -368,11 +368,9 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
       const scope = {
         agentId: "main",
         sessionKey:
-          kind === "incognito"
-            ? "agent:main:dashboard:incognito-fixture"
-            : kind === "maintenance"
-              ? "agent:main:native-maintenance"
-              : "agent:main:signal:group:NativeReplacement",
+          kind === "maintenance"
+            ? "agent:main:native-maintenance"
+            : "agent:main:signal:group:NativeReplacement",
       };
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
       const alias = scope.sessionKey.toLowerCase();
@@ -385,15 +383,12 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
           "/old",
         );
       }
-      const schemaLease =
-        kind !== "incognito" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
-      const maintenance = schemaLease
-        ? createOpenClawDatabaseMaintenanceScope({
-            schemaMaintenance: true,
-            assertOwnerCurrent: () => schemaLease.assertCurrent(),
-            assertDatabaseAccess: schemaLease.assertDatabaseAccess,
-          })
-        : undefined;
+      const schemaLease = acquireStateDatabaseSchemaLease(database.path);
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => schemaLease.assertCurrent(),
+        assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+      });
       let followed = false;
       const create = () =>
         createSessionEntryWithTranscript(
@@ -412,7 +407,7 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
           },
         );
       try {
-        const created = await (maintenance ? maintenance.run(create) : create());
+        const created = await maintenance.run(create);
         expect(created.ok).toBe(true);
         expect(followed).toBe(true);
         if (kind === "alias replacement") {
@@ -426,9 +421,9 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
         }
       } finally {
         try {
-          await maintenance?.close();
+          await maintenance.close();
         } finally {
-          schemaLease?.release();
+          schemaLease.release();
         }
       }
     });

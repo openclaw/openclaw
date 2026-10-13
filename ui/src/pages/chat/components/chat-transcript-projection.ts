@@ -229,7 +229,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
   const hasLiveContent = Boolean(subagents.wait || hasTypingActors || hasRealtimeTalkConversation);
   // An empty page is not an empty conversation. Keep the transcript mounted
-  // while older history exists so its viewport can bootstrap the next page.
+  // while older history exists so the reader can request the next page.
   const isEmpty =
     transcriptItems.length === 0 &&
     !props.loading &&
@@ -346,10 +346,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   } satisfies StreamGroupOptions;
   const renderGroupOptions = (item: MessageGroup) => {
     const continuation = continuations.get(item.key);
-    const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
-      item.role.toLowerCase() === "user" && lastMessage
-        ? persistedMessageEntryId(lastMessage)
+      item.role.toLowerCase() === "user"
+        ? persistedMessageEntryId(item.messages.at(-1)?.message)
         : null;
     return {
       ...sharedMessageRenderOptions,
@@ -721,6 +720,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         overlay,
         header,
         props.transcriptVisible ?? true,
+        props.applicationContext,
       ),
   };
 }
