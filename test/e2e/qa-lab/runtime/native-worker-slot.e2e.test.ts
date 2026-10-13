@@ -1,3 +1,4 @@
+// CI baseline probe for #170257; no behavior changes.
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";

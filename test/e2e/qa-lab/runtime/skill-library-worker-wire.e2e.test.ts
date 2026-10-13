@@ -1,3 +1,4 @@
+// CI baseline probe for #170257; no behavior changes.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
