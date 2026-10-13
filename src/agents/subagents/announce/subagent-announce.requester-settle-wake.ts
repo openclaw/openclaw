@@ -217,6 +217,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   };
 
   const resolveGatewayContext = getSharedGatewayContextResolver(settledBatch);
+  const preparation = requesterAgentId
+    ? resolveGatewayContext?.()?.agentDatabaseStartup?.waitForAgentPreparation(requesterAgentId, {
+        signal: params.signal,
+      })
+    : undefined;
+  if (preparation) {
+    await preparation;
+    if (params.signal?.aborted || !params.isSourceCurrent()) {
+      return false;
+    }
+  }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
   const currentCompletionRows = (rows: SubagentRunRecord[]) =>

@@ -550,6 +550,8 @@ the adapter's final page-session and URL checks remain required.
 
 ## Worker provider allocation authority
 
+Worker runtime and enrollment grants may include `nodeBootstrap.linuxToolchainSetup`, a core-owned POSIX script that prepares a supported Node before invoking bootstrap JavaScript. Providers execute it only for Linux targets, using the same operation authority and command budget as bootstrap. It carries no credentials. macOS and Windows providers retain their image-provided Node contract.
+
 The Gateway supplies `assertCurrent()` in the options passed to worker providers'
 `provision` and `prepareProvision` methods. This required runtime callback binds
 the operation to the live environment owner and any requesting run. Invoke it
@@ -708,3 +710,11 @@ passes the previous successful value (or `undefined`) to its load callback,
 including explicit refreshes. Keep HTTP validators with that value so eviction,
 clear, and failed refreshes retire the representation and its validators together.
 The loader must treat the previous value as immutable.
+
+### Worker provisioning status
+
+Worker providers can call `options.reportStartStatus` during provisioning to publish
+attempt-scoped snapshot or cold-start facts. Environment status and session
+placement expose these facts as `startStatus`; the host closes the callback when
+the attempt finishes or loses authority. Report capture progress only when capture
+is claimed. These display facts do not change allocation or enrollment ownership.

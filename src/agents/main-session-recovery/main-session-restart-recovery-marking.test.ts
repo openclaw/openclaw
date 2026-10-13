@@ -24,6 +24,7 @@ import {
   retainQueuedAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -338,6 +339,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       "PRAGMA user_version = 16; UPDATE schema_meta SET agent_id = 'main', schema_version = 16;",
     );
     copy.close();
+    revokeSqliteDatabaseAdmissionsForPath(copyPath);
     await assertOpenClawDatabasesReady({
       config: cfg,
       env: state.env,

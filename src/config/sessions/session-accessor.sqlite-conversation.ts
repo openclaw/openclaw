@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   encodeSqliteStringSet,
@@ -21,6 +22,7 @@ import {
   type ConversationPublication,
 } from "./session-accessor.sqlite-conversation-publication.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionConversationRole = "participant" | "primary" | "related";
@@ -98,9 +100,31 @@ export function prepareSessionConversationForWrite(params: {
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry | null;
+  canonicalPreviousEntry?: SessionEntry;
+  previousWindow?: SessionEntryWindowRow | null;
+  observeConversation?: boolean;
   routeContext?: ConversationRouteContext | null;
   sessionScope: string;
-}): PreparedSessionConversation | null {
+}): { conversation: PreparedSessionConversation | null; primaryConversationId: string | null } {
+  // Bookkeeping is not a new route observation. Its committed association owns
+  // the canonical peer and route context until a route or lifecycle changes.
+  if (
+    !params.observeConversation &&
+    params.routeContext === undefined &&
+    params.canonicalPreviousEntry?.sessionId === params.entry.sessionId &&
+    params.canonicalPreviousEntry.lifecycleRevision === params.entry.lifecycleRevision &&
+    params.previousWindow?.session_id === params.entry.sessionId &&
+    params.previousWindow.session_scope === params.sessionScope &&
+    isDeepStrictEqual(
+      conversationIdentityFromSessionEntry(params.entry),
+      conversationIdentityFromSessionEntry(params.canonicalPreviousEntry),
+    )
+  ) {
+    return {
+      conversation: null,
+      primaryConversationId: params.previousWindow.primary_conversation_id,
+    };
+  }
   const routeContext =
     params.routeContext === null
       ? null
@@ -112,9 +136,9 @@ export function prepareSessionConversationForWrite(params: {
   }
   const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
   if (!identity) {
-    return null;
+    return { conversation: null, primaryConversationId: null };
   }
-  return {
+  const conversation: PreparedSessionConversation = {
     identity:
       routeContext === undefined
         ? preserveSessionConversationIdentity({
@@ -130,6 +154,11 @@ export function prepareSessionConversationForWrite(params: {
         ? "participant"
         : "primary",
     ...(routeContext !== undefined ? { routeContext } : {}),
+  };
+  return {
+    conversation,
+    primaryConversationId:
+      conversation.role === "primary" ? conversation.identity.conversationRef : null,
   };
 }
 

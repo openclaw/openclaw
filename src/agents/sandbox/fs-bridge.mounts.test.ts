@@ -96,7 +96,9 @@ describe("sandbox effective filesystem mounts", () => {
         },
       });
       const catalog = getSkills(null);
-      await expect(readInstalledSkill(catalog, "guide")).resolves.toBe("Inside instructions");
+      await expect(readInstalledSkill(catalog, "guide")).resolves.toMatchObject({
+        content: "Inside instructions",
+      });
       await fs.unlink(alias);
       await fs.symlink("/data/SKILL.md", alias);
       mockContainerCanonicalPaths({ "/workspace/alias.md": "/data/SKILL.md" });

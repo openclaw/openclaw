@@ -211,6 +211,70 @@ describe("publication receipt reads", () => {
     });
   });
 
+  it("serves warm options while expired native authentication refreshes, then observes logout", async ({
+    signal,
+  }) => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const refresh = createDeferredCore<{
+      stdout: Buffer;
+      stderr: Buffer;
+      code: number;
+      termination: "exit";
+    }>();
+    const entered = createDeferredCore();
+    mocks.runCommandBuffered
+      .mockReset()
+      .mockResolvedValueOnce({
+        stdout: Buffer.from("synthetic-options-native-expired"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+        termination: "exit",
+      })
+      .mockImplementation(() => {
+        entered.resolve();
+        return refresh.promise;
+      });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ id: 7, login: "shared-bot", avatar_url: null }),
+    );
+    await withReadFixture(async (fixture) => {
+      await fixture.invoke("sessions.github.options", { sessionKey });
+      now.mockReturnValue(61_001);
+      const request = fixture.invoke("sessions.github.options", { sessionKey });
+      try {
+        await withinTest(entered.promise, signal);
+        const stale = await awaitGateBeforeSettlement(
+          request,
+          refresh.promise,
+          "Warm options waited for native authentication",
+        );
+        expect(stale).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            stale: true,
+            shared: { ...publisher, source: "system-detected" },
+          }),
+        );
+      } finally {
+        refresh.resolve({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 1,
+          termination: "exit",
+        });
+        await request;
+      }
+      const unavailable = await fixture.invoke("sessions.github.options", { sessionKey });
+      expect(unavailable).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ shared: null, sharedUnavailableReason: "unavailable" }),
+      );
+    });
+  });
+
   it("marks only expired personal account facts stale through options revalidation", async ({
     signal,
   }) => {

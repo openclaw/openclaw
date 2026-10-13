@@ -1,4 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -164,6 +166,39 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
+  it.runIf(process.platform === "linux")(
+    "raises the CLI child OOM score without changing its shim identity or the parent score",
+    async () => {
+      const context = await contextForChild(`
+        import { readFileSync } from "node:fs";
+        process.stdin.once("data", () => process.stdout.end(JSON.stringify({
+          argv0: process.argv0, score: readFileSync("/proc/self/oom_score_adj", "utf8").trim(),
+        })));
+      `);
+      context.argv0 = "/opt/shims/claude";
+      context.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = "1";
+      const parentScore = await readFile("/proc/self/oom_score_adj", "utf8");
+      const writes = vi.spyOn(fs, "writeFileSync");
+      using owner = cliProcess.createClaudeCliProcessOwner(() => context);
+      const child = owner.spawn(context);
+      const closed = once(child, "close");
+      let output = "";
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+      });
+      try {
+        expect(writes).toHaveBeenCalledWith(`/proc/${child.pid}/oom_score_adj`, "1000");
+        child.stdin.end("ready");
+        expect(await closed).toEqual([0, null]);
+        expect(JSON.parse(output)).toEqual({ argv0: context.argv0, score: "1000" });
+        expect(await readFile("/proc/self/oom_score_adj", "utf8")).toBe(parentScore);
+      } finally {
+        child.kill("SIGKILL");
+        await closed;
+      }
+    },
+  );
+
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
     const context = await contextForChild(`

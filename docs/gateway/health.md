@@ -97,7 +97,9 @@ The HTTP listener opens before the initial session projection is complete. Durin
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
 pending. Other HTTP requests and WebSocket upgrades wait for the complete
 projection before authentication and routing; they never see a partial roster.
-Discovery and remote-skill setup run alongside projection preparation. Readiness
+Discovery and remote-skill listeners run alongside projection preparation. The
+initial fleet-wide skills scan runs in tracked maintenance after readiness;
+on-demand skill reads still prepare the requested workspace. Readiness
 also waits for the reply and WebSocket connection modules to load, so immediate
 connections and first turns reuse the prepared runtime.
 Update verification still waits for startup completion before checking readiness.

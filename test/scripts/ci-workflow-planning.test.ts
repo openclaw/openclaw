@@ -2616,7 +2616,7 @@ describe("ci workflow guards", () => {
             .trim()
             .split("\n")
             .map((line) => JSON.parse(line) as string[]);
-          expect(calls[0]).toContain(tier === "main" ? "never" : "on-failure");
+          expect(calls[0]).toContain("never");
           commands.push(calls);
         }
         const main = expectDefined(commands[0], "main-tier commands");
@@ -6626,6 +6626,26 @@ describe("ci workflow guards", () => {
         options: {
           checkoutRevision: workflowRevision,
           eventName: "workflow_dispatch" as const,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "restore", cache_write_allowed: "false", trust: "workflow" },
+        options: {
+          checkoutRevision: workflowRevision,
+          defaultRevision,
+          eventName: "workflow_dispatch" as const,
+          targetRef: workflowRevision,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "off", cache_write_allowed: "false", trust: "untrusted" },
+        options: {
+          checkoutRevision: workflowRevision,
+          defaultRevision,
+          eventName: "workflow_dispatch" as const,
+          targetRef: "release-candidate",
           workflowRevision,
         },
       },

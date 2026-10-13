@@ -4,6 +4,7 @@ import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareModelRequestBody } from "../../../../packages/ai/src/transports/model-request-body.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
@@ -25,6 +26,7 @@ import {
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -296,6 +298,41 @@ describe("model diagnostic lifecycle", () => {
       expect(JSON.stringify(events)).not.toMatch(/private-(?:answer|payload|prompt)/);
     },
   );
+
+  it("marks serialized request bytes before transport consumption without logging content", async () => {
+    const wrapped = wrap(async (_model, _context, options) => {
+      const request = await prepareModelRequestBody(options)({
+        stream: true,
+        input: [{ role: "user", content: "private preparation fixture" }],
+      });
+      expect(new TextDecoder().decode(request.body)).toContain("private preparation fixture");
+      const source = createAssistantMessageEventStream();
+      source.end(
+        makeAssistantMessageFixture({ stopReason: "stop", content: [], errorMessage: undefined }),
+      );
+      return source;
+    });
+    const events = await timeline(async () => {
+      const response = await wrapped(
+        makeProviderModelFixture({
+          id: "test-model",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://synthetic.invalid",
+        }),
+        { messages: [] },
+      );
+      await drain(response);
+      await response.result();
+    });
+    expect(events.map((event) => event.name)).toEqual([
+      "provider.request.started",
+      "provider.request.serialized",
+      "provider.request",
+    ]);
+    expect(events[1]).toMatchObject({ type: "mark", runId: "run-1", spanId: "call-1" });
+    expect(JSON.stringify(events)).not.toContain("private preparation fixture");
+  });
 
   it("bounds activity marks and flag lookups independently of chunk volume", async () => {
     let now = 0;

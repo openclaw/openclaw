@@ -176,23 +176,13 @@ suite.define(() => {
         ts: now,
         defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: null },
       });
+      // Failure receipts commit before chat.error; custom reports do not emit session.message.
+      await gateway.setHistoryMessages(historyMessages);
       await gateway.emitGatewayEvent("chat", {
         sessionKey,
         runId,
         state: "error",
         errorMessage: summary,
-      });
-      // The terminal lifecycle and durable transcript append are separate real events.
-      await gateway.setHistoryMessages(historyMessages);
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
-        runId,
-        clientRunId: runId,
-        message: historyMessages[2],
-        messageId: "failure",
-        messageSeq: 3,
-        hasActiveRun: false,
-        activeRunIds: [],
       });
       const notice = page.locator(".chat-run-failure");
       await notice.waitFor();

@@ -179,6 +179,34 @@ describe("legacy package executable entrypoint", () => {
     );
   });
 
+  it("passes uncaught exception cause to the process exit owner", async () => {
+    const listeners = new Set(process.listeners("uncaughtException"));
+    const runtime = await import("./runtime.js");
+    vi.spyOn(runtime, "restoreRuntimeTerminalState").mockImplementation(() => {});
+    const { registerSignalExitOwner } = await import("./cli/signal-exit-barrier.js");
+    const owner = vi.fn();
+    const releaseOwner = registerSignalExitOwner(owner);
+    try {
+      await import("./index.js?uncaught-exception-cause" as "./index.js");
+      const handler = process.listeners("uncaughtException").find((entry) => !listeners.has(entry));
+      if (!handler) {
+        throw new Error("uncaughtException handler was not registered");
+      }
+      handler(new Error("owned failure"), "uncaughtException");
+      expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
+      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception", {
+        resumeStdinIfPaused: false,
+      });
+    } finally {
+      releaseOwner();
+      for (const listener of process.listeners("uncaughtException")) {
+        if (!listeners.has(listener)) {
+          process.off("uncaughtException", listener);
+        }
+      }
+    }
+  });
+
   it("honors explicit compile-cache disabling", async () => {
     vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
     await import("./index.js?disabled-compile-cache" as "./index.js");

@@ -10,6 +10,7 @@ import { worktreeEntry } from "./review-transition-state.mjs";
 
 const executable = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git";
 const bindingPath = ".local/prepare-baseline.json";
+const signingRequestPath = (oid) => `.local/prepare-baseline-signing.${oid}.json`;
 const oidPattern = /^[a-f0-9]{40}$/u;
 const modes = new Set(["100644", "100755", "120000"]);
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -778,8 +779,8 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
   process.stdout.write(JSON.stringify(facts));
 }
 
-function checkSource(pr, source, cwd, root, lockRef, lockOid) {
-  const snapshot = fs.readFileSync(0, "utf8").trim().split("\n");
+function checkSource(pr, source, cwd, root, lockRef, lockOid, suppliedSnapshot, suppliedGitDir) {
+  const snapshot = (suppliedSnapshot ?? fs.readFileSync(0, "utf8")).trim().split("\n");
   for (const line of snapshot) {
     const [path, expected] = line.split(" ");
     if (
@@ -795,7 +796,13 @@ function checkSource(pr, source, cwd, root, lockRef, lockOid) {
     throw new Error("Untracked source blocks baseline admission.");
   }
   requireOperationOwner(pr, root, lockRef, lockOid);
-  requireCheckout(source, source, `pr-${pr}-prep`, cwd, text("rev-parse", "--absolute-git-dir"));
+  requireCheckout(
+    source,
+    source,
+    `pr-${pr}-prep`,
+    cwd,
+    suppliedGitDir ?? text("rev-parse", "--absolute-git-dir"),
+  );
 }
 
 export function baselineRefreshScope({
@@ -827,7 +834,7 @@ export function baselineRefreshScope({
   return [...retained.scope, ...paths(anchor, head)];
 }
 
-function create(pr, source, baseline, main, archive, snapshot, manifestPath, successor) {
+function create(pr, source, baseline, main, archive, snapshot, manifestPath, successor, signer) {
   if (
     ![source, baseline, main].every((value) => oidPattern.test(value)) ||
     (!successor && present(bindingPath))
@@ -897,17 +904,205 @@ function create(pr, source, baseline, main, archive, snapshot, manifestPath, suc
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
+  const message = `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${oid}\n`;
   const anchor = decoder
     .decode(
-      git(["commit-tree", "-S", replay.tree, "-p", source, "-p", baseline], {
-        input: `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${oid}\n`,
-      }),
+      git(
+        ["commit-tree", signer ? "--no-gpg-sign" : "-S", replay.tree, "-p", source, "-p", baseline],
+        {
+          input: message,
+        },
+      ),
     )
     .trim();
+  if (signer) {
+    if (!/^(?:SHA256:[A-Za-z0-9+/]{43}|[A-F0-9]{40,64})$/u.test(signer)) {
+      throw new Error("Expected the signing key fingerprint, not a key path or signer label.");
+    }
+    process.stdout.write(
+      JSON.stringify({
+        version: 1,
+        pr,
+        signer,
+        binding: bytes.toString("base64"),
+        unsignedCommit: git(["cat-file", "commit", anchor]).toString("base64"),
+        evidence: proofInventory(
+          sourceAdmission ? Object.keys(sourceAdmission.evidence) : [archive],
+        ),
+        cwd: fs.realpathSync("."),
+        gitDir: text("rev-parse", "--absolute-git-dir"),
+      }),
+    );
+    return;
+  }
   retainedAuthority({ ...bindingAt(anchor, bytes), anchor });
   process.stdout.write(
     `${JSON.stringify({ target: anchor, binding: bytes.toString("base64"), resolutions: replay.resolutions })}\n`,
   );
+}
+
+function readSigningRequest(pr, oid) {
+  if (!oidPattern.test(oid)) {
+    throw new Error("Invalid signing request identity.");
+  }
+  const bytes = readRegular(signingRequestPath(oid));
+  if (hash(bytes) !== oid) {
+    throw new Error("Signing request changed; retain the exact request and signed response.");
+  }
+  const request = JSON.parse(bytes);
+  exactKeys(request, [
+    "version",
+    "pr",
+    "signer",
+    "binding",
+    "unsignedCommit",
+    "evidence",
+    "cwd",
+    "gitDir",
+  ]);
+  if (
+    request.version !== 1 ||
+    request.pr !== pr ||
+    request.cwd !== fs.realpathSync(".") ||
+    request.gitDir !== text("rev-parse", "--absolute-git-dir")
+  ) {
+    throw new Error("Signing request repository or checkout changed.");
+  }
+  return request;
+}
+
+function unsignedCommit(bytes) {
+  // Remove only Git's signature header, preserving all other bytes, including
+  // identities, dates, parent order and the message's trailing newline.
+  const separator = bytes.indexOf("\n\n");
+  if (separator < 0) {
+    throw new Error("Invalid signed commit headers.");
+  }
+  const headers = decoder.decode(bytes.subarray(0, separator)).split("\n");
+  const result = [];
+  let signatures = 0;
+  for (let i = 0; i < headers.length; i++) {
+    if (headers[i].startsWith("gpgsig ")) {
+      signatures++;
+      while (headers[i + 1]?.startsWith(" ")) {
+        i++;
+      }
+    } else {
+      result.push(headers[i]);
+    }
+  }
+  if (signatures !== 1) {
+    throw new Error("Expected one complete Git commit signature.");
+  }
+  return Buffer.concat([Buffer.from(result.join("\n")), bytes.subarray(separator)]);
+}
+
+function continueSigning(pr, oid, commitPath) {
+  replayFiles = {};
+  replayDirectories = {};
+  const request = readSigningRequest(pr, oid);
+  const signed = readRegular(commitPath);
+  if (!unsignedCommit(signed).equals(Buffer.from(request.unsignedCommit, "base64"))) {
+    throw new Error("Signed commit payload differs from the exact requested bytes.");
+  }
+  // Import only a dangling complete object. No ref or preparation authority can
+  // change until signature, retained proof and fresh live authority all pass.
+  const target = decoder
+    .decode(git(["hash-object", "-t", "commit", "-w", "--stdin"], { input: signed }))
+    .trim();
+  git(["verify-commit", target]);
+  if (text("show", "-s", "--format=%GF", target) !== request.signer) {
+    throw new Error("Signed commit does not match the requested signing key.");
+  }
+  const binding = { ...bindingAt(target, Buffer.from(request.binding, "base64")), anchor: target };
+  const retained = retainedAuthority(binding);
+  if (
+    binding.record.pr !== pr ||
+    JSON.stringify(proofInventory(retained.archives)) !== JSON.stringify(request.evidence)
+  ) {
+    throw new Error("Signing request retained evidence changed.");
+  }
+  const source = binding.record.sourceHead;
+  let state = "source";
+  if (present(".local/review-transition.json")) {
+    const journal = JSON.parse(readRegular(".local/review-transition.json"));
+    if (
+      journal.pr !== pr ||
+      journal.source !== source ||
+      journal.target !== target ||
+      journal.mode !== "prep" ||
+      journal.branch !== `pr-${pr}-prep` ||
+      journal.binding !== request.binding
+    ) {
+      throw new Error("Signing continuation conflicts with the retained transition.");
+    }
+    state = "transition";
+  } else if (text("rev-parse", "HEAD") === target) {
+    if (
+      !readRegular(bindingPath).equals(binding.bytes) ||
+      !readRegular(".local/prep-context.env").equals(retained.boundContext)
+    ) {
+      throw new Error("Completed signing continuation lost its exact authority.");
+    }
+    state = "complete";
+  }
+  const snapshot = authorityPaths
+    .map((path) => `${path} ${present(path) ? hash(readRegular(path)) : "absent"}`)
+    .join("\n");
+  if (
+    state === "source" &&
+    snapshot !==
+      authorityPaths.map((path) => `${path} ${binding.record.authority[path]}`).join("\n")
+  ) {
+    throw new Error("Correction review authority changed while awaiting signature.");
+  }
+  const files = replayFiles;
+  const directories = replayDirectories;
+  replayFiles = undefined;
+  replayDirectories = undefined;
+  process.stdout.write(
+    JSON.stringify({
+      target,
+      source,
+      binding: request.binding,
+      state,
+      snapshot,
+      cwd: request.cwd,
+      gitDir: request.gitDir,
+      files,
+      directories,
+      resolutions: binding.record.resolutions,
+    }),
+  );
+}
+
+function checkSigning(pr, root, lockRef, lockOid) {
+  const facts = JSON.parse(fs.readFileSync(0, "utf8"));
+  for (const [path, expected] of Object.entries(facts.files)) {
+    if (digest(readRegular(path)) !== expected) {
+      throw new Error("Signing evidence changed after replay.");
+    }
+  }
+  for (const [path, names] of Object.entries(facts.directories)) {
+    if (JSON.stringify(fs.readdirSync(path).toSorted()) !== JSON.stringify(names)) {
+      throw new Error("Signing evidence inventory changed after replay.");
+    }
+  }
+  if (facts.state === "transition") {
+    requireOperationOwner(pr, root, lockRef, lockOid);
+    requireCheckout(facts.source, facts.target, `pr-${pr}-prep`, facts.cwd, facts.gitDir);
+  } else {
+    checkSource(
+      pr,
+      facts.state === "complete" ? facts.target : facts.source,
+      facts.cwd,
+      root,
+      lockRef,
+      lockOid,
+      facts.snapshot,
+      facts.gitDir,
+    );
+  }
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
@@ -917,6 +1112,53 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       create(Number(args[0]), ...args.slice(1));
     } else if (command === "create-successor" && args.length === 11) {
       create(Number(args[0]), ...args.slice(1, 7), args.slice(7));
+    } else if (command === "create-signing-request" && [8, 12].includes(args.length)) {
+      create(
+        Number(args[0]),
+        ...args.slice(1, 7),
+        args.length === 12 ? args.slice(7, 11) : undefined,
+        args.at(-1),
+      );
+    } else if (command === "check-signing-source" && args.length === 1) {
+      for (const name of fs.readdirSync(".local")) {
+        if (!/^prepare-baseline-signing\.[a-f0-9]{40}\.json$/u.test(name)) {
+          continue;
+        }
+        const request = JSON.parse(readRegular(join(".local", name)));
+        const record = JSON.parse(Buffer.from(request.binding, "base64"));
+        if (record.sourceHead === args[0]) {
+          throw new Error(
+            `Retained signing request exists: .local/${name}; continue that exact request.`,
+          );
+        }
+      }
+    } else if (command === "save-signing-request" && args.length === 4) {
+      const bytes = fs.readFileSync(0);
+      const request = JSON.parse(bytes);
+      const record = JSON.parse(Buffer.from(request.binding, "base64"));
+      if (
+        JSON.stringify(proofInventory(Object.keys(request.evidence))) !==
+        JSON.stringify(request.evidence)
+      ) {
+        throw new Error("Retained proof changed before sealing the signing request.");
+      }
+      checkSource(
+        Number(args[0]),
+        record.sourceHead,
+        request.cwd,
+        ...args.slice(1),
+        Object.entries(record.authority)
+          .map(([path, value]) => `${path} ${value}`)
+          .join("\n"),
+        request.gitDir,
+      );
+      const oid = hash(bytes);
+      fs.writeFileSync(signingRequestPath(oid), bytes, { flag: "wx", mode: 0o600 });
+      process.stdout.write(oid);
+    } else if (command === "continue-signing" && args.length === 3) {
+      continueSigning(Number(args[0]), ...args.slice(1));
+    } else if (command === "check-signing" && args.length === 4) {
+      checkSigning(Number(args[0]), ...args.slice(1));
     } else if (command === "check-source" && args.length === 6) {
       checkSource(Number(args[0]), ...args.slice(1));
     } else if (

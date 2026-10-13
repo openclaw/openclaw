@@ -2,8 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmission,
+} from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -92,6 +97,7 @@ type PreparedSchemaHeader = Pick<
 type PreparedSchemaHeaders = {
   statePath: string;
   headers: Map<string, PreparedSchemaHeader>;
+  state?: { identity: string; schemaAdmissionId: string };
 };
 
 function matchesInspectionPath(
@@ -193,6 +199,50 @@ class AgentDatabaseStartupAdmission {
         ? header
         : undefined;
     };
+  }
+
+  recordStateSchemaPreparation(env: NodeJS.ProcessEnv): void {
+    const prepared = this.preparedSchemaHeaders;
+    if (this.stopped || prepared?.statePath !== resolveOpenClawStateSqlitePath(env)) {
+      return;
+    }
+    const schema = getOrLoadSqliteDatabaseAdmissionForPath(
+      prepared.statePath,
+      schemaAdmission,
+      () => undefined,
+    );
+    const identity = prepareSqliteDatabaseAdmission(prepared.statePath);
+    if (schema && identity) {
+      prepared.state = { identity, schemaAdmissionId: schema.admissionId };
+    }
+  }
+
+  takePreparedStateSchema(env: NodeJS.ProcessEnv): (() => void) | undefined {
+    const prepared = this.preparedSchemaHeaders;
+    const state = prepared?.state;
+    if (!prepared || !state || prepared.statePath !== resolveOpenClawStateSqlitePath(env)) {
+      return undefined;
+    }
+    const assertCurrent = () => {
+      const schema = getOrLoadSqliteDatabaseAdmissionForPath(
+        prepared.statePath,
+        schemaAdmission,
+        () => undefined,
+      );
+      if (
+        this.stopped ||
+        prepareSqliteDatabaseAdmission(prepared.statePath) !== state.identity ||
+        schema?.admissionId !== state.schemaAdmissionId
+      ) {
+        throw new Error("Prepared startup state schema changed before source inspection");
+      }
+    };
+    try {
+      assertCurrent();
+      return assertCurrent;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Joins startup work already scheduled before a background consumer begins. */

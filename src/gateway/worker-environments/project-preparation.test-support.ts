@@ -37,7 +37,8 @@ export async function runProjectScriptWithGitProbe(
     kill: process.kill.bind(process),
   };
   // Both provider scripts wrap their Node program in a shell heredoc.
-  await runInNewContext(script.split("\n").slice(2, -1).join("\n"), {
+  const source = script.slice(script.indexOf("\n", script.indexOf("node <<'PROJECT_")) + 1);
+  await runInNewContext(source.slice(0, source.lastIndexOf("\n")), {
     Buffer,
     performance,
     setTimeout,

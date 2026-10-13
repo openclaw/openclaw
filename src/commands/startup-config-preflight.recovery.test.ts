@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
@@ -236,9 +236,11 @@ it.each(["backup", "active config"] as const)(
         async () => {
           expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
           const acquire = checkpoint.acquireStartupMigrationLeaseWithWait;
+          let heartbeat: MockInstance<checkpoint.StartupMigrationLease["heartbeat"]> | undefined;
           vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait").mockImplementationOnce(
             async (params) => {
               const lease = await acquire(params);
+              heartbeat = vi.spyOn(lease, "heartbeat");
               await fs.writeFile(kind === "backup" ? `${configPath}.bak` : configPath, replacement);
               return lease;
             },
@@ -248,7 +250,10 @@ it.each(["backup", "active config"] as const)(
             beforeStatePreparation: (snapshot) =>
               recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot }),
           }).catch((error: unknown) => error);
-          expect(vi.getTimerCount()).toBe(0);
+          expect(heartbeat).toBeDefined();
+          heartbeat?.mockClear();
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(heartbeat).not.toHaveBeenCalled();
           expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
           expect(refusal).toMatchObject({ code: kind === "backup" ? 78 : 1 });
           expect(await fs.readFile(configPath, "utf8")).toBe(
@@ -284,6 +289,7 @@ it.each(["expired", "reassigned"] as const)(
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       let replacement: checkpoint.StartupMigrationLease | undefined;
+      let heartbeat: MockInstance<checkpoint.StartupMigrationLease["heartbeat"]> | undefined;
       const acquire = checkpoint.acquireStartupMigrationLeaseWithWait;
       vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait").mockImplementationOnce(
         async (params) => {
@@ -292,6 +298,7 @@ it.each(["expired", "reassigned"] as const)(
             now: () => Date.now() - checkpoint.STARTUP_MIGRATION_LEASE_TTL_MS - 1,
             timeoutMs: 0,
           });
+          heartbeat = vi.spyOn(stale, "heartbeat");
           if (loss === "reassigned") {
             replacement = await acquire({ ...params, timeoutMs: 0 });
           }
@@ -308,7 +315,10 @@ it.each(["expired", "reassigned"] as const)(
         );
         expect(refusal).toBeInstanceOf(Error);
         expect(String(refusal)).toContain("startup migration lease was lost");
-        expect(vi.getTimerCount()).toBe(0);
+        expect(heartbeat).toBeDefined();
+        heartbeat?.mockClear();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(heartbeat).not.toHaveBeenCalled();
         replacement?.heartbeat();
       } finally {
         replacement?.release();

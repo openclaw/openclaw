@@ -77,6 +77,11 @@ Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool arc
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. When an eligible bound external CLI transcript contributes messages, history returns a merged snapshot instead of a numeric offset page—even with an explicit `offset`. The Gateway treats these as terminal snapshots (`hasMore: false`); oversized snapshots remain byte-bounded, so terminal does not imply complete. Local offset paging applies when no external import survives. Unanchored reads stay the current reset-relative view. An explicit `messageId` that remains in that current view, including a pre-reset row kept after reset, keeps current-view behavior. An explicit `messageId` for a retained active-path row outside the current view opens that original closed interval and does not mix later post-reset turns; a missing or off-path `messageId` returns empty history rather than the newest messages.
 
+Display history limits raw pages to 8 MiB before loading message bodies. A larger
+message returns an error instead of exhausting a transcript worker. If an anchored
+page exceeds this limit, request a smaller `limit`. The tool's text and response
+byte caps still apply.
+
 Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.

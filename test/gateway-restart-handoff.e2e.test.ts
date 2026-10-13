@@ -1,23 +1,32 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { resolveLoadedCommitHash } from "../src/infra/git-commit.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../src/state/openclaw-agent-schema.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
+import {
+  readBuildIdFromBuildInfoForModuleUrl,
+  resolveVersionFromModuleUrl,
+} from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { startGatewayRestartProvider } from "./helpers/gateway-restart-provider.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -302,12 +311,35 @@ it.skipIf(process.platform !== "linux")(
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();
         expect(serviceStop!.at).toBeLessThanOrEqual(exitedAt);
+        const [entrypoint] = await instance.entrypoint();
+        if (!entrypoint) {
+          throw new Error("Restart proof lost its Gateway artifact entrypoint");
+        }
+        const moduleUrl = pathToFileURL(path.resolve(entrypoint)).href;
+        const version = resolveVersionFromModuleUrl(moduleUrl);
+        if (!version) {
+          throw new Error("Restart proof cannot identify its Gateway artifact version");
+        }
+        // The child runs built artifacts; this source test has a different build identity.
+        // Bind the expected seal to the actual artifact and its canonical schema inputs.
+        const artifactSchema = createHash("sha256")
+          .update(version)
+          .update(
+            resolveLoadedCommitHash({ moduleUrl }) ??
+              readBuildIdFromBuildInfoForModuleUrl(moduleUrl) ??
+              "source",
+          )
+          .update(OPENCLAW_AGENT_SCHEMA_SQL)
+          .update(OPENCLAW_STATE_SCHEMA_SQL)
+          .digest("hex");
+        const seal = readSqliteCleanCloseSeal(
+          agentPath,
+          artifactSchema,
+          statSync(agentPath, { bigint: true }),
+        );
+        expect(seal).toBeDefined();
         const shared = openNodeSqliteDatabase(
           instance.state.statePath("state", "openclaw.sqlite"),
-          { readOnly: true },
-        );
-        const receipts = openNodeSqliteDatabase(
-          instance.state.statePath("state", "openclaw-quarantine.sqlite"),
           { readOnly: true },
         );
         const agent = openNodeSqliteDatabase(agentPath, { readOnly: true });
@@ -316,16 +348,12 @@ it.skipIf(process.platform !== "linux")(
           const leases = shared
             .prepare("SELECT lease_id FROM agent_database_leases WHERE path=?")
             .all(agentPath);
-          const verification = receipts
-            .prepare("SELECT clean_close FROM agent_integrity_verifications WHERE path=?")
-            .get(agentPath);
           const boot = shared
             .prepare(
               "SELECT outcome, completed_at_ms FROM gateway_boot_lifecycle WHERE pid=? ORDER BY started_at_ms DESC LIMIT 1",
             )
             .get(child.pid!);
           expect(leases).toEqual([]);
-          expect(verification).toEqual({ clean_close: 1 });
           expect(boot).toEqual({
             outcome: "planned_restart",
             completed_at_ms: expect.any(Number),
@@ -358,13 +386,12 @@ it.skipIf(process.platform !== "linux")(
               bootOutcome: boot?.outcome,
               bootCompletedAtMs: boot?.completed_at_ms,
               remainingLeases: leases.length,
-              cleanClose: verification?.clean_close,
+              cleanClose: seal !== undefined,
               persistedRecoverySessions: persistedSessions.size,
             }),
           );
         } finally {
           shared.close();
-          receipts.close();
           agent.close();
         }
         await client.stopAndWait({ timeoutMs: 1000 });
@@ -377,37 +404,6 @@ it.skipIf(process.platform !== "linux")(
           throw new Error("Successor exited before restart admission proof");
         }
         expect(successor.pid).not.toBe(child.pid);
-        const successorClosed = once(successor, "close");
-        const verified = createDeferred();
-        const observeVerification = () => {
-          if (
-            journal(gateway.logs()).some(
-              (row) =>
-                row.at >= successorStartedAt &&
-                row.path === agentPath &&
-                row.check === "quick" &&
-                row.message.includes("database integrity verification passed"),
-            )
-          ) {
-            verified.resolve();
-          }
-        };
-        successor.stdout.on("data", observeVerification);
-        successor.stderr.on("data", observeVerification);
-        try {
-          observeVerification();
-          await withinTest(
-            awaitGateBeforeSettlement(
-              verified.promise,
-              successorClosed,
-              "Successor exited before verifying its reused clean-close receipt",
-            ),
-            signal,
-          );
-        } finally {
-          successor.stdout.off("data", observeVerification);
-          successor.stderr.off("data", observeVerification);
-        }
         client = await connect();
         const restored = await client.request<SessionsListResult>("sessions.list", {
           agentId: "main",
@@ -427,10 +423,18 @@ it.skipIf(process.platform !== "linux")(
             ),
           ).toHaveLength(1);
         }
+        expect(
+          journal(gateway.logs()).filter(
+            (row) =>
+              row.at >= successorStartedAt &&
+              row.path === agentPath &&
+              row.message.includes("database integrity verification passed"),
+          ),
+        ).toEqual([]);
         console.info(
           JSON.stringify({
             proof: "gateway-restart-handoff-successor",
-            receiptAdmission: "quick-check-passed",
+            receiptAdmission: "seal-reused-without-verification",
             successorReadyAfterExitMs: successorReadyAt - exitedAt,
             preservedSessions: persistedSessions.size,
             preservedUserTurns: sessionKeys.length,

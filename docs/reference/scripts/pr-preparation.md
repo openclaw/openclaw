@@ -22,3 +22,45 @@ Use focused local checks before publication and PR CI for broad proof. Open a re
 - Main freshness belongs to one `scripts/pr` operation: nested entry/review guards share a captured main SHA; gate selection, publication after gates, and merge verification after CI each refresh it. Capture the canonical origin's main from the PR worktree's private `FETCH_HEAD`, never a later shared-ref read. Main refreshes never write shared `origin/main`. Cold provisioning fetches into its existing per-PR `temp/pr-<PR>` branch without writing canonical `FETCH_HEAD`, then fully initializes from that seed before the private checkpoint; the seed is not checkpoint authority. Checkout budgets scale with the measured tree allocation (at least 4 KiB per file), with a four-hour ceiling; the same measurement grants Git at least 30 seconds and at most 30 minutes for signal cleanup before force-kill. Provisioning advertises its measured cleanup allowance over the existing lock-notification pipe so the outer supervisor also joins cleanup after an interrupt; the second-signal force escape is unchanged. Allocation leases, template records, and configuration observation use canonical-repo `.local/pr-state`, independently of the operator's state-directory environment. Failed native provisioning may remove only its exclusively reserved, unchanged directory after the Git runner settles and the shared cleanup owner proves no admin entry belongs to that path; ordinary rejection removes only an empty reservation, while interruption permits partial checkout removal; registered hook state, preexisting damage, uncertain process cleanup, and changed authority remain preserved. Directory cleanup never releases the failed operation lock. Every standalone command and newly provisioned worktree starts fresh; coalescing must not skip containment, transition recovery, exact-head checks, or the separate Crabbox authority windows.
 - Native gate planning derives one candidate/main fork base from that captured snapshot and passes it through `pnpm check --base` to all ratchets. Incoming review identity and prior publication receipts do not select the check base; keep those bindings intact when a prepared candidate incorporates main.
 - When explicitly selecting the optional local full-test gate mode, scope `OPENCLAW_BUILD_PRIVATE_QA=1` to its initial `pnpm build` child so ordinary test preparation can reuse complete artifacts. Keep the full build profile, freshness checks, and managed-Gateway fences; do not export the flag across check/test workers. Docs-only builds and remote/hosted gate modes retain their existing inputs.
+
+## Signing a baseline on another host
+
+When the preparation host can verify signatures but the signing key is available
+only on another authorized host, use the native request and continuation commands:
+
+```bash
+scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <key-fingerprint> [--resolutions <file>]
+scripts/pr prepare-baseline-signing-continue <PR> --request <request-OID> --signed-commit <file>
+```
+
+For a successor, add the same `--expected-tree`, `--expected-review`,
+`--predecessor-head`, and `--predecessor-binding` identities required by
+`prepare-baseline-successor`. Both commands use canonical wrapper code and a
+fresh operation lock. The existing synchronous signing commands remain available.
+
+The request command prints **Awaiting signature** and the path
+`.local/prepare-baseline-signing.<request-OID>.json`. It preserves the active
+preparation authority and branch. Keep that exact request and its printed OID.
+It contains the expected signing-key fingerprint, exact unsigned commit bytes
+in base64, the baseline binding, checkout identity, and the retained proof
+inventory. SHA-256 SSH fingerprints and full uppercase OpenPGP fingerprints are
+supported. Select the fingerprint from the operator's authorized signing key;
+a matching author email alone does not identify that key.
+
+Transfer only the required Git objects and request through an already authorized
+transport. On the signing host, use ordinary `git commit-tree -S` in a task-owned
+object store with the request's exact tree, ordered parents, author and committer
+identities, timestamps, and message. Return the complete `git cat-file commit`
+output without trimming or rewriting bytes. Do not splice a detached signature
+into a synthetic commit. The wrapper neither supplies a remote execution bridge
+nor grants new host or credential access.
+
+Continuation verifies the full signature, expected key, and exact unsigned
+payload, reconstructs the tree and retained review authority, and rechecks the
+live PR, evidence, checkout, branch, and current operation lock. A saved request
+is never authority to install a candidate. Changed inputs refuse without
+replacing evidence. A partial transition retains the existing native journal;
+repeat continuation with the same request OID and signed commit after resolving
+the reported condition. It resumes only that target, without new timestamps or
+another signing request. After installation, complete fresh correction review
+and native gate qualification before publication.

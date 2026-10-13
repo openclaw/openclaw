@@ -14,6 +14,7 @@ import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js"
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
+  invalidateSqliteDatabaseCleanClose,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import {
@@ -913,6 +914,8 @@ describe("external shared-state ownership", () => {
 
   it("fences state repair and config health writes while allowing health reads", async () => {
     const fixture = claimFixture();
+    // Maintenance can discard derived seal proof before refusing a database write.
+    invalidateSqliteDatabaseCleanClose(fixture.databasePath);
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.databasePath, 0o666);
     }

@@ -534,8 +534,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 (requestedTier === "priority" || requestedTier === "default"
                   ? requestedTier
                   : originalTier),
-              onServiceTier: (responseTier) =>
-                responsesServiceTierObserver.observe(options, requestedTier, responseTier),
+              onServiceTier: (tier, response) =>
+                responsesServiceTierObserver.observe(options, requestedTier, tier, response),
               firstEventTimeoutMs:
                 getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
               abortFirstEventStream: firstEvent.abort,

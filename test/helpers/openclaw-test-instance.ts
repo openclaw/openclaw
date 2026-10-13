@@ -134,7 +134,7 @@ export type GatewayReadinessDiagnostic = {
   startedAtMs: number;
   deadlineMs: number;
   elapsedMs: number;
-  outcome: "ready" | "timeout" | "child-exit" | "aborted";
+  outcome: "ready" | "timeout" | "child-exit" | "aborted" | "agent-refused";
   attempts: number;
   probes: Array<ReadinessProbe & { startedAtMs: number; deadlineMs: number }>;
   omittedProbes: number;
@@ -343,6 +343,24 @@ export function formatGatewayReadinessDiagnostic(
 
 class GatewayReadinessError extends Error {}
 
+export class GatewayAgentAdmissionError extends GatewayReadinessError {
+  override readonly name = "GatewayAgentAdmissionError";
+
+  constructor(
+    readonly refusals: readonly Record<string, unknown>[],
+    diagnostic: string,
+  ) {
+    const details = refusals
+      .map((refusal) =>
+        typeof refusal.reason === "string" && typeof refusal.repairHint === "string"
+          ? `${refusal.reason}\n${refusal.repairHint}`
+          : JSON.stringify(refusal),
+      )
+      .join("\n");
+    super(`gateway agent database admission refused:\n${details}\n${diagnostic}`);
+  }
+}
+
 async function waitForGatewayReady(
   proc: OpenClawTestProcessReadiness,
   chunksOut: string[],
@@ -452,10 +470,42 @@ async function waitForGatewayReady(
                 probe.omittedFailing = Math.max(0, readiness.failing.length - 8);
               }
             }
-            if (!response.ok || !isRecord(readiness) || readiness.ready !== true) {
+            const agentDatabases =
+              isRecord(readiness) && Array.isArray(readiness.agentDatabases)
+                ? readiness.agentDatabases
+                : [];
+            const refused = agentDatabases.filter(
+              (entry): entry is Record<string, unknown> =>
+                isRecord(entry) &&
+                typeof entry.code === "string" &&
+                entry.code !== "agent-database-inspection-pending",
+            );
+            if (refused.length) {
+              outcome = "agent-refused";
+              throw new GatewayAgentAdmissionError(
+                refused,
+                formatGatewayReadinessDiagnostic({
+                  attempts,
+                  elapsedMs: Date.now() - startedAt,
+                  lastProbe: probe,
+                  lastFailedResponse,
+                  child: {
+                    pid: proc.pid ?? null,
+                    exitCode: proc.exitCode,
+                    signalCode: proc.signalCode,
+                  },
+                }),
+              );
+            }
+            if (
+              !response.ok ||
+              !isRecord(readiness) ||
+              readiness.ready !== true ||
+              agentDatabases.length > 0
+            ) {
               return false;
             }
-            // Readiness serves healthy agents while startup still owns deferred admission.
+            // All configured agents are admitted; also join the startup sidecars.
             probeAbort.signal.throwIfAborted();
             probe.endpoint = "/startupz";
             probe.phase = "headers";
@@ -492,6 +542,9 @@ async function waitForGatewayReady(
         }
       } catch (error) {
         signal?.throwIfAborted();
+        if (error instanceof GatewayAgentAdmissionError) {
+          throw error;
+        }
         probe.elapsedMs = Date.now() - attemptStartedAt;
         if (hasChildExited(proc)) {
           probe.error ??= "child-exit";
@@ -1171,8 +1224,11 @@ export async function createOpenClawTestInstance(
             }
             // Exit precedes pipe closure. Capture output after the owner's drain,
             // including when reclaiming its port failed after successful cleanup.
+            if (err instanceof GatewayAgentAdmissionError) {
+              err.message += `\n${formatLogs(stdout, stderr)}`;
+            }
             const startupError =
-              err instanceof GatewayReadinessError
+              err instanceof GatewayReadinessError && !(err instanceof GatewayAgentAdmissionError)
                 ? new Error(`${err.message}\n${formatLogs(stdout, stderr)}`, { cause: err })
                 : err;
             if (cleanupErrors.length > 0) {

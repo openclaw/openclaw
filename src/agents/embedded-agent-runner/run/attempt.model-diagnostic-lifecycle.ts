@@ -176,6 +176,7 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
+  ctx: ModelCallDiagnosticContext,
 ): NonNullable<ModelCallStreamOptions> {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -224,6 +225,16 @@ function withDiagnosticRequestContext(
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {
     observer.state.requestPayloadBytes = bytes;
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "provider.request.serialized",
+        timestamp: new Date().toISOString(),
+        runId: ctx.runId,
+        spanId: callId,
+      },
+      { config: ctx.config },
+    );
   };
   return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
     if (observer.state.terminalEventEmitted) {
@@ -273,7 +284,13 @@ export function createModelLifecycle(params: {
     },
     { config: params.ctx.config },
   );
-  const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  const propagatedOptions = withDiagnosticRequestContext(
+    params.options,
+    trace,
+    observer,
+    callId,
+    params.ctx,
+  );
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
     if (observer.state.terminalEventEmitted) {
