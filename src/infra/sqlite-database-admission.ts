@@ -576,7 +576,7 @@ export function readSqliteDatabaseSiblingWriteRevision(database: DatabaseSync): 
 /** A stopped worker may have committed before delivering its row-cache receipt. */
 export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
-  once(event: "exit", listener: (code: number) => void): unknown;
+  once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
   worker.once("exit", (code) => state.registry.releaseWorker(owner, code));

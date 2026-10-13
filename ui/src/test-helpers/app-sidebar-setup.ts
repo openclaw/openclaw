@@ -127,14 +127,21 @@ export function setupSidebarTest() {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.resetConfig();
+    const sidebars =
+      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
+    // Open native menus keep scheduling frames while imports settle.
+    for (const sidebar of sidebars) {
+      // Lazy shell fixtures can retain an unupgraded sidebar tag.
+      if (sidebar.matches(":defined")) {
+        sidebar.dismissTransientMenus();
+      }
+    }
     await vi.dynamicImportSettled();
     // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
     for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
       modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     }
     await vi.dynamicImportSettled();
-    const sidebars =
-      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
     document.body.replaceChildren();
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.

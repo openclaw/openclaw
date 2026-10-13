@@ -196,7 +196,7 @@ export class SqliteDatabaseAdmissionRegistry {
     record.writeScopes.clear();
   }
 
-  releaseWorker(owner: number, exitCode: number): void {
+  releaseWorker(owner: number, exitCode: number | undefined): void {
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
       let priorReferences: number | undefined;
