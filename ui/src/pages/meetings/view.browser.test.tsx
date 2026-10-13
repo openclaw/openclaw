@@ -84,10 +84,23 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     expect(getComputedStyle(library).display).toBe("none");
     expect(reader.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth + 1);
     expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1);
+    const transcript = document.querySelector<HTMLElement>("#transcript-reader-tab-text")!;
     const summary = document.querySelector<HTMLElement>("#transcript-reader-tab-summary")!;
+    transcript.focus();
+    transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(document.activeElement).toBe(summary);
+    expect(summary.getAttribute("aria-selected")).toBe("false");
+    expect(transcript.getAttribute("aria-selected")).toBe("true");
+    expect(props.onReaderTab).not.toHaveBeenCalled();
     summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(props.onReaderTab).toHaveBeenCalledWith("summary");
+    expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
     mountView({ ...props, readerTab: "summary" });
+    expect(summary.getAttribute("aria-selected")).toBe("true");
+    expect(document.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
+      summary.id,
+    );
+    summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
     expect(document.querySelector('[role="tabpanel"]')?.textContent).toContain(
       "Notes extracted using text heuristics",
     );

@@ -6,7 +6,7 @@ import {
   getAgentRuntimeOptionalCommandSecretPaths,
   getScopedChannelsCommandSecretTargets,
 } from "../cli/command-secret-targets.js";
-import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
+import { captureRuntimeConfigAsyncReader, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -26,7 +26,7 @@ export async function resolveAgentRuntimeConfig(
     runtimeChannelSecretScope?: { channel: string; accountId?: string };
   },
 ): Promise<OpenClawConfig> {
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
   const channelSecretScope = params?.runtimeChannelSecretScope;
   const hasRuntimeSecretRefs = hasAgentRuntimeSecretRefs({
