@@ -40,6 +40,10 @@ vi.mock("./src/tool.js", () => ({
   createCanvasTool: mocks.createCanvasTool,
 }));
 
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("agent harness runtime loaded before Canvas presentation");
+});
+
 function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
   const registrations = {
     registerHttpRoute: vi.fn<OpenClawPluginApi["registerHttpRoute"]>(),
