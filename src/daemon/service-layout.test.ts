@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-service-plan.js";
 import { summarizeGatewayServiceLayout } from "./service-layout.js";
 
 describe("summarizeGatewayServiceLayout", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it.each(
     [
       ["node", "dist/index.js", "gateway", "run"],
@@ -70,9 +72,7 @@ describe("summarizeGatewayServiceLayout", () => {
     { label: "truncated", buildInfo: '{"version":"2026.9.5","buil' },
     { label: "over-long", buildInfo: `{"buildId":"${"b".repeat(97)}"}` },
   ])("reports the build id currently on disk ($label)", async ({ label, buildInfo }) => {
-    const root = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-layout-build-id-")),
-    );
+    const root = tempDirs.make("openclaw-service-layout-build-id-");
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
     await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.5"}');
     await fs.writeFile(path.join(root, "dist", "index.js"), "gateway");

@@ -360,11 +360,13 @@ async function gatherDaemonStatusImpl(
           )
           .catch(() => undefined)
       : undefined;
-  // A remote or URL-override probe reaches a Gateway whose install this host cannot read,
-  // so only a local inspection can say which build a restart would actually load.
+  // Only the registered service's own install says which build a restart would load.
+  // A URL override, an explicit --port, or a separate-process context reaches a Gateway
+  // this service does not own, so comparing its build would name the wrong install; the
+  // service's own build id stays available as a diagnostic under service.layout.
   const gatewayIdentity = opts.probe
     ? resolveGatewayIdentityReport(rpc, {
-        installedBuildId: shouldInspectLocalGateway ? serviceLayout?.packageBuildId : undefined,
+        installedBuildId: serviceTargetsProbe ? serviceLayout?.packageBuildId : undefined,
       })
     : undefined;
   const gatewayVersion = gatewayIdentity?.version;
