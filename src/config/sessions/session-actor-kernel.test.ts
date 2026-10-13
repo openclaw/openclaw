@@ -210,7 +210,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         ...state.hot,
         entry: {
           ...state.hot.entry!,
-          deliveryContext: { channel: "synthetic", to: "original-recipient" },
+          cliSessionIds: { synthetic: "original-session" },
         },
         participants: [
           {
@@ -227,7 +227,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     const detached = projectSessionActorHotState(projectionState);
     const original = structuredClone(detached);
     detached.entry!.label = "caller edit";
-    detached.entry!.deliveryContext!.to = "caller edit";
+    detached.entry!.cliSessionIds!.synthetic = "caller edit";
     Object.assign(detached.target.database, { birthtime: "caller edit" });
     Object.assign(detached.version, { sequence: -1 });
     detached.participants[0]!.identity.id = "caller edit";

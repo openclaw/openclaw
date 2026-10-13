@@ -32,6 +32,7 @@ import { getSessionKysely, type ResolvedTranscriptScope } from "./session-access
 import type {
   TranscriptAppendCursor,
   TranscriptAppendOptions,
+  TranscriptInsertRow,
 } from "./session-accessor.sqlite-transcript-append.types.js";
 import {
   createTranscriptIdentityInserter,
@@ -84,13 +85,7 @@ import {
 export function insertTranscriptRowsWithoutProjectionInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
-  rows: readonly {
-    event: TranscriptEvent;
-    seq: number;
-    createdAt: number;
-    messageIdempotencyKey?: string | null;
-    storedEventSeq?: number;
-  }[],
+  rows: readonly TranscriptInsertRow[],
   reservedMessageIdempotencyKeys: ReadonlySet<string> = new Set(),
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
