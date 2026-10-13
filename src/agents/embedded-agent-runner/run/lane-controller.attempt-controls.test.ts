@@ -85,7 +85,6 @@ async function holdLane(controller: LaneController) {
 beforeEach(() => {
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
-  setRuntimeConfigSnapshot({});
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
 });
