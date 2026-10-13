@@ -7,6 +7,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -37,6 +38,9 @@ const GREEN_VERTICAL_CENTER_DATA_URL = `data:image/png;base64,${GREEN_VERTICAL_C
 const LIVE_TEST_MAX_OUTPUT_TOKENS = 4_000;
 const LIVE =
   isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) && MODEL_API_KEY.length > 0;
+if (LIVE) {
+  ensureGlobalUndiciEnvProxyDispatcher();
+}
 // Contributor prompts and completions may train future Meta models, so sending live
 // test content requires deliberate opt-in even though the fixture is synthetic.
 const CONTRIBUTOR_LIVE = LIVE && process.env.OPENCLAW_LIVE_META_CONTRIBUTOR === "1";
