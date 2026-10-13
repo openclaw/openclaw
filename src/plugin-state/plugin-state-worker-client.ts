@@ -212,11 +212,12 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
               typedCommand.input,
               cached[0]!,
             );
-            // SAFETY: This branch handles only the observe command's observation output.
-            return {
+            const cachedObservation = {
               ...observation,
               row: cached[0]!.row,
-            } as PluginStateWorkerRequests[Key]["output"];
+            };
+            // SAFETY: This branch handles only the observe command's observation output.
+            return cachedObservation as PluginStateWorkerRequests[Key]["output"];
           }
           const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
             try {

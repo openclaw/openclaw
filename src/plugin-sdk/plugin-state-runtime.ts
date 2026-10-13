@@ -85,7 +85,7 @@ export async function preparePluginStateRead<T>(
   return {
     // SAFETY: The store owns this namespace's JSON value type, as with lookup.
     read: () => facts.read() as T | undefined,
-    release: facts.release,
+    release: () => facts.release(),
   };
 }
 

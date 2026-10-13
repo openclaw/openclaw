@@ -1,4 +1,5 @@
 import { hasErrnoCode } from "../infra/errno.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
@@ -135,7 +136,7 @@ export function runWriteTransaction<T>(
       }
       const publication = beginPluginStatePublication(() => identity);
       // Savepoints keep denial until the outer owner installs all committed facts.
-      stageSqliteTransactionState(store.db, {
+      stageSqliteTransactionState(sqlPublicationAnchor(store.db), {
         stage() {},
         commit() {},
         prepareObservers: () => publication.finish("completed"),

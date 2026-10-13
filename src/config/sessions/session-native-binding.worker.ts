@@ -1,4 +1,5 @@
 import { serialize } from "node:v8";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -208,7 +209,8 @@ export function runSessionNativeBindingTransaction(
       ...captured,
       facts: new Map([...(pluginState?.facts ?? []), ...captured.facts]),
     };
-    stageSqliteTransactionState(shared.db, {
+    const anchor = sqlPublicationAnchor(shared.db);
+    stageSqliteTransactionState(anchor, {
       stage() {},
       commit: () => {
         bindings = nextBindings;
@@ -216,7 +218,7 @@ export function runSessionNativeBindingTransaction(
       },
       rollback() {},
     });
-    deferSqliteWorkerCommitReceipt(shared.db, receipt(agent, nextBindings, nextPluginState));
+    deferSqliteWorkerCommitReceipt(anchor, receipt(agent, nextBindings, nextPluginState));
   };
   const admitShared = (
     index: number,

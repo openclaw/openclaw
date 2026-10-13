@@ -324,7 +324,7 @@ export function runSessionNativeBindingWorkerOperation<
       }
     },
   })
-    .catch((error) => {
+    .catch((error: unknown) => {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         publication.finish("unknown");
       }

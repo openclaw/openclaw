@@ -5,6 +5,7 @@ import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -65,13 +66,14 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication
 }));
 
 function sourceFor(db: DatabaseSync): SqliteCommitSource {
-  let source = state.sources.get(db);
+  const anchor = sqlPublicationAnchor(db);
+  let source = state.sources.get(anchor);
   if (!source) {
     source = {
-      identity: readTrackedStateDatabaseIdentity(db)?.key ?? Symbol("untracked-plugin-state"),
+      identity: readTrackedStateDatabaseIdentity(anchor)?.key ?? Symbol("untracked-plugin-state"),
       incarnation: randomUUID(),
     };
-    state.sources.set(db, source);
+    state.sources.set(anchor, source);
   }
   return source;
 }
@@ -250,10 +252,11 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginSt
   if (state.installingFacts) {
     throw new Error("Plugin state cannot mutate during fact installation");
   }
+  const anchor = sqlPublicationAnchor(db);
   const capture = state.capture.getStore();
   if (capture) {
     const previous = new Map([...facts.keys()].map((key) => [key, capture.get(key)]));
-    stageSqliteTransactionState(db, {
+    stageSqliteTransactionState(anchor, {
       stage: () => {
         for (const [key, fact] of facts) {
           capture.set(key, fact);
@@ -272,7 +275,7 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginSt
     });
   }
   const next = publication(captureReceipt(db, facts));
-  if (!stageSqliteCommittedPublication(db, next) && !db.isTransaction) {
+  if (!stageSqliteCommittedPublication(anchor, next) && !db.isTransaction) {
     publishSqliteCommittedState(next);
   }
 }
@@ -309,7 +312,7 @@ export function withPluginStateWorkerReceipt<T>(
   // Publication cannot make a previously valid large clear/import fail to commit.
   // Unbounded retained namespaces may exceed the transport even with keys alone.
   deferSqliteWorkerCommitReceipt(
-    db,
+    sqlPublicationAnchor(db),
     serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
       ? receipt
       : { ...metadata, kind: "unknown", identity: receipt.source.identity },
@@ -469,16 +472,24 @@ export function withPluginStatePublication(
       owner.admission.finish();
       throw error;
     }
+    let installed = false;
     const finish = owner.admission.finish.bind(owner.admission);
     owner.admission.finish = () => {
       try {
         finish();
       } finally {
-        pending.finish(owner.admission.settlement?.kind === "completed" ? "completed" : "unknown");
+        const settlement = owner.admission.settlement;
+        // A completed rollback has no receipt; a committed write must publish before denial ends.
+        pending.finish(
+          settlement?.kind === "completed" && (!settlement.committed || installed)
+            ? "completed"
+            : "unknown",
+        );
       }
     };
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       pending.install(facts);
+      installed = true;
       onCommitted?.(facts);
     });
     return owner;
