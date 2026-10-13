@@ -2,11 +2,12 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveIdentityPathViaExistingAncestorSync as canonicalPath } from "../../infra/boundary-path.js";
 import { readGatewayLockProcessCmdline as readCmdline } from "../../infra/gateway-lock-process.js";
-import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
-import { classifyOpenClawArgv } from "../../infra/gateway-process-argv.js";
+import { readLockPayload, resolveGatewayLockPaths as lockPaths } from "../../infra/gateway-lock.js";
+import { classifyOpenClawArgv as classify } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   captureTargetDatabaseSchemaContext,
@@ -105,16 +106,16 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       params.updateInstallKind === "package" &&
       inspected.serviceUpdateVerdict?.kind === "unavailable"
     ) {
-      const owner = process.platform !== "win32" && (await readActiveGatewayLockIdentity());
-      const identity = classifyOpenClawArgv(
-        owner ? (readCmdline(owner.pid, process.platform, params.timeoutMs) ?? []) : [],
-        { requirePackageIdentity: true, pid: owner ? owner.pid : undefined },
-      );
+      const owner = await readLockPayload(lockPaths(process.env).ownerLockPath);
+      const live = owner && isPidAlive(owner.pid) && (owner.role ?? "gateway") === "gateway";
+      const argv = live ? readCmdline(owner.pid, process.platform, params.timeoutMs) : null;
+      const entry = classify(argv ?? [], { requirePackageIdentity: true, pid: owner?.pid });
       if (
-        process.platform === "win32" ||
-        (identity.kind === "openclaw" &&
-          identity.packageIdentity &&
-          canonicalPath(identity.packageIdentity.root) === canonicalPath(params.roots[0] ?? root))
+        live &&
+        ((process.platform === "win32" && (!argv || entry.kind === "unclassified")) ||
+          (entry.kind === "openclaw" &&
+            entry.packageIdentity &&
+            canonicalPath(entry.packageIdentity.root) === canonicalPath(params.roots[0] ?? root)))
       ) {
         const failure = createUpdatePreflightFailure("gateway-stop-unverified");
         throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, failure);
