@@ -181,7 +181,8 @@ export function assertBorrowedAgentDatabaseFileIdentity({
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   nativeIdentity: AgentDatabaseExecutionFileIdentity | undefined;
 }): void {
-  if (!fileIdentity || creatingTarget) {
+  // After admission the borrower follows its canonical owner, not a retargeted alias.
+  if (!fileIdentity) {
     const current = readDatabasePathIdentitySync(borrowedPath);
     if (
       current.canonicalPath !== identity.canonicalPath ||
