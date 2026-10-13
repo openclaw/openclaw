@@ -8,19 +8,15 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
-import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
-import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import {
   assistantMessage,
   attemptResult,
   prepareAttempt,
+  type OuterContextTokenMeta,
+  type TerminalStatsInput,
 } from "./terminal-preparation.test-support.js";
-type OuterContextTokenMeta = Parameters<
-  typeof prepareEmbeddedRunTerminal
->[0]["outerContextTokenMeta"];
-
 const payloadMocks = vi.hoisted(() => ({
   buildEmbeddedRunPayloads: vi.fn<typeof buildEmbeddedRunPayloads>(),
 }));
@@ -702,23 +698,7 @@ describe("prepareEmbeddedRunTerminal", () => {
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
-  type StatsInput = {
-    attempt?: Partial<EmbeddedRunAttemptWithReceiptEvidence> & {
-      terminalTurnId?: string;
-    };
-    assistantTurns?: number;
-    bridgeCalls?: { search: number; describe: number; call: number };
-    config?: unknown;
-    assistantProvider?: string;
-    provider?: string;
-    model?: string;
-    outerContextTokenMeta?: OuterContextTokenMeta;
-    responseModel?: string;
-    usage?: Parameters<typeof mergeUsageIntoAccumulator>[1];
-    attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
-  };
-
-  async function prepareStats(statsInput: StatsInput = {}) {
+  async function prepareStats(statsInput: TerminalStatsInput = {}) {
     const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
     const provider = statsInput.provider ?? "cost-test-provider";
     const model = statsInput.model ?? "cost-model";
