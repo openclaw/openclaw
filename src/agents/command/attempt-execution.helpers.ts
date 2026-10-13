@@ -67,8 +67,11 @@ export function resolveCommandReplyExpectation(params: {
   if (provenance?.kind === "internal_system" && provenance.sourceTool === "cron_failure_repair") {
     return "optional";
   }
+  if (!isDeliverableMessageChannel(params.messageChannel ?? "")) {
+    return "required";
+  }
   if (provenance?.kind !== "inter_session") {
-    return !isDeliverableMessageChannel(params.messageChannel ?? "") ? "required" : undefined;
+    return undefined;
   }
   const chatType = normalizeChatType(params.sessionEntry?.chatType);
   return resolveSilentReplySettings({

@@ -52,7 +52,7 @@ function formatClaudeCliFallbackPrelude(
 }
 
 describe("resolveCommandReplyExpectation", () => {
-  it("treats cron_failure_repair internal_system turns and policy-allowed group inter_session turns on webchat as optional", () => {
+  it("treats cron_failure_repair internal_system turns on webchat as optional", () => {
     expect(
       resolveCommandReplyExpectation({
         cfg: {},
@@ -61,18 +61,9 @@ describe("resolveCommandReplyExpectation", () => {
         opts: { inputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" } },
       }),
     ).toBe("optional");
-    expect(
-      resolveCommandReplyExpectation({
-        cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
-        sessionKey: "agent:main:group:ops",
-        sessionEntry: { chatType: "group" },
-        messageChannel: "webchat",
-        opts: { inputProvenance: { kind: "inter_session" } },
-      }),
-    ).toBe("optional");
   });
 
-  it("keeps main_session_restart_recovery, direct user turns, disallowed inter_session turns, and subagent completions as required", () => {
+  it("keeps main_session_restart_recovery, direct user turns, non-deliverable inter_session turns, and subagent completions as required", () => {
     expect(
       resolveCommandReplyExpectation({
         cfg: {},
@@ -96,8 +87,9 @@ describe("resolveCommandReplyExpectation", () => {
     ).toBe("required");
     expect(
       resolveCommandReplyExpectation({
-        cfg: {},
-        sessionKey: "agent:main:direct:reply-required",
+        cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
+        sessionKey: "agent:main:group:ops",
+        sessionEntry: { chatType: "group" },
         messageChannel: "webchat",
         opts: { inputProvenance: { kind: "inter_session" } },
       }),
