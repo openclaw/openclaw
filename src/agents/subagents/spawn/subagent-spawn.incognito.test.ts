@@ -1,4 +1,5 @@
 import "../../../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.sqlite-entry.js";
@@ -124,12 +125,18 @@ it.each([
           requesterAgentId: parent.agentId,
           targetAgentId: childOwner.agentId,
           requesterInternalKey: parentKey,
-          parentTarget: await spawnRuntime.resolveGatewaySessionStoreTargetInWorker({
-            cfg: {},
-            key: parentKey,
+          parentTarget: {
             agentId: parent.agentId,
-            projection: "full",
-          }),
+            storePath: parent.path,
+            canonicalKey: parentKey,
+            storeKeys: [parentKey],
+            store: {
+              [parentKey]: expectDefined(
+                (await parent.sessions.read(authority, { sessionKey: parentKey })).entry,
+                "parent session entry",
+              ),
+            },
+          },
           childSessionKey: childKey,
           incognito: true,
           expectedParentSessionId: name,

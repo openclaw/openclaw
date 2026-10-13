@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
@@ -79,7 +80,12 @@ it.each(["main", "research"])(
             storePath: parent.path,
             canonicalKey: parentKey,
             storeKeys: [parentKey],
-            store: { [parentKey]: parent.readSession(parentKey, authority)!.entry },
+            store: {
+              [parentKey]: expectDefined(
+                parent.readSession(parentKey, authority)?.entry,
+                "parent session entry",
+              ),
+            },
           },
           childSessionKey: childKey,
           incognito: true,
