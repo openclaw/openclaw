@@ -718,6 +718,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/agent-session-compaction.admission.test.ts",
   "src/agents/sessions/agent-session-compaction.degraded-reload.test.ts",
   "src/agents/sessions/agent-session-compaction.test.ts",
+  "src/agents/sessions/agent-session-context-window.test.ts",
   "src/agents/sessions/agent-session-runtime-projection.test.ts",
   "src/agents/sessions/agent-session.reclamation-admission.test.ts",
   "src/agents/sessions/sdk.tool-outcomes.test.ts",

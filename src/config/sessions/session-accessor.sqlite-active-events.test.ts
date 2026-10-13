@@ -234,7 +234,7 @@ describe("SQLite active transcript event projection", () => {
       touchSessionEntry: false,
     });
 
-    expect(readActiveTranscriptStats(scope)).toMatchObject({ eventCount: 1 });
+    expect(readActiveTranscriptStats(scope)).toMatchObject({ eventCount: 2 });
     expect(readActiveTranscriptStats(scope).sizeBytes).toBeLessThan(1_000);
     expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({
       id: "post-reset",

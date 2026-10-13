@@ -388,12 +388,13 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       { role: "compactionSummary", summary: "fresh-only summary" },
       { role: "user", content: "fresh user" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
+    // The latest assistant also restores model metadata before the compacted prefix.
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
 
     const nextUserId = appendUser("after compaction");
     await settle();
     expectHistory([freshUserId, nextUserId]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(4);
 
     // A newer reset wins for both scopes; another compaction must not revive older resets.
     manager.appendResetBoundary("new", nextUserId);
@@ -404,7 +405,7 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       { role: "user", content: "after compaction" },
       { role: "user", content: "after second reset" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(4);
 
     manager.appendCompaction("newest-only summary", newestUserId, 100);
     await settle();
@@ -414,7 +415,7 @@ it("keeps reset history closed across compaction with a warm history cache", asy
       { role: "compactionSummary", summary: "newest-only summary" },
       { role: "user", content: "after second reset" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
   });
 });
 
@@ -467,7 +468,7 @@ it("counts paired reset tool results without counting discarded orphan results",
     });
 
     const stats = readActiveTranscriptStats(scope);
-    expect(stats.eventCount).toBe(4);
+    expect(stats.eventCount).toBe(5);
     expect(stats.sizeBytes).toBeGreaterThan(3_000);
     expect(stats.sizeBytes).toBeLessThan(8_000);
     expect(readHistory(scope).totalMessages).toBe(3);
@@ -483,7 +484,7 @@ it("counts paired reset tool results without counting discarded orphan results",
     });
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      expect(readActiveTranscriptStats(scope).eventCount).toBe(5);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(6);
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       parseSpy.mockRestore();
@@ -534,7 +535,7 @@ it("counts retained raw bytes without hydrating private native payloads", async 
     });
     try {
       const stats = readActiveTranscriptStats(scope);
-      expect(stats.eventCount).toBe(1);
+      expect(stats.eventCount).toBe(2);
       expect(stats.sizeBytes).toBeGreaterThan(privateText.length);
       expect(privateBytes).toBe(0);
     } finally {
@@ -797,6 +798,9 @@ it.each(["unbounded", "reset"] as const)(
         });
       }
       const contextIds = new Set(["kept-user", "kept-assistant"]);
+      if (boundary !== "unbounded") {
+        contextIds.add("boundary");
+      }
       const contextEvents = loadTranscriptEventsSync(scope).filter((event) =>
         contextIds.has((event as { id: string }).id),
       );

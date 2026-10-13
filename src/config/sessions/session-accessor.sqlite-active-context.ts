@@ -33,9 +33,14 @@ import { readSessionActorTransactionState } from "./session-actor-transaction.js
 import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { projectDetachedAssistantModelChangeSql } from "./session-model-context-projection.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql, transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventModelNavigationSql,
+  transcriptEventResetNavigationSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 function readBoundedRetentionRanges(
@@ -290,12 +295,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
     const headerBytes = header?.serialized_bytes ?? 0;
     // Explicit reset retention wins over ordinary exclusion. The window owner
     // selects paired entries; only its newest candidates can fit this bounded read.
-    const retained =
-      resolveTranscriptBoundaryWindow(
-        projection,
-        "context",
-        fence?.beforeRawSeq,
-      )?.keptMessagePositions.slice(-(maxEvents + 1)) ?? [];
+    const window = resolveTranscriptBoundaryWindow(projection, "context", fence?.beforeRawSeq);
+    const retained = window?.keptActivePositions.slice(-(maxEvents + 1)) ?? [];
+    const controls = window?.requiredControlSequences ?? [];
+    // Ambiguous legacy role predicates retain raw acquisition and accounting together.
+    const assistantSequence =
+      window?.requiredAssistantSizeBytes === undefined
+        ? undefined
+        : window.requiredAssistantSequence;
     const metadata = iterateSqliteQuerySync(
       projection.database.db,
       db
@@ -309,20 +316,27 @@ export function readSessionTranscriptBoundedActiveContextCore(
           "active.event_seq",
           "active.active_position",
           /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
-          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
+          sql<number>`CASE WHEN active.event_seq = ${assistantSequence ?? -1}
+            THEN ${window?.requiredAssistantSizeBytes ?? 0}
+            ELSE ${transcriptEventReadBytesSql("event")} + 1 END`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
         .$if(fence !== undefined, (query) =>
           query.where("active.event_seq", "<", fence!.beforeRawSeq),
         )
-        .where((eb) =>
-          retained.length > 0
-            ? eb.or([
+        .where((eb) => {
+          const current = window
+            ? eb.and([
                 eb("active.context_eligible", "=", 1),
-                eb("active.message_position", "in", retained),
+                eb("active.active_position", ">=", window.boundaryActivePosition),
               ])
-            : eb("active.context_eligible", "=", 1),
-        )
+            : eb("active.context_eligible", "=", 1);
+          return eb.or([
+            current,
+            ...(retained.length > 0 ? [eb("active.active_position", "in", retained)] : []),
+            ...(controls.length > 0 ? [eb("active.event_seq", "in", controls)] : []),
+          ]);
+        })
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     );
@@ -407,7 +421,13 @@ export function readSessionTranscriptBoundedActiveContextCore(
         : executeSqliteQuerySync(
             projection.database.db,
             transcript
-              .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+              .select([
+                "seq",
+                /* kysely-allow-raw: only admitted detached model metadata replaces an omitted body. */
+                sql<string>`CASE WHEN seq = ${assistantSequence ?? -1}
+                  THEN ${projectDetachedAssistantModelChangeSql(transcriptEventModelNavigationSql())}
+                  ELSE ${transcriptEventJsonSql(projection.database.db)} END`.as("event_json"),
+              ])
               .where("seq", "in", payloadSequences),
           ).rows
       ).map((row) => [row.seq, JSON.parse(row.event_json)]),
@@ -439,18 +459,19 @@ export function readSessionTranscriptBoundedActiveContextCore(
       events.push(event);
     }
     const firstSelected = selectedRows.findLast(
-      (row) => typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
+      (row) =>
+        (!window ||
+          row.active_position >= window.boundaryActivePosition ||
+          retained.includes(row.active_position)) &&
+        typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
     );
     const anchorEntry = firstSelected
       ? asOptionalRecord(payloads.get(firstSelected.event_seq))
       : undefined;
-    const injectedEntry =
-      injectedBoundarySeq === undefined
-        ? undefined
-        : asOptionalRecord(payloads.get(injectedBoundarySeq));
+    const boundaryEntry = boundary ? asOptionalRecord(payloads.get(boundary.seq)) : undefined;
     const anchors = [
-      ...(boundary && isIndexedSessionEntry(injectedEntry) && injectedEntry.type === "compaction"
-        ? [{ activePosition: boundary.active_position, id: injectedEntry.id, entry: injectedEntry }]
+      ...(boundary && isIndexedSessionEntry(boundaryEntry) && boundaryEntry.type === "compaction"
+        ? [{ activePosition: boundary.active_position, id: boundaryEntry.id, entry: boundaryEntry }]
         : []),
       ...(firstSelected && typeof anchorEntry?.id === "string"
         ? [

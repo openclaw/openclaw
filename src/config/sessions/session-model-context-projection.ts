@@ -32,13 +32,21 @@ export function projectModelContextEventSql(
     THEN json_remove(${boundedEvent}, '$.message.providerReplay') ELSE ${boundedEvent} END`;
 }
 
-function pickJsonObject(value: Expression<unknown>, keys: readonly string[]): RawBuilder<string> {
-  // json_each distinguishes absent properties from explicit nulls. Preserve JSON
+function jsonObjectMembersSql(value: Expression<unknown>, path = "$"): RawBuilder<unknown> {
+  return /* kysely-allow-raw: the projection owner enumerates a bounded JSON object's members. */ sql`SELECT key, value, type FROM json_each(${value}, ${path})`;
+}
+
+function pickJsonObject(
+  value: Expression<unknown>,
+  keys: readonly string[],
+  members = jsonObjectMembersSql(value),
+): RawBuilder<string> {
+  // Member rows distinguish absent properties from explicit nulls. Preserve JSON
   // subtypes so booleans and nested navigation facts do not become strings/numbers.
   return /* kysely-allow-raw: narrow JSON member selection, with bound property names. */ sql<string>`(SELECT json_group_object(key, CASE type
     WHEN 'object' THEN json(value) WHEN 'array' THEN json(value)
     WHEN 'true' THEN json('true') WHEN 'false' THEN json('false')
-    ELSE value END) FROM json_each(${value}) WHERE key IN (${sql.join(keys)}))`;
+    ELSE value END) FROM (${members}) WHERE key IN (${sql.join(keys)}))`;
 }
 
 function contentPropertySql(
@@ -68,6 +76,26 @@ function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
     WHEN 'array' THEN json(${value})
     WHEN 'true' THEN json('true') WHEN 'false' THEN json('false')
     ELSE ${value} END`;
+}
+
+/** Omitted assistants carry only the detached model state used by bounded context. */
+export function projectDetachedAssistantModelChangeSql(
+  navigation: Expression<string>,
+): RawBuilder<string> {
+  // Select present members instead of filling absent fields with null, matching
+  // the detached model_change contract in session-model-context-read.ts.
+  const members = /* kysely-allow-raw: detached state renames model facts within the projection owner. */ sql`
+    SELECT 'type' AS key, 'model_change' AS value, 'text' AS type
+    UNION ALL SELECT key, value, type FROM (${jsonObjectMembersSql(navigation)})
+      WHERE key IN (${sql.join(["id", "parentId", "timestamp"])})
+    UNION ALL SELECT CASE key WHEN 'model' THEN 'modelId' ELSE key END, value, type
+      FROM (${jsonObjectMembersSql(navigation, "$.message")})
+      WHERE key IN (${sql.join(["provider", "model"])})`;
+  return pickJsonObject(
+    navigation,
+    ["type", "id", "parentId", "timestamp", "provider", "modelId"],
+    members,
+  );
 }
 
 /** Stored navigation serves SQL's first-key lookup and JavaScript's last-key parse. */

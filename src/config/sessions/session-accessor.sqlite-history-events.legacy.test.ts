@@ -174,7 +174,7 @@ describe("SQLite imported transcript history", () => {
         "reset",
         "fresh",
       ]);
-      const retained = new Set(["kept-user", "kept-assistant", "kept-result", "fresh"]);
+      const retained = new Set(["kept-user", "kept-assistant", "kept-result", "reset", "fresh"]);
       expect(readActiveTranscriptStats(scope)).toEqual({
         eventCount: retained.size,
         sizeBytes: rows.reduce(
