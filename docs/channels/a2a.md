@@ -185,6 +185,8 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
+The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
+
 A repeated `messageId` from the same authenticated peer returns the existing task and its current
 state while that task is retained. It does not start another agent turn, even if the retry omits
 `contextId`. Use a new `messageId` for new work. Replies are associated with the task that started
