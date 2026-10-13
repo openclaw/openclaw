@@ -73,6 +73,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
   "diagnostics.otel.captureContent": "OpenTelemetry Content Capture",
+  "diagnostics.otel.captureRootOperationSpans": "OpenTelemetry Root Operation Spans",
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "agents.entries.*.identity.avatar": "Identity Avatar",
   "agents.entries.*.skills": "Agent Skill Filter",
