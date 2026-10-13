@@ -44,6 +44,45 @@ describe("resolveSlackAutoThreadId", () => {
     ).toBeUndefined();
   });
 
+  it.each(["C123", "channel:C123"])("uses the workspace-qualified source root for %s", (to) => {
+    expect(
+      resolveSlackAutoThreadId({
+        to,
+        toolContext: createToolContext({
+          currentChannelId: "team:T123:channel:C123",
+          currentMessagingTarget: "team:T123:channel:C123",
+        }),
+      }),
+    ).toBe("thread-1");
+  });
+
+  it.each(["C999", "team:T999:channel:C123"])(
+    "does not inherit the source root for another destination %s",
+    (to) => {
+      expect(
+        resolveSlackAutoThreadId({
+          to,
+          toolContext: createToolContext({
+            currentChannelId: "team:T123:channel:C123",
+            currentMessagingTarget: "team:T123:channel:C123",
+          }),
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("does not infer a root when the source workspace is ambiguous", () => {
+    expect(
+      resolveSlackAutoThreadId({
+        to: "C123",
+        toolContext: createToolContext({
+          currentChannelId: "team:T123:channel:C123",
+          currentMessagingTarget: "team:T999:channel:C123",
+        }),
+      }),
+    ).toBeUndefined();
+  });
+
   it("threads first matching prefixed channel target with bare current channel", () => {
     const hasRepliedRef = { value: false };
 
