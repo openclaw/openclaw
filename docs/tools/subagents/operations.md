@@ -98,6 +98,9 @@ transfers do not retry indefinitely. Registry hydration and startup transfer eac
 run once per attempt. A failed hydration logs its error and can be retried by the
 next registry access; an incomplete startup transfer remains recorded for the
 next activation or restart. Recovery does not keep a separate retry timer.
+Requester recovery selects each retained turn's children without repeatedly
+scanning unrelated run history. Completed children remain in saved batches when
+their delivery receipts are needed to prevent replaying an already delivered result.
 
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child

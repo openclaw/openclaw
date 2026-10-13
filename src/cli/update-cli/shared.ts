@@ -64,6 +64,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
+    /** Explicit operator budget, minted once by this invocation’s admission. */
+    deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
     env: NodeJS.ProcessEnv;
     /** Candidate-reported admission checks; execution authority remains installed-owned. */
     candidateAdmissionChecks?: readonly string[];
