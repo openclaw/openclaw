@@ -4,20 +4,24 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
 import {
-  readClawInstallRecordFromDatabase,
   readClawPackageRefs,
   type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import type { ClawPackage, ClawPackagePreflightResult } from "./types.js";
 
-function ownerInstallIsNewerThanRef(
+export function ownerInstallIsNewerThanRefs(
   installedAt: string | undefined,
-  ref: PersistedClawPackageRef,
+  refs: readonly PersistedClawPackageRef[],
 ): boolean {
   const timestamp = Date.parse(installedAt ?? "");
-  return Number.isFinite(timestamp) && timestamp > ref.updatedAtMs;
+  return (
+    Number.isFinite(timestamp) &&
+    refs.length > 0 &&
+    refs.every((ref) => timestamp > ref.updatedAtMs)
+  );
 }
 
 function persistedExtensionMatchesPreflight(
@@ -79,7 +83,7 @@ export function findResumableIntroducedPluginRequirement(params: {
       !candidate.independentOwner &&
       persistedExtensionMatchesPreflight(candidate, params.preflight),
   );
-  return ref && !ownerInstallIsNewerThanRef(params.preflight.installedAt, ref) ? ref : undefined;
+  return ref && !ownerInstallIsNewerThanRefs(params.preflight.installedAt, [ref]) ? ref : undefined;
 }
 
 export async function readClawResumeStateReadOnly(
@@ -92,17 +96,14 @@ export async function readClawResumeStateReadOnly(
     }
   | undefined
 > {
-  const database = await openExistingOpenClawStateDatabaseReadOnly(options);
+  const database = await openExistingOpenClawStateDatabaseReadOnly({
+    ...options,
+    requireCanonicalSchema: true,
+  });
   if (!database) {
     return undefined;
   }
   try {
-    const hasInstallTable = database.db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-      .get();
-    if (!hasInstallTable) {
-      return undefined;
-    }
     const record = readClawInstallRecordFromDatabase(database.db, agentId);
     if (!record) {
       return undefined;

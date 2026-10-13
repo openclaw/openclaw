@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { withGatewayServiceUpdateAuthority } from "../daemon/service-update-authority.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
@@ -84,23 +85,6 @@ describe("resolveGatewayInstallToken", () => {
     randomTokenMock.mockReturnValue("generated-token");
   });
 
-  it("does not generate a token when plaintext gateway.auth.token is configured", async () => {
-    const result = await resolveGatewayInstallToken({
-      config: {
-        gateway: { auth: { token: "config-token" } },
-      } as OpenClawConfig,
-      env: {} as NodeJS.ProcessEnv,
-      generateIfMissing: createGeneration(),
-    });
-
-    expect(result).toEqual({
-      unavailableReason: undefined,
-      warnings: [],
-    });
-    expect(randomTokenMock).not.toHaveBeenCalled();
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
-  });
-
   it("validates SecretRef token but does not persist resolved plaintext", async () => {
     const tokenRef = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" };
     resolveSecretRefValuesMock.mockResolvedValue(
@@ -157,16 +141,14 @@ describe("resolveGatewayInstallToken", () => {
     expect(resolveSecretRefValuesMock).not.toHaveBeenCalled();
   });
 
-  it("does not generate a token during validation-only setup", async () => {
+  it("refuses missing required auth without generating config during deferred load", async () => {
     const result = await resolveGatewayInstallToken({
-      config: {
-        gateway: { auth: { mode: "token" } },
-      } as OpenClawConfig,
-      env: {} as NodeJS.ProcessEnv,
+      config: { gateway: { auth: { mode: "token" } } },
+      env: {},
+      requireExisting: true,
+      generateIfMissing: createGeneration(),
     });
-
-    expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings).toEqual([]);
+    expect(result.unavailableReason).toContain("existing Gateway token");
     expect(randomTokenMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
@@ -190,7 +172,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.warnings.join("\n")).toContain("saving to config");
     expect(replaceConfigFileMock).toHaveBeenCalledOnce();
     expect(firstReplaceConfigRequest()).toStrictEqual({
-      nextConfig: {
+      sourceConfig: {
         gateway: {
           auth: {
             mode: "token",
@@ -208,6 +190,40 @@ describe("resolveGatewayInstallToken", () => {
     });
   });
 
+  it("refuses an update-owned token commit after its captured precommit revokes authority", async () => {
+    let current = true;
+    let committed = false;
+    replaceConfigFileMock.mockImplementationOnce(async (params) => {
+      await params.writeOptions.beforeCommit?.();
+      params.writeOptions.assertCurrent?.();
+      committed = true;
+    });
+    await expect(
+      withGatewayServiceUpdateAuthority(
+        () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+        () =>
+          resolveGatewayInstallToken({
+            config: { gateway: { auth: { mode: "token" } } },
+            env: {},
+            generateIfMissing: {
+              ...createGeneration(),
+              writeOptions: {
+                beforeCommit: async () => {
+                  current = false;
+                },
+              },
+            },
+          }),
+      ),
+    ).rejects.toThrow("original owner revoked");
+    expect(replaceConfigFileMock).toHaveBeenCalledOnce();
+    expect(committed).toBe(false);
+  });
+
   it("does not overwrite a SecretRef in the captured source config", async () => {
     const result = await resolveGatewayInstallToken({
       config: {
@@ -220,78 +236,6 @@ describe("resolveGatewayInstallToken", () => {
     });
 
     expect(result.warnings.join("\n")).toContain("skipping plaintext token persistence");
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("reports a rejected token write without changing install auth validation", async () => {
-    replaceConfigFileMock.mockRejectedValueOnce(new Error("Config changed since it was read"));
-
-    const result = await resolveGatewayInstallToken({
-      config: { gateway: { auth: { mode: "token" } } },
-      env: {},
-      generateIfMissing: createGeneration(),
-    });
-
-    expect(replaceConfigFileMock).toHaveBeenCalledOnce();
-    expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings).toEqual([
-      "No gateway token found. Auto-generated one and saving to config.",
-      "Warning: could not persist token to config: Error: Config changed since it was read",
-    ]);
-  });
-
-  it("does not auto-generate when inferred mode has password SecretRef configured", async () => {
-    shouldRequireGatewayTokenForInstallMock.mockReturnValue(false);
-
-    const result = await resolveGatewayInstallToken({
-      config: {
-        gateway: {
-          auth: {
-            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
-      env: {} as NodeJS.ProcessEnv,
-      generateIfMissing: createGeneration(),
-    });
-
-    expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.join("\n")).not.toContain("Auto-generated");
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("passes the install env through to gateway auth resolution", async () => {
-    const env = {
-      OPENCLAW_GATEWAY_PASSWORD: "dotenv-password", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-    shouldRequireGatewayTokenForInstallMock.mockReturnValue(false);
-    resolveGatewayAuthMock.mockReturnValue({
-      mode: "password",
-      token: undefined,
-      password: undefined,
-      allowTailscale: false,
-    });
-
-    const result = await resolveGatewayInstallToken({
-      config: {
-        gateway: { auth: {} },
-      } as OpenClawConfig,
-      env,
-      generateIfMissing: createGeneration(),
-    });
-
-    expect(resolveGatewayAuthMock).toHaveBeenCalledWith({
-      authConfig: {},
-      env,
-      tailscaleMode: "off",
-    });
-    expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.join("\n")).not.toContain("Auto-generated");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 

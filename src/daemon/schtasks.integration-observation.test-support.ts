@@ -1,13 +1,28 @@
 // Native task/process inspection and sanitized proof rendering.
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import os from "node:os";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
-import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+} from "../infra/windows-install-roots.js";
+import { decodeXml } from "../shared/xml.js";
+import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+
+const WAIT_INTERVAL_MS = 200;
+const WAIT_TIMEOUT_MS = 30_000;
+const TASK_STATE_READY = 3;
 
 export const DIAGNOSTIC_TEXT_LIMIT = 16_384;
 const DIAGNOSTIC_PROCESS_LIMIT = 32;
-export const TASK_LOGON_INTERACTIVE_TOKEN = 3;
+export const TASK_LOGON_S4U = 2;
+const TASK_LOGON_INTERACTIVE_TOKEN = 3;
 export const TASK_RUNLEVEL_LEAST_PRIVILEGE = 0;
 
 export type ScheduledTaskPrincipal = {
@@ -21,15 +36,70 @@ export type ScheduledTaskPrincipal = {
 
 export type WindowsProcessDiagnostic = {
   CommandLine?: string | null;
+  CreationDate?: string | null;
+  UserModeTime?: number | string;
+  KernelModeTime?: number | string;
+  ReadOperationCount?: number | string;
+  WriteOperationCount?: number | string;
   ParentProcessId?: number;
   ProcessId?: number;
 };
+
+type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
+
+export async function canBindLoopbackPort(port: number): Promise<boolean> {
+  const server = createServer();
+  return new Promise<boolean>((resolve) => {
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
 
 export async function readTaskXml(taskName: string): Promise<string | null> {
   const result = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+export async function readTaskDefinitionSnapshot(
+  taskName: string,
+): Promise<TaskDefinitionSnapshot> {
+  const exists = probeScheduledTaskExists(taskName);
+  if (exists === null) {
+    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
+  }
+  if (!exists) {
+    return { exists: false, taskXml: null };
+  }
+  const taskXml = await readTaskXml(taskName);
+  if (!taskXml) {
+    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
+  }
+  return { exists: true, taskXml };
+}
+
+export function disableScheduledTaskXmlForFixture(xml: string): string {
+  return setScheduledTaskXmlEnabled(xml, false).replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) => {
+      const field = /<AllowStartOnDemand>\s*(true|false)\s*<\/AllowStartOnDemand>/iu;
+      const disabled = "<AllowStartOnDemand>false</AllowStartOnDemand>";
+      return `${open}${field.test(body) ? body.replace(field, disabled) : `${disabled}${body}`}${close}`;
+    },
+  );
+}
+
+export function normalizeScheduledTaskXmlEnabledForFixture(xml: string): string {
+  // COM exports omit Enabled=true and place an explicit false in schema order.
+  // Remove its whole LF/CRLF/CRCRLF export line; every other definition byte remains checked.
+  return setScheduledTaskXmlEnabled(xml, false).replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) =>
+      `${open}<Enabled>false</Enabled>${body.replace(/(?:\r{0,2}\n[\t ]*)?<Enabled>false<\/Enabled>/u, "")}${close}`,
+  );
 }
 
 export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
@@ -97,7 +167,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
 } {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync(
     getWindowsPowerShellExePath(),
@@ -139,6 +209,28 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
     const commandLine = (entry.CommandLine ?? "").replaceAll("/", "\\").toLowerCase();
     return normalizedNeedles.some((needle) => commandLine.includes(needle));
   });
+  const matchingPids = new Set(
+    matching
+      .map((entry) => entry.ProcessId)
+      .filter((pid): pid is number => typeof pid === "number"),
+  );
+  // Anchors and console hosts need not carry fixture paths in argv. Expand only
+  // descendants of matching processes; context parents must not admit unrelated siblings.
+  let descendantsAdded: boolean;
+  do {
+    descendantsAdded = false;
+    for (const entry of entries) {
+      if (
+        typeof entry.ProcessId === "number" &&
+        typeof entry.ParentProcessId === "number" &&
+        matchingPids.has(entry.ParentProcessId) &&
+        !matchingPids.has(entry.ProcessId)
+      ) {
+        matchingPids.add(entry.ProcessId);
+        descendantsAdded = true;
+      }
+    }
+  } while (descendantsAdded);
   const parentPids = new Set(
     matching
       .map((entry) => entry.ParentProcessId)
@@ -147,7 +239,8 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
   const processes = entries.filter(
     (entry) =>
       matching.includes(entry) ||
-      (typeof entry.ProcessId === "number" && parentPids.has(entry.ProcessId)),
+      (typeof entry.ProcessId === "number" &&
+        (matchingPids.has(entry.ProcessId) || parentPids.has(entry.ProcessId))),
   );
   return {
     error: null,
@@ -244,9 +337,99 @@ export function assertInteractiveLeastPrivilegeTask(params: {
 }): void {
   expect(params.taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
   expect(params.principal.logonType).toBe(TASK_LOGON_INTERACTIVE_TOKEN);
+  assertLeastPrivilegeTask(params);
+}
+
+export function assertUnattendedLeastPrivilegeTask(params: {
+  principal: ScheduledTaskPrincipal;
+  taskXml: string;
+  scriptPath: string;
+}): void {
+  expect(params.taskXml).toContain("<LogonType>S4U</LogonType>");
+  expect(params.principal.logonType).toBe(TASK_LOGON_S4U);
+  expect(params.taskXml).toMatch(/<BootTrigger(?:\s[^>]*)?\/?>/u);
+  expect(params.taskXml).toMatch(/<LogonTrigger(?:\s[^>]*)?\/?>/u);
+  const normalizePath = (value: string) => path.win32.normalize(value).toLowerCase();
+  const command = decodeXml(params.taskXml.match(/<Command>([^<]*)<\/Command>/u)?.[1] ?? "");
+  const args = decodeXml(params.taskXml.match(/<Arguments>([^<]*)<\/Arguments>/u)?.[1] ?? "");
+  const workingDirectory = decodeXml(
+    params.taskXml.match(/<WorkingDirectory>([^<]*)<\/WorkingDirectory>/u)?.[1] ?? "",
+  );
+  expect(normalizePath(command)).toBe(normalizePath(getWindowsCmdExePath()));
+  expect(args).toBe(`/d /s /c ""${params.scriptPath}""`);
+  expect(normalizePath(workingDirectory)).toBe(
+    normalizePath(path.win32.dirname(params.scriptPath)),
+  );
+  assertLeastPrivilegeTask(params);
+}
+
+function assertLeastPrivilegeTask(params: {
+  principal: ScheduledTaskPrincipal;
+  taskXml: string;
+}): void {
   expect(params.principal.runLevel).toBe(TASK_RUNLEVEL_LEAST_PRIVILEGE);
   const exportedRunLevel = params.taskXml.match(/<RunLevel>([^<]+)<\/RunLevel>/u)?.[1];
   // Task Scheduler may omit the default LeastPrivilege node when exporting XML.
   // If present, it must agree with the effective COM principal checked above.
   expect(exportedRunLevel === undefined || exportedRunLevel === "LeastPrivilege").toBe(true);
+}
+
+/** Wait for the service owner to report the expected native runtime and identity. */
+export async function waitForRuntimeStatus(
+  readRuntime: () => Promise<GatewayServiceRuntime>,
+  expected: "running" | "stopped",
+  expectedPid?: number,
+): Promise<void> {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+  let lastStatus = "unknown";
+  let lastDetail = "";
+  let lastPid: number | undefined;
+  while (Date.now() < deadline) {
+    const runtime = await readRuntime();
+    lastStatus = runtime.status ?? "unknown";
+    lastDetail = runtime.detail ?? "";
+    lastPid = runtime.pid;
+    if (runtime.status === expected && (expectedPid === undefined || runtime.pid === expectedPid)) {
+      return;
+    }
+    await sleep(WAIT_INTERVAL_MS);
+  }
+  throw new Error(
+    `Timed out waiting for Scheduled Task status=${expected}${
+      expectedPid === undefined ? "" : ` pid=${expectedPid}`
+    }; observed ${lastStatus}${lastPid === undefined ? "" : ` pid=${lastPid}`}: ${lastDetail}`,
+  );
+}
+
+/** Wait for Scheduler to record the completed native invocation and exit code. */
+export async function waitForCompletedScheduledTaskRun(
+  taskName: string,
+  exitCode: number,
+): Promise<ScheduledTaskPrincipal> {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+  let lastPrincipal: ScheduledTaskPrincipal | null = null;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      lastPrincipal = readTaskPrincipal(taskName);
+      if (
+        lastPrincipal.taskState === TASK_STATE_READY &&
+        lastPrincipal.lastTaskResult === exitCode &&
+        !Number.isNaN(Date.parse(lastPrincipal.lastRunTime)) &&
+        Date.parse(lastPrincipal.lastRunTime) > 0
+      ) {
+        return lastPrincipal;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(WAIT_INTERVAL_MS);
+  }
+  throw new Error(
+    `Timed out waiting for Scheduled Task ${taskName} to finish with exit ${exitCode}; ${
+      lastPrincipal
+        ? `observed state=${lastPrincipal.taskState} result=${lastPrincipal.lastTaskResult}`
+        : `last inspection failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    }`,
+  );
 }

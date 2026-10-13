@@ -84,13 +84,8 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) =>
       resolveMantleBearerToken(env) ? "env:AWS_BEARER_TOKEN_BEDROCK" : undefined,
-    prepareRuntimeAuth: async ({ apiKey, env }) =>
-      await resolveMantleRuntimeBearerToken({
-        apiKey,
-        env,
-      }),
-    normalizeResolvedModel: ({ modelId, model }) =>
-      normalizeMantleResolvedModel({ modelId, model }),
+    prepareRuntimeAuth: resolveMantleRuntimeBearerToken,
+    normalizeResolvedModel: normalizeMantleResolvedModel,
     supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,

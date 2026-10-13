@@ -1,10 +1,7 @@
-import {
-  createMeetingLeaveSource,
-  createMeetingTranscriptSource,
-} from "openclaw/plugin-sdk/meeting-page-script-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { ZOOM_MEETING_SELECTORS } from "./zoom-meetings-selectors.js";
-import { zoomMeetingStatusCallSource } from "./zoom-meetings-status-call-source.js";
-import { zoomMeetingStatusPreludeSource } from "./zoom-meetings-status-prejoin-source.js";
+import { zoomMeetingStatusCall } from "./zoom-meetings-status-call-source.js";
+import { zoomMeetingStatusPrelude } from "./zoom-meetings-status-prejoin-source.js";
 import { normalizeZoomMeetingUrlForReuse } from "./zoom-meetings-urls.js";
 
 function pageIdentityFunctionSource(): string {
@@ -53,59 +50,25 @@ function zoomMeetingToggleStateFunctionSource(): string {
   }`;
 }
 
-export function zoomMeetingStatusScript(params: {
-  allowMicrophone: boolean;
-  allowSessionAdoption: boolean;
-  autoJoin: boolean;
-  captureCaptions: boolean;
-  guestName: string;
-  meetingSessionId?: string;
-  meetingUrl: string;
-  readOnly?: boolean;
-  waitForInCallMs: number;
-}) {
-  const selectors = JSON.stringify(ZOOM_MEETING_SELECTORS);
-  const expectedIdentity = normalizeZoomMeetingUrlForReuse(params.meetingUrl);
-  const toggleStateFunction = zoomMeetingToggleStateFunctionSource();
-  return (
-    zoomMeetingStatusPreludeSource({
-      ...params,
-      expectedIdentity,
-      pageIdentitySource: pageIdentityFunctionSource(),
-      selectors,
-      toggleStateFunction,
-    }) + zoomMeetingStatusCallSource()
-  );
-}
-
-export function zoomMeetingTranscriptScript(
-  meetingUrl: string,
-  meetingSessionId: string,
-  finalize: boolean,
-) {
-  const expectedIdentity = normalizeZoomMeetingUrlForReuse(meetingUrl);
-  return createMeetingTranscriptSource({
-    expectedIdentity,
-    finalize,
+export const zoomMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
+  platform: {
+    audioOutputElementIdPrefix: "openclaw-zoom-audio-output-",
+    manualActionReasonPrefix: "zoom",
+    displayName: "Zoom",
     globals: {
+      audioOutputs: "__openclawZoomAudioOutputs",
       captionArchive: "__openclawZoomCaptionArchive",
       captions: "__openclawZoomCaptions",
       meeting: "__openclawZoomMeeting",
     },
-    meetingSessionId,
-    pageIdentitySource: pageIdentityFunctionSource(),
-    platformDisplayName: "Zoom",
-  });
-}
-
-export function zoomMeetingLeaveScript(params: {
-  leaveInitiated: boolean;
-  meetingSessionId: string;
-  meetingUrl: string;
-}) {
-  const selectors = JSON.stringify(ZOOM_MEETING_SELECTORS);
-  const expectedIdentity = normalizeZoomMeetingUrlForReuse(params.meetingUrl);
-  return createMeetingLeaveSource({
+  },
+  normalizeUrl: normalizeZoomMeetingUrlForReuse,
+  pageIdentitySource: pageIdentityFunctionSource,
+  selectors: ZOOM_MEETING_SELECTORS,
+  toggleStateFunction: zoomMeetingToggleStateFunctionSource,
+  statusPrelude: zoomMeetingStatusPrelude,
+  statusCall: zoomMeetingStatusCall,
+  leave: {
     controlSource: `const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);
@@ -134,19 +97,7 @@ export function zoomMeetingLeaveScript(params: {
     departedMarkerSource: "(postCall || webClientHome)",
     documentSetupSource: `const topDocument = globalThis.document;
   const document = topDocument.querySelector("#webclient")?.contentDocument || topDocument;`,
-    expectedIdentity,
-    leaveInitiated: params.leaveInitiated,
-    meetingSessionId: params.meetingSessionId,
     meetingStateSource: "sessionId: expectedSessionId || state?.sessionId,",
-    pageIdentitySource: pageIdentityFunctionSource(),
-    platform: {
-      displayName: "Zoom",
-      globals: {
-        audioOutputs: "__openclawZoomAudioOutputs",
-        meeting: "__openclawZoomMeeting",
-      },
-    },
-    selectors,
     sessionMatchSource: `const sessionAdoptedFromUrl = Boolean(
     enforceSessionOwnership &&
     !state?.sessionId &&
@@ -156,5 +107,5 @@ export function zoomMeetingLeaveScript(params: {
   const sessionMatched = !enforceSessionOwnership ||
     state?.sessionId === expectedSessionId ||
     sessionAdoptedFromUrl;`,
-  });
-}
+  },
+});

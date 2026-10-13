@@ -18,6 +18,7 @@ describe("in-process Gateway original execution ownership", () => {
     "rejects %s dispatch when its inherited execution scope is closed",
     async (surface) => {
       const state = await createOpenClawTestState({ label: `closed-local-${surface}-execution` });
+      const cfg = {};
       const scope = new AsyncWorkScope();
       const releaseCallback = createDeferred();
       let dispatch: Promise<unknown> | undefined;
@@ -25,7 +26,7 @@ describe("in-process Gateway original execution ownership", () => {
         await scope.track(() => {
           // A callback retained by local work keeps its original async owner after drain.
           dispatch = releaseCallback.promise.then(() =>
-            withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => ({}) }, () => {
+            withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, () => {
               const context = getPluginRuntimeGatewayRequestScope()?.context;
               if (!context) {
                 throw new Error("local Gateway context was not created");
@@ -152,13 +153,11 @@ describe("in-process Gateway original execution ownership", () => {
           payload: { status: "accepted", runId: "in-process-tail" },
         });
         expect(order).toEqual([]);
-        kernel.registerGatewayLifetimeSidecars([
-          {
-            stop: () => {
-              order.push("dependencies stopped");
-            },
+        kernel.registerGatewayLifetimeSidecars({
+          stop: () => {
+            order.push("dependencies stopped");
           },
-        ]);
+        });
         const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
         vi.spyOn(kernel.connectionWork, "drain").mockImplementationOnce(() => {
           const operation = drain();

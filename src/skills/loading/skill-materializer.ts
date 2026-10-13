@@ -1,10 +1,28 @@
+import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillInvocationPolicy } from "./frontmatter.js";
-import {
-  createSyntheticSourceInfo,
-  resolveSkillDisplayName,
-  type Skill,
-} from "./skill-contract.js";
+import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
+
+const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
+
+function humanizeSkillIdentifier(value: string): string {
+  return value
+    .trim()
+    .split(/[-_]+/u)
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
+function resolveSkillDisplayName(content: string, fallbackName: string): string {
+  const body = extractFrontmatterBlock(content)?.body ?? content;
+  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
+  const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
+  // A captured heading can retain the whole skill body in metadata caches.
+  // Copy UTF-16 code units without changing lone surrogates.
+  return Buffer.from(displayName, "utf16le").toString("utf16le");
+}
 
 export function materializeSkill(params: {
   content: string;
@@ -18,8 +36,9 @@ export function materializeSkill(params: {
 }): Skill {
   return {
     name: params.name,
-    displayName: resolveSkillDisplayName(params.content, params.name),
+    displayName: resolveSkillDisplayName(params.content, params.frontmatter.name || params.name),
     description: params.description,
+    contentHash: sha256Hex(params.content),
     filePath: params.filePath,
     baseDir: params.baseDir,
     source: params.source,

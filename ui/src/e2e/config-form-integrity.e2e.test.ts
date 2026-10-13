@@ -281,7 +281,7 @@ suite.define(() => {
     );
   });
 
-  it("matches rejected Settings-save errors to visible one-based model rows", async () => {
+  it("explains rejected Settings-save errors and discards the draft", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -295,12 +295,7 @@ suite.define(() => {
           models: {
             providers: {
               [providerId]: {
-                models: [
-                  { name: "First" },
-                  { name: "Second" },
-                  { name: "Third" },
-                  { name: "Fourth" },
-                ],
+                models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, {}],
               },
             },
           },
@@ -381,17 +376,20 @@ suite.define(() => {
         };
         await gateway.rejectDeferred("config.set", rejection);
 
-        const status = page.locator('.settings-save-indicator--danger[role="status"]');
-        await expect.poll(() => status.isVisible()).toBe(true);
-        await expect
-          .poll(() => status.getAttribute("title"))
-          .toBe(
-            `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
-          );
-        expect(await status.getAttribute("aria-label")).toContain(
+        const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
+        await expect.poll(() => status.textContent()).toContain("Settings not applied");
+        // Opening the reason blurs the edited field without resubmitting its rejected value.
+        await status.getByText("Show reason", { exact: true }).click();
+        await status
+          .getByText(
+            `invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+            { exact: true },
+          )
+          .waitFor();
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
+        expect(await status.ariaSnapshot()).toContain(
           `models.providers.${providerId}.models.#4.name`,
         );
-        expect(await status.textContent()).toContain("Save failed");
         expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
         expect(rejection.message).toContain(".3.name");
 
@@ -406,6 +404,16 @@ suite.define(() => {
             await status.ariaSnapshot(),
           );
         }
+
+        await status.getByRole("button", { name: "Discard draft and reload", exact: true }).click();
+        await status.waitFor({ state: "hidden" });
+        expect(await panel.getByRole("textbox", { name: "Model name" }).nth(3).inputValue()).toBe(
+          "",
+        );
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        const restored = await page.locator(".config-raw-field textarea").inputValue();
+        expect(JSON.parse(restored)).toEqual(config);
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
       },
     );
   });

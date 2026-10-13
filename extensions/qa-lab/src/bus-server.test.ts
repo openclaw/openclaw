@@ -1,11 +1,11 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { QaBusPollResult } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-import type { QaBusPollResult } from "./runtime-api.js";
 
 async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -461,7 +461,12 @@ describe("qa-bus server", () => {
       expect(snapshot.events).toHaveLength(1);
       const storedAttachment = snapshot.messages[0]?.attachments?.[0];
       expect(storedAttachment).toEqual(attachment);
-      expect(Buffer.from(storedAttachment?.contentBase64 ?? "", "base64")).toEqual(generatedImage);
+      const storedImage = Buffer.from(storedAttachment?.contentBase64 ?? "", "base64");
+      expect(storedImage.byteLength).toBe(generatedImage.byteLength);
+      expect(
+        storedImage.equals(generatedImage),
+        "stored attachment bytes match the generated image",
+      ).toBe(true);
     },
   );
 

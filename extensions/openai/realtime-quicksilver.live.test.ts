@@ -168,7 +168,7 @@ describeLive("GPT-Live Platform WebSocket", () => {
         await bridge.connect();
         expect(bridge.isConnected()).toBe(true);
       } finally {
-        bridge.close();
+        await bridge.close();
       }
     },
     LIVE_TIMEOUT_MS,

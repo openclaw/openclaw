@@ -1,4 +1,6 @@
 import { normalizeBasePath } from "../app-route-paths.ts";
+import { fetchWithControlUiAuth } from "../app/control-ui-auth.ts";
+import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 
 // Gateway startup owns connection context; avatar presentation stays in lazy views.
 let appGatewayOrigin: string | null = null;
@@ -35,35 +37,27 @@ export async function fetchGatewayContextResource(
     throw new Error("Resource must belong to the connected Gateway");
   }
   const signal = AbortSignal.any([gatewayRequests.signal, AbortSignal.timeout(timeoutMs)]);
-  for (const token of appGatewayAuthTokens.length ? appGatewayAuthTokens : [""]) {
-    signal.throwIfAborted();
-    const response = await fetch(url, {
-      credentials: "include",
-      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
-      signal,
-    });
-    if (signal.aborted || response.status === 401 || response.status === 403) {
-      await response.body?.cancel();
-      signal.throwIfAborted();
-      continue;
-    }
-    return response;
+  const response = await fetchWithControlUiAuth(
+    url,
+    { credentials: "include", signal },
+    appGatewayAuthTokens,
+    () => true,
+  );
+  if (response.status === 401 || response.status === 403) {
+    await response.body?.cancel();
+    throw new Error("Gateway credentials rejected");
   }
-  throw new Error("Gateway credentials rejected");
+  return response;
 }
 
 function toHttpOrigin(url: string | null | undefined): string | null {
-  if (!url) {
+  const parsed = url ? URL.parse(url) : null;
+  if (!parsed) {
     return null;
   }
-  try {
-    const parsed = new URL(url);
-    const scheme =
-      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
+  const scheme =
+    parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+  return `${scheme}//${parsed.host}`;
 }
 
 /** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */
@@ -72,7 +66,10 @@ export function setAvatarGatewayOrigin(
   authTokens: readonly string[] = [],
   resourceBasePath = "",
 ): void {
-  const nextOrigin = toHttpOrigin(gatewayUrl);
+  const nextOrigin =
+    gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
+      ? (globalThis.location?.origin ?? null)
+      : toHttpOrigin(gatewayUrl);
   const documentOrigin = globalThis.location?.origin;
   const nextResourceBasePath =
     nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";

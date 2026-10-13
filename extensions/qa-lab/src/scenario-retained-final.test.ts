@@ -320,7 +320,7 @@ describe("failed-tool scenario retained final", () => {
     {
       name: "preview-only with processing ack",
       previewOnly: true,
-      error: "ordered preview send/delete/replacement chain",
+      error: "expected exactly one failure-honest reply, got []",
     },
     {
       name: "deleted preview without final",
@@ -378,6 +378,13 @@ describe("failed-tool scenario retained final", () => {
         expect(harness.state.getAcknowledgedPollCursor("default")).toBeGreaterThanOrEqual(
           Number(harness.vars.inboundCursor),
         );
+      }
+      if (fault.previewOnly) {
+        expect(
+          harness.state
+            .getSnapshot()
+            .messages.filter((message) => message.direction === "outbound"),
+        ).toMatchObject([{ deleted: true }]);
       }
     } finally {
       await harness.stop();

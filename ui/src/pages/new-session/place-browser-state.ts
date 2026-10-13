@@ -4,8 +4,12 @@ import type {
   FsListDirResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { isMissingFolderError } from "./folder-validation.ts";
 import { isAbsolutePath, sameAbsolutePath } from "./path.ts";
 import { resolvePlaceBrowserView, splitBrowserDraft } from "./place-browser-view.ts";
+
+registerNewSessionSetupEnglish();
 
 export const PICKER_INPUT_DEBOUNCE_MS = 300;
 
@@ -14,7 +18,7 @@ export class PlaceBrowserState {
   draft = "";
   loading = false;
   error: string | null = null;
-  activeIndex = 0;
+  activeIndex = -1;
   private token = 0;
   private listingGenerationValue = 0;
   private timer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -29,19 +33,20 @@ export class PlaceBrowserState {
     return this.listingGenerationValue;
   }
 
-  navigate(path: string | undefined): Promise<void> {
+  navigate(path: string | undefined, mode: "initial" | "navigation" = "navigation"): Promise<void> {
     this.cancelPending();
     this.draft = path ?? "";
+    this.activeIndex = -1;
     this.error = null;
     this.loading = true;
     this.requestUpdate();
-    return this.load(path, true, this.token);
+    return this.load(path, mode, this.token);
   }
 
   setDraft(value: string) {
     this.cancelPending();
     this.draft = value;
-    this.activeIndex = 0;
+    this.activeIndex = -1;
     this.error = null;
     const split = splitBrowserDraft(value.trim());
     this.loading = Boolean(split && !this.draftInLoadedDirectory());
@@ -50,7 +55,7 @@ export class PlaceBrowserState {
       // Mark loading before the debounce so an unloaded directory never flashes "no matches".
       this.timer = globalThis.setTimeout(() => {
         this.timer = undefined;
-        void this.load(split.directory, false, requestId);
+        void this.load(split.directory, "typing", requestId);
       }, PICKER_INPUT_DEBOUNCE_MS);
     }
     this.requestUpdate();
@@ -74,18 +79,21 @@ export class PlaceBrowserState {
     if (count === 0) {
       return;
     }
-    this.activeIndex = (this.activeIndex + delta + count) % count;
+    this.activeIndex =
+      this.activeIndex < 0
+        ? delta === 1
+          ? 0
+          : count - 1
+        : (this.activeIndex + delta + count) % count;
     this.requestUpdate();
   }
 
   highlightedEntry(): FsDirEntry | undefined {
-    const entries = this.view().entries;
-    this.activeIndex = Math.max(0, Math.min(this.activeIndex, entries.length - 1));
-    return entries[this.activeIndex];
+    return this.view().entries[this.activeIndex];
   }
 
   completeHighlighted(): boolean {
-    const entry = this.highlightedEntry();
+    const entry = this.highlightedEntry() ?? this.view().entries[0];
     if (!entry || this.draft.trim() === entry.path) {
       return false;
     }
@@ -94,13 +102,12 @@ export class PlaceBrowserState {
   }
 
   async activate(): Promise<void> {
-    const entry = this.highlightedEntry();
-    const draft = this.draft.trim();
-    if (entry) {
-      await this.navigate(entry.path);
-    } else if (!draft || isAbsolutePath(draft)) {
-      await this.navigate(draft || undefined);
+    const path = this.usablePath();
+    // A relative draft still shows the loaded listing; its highlight must not stand in for the draft.
+    if (path === null) {
+      return;
     }
+    await this.navigate(this.highlightedEntry()?.path ?? (path || undefined));
   }
 
   usablePath(): string | null {
@@ -115,7 +122,7 @@ export class PlaceBrowserState {
     this.draft = "";
     this.loading = false;
     this.error = null;
-    this.activeIndex = 0;
+    this.activeIndex = -1;
   }
 
   view() {
@@ -130,8 +137,11 @@ export class PlaceBrowserState {
     this.timer = undefined;
   }
 
-  private async load(path: string | undefined, navigation: boolean, requestId: number) {
-    const previousListing = this.listing;
+  private async load(
+    path: string | undefined,
+    mode: "initial" | "navigation" | "typing",
+    requestId: number,
+  ) {
     const draftAtRequest = this.draft;
     try {
       const listing = await this.listDirectory(path);
@@ -140,26 +150,25 @@ export class PlaceBrowserState {
       }
       this.listing = listing;
       this.listingGenerationValue += 1;
-      if (navigation && this.draft === draftAtRequest) {
+      if (mode !== "typing" && this.draft === draftAtRequest) {
         this.draft = listing.path;
       }
       // Typed loads keep the requested spelling. A different Gateway-canonicalized write-scope
       // symlink path intentionally shows "No matching folders" instead of children.
-      this.activeIndex = 0;
+      this.activeIndex = -1;
       this.onListing?.(listing);
     } catch (error) {
       if (requestId !== this.token) {
         return;
       }
       // Typed directories may be incomplete; only explicit navigation reports a hard failure.
-      if (navigation) {
-        this.error ??= readMissingScopeError(error)?.missingScope
+      if (mode === "initial" && path && isMissingFolderError(error)) {
+        this.draft = "";
+        await this.load(undefined, "navigation", requestId);
+      } else if (mode !== "typing") {
+        this.error = readMissingScopeError(error)?.missingScope
           ? t("newSession.browseRequiresAdmin")
           : t("newSession.browserLoadFailed");
-        if (!previousListing && path) {
-          this.draft = "";
-          await this.load(undefined, true, requestId);
-        }
       }
     } finally {
       if (requestId === this.token) {

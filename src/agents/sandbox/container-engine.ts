@@ -4,6 +4,7 @@
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
+import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
 export type ExecContainerRawOptions = {
@@ -36,17 +37,7 @@ export const PODMAN_SANDBOX_ENGINE: SandboxContainerEngine = {
   displayName: "Podman",
 };
 
-export type ExecDockerRawResult = {
-  stdout: Buffer;
-  stderr: Buffer;
-  code: number;
-};
-
-type ExecDockerRawError = Error & {
-  code: number;
-  stdout: Buffer;
-  stderr: Buffer;
-};
+export type ExecDockerRawResult = SandboxBackendCommandResult;
 
 function missingContainerEngineMessage(engine: SandboxContainerEngine): string {
   if (engine.id === "docker") {
@@ -98,12 +89,22 @@ export async function execContainerRaw(
   const stderr = Buffer.from(result.stderr);
   const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
   if (exitCode !== 0 && !opts?.allowFailure) {
-    const message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
-    const error: ExecDockerRawError = Object.assign(
+    let message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+    if (
+      engine.id === "podman" &&
+      args[0] === "create" &&
+      /^(?:Error: )?(?:lookup init binary|container-init binary not found on the host):/mu.test(
+        message,
+      )
+    ) {
+      // Podman owns init resolution, including helpers outside PATH and inside Podman Machine.
+      message +=
+        "\nInstall catatonit on the Podman engine host, or repair its configured init_path/helper_binaries_dir in containers.conf, then retry. The init executable must be available to the engine, not only inside the sandbox image. Keep --init and sandboxing enabled so orphaned processes are reaped.";
+    }
+    throw Object.assign(
       new Error(message || `${engine.displayName} command failed (exit ${exitCode})`),
       { code: exitCode, stdout, stderr },
     );
-    throw error;
   }
   return { stdout, stderr, code: exitCode };
 }

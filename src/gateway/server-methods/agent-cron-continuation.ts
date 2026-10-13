@@ -1,11 +1,11 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { hasNewGeneratedMediaTaskForSessionKey } from "../../agents/media-generation-activity.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { hasNewGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 import {
   CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS,
   waitForCronContinuationReleaseRecovery,
@@ -64,6 +64,7 @@ export function createCronContinuationController(params: {
               hasNewGeneratedMediaTaskForSessionKey(
                 activeClaim.sessionKey,
                 activeClaim.mediaTaskIdsBefore,
+                activeClaim.sessionAgentId,
               );
             if (!continuationCommittedWork) {
               current = structuredClone(activeClaim.initialEntry);

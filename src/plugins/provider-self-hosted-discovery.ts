@@ -2,6 +2,8 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
+import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -10,7 +12,6 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
@@ -54,6 +55,7 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
   "context_size",
+  "max_model_len",
 ] as const;
 
 function readOpenAICompatibleContextWindow(
@@ -89,7 +91,7 @@ function buildSelfHostedDiscoveryHeaders(params: {
 
 async function fetchSelfHostedDiscoveryJson(params: {
   url: string;
-  origin: string;
+  requestPolicy: ReturnType<typeof resolveProviderRequestPolicyConfig>;
   apiKey?: string;
   headers?: Record<string, string>;
   acceptJson?: boolean;
@@ -103,7 +105,7 @@ async function fetchSelfHostedDiscoveryJson(params: {
     guarded = await fetchWithSsrFGuard({
       url: params.url,
       init: { headers: buildSelfHostedDiscoveryHeaders(params) },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
+      policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       auditContext: "self-hosted-provider-discovery",
@@ -169,9 +171,13 @@ async function discoverOpenAICompatibleModelRows(
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
   const timeoutMs = params.timeoutMs ?? 5_000;
+  const requestPolicy = resolveProviderRequestPolicyConfig({
+    baseUrl: inferenceBaseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
   const request = {
     ...params,
-    origin: new URL(serverBaseUrl).origin,
+    requestPolicy,
     timeoutMs,
     acceptJson: params.modelsPathOrder === "server-first",
     readBody: true,
@@ -287,6 +293,7 @@ async function discoverOpenAICompatibleModelRows(
 
 type OpenAICompatibleLocalModelsParams = {
   baseUrl: string;
+  allowPrivateNetwork?: boolean;
   serverBaseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -342,12 +349,24 @@ export async function discoverOpenAICompatibleLocalModels(
     return [];
   }
 
+  const topLevelContextByModelId = new Map<string, number>();
+  for (const { model } of result.rows) {
+    const modelId = normalizeOptionalString(model.id);
+    const contextWindow = readOpenAICompatibleContextWindow(model);
+    if (modelId && contextWindow !== undefined) {
+      topLevelContextByModelId.set(modelId, contextWindow);
+    }
+  }
+
   return result.rows.flatMap(({ model, props }) => {
     const modelId = normalizeOptionalString(model.id);
     if (!modelId) {
       return [];
     }
     const meta = asOptionalRecord(model.meta);
+    const parentId = normalizeOptionalString(model.parent);
+    const parentContextWindow =
+      parentId && parentId !== modelId ? topLevelContextByModelId.get(parentId) : undefined;
     const generationSettings = asOptionalRecord(props?.default_generation_settings);
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
@@ -361,6 +380,7 @@ export async function discoverOpenAICompatibleLocalModels(
         params.contextWindow ??
         readPositiveInteger(meta?.n_ctx_train) ??
         readOpenAICompatibleContextWindow(model) ??
+        parentContextWindow ??
         SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
       ...(runtimeContextTokens ? { contextTokens: runtimeContextTokens } : {}),

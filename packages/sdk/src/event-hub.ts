@@ -1,4 +1,3 @@
-// OpenClaw SDK module implements event hub behavior.
 import type { GatewayEvent } from "./types.js";
 
 // Async event hub with bounded replay for SDK event streams.
@@ -126,16 +125,7 @@ export class EventHub<T> {
 
         return {
           next: async (): Promise<IteratorResult<T>> => {
-            if (stopped) {
-              if (hasStreamError) {
-                throw streamError;
-              }
-              if (this.hasCloseError) {
-                throw this.closeError;
-              }
-              return { done: true, value: undefined };
-            }
-            if (queueHead < queue.length) {
+            if (!stopped && queueHead < queue.length) {
               const value = queue[queueHead] as T;
               // Release consumed payloads immediately; lagging consumers compact only
               // after a substantial prefix reaches half the buffer, amortizing dequeue.
@@ -146,7 +136,7 @@ export class EventHub<T> {
               }
               return { done: false, value };
             }
-            if (!this.closed) {
+            if (!stopped && !this.closed) {
               return await new Promise<IteratorResult<T>>((resolve, reject) => {
                 const pending: PendingRead = {
                   resolve,
@@ -158,6 +148,9 @@ export class EventHub<T> {
               });
             }
             cleanup();
+            if (hasStreamError) {
+              throw streamError;
+            }
             if (this.hasCloseError) {
               throw this.closeError;
             }

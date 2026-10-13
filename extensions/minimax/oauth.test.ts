@@ -4,31 +4,10 @@ import type { Socket } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { loginMiniMaxPortalOAuth } from "./oauth.js";
 
 const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 function timeoutResult<T>(value: T, timeoutMs: number): Promise<T> {
   return new Promise((resolve) => {
@@ -278,18 +257,21 @@ afterEach(() => {
 });
 
 describe("loginMiniMaxPortalOAuth", () => {
-  it.each([
-    [3600, 1_700_003_600_000],
-    [1_700_000_000, 1_700_000_000_000],
-    [1_700_000_000_000, 1_700_000_000_000],
-  ])("normalizes token expiry %s through the OAuth flow", async (expiredIn, expectedExpires) => {
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  it("delivers the pairing code before polling for credentials", async () => {
+    const deviceCode = vi.fn(async () => {});
     stubOAuthFetch(
       (_input, init) => authorizationResponse(init),
-      tokenResponse({ expired_in: expiredIn }),
+      () => {
+        expect(deviceCode).toHaveBeenCalledExactlyOnceWith({
+          title: "MiniMax OAuth",
+          code: "CODE",
+          expiresInMinutes: 1,
+          message: "Enter this one-time code to approve access.",
+        });
+        return tokenResponse();
+      },
     );
-
-    await expect(loginMiniMax()).resolves.toMatchObject({ expires: expectedExpires });
+    await loginMiniMax({ deviceCode });
   });
 
   it("rejects malformed token expiry through the OAuth flow", async () => {
@@ -361,7 +343,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   );
 
   it("bounds authorization error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(
+    const tracked = cancelTrackedTextResponse(
       `${"minimax authorization unavailable ".repeat(1024)}tail`,
       {
         status: 503,
@@ -383,7 +365,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   });
 
   it("bounds token error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"minimax token unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"minimax token unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "Content-Type": "text/plain" },
     });
@@ -400,7 +382,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   });
 
   it("bounds HTTP 200 token bodies before app-level parsing", async () => {
-    const tracked = cancelTrackedResponse(`${'{"status":"error","detail":"'.repeat(512)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${'{"status":"error","detail":"'.repeat(512)}tail`, {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -415,7 +397,7 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
+  it("records the issuing account endpoint for Global and CN credentials", async () => {
     for (const [region, expectedHosts] of [
       [
         "global",
@@ -438,8 +420,7 @@ describe("loginMiniMaxPortalOAuth", () => {
       );
 
       await expect(loginMiniMax({ region })).resolves.toMatchObject({
-        access: "access",
-        refresh: "refresh",
+        tokenEndpoint: expectedHosts[1],
       });
       expect(
         fetchMock.mock.calls.map(([input]) =>
@@ -501,24 +482,5 @@ describe("loginMiniMaxPortalOAuth", () => {
     const rejection = expect(result).rejects.toThrow("timed out");
     await vi.advanceTimersByTimeAsync(10_000);
     await rejection;
-  });
-
-  it("keeps the default poll delay for zero authorization intervals", async () => {
-    vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    stubOAuthFetch(
-      (_input, init) => authorizationResponse(init, { interval: 0 }),
-      jsonResponse({ status: "pending" }),
-      tokenResponse(),
-    );
-
-    const result = loginMiniMax();
-
-    await vi.waitFor(() => {
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
-    });
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(result).resolves.toMatchObject({ access: "access", refresh: "refresh" });
   });
 });

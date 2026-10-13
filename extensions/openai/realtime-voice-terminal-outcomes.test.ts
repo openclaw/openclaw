@@ -128,7 +128,7 @@ async function capture(
     captured.connected = bridge.isConnected();
     return captured;
   } finally {
-    bridge.close();
+    await bridge.close();
     for (const socket of sockets) {
       socket.terminate();
     }

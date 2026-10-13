@@ -54,6 +54,8 @@ legacy encrypted OAuth sidecar credentials. It must persist for that recovery
 path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
 current SQLite rows or protect a state-only backup or copy.
 
+<a id="build-and-launch" />
+
 ## Run the maintained Docker setup
 
 ```bash
@@ -196,6 +198,8 @@ to the same file in place does not cause this divergence.
 
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
+
+<a id="updates" />
 
 ## Update OpenClaw
 

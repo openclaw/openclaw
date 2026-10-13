@@ -5,16 +5,19 @@ import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { isSessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
-import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
+  directSessionReq,
   getGatewayConfigModule,
   expectNoSessionQueueCleanup,
   browserSessionTabMocks,
@@ -28,34 +31,40 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-type CaptureSessionDiffBaseline =
-  (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
-const captureMocks = vi.hoisted(() => ({
-  capture: vi.fn<CaptureSessionDiffBaseline>(),
-}));
-
-vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sessions/session-diff.js")>()),
-  captureSessionDiffBaseline: captureMocks.capture,
-}));
-
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
 async function resetFromCaller(key: string, current: () => boolean) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  return await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
-    withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:reset-requester",
-        operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
-        receiptAuthority: current,
-      },
-      () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
-    ),
-  );
+  const resources = new LegacyPluginSdkResourceHost();
+  const work = new AsyncWorkScope();
+  // The RPC deadline does not cancel accepted work; authority tests control that clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    return await work.run(() =>
+      resources.run(() =>
+        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:reset-requester",
+              operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
+              receiptAuthority: current,
+            },
+            () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
+          ),
+        ),
+      ),
+    );
+  } finally {
+    try {
+      await work.runWhenIdle(() => resources.close());
+    } finally {
+      vi.useRealTimers();
+      await work.drain();
+    }
+  }
 }
 
 test.each(["normal", "incognito", "replacement"])(
@@ -222,64 +231,118 @@ test("sessions.reset preserves a concurrent same-id lifecycle replacement", asyn
   }
 });
 
-test("sessions.reset fences an old same-id baseline completion with a fresh capture id", async () => {
+test("sessions.reset rejects a stale expected session without interrupting current work", async () => {
+  const sessionKey = "agent:main:subagent:guarded-reset";
+  const currentSessionId = "sess-current";
   const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:main";
-  const sessionId = "sess-main";
-  const oldClaim = createSessionDiffBaselineCaptureClaim();
   await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(sessionId, {
-        createdVia: "operator",
-        sessionDiffBaselineCapture: oldClaim,
-      } as Partial<InternalSessionEntry>),
+    entries: { [sessionKey]: sessionStoreEntry(currentSessionId) },
+  });
+  let interrupted = false;
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [sessionKey, currentSessionId],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
     },
   });
-  const capture = createDeferredCore<SessionDiffBaseline>();
-  captureMocks.capture.mockReturnValueOnce(capture.promise);
-  const oldEntry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry;
-  const oldCompletion = ensureSessionDiffBaseline({
-    cwd: "/workspace",
-    entry: oldEntry,
-    isNewSession: false,
-    sessionKey,
-    storePath,
-  });
-  const oldOutcome = Promise.allSettled([oldCompletion]);
-  await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledOnce());
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
   try {
-    const reset = await performGatewaySessionReset({
-      key: "main",
-      reason: "new",
-      commandSource: "gateway:agent",
-      workerPlacementContext: {},
-      armSessionDiffBaselineCapture: true,
-    });
-    expect(reset).toMatchObject({ ok: true, entry: { sessionId } });
-    if (!reset.ok || "incognitoDeleted" in reset) {
-      throw new Error("expected reset session entry");
-    }
-    expect(reset.entry).not.toHaveProperty("sessionDiffBaselineCapture");
-    const afterReset = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry;
-    expect(afterReset.sessionDiffBaselineCapture?.captureId).not.toBe(oldClaim.captureId);
-    expect(afterReset.sessionDiffBaselineCapture).toMatchObject({
-      status: "pending",
+    const reset = await directSessionReq("sessions.reset", {
+      key: sessionKey,
+      expectedSessionId: "sess-stale",
     });
 
-    capture.resolve({ version: 1, sessionId, root: "/workspace", files: [] });
-    const [settled] = await oldOutcome;
-    expect(settled?.status).toBe("rejected");
-    if (settled?.status === "rejected") {
-      expect(isSessionWorkStartInvalidatedError(settled.reason)).toBe(true);
-      expect(String(settled.reason)).toMatch(/changed while starting work/i);
-    }
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionDiffBaselineCapture: afterReset.sessionDiffBaselineCapture,
+    expect(reset).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { reason: "session-changed" },
+      },
     });
-    expect(loadSessionEntry({ sessionKey, storePath })).not.toHaveProperty("sessionDiffBaseline");
+    expect(interrupted).toBe(false);
+    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(currentSessionId);
   } finally {
-    capture.resolve({ version: 1, sessionId, root: "/workspace", files: [] });
-    await oldOutcome;
+    admission.release();
   }
+});
+
+test("sessions.reset rechecks the expected session before interrupting replacement work", async () => {
+  const sessionKey = "agent:main:subagent:guarded-reset-race";
+  const observedSessionId = "sess-observed";
+  const replacementSessionId = "sess-replacement";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { [sessionKey]: sessionStoreEntry(observedSessionId) },
+  });
+  let replacementInterrupted = false;
+  const replacementAdmission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [sessionKey, replacementSessionId],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      replacementInterrupted = true;
+    },
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  let replaced = false;
+
+  try {
+    const reset = await performGatewaySessionReset({
+      key: sessionKey,
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+      workerPlacementContext: {},
+      expectedSessionId: observedSessionId,
+      assertCurrent: () => {
+        if (!replaced) {
+          replaced = true;
+          replaceSessionEntrySync(
+            { sessionKey, storePath },
+            sessionStoreEntry(replacementSessionId),
+          );
+        }
+      },
+    });
+
+    expect(reset).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "session-changed" } },
+    });
+    expect(replaced).toBe(true);
+    expect(replacementInterrupted).toBe(false);
+    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(replacementSessionId);
+  } finally {
+    replacementAdmission.release();
+  }
+});
+
+test("sessions.reset classifies a post-drain replacement as session-changed", async () => {
+  const sessionKey = "agent:main:subagent:guarded-reset-post-drain-race";
+  const observedSessionId = "sess-observed";
+  const replacementSessionId = "sess-replacement";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { [sessionKey]: sessionStoreEntry(observedSessionId) },
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  const reset = await performGatewaySessionReset({
+    key: sessionKey,
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
+    expectedSessionId: observedSessionId,
+    prepareLifecycle: async () => {
+      replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry(replacementSessionId));
+      return { ok: true, value: {} };
+    },
+  });
+
+  expect(reset).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", details: { reason: "session-changed" } },
+  });
+  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(replacementSessionId);
 });

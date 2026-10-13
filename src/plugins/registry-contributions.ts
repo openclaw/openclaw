@@ -1,0 +1,99 @@
+import { projectPluginHttpRoutes } from "./http-route-owner.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
+import { pluginArrays, pluginMaps } from "./registry-empty.js";
+import { capturePluginLifecycleAuthority, isPluginRecordBorrowed } from "./registry-lifecycle.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+
+function projectArray<T>(source: T[], target: T[] | undefined, owns: (entry: T) => boolean): void {
+  if (target) {
+    target.push(...source.filter(owns));
+  } else {
+    for (let index = source.length - 1; index >= 0; index--) {
+      if (owns(source[index]!)) {
+        source.splice(index, 1);
+      }
+    }
+  }
+}
+
+function projectMap<K, V>(
+  source: Map<K, V>,
+  target: Map<K, V> | undefined,
+  owns: (entry: V, key: K) => boolean,
+): void {
+  for (const [key, entry] of source) {
+    if (!owns(entry, key)) {
+      continue;
+    }
+    if (target) {
+      target.set(key, entry);
+    } else {
+      source.delete(key);
+    }
+  }
+}
+
+/** Copy exact owned contributions into a candidate, or remove them during failed registration. */
+export function projectPluginContributions(
+  source: PluginRegistry,
+  record: PluginRecord,
+  target?: PluginRegistry,
+): void {
+  const pluginId = record.id;
+  projectPluginHttpRoutes(source, record, target);
+  const owns = (entry: { pluginId?: string }) => entry.pluginId === pluginId;
+  for (const key of pluginArrays) {
+    if (key === "channels" && target && isPluginRecordBorrowed(target, record)) {
+      const channels = source.channels.filter(owns);
+      if (channels.length > 0) {
+        const instance = getPluginInstance(record);
+        const isCurrent = capturePluginLifecycleAuthority(target, record, { scopedRuntime: true });
+        if (!instance || !isCurrent) {
+          throw new Error(`Plugin ${pluginId} channel runtime cannot be borrowed`);
+        }
+        // A loan shares the live instance, not its lifetime. Fence the whole registration,
+        // including registrar-created callbacks and the read grants they return.
+        const wrap = instance.createRegistryView(target, (run) => {
+          if (!isCurrent()) {
+            throw new Error("Channel runtime borrower is no longer active");
+          }
+          return run();
+        });
+        target.channels.push(...channels.map((entry) => wrap(entry)));
+      }
+    } else {
+      projectArray<{ pluginId?: string }>(source[key], target?.[key], owns);
+    }
+  }
+  invalidateProviderRegistryIndex((target ?? source).providers);
+  for (const key of pluginMaps) {
+    projectMap<string, { pluginId: string }>(source[key], target?.[key], owns);
+  }
+  projectArray(
+    source.compactionProviders,
+    target?.compactionProviders,
+    (entry) => entry.ownerPluginId === pluginId,
+  );
+  projectMap(
+    source.contextEngines,
+    target?.contextEngines,
+    (entry) => entry.owner === `plugin:${pluginId}`,
+  );
+  projectMap(
+    source.pluginRuntimeArtifacts,
+    target?.pluginRuntimeArtifacts,
+    // SAFETY: Runtime artifact keys are host-created JSON tuples with the owning plugin id first.
+    (_entry, key) => (JSON.parse(key) as unknown[])[0] === pluginId,
+  );
+  const ownsMethod = (entry: PluginRegistry["gatewayMethodDescriptors"][number]) =>
+    entry.owner.kind === "plugin" && entry.owner.pluginId === pluginId;
+  for (const entry of source.gatewayMethodDescriptors.filter(ownsMethod)) {
+    if (target) {
+      target.gatewayHandlers[entry.name] = source.gatewayHandlers[entry.name]!;
+    } else {
+      delete source.gatewayHandlers[entry.name];
+    }
+  }
+  projectArray(source.gatewayMethodDescriptors, target?.gatewayMethodDescriptors, ownsMethod);
+}

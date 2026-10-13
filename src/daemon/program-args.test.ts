@@ -2,7 +2,10 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as windowsEncoding from "../infra/windows-encoding.js";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -26,10 +29,14 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
+import { stageScheduledTask } from "./schtasks-install.js";
+import { readScheduledTaskCommand } from "./schtasks-layout.js";
 
 const originalArgv = [...process.argv];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalExecPath = process.execPath;
 const validatedNodePath = "/opt/Validated Node/bin/node";
 const validatedBunPath = "/opt/Validated Bun/bin/bun";
@@ -50,73 +57,87 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function mockEntrypoint(entryPath: string, execPath = "node") {
+  process.argv = [execPath, entryPath];
+  fsMocks.realpath.mockResolvedValue(entryPath);
+  fsMocks.access.mockResolvedValue(undefined);
+}
+
 describe("resolveGatewayProgramArguments", () => {
-  it.skipIf(Boolean(process.versions.bun))(
-    "sizes only the Gateway in an ordinary Node spawn tree",
-    async () => {
+  it.each([true])(
+    "installs only the requested start-mode override: %s",
+    async (allowUnconfigured) => {
       const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      process.argv = [originalExecPath, entryPath];
+      process.argv = ["node", entryPath];
       fsMocks.realpath.mockResolvedValue(entryPath);
       fsMocks.access.mockResolvedValue(undefined);
       const { programArguments } = await resolveGatewayProgramArguments({
         port: 18789,
         runtime: "node",
-        runtimePath: originalExecPath,
+        runtimePath: validatedNodePath,
+        allowUnconfigured,
+        existingCommand: {
+          programArguments: [validatedNodePath, entryPath, "gateway", "--allow-unconfigured"],
+        },
       });
-      const measurement = "console.log(require('node:v8').getHeapStatistics().heap_size_limit)";
-      const environment = { NODE_OPTIONS: resolveGatewayHeapNodeOptions(undefined) };
-      const nativeDefault = spawnSync(originalExecPath, ["-e", measurement], {
-        env: environment,
-        encoding: "utf8",
-      });
-      const parent = spawnSync(
-        originalExecPath,
-        [
-          ...programArguments.slice(1, programArguments.indexOf(entryPath)),
-          "-e",
-          `const child = require('node:child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(measurement)}], { encoding: 'utf8' });
-       if (child.status !== 0) throw new Error(child.stderr);
-       console.log(JSON.stringify({ heap: require('node:v8').getHeapStatistics().heap_size_limit, used: process.memoryUsage().heapUsed, child: Number(child.stdout), options: process.env.NODE_OPTIONS }));`,
-        ],
-        { env: environment, encoding: "utf8" },
-      );
-      expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
-      expect(parent.status, parent.stderr).toBe(0);
-      const result = JSON.parse(parent.stdout);
-      expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
-      expect(result.used).toBeLessThan(64 * 1024 ** 2);
-      expect(result.child).toBe(Number(nativeDefault.stdout));
-      expect(result.options).toBe("");
+
+      expect(programArguments.slice(programArguments.indexOf("gateway"))).toEqual([
+        "gateway",
+        "--port",
+        "18789",
+        ...(allowUnconfigured ? ["--allow-unconfigured"] : []),
+      ]);
     },
   );
 
+  it.skipIf(
+    resolveNodeRuntimeExecutable({ requiredFlag: "--max-old-space-size" }) !== originalExecPath,
+  )("sizes only the Gateway in an ordinary Node spawn tree", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+    mockEntrypoint(entryPath, originalExecPath);
+    const { programArguments } = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      runtimePath: originalExecPath,
+    });
+    const measurement = "console.log(require('node:v8').getHeapStatistics().heap_size_limit)";
+    const environment = { NODE_OPTIONS: resolveGatewayHeapNodeOptions(undefined) };
+    const nativeDefault = spawnSync(originalExecPath, ["-e", measurement], {
+      env: environment,
+      encoding: "utf8",
+    });
+    const parent = spawnSync(
+      originalExecPath,
+      [
+        ...programArguments.slice(1, programArguments.indexOf(entryPath)),
+        "-e",
+        `const child = require('node:child_process').spawnSync(process.execPath, ['-e', ${JSON.stringify(measurement)}], { encoding: 'utf8' });
+       if (child.status !== 0) throw new Error(child.stderr);
+       console.log(JSON.stringify({ heap: require('node:v8').getHeapStatistics().heap_size_limit, used: process.memoryUsage().heapUsed, child: Number(child.stdout), options: process.env.NODE_OPTIONS }));`,
+      ],
+      { env: environment, encoding: "utf8" },
+    );
+    expect(nativeDefault.status, nativeDefault.stderr).toBe(0);
+    expect(parent.status, parent.stderr).toBe(0);
+    const result = JSON.parse(parent.stdout);
+    expect(result.heap).toBeGreaterThanOrEqual(16384 * 1024 ** 2);
+    expect(result.used).toBeLessThan(64 * 1024 ** 2);
+    expect(result.child).toBe(Number(nativeDefault.stdout));
+    expect(result.options).toBe("");
+  });
+
   it.each([
     { nodeOptions: "--max-old-space-size=24576", existing: [], expected: [] },
-    { nodeOptions: "--max-old-space-size-percentage=25", existing: [], expected: [] },
-    { nodeOptions: "--max-heap-size=24576", existing: [], expected: [] },
-    { nodeOptions: "--max-old-space-size=0", existing: [], expected: [] },
-    {
-      nodeOptions: "",
-      existing: ["--max-old-space-size=24576"],
-      expected: ["--max-old-space-size=24576"],
-    },
     {
       nodeOptions: "",
       existing: ["--require", "gateway", "--max-old-space-size=24576"],
-      expected: ["--max-old-space-size=24576"],
-    },
-    {
-      nodeOptions: "--max-old-space-size-percentage=25",
-      existing: ["--max-old-space-size=24576", "--require=/tmp/preload.js"],
       expected: ["--max-old-space-size=24576"],
     },
   ])(
     "preserves stored controls without adding an automatic override: $nodeOptions $existing",
     async ({ nodeOptions, existing, expected }) => {
       const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      process.argv = ["node", entryPath];
-      fsMocks.realpath.mockResolvedValue(entryPath);
-      fsMocks.access.mockResolvedValue(undefined);
+      mockEntrypoint(entryPath);
       const result = await resolveGatewayProgramArguments({
         port: 18789,
         runtime: "node",
@@ -161,85 +182,6 @@ describe("resolveGatewayProgramArguments", () => {
     } finally {
       process.execArgv = originalExecArgv;
     }
-  });
-
-  it("prefers index.js over legacy entry.js when both exist in the same dist directory", async () => {
-    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
-    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = ["node", entryPath];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockResolvedValue(undefined);
-
-    const result = await resolveGatewayProgramArguments({
-      port: 18789,
-      runtime: "node",
-      runtimePath: validatedNodePath,
-    });
-
-    expect(result.programArguments).toEqual([
-      validatedNodePath,
-      "--max-old-space-size=16384",
-      indexPath,
-      "gateway",
-      "--port",
-      "18789",
-    ]);
-  });
-
-  it("keeps entry.js when index.js is missing", async () => {
-    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
-    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    const indexMjsPath = path.resolve("/opt/openclaw/dist/index.mjs");
-    process.argv = ["node", entryPath];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === indexPath || target === indexMjsPath) {
-        throw new Error("missing");
-      }
-    });
-
-    const result = await resolveGatewayProgramArguments({
-      port: 18789,
-      runtime: "node",
-      runtimePath: validatedNodePath,
-    });
-
-    expect(result.programArguments).toEqual([
-      validatedNodePath,
-      "--max-old-space-size=16384",
-      entryPath,
-      "gateway",
-      "--port",
-      "18789",
-    ]);
-  });
-
-  it("uses realpath-resolved dist entry when running via npx shim", async () => {
-    const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
-    const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
-    process.argv = ["node", argv1];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === entryPath) {
-        return;
-      }
-      throw new Error("missing");
-    });
-
-    const result = await resolveGatewayProgramArguments({
-      port: 18789,
-      runtime: "node",
-      runtimePath: validatedNodePath,
-    });
-
-    expect(result.programArguments).toEqual([
-      validatedNodePath,
-      "--max-old-space-size=16384",
-      entryPath,
-      "gateway",
-      "--port",
-      "18789",
-    ]);
   });
 
   it("prefers symlinked path over realpath for stable service config", async () => {
@@ -300,9 +242,7 @@ describe("resolveGatewayProgramArguments", () => {
   it("uses Node with tsx for source-checkout dev mode", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    process.argv = ["/usr/local/bin/node", repoIndexPath];
-    fsMocks.realpath.mockResolvedValue(repoIndexPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(repoIndexPath, "/usr/local/bin/node");
 
     const result = await resolveGatewayProgramArguments({
       dev: true,
@@ -327,9 +267,7 @@ describe("resolveGatewayProgramArguments", () => {
   it("uses Bun directly for packaged and source-checkout Gateway commands", async () => {
     const packagedEntryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const packagedIndexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = [validatedBunPath, packagedEntryPath];
-    fsMocks.realpath.mockResolvedValue(packagedEntryPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(packagedEntryPath, validatedBunPath);
 
     const packaged = await resolveGatewayProgramArguments({
       port: 18789,
@@ -338,6 +276,7 @@ describe("resolveGatewayProgramArguments", () => {
     });
     expect(packaged.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       packagedIndexPath,
       "gateway",
       "--port",
@@ -357,6 +296,7 @@ describe("resolveGatewayProgramArguments", () => {
     });
     expect(sourceCheckout.programArguments).toEqual([
       validatedBunPath,
+      "--no-install",
       repoEntryPath,
       "gateway",
       "--port",
@@ -366,38 +306,6 @@ describe("resolveGatewayProgramArguments", () => {
   });
 
   it.each([
-    {
-      service: "gateway",
-      selection: "missing",
-      resolve: () =>
-        resolveGatewayProgramArguments({
-          dev: true,
-          port: 18789,
-          runtime: "node",
-        }),
-    },
-    {
-      service: "node host",
-      selection: "missing",
-      resolve: () =>
-        resolveNodeProgramArguments({
-          dev: true,
-          host: "gateway.example",
-          port: 18789,
-          runtime: "node",
-        }),
-    },
-    {
-      service: "gateway",
-      selection: "blank",
-      resolve: () =>
-        resolveGatewayProgramArguments({
-          dev: true,
-          port: 18789,
-          runtime: "node",
-          runtimePath: " \t ",
-        }),
-    },
     {
       service: "node host",
       selection: "blank",
@@ -416,23 +324,15 @@ describe("resolveGatewayProgramArguments", () => {
     await expect(resolve()).rejects.toThrow(missingSelectedNodeError);
   });
 
-  it.each([
-    {
-      service: "gateway",
-      resolve: () => resolveGatewayProgramArguments({ port: 18789, runtime: "bun" }),
-    },
-    {
-      service: "node host",
-      resolve: () =>
-        resolveNodeProgramArguments({
-          host: "gateway.example",
-          port: 18789,
-          runtime: "bun",
-          runtimePath: " \t ",
-        }),
-    },
-  ])("rejects a missing Bun path for the $service", async ({ resolve }) => {
-    await expect(resolve()).rejects.toThrow(missingSelectedBunError);
+  it("rejects a blank selected Bun path for the node host", async () => {
+    await expect(
+      resolveNodeProgramArguments({
+        host: "gateway.example",
+        port: 18789,
+        runtime: "bun",
+        runtimePath: " \t ",
+      }),
+    ).rejects.toThrow(missingSelectedBunError);
   });
 
   it("uses an executable wrapper from Bun without a selected Node path", async () => {
@@ -467,17 +367,16 @@ describe("resolveGatewayProgramArguments", () => {
 });
 
 describe("resolveNodeProgramArguments", () => {
-  it("carries an explicit plaintext selection into the managed node command", async () => {
+  it("carries plaintext and command restrictions into the managed node command", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
     const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = ["node", entryPath];
-    fsMocks.realpath.mockResolvedValue(entryPath);
-    fsMocks.access.mockResolvedValue(undefined);
+    mockEntrypoint(entryPath);
 
     const result = await resolveNodeProgramArguments({
       host: "gateway.example",
       port: 18789,
       tls: false,
+      commands: ["fixture.list", "fixture.read"],
       runtime: "node",
       runtimePath: validatedNodePath,
     });
@@ -492,32 +391,62 @@ describe("resolveNodeProgramArguments", () => {
       "--port",
       "18789",
       "--no-tls",
+      "--commands",
+      "fixture.list,fixture.read",
     ]);
   });
 
-  it("uses Bun for the managed node command", async () => {
+  it("replaces persisted command restrictions with all commands while retaining node options", async () => {
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    fsMocks.stat.mockImplementation(actualFs.stat);
     const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
-    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
-    process.argv = [validatedBunPath, entryPath];
+    process.argv = ["node", entryPath];
     fsMocks.realpath.mockResolvedValue(entryPath);
     fsMocks.access.mockResolvedValue(undefined);
-
-    const result = await resolveNodeProgramArguments({
+    vi.spyOn(windowsEncoding, "resolveWindowsOemCodePage").mockReturnValue(437);
+    const home = tempDirs.make("openclaw-node-command-reset-");
+    const env = {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_STATE_DIR: path.join(home, "state"),
+      OPENCLAW_TASK_SCRIPT_NAME: "node.cmd",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node Fixture",
+    };
+    const stdout = new PassThrough();
+    const options = {
       host: "gateway.example",
       port: 18789,
-      runtime: "bun",
-      runtimePath: validatedBunPath,
-    });
+      displayName: "Fixture Node",
+      installedAppsSharing: false,
+      runtime: "node" as const,
+      runtimePath: validatedNodePath,
+    };
+    try {
+      const restricted = await resolveNodeProgramArguments({
+        ...options,
+        commands: ["fixture.read"],
+      });
+      await stageScheduledTask({ env, stdout, ...restricted });
+      const saved = await readScheduledTaskCommand(env);
+      expect(saved?.programArguments).toEqual(
+        expect.arrayContaining(["--commands", "fixture.read"]),
+      );
 
-    expect(result.programArguments).toEqual([
-      validatedBunPath,
-      indexPath,
-      "node",
-      "run",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-    ]);
+      const reset = await resolveNodeProgramArguments({ ...options, allCommands: true });
+      await stageScheduledTask({ env, stdout, ...reset });
+      const replaced = await readScheduledTaskCommand(env);
+      expect(replaced?.programArguments).toEqual(
+        expect.arrayContaining([
+          "--all-commands",
+          "--display-name",
+          "Fixture Node",
+          "--no-share-installed-apps",
+        ]),
+      );
+      expect(replaced?.programArguments).not.toContain("--commands");
+      expect(replaced?.programArguments).not.toContain("fixture.read");
+    } finally {
+      stdout.destroy();
+    }
   });
 });

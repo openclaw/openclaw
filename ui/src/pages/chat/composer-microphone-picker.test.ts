@@ -2,7 +2,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ComposerMicrophonePicker } from "./composer-microphone-picker.ts";
-import * as realtimeTalkInput from "./realtime-talk-input.ts";
+import * as realtimeTalkInput from "./talk/input.ts";
 
 function catalog(ready: boolean) {
   return {

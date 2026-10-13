@@ -1,4 +1,3 @@
-// Feishu plugin module implements secret contract behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
@@ -63,39 +62,22 @@ export function collectRuntimeConfigAssignments(params: {
     hasOwnProperty(account, "connectionMode")
       ? normalizeSecretStringValue(account.connectionMode)
       : baseConnectionMode;
-  collectConditionalChannelFieldAssignments({
-    channelKey: "feishu",
-    field: "encryptKey",
-    channel: feishu,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
-    topLevelActiveWithoutAccounts: baseConnectionMode === "webhook",
-    topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled &&
-      !hasOwnProperty(account, "encryptKey") &&
-      resolveAccountMode(account) === "webhook",
-    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "webhook",
-    topInactiveReason: "no enabled Feishu webhook-mode surface inherits this top-level encryptKey.",
-    accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
-  });
-  collectConditionalChannelFieldAssignments({
-    channelKey: "feishu",
-    field: "verificationToken",
-    channel: feishu,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
-    topLevelActiveWithoutAccounts: baseConnectionMode === "webhook",
-    topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled &&
-      !hasOwnProperty(account, "verificationToken") &&
-      resolveAccountMode(account) === "webhook",
-    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "webhook",
-    topInactiveReason:
-      "no enabled Feishu webhook-mode surface inherits this top-level verificationToken.",
-    accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
-  });
+  for (const field of ["encryptKey", "verificationToken"] as const) {
+    collectConditionalChannelFieldAssignments({
+      channelKey: "feishu",
+      field,
+      channel: feishu,
+      surface,
+      defaults: params.defaults,
+      context: params.context,
+      topLevelActiveWithoutAccounts: baseConnectionMode === "webhook",
+      topLevelInheritedAccountActive: ({ account, enabled }) =>
+        enabled && !hasOwnProperty(account, field) && resolveAccountMode(account) === "webhook",
+      accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "webhook",
+      topInactiveReason: `no enabled Feishu webhook-mode surface inherits this top-level ${field}.`,
+      accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
+    });
+  }
 }
 
 export const channelSecrets = {

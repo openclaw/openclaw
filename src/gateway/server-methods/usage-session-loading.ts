@@ -48,7 +48,7 @@ export async function discoverAllSessionsForUsage(params: {
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : listGatewayAgentsBasic(params.config).agents;
+    : (await listGatewayAgentsBasic(params.config)).agents;
   const discovered = await runUsageAgentTasks(
     agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);
@@ -56,7 +56,6 @@ export async function discoverAllSessionsForUsage(params: {
         agentId,
         startMs: params.startMs,
         endMs: params.endMs,
-        includeFirstUserMessage: false,
       });
       return sessions.map((session) => Object.assign({}, session, { agentId }));
     }),
@@ -87,12 +86,18 @@ export function mergeUsageCacheStatus(
 }
 
 export async function loadUsageSessionSummaries(params: {
-  entries: UsageSessionSummaryTarget[];
+  entries: Array<{
+    agentId: string;
+    sessionId?: string;
+    sessionFile?: string;
+    instances: Array<{ sessionId?: string; sessionFile: string }>;
+  }>;
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
+  projection?: "overview";
 }) {
   const {
     entries: mergedEntries,
@@ -111,7 +116,7 @@ export async function loadUsageSessionSummaries(params: {
   // Batch all included instances by agent so cache reads do not scale with the row limit.
   const sessionsByAgent = new Map<
     string,
-    Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+    Array<{ entryIndex: number; sessionId?: string; sessionFile: string }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
     for (const { sessionId, sessionFile } of merged.instances) {
@@ -136,6 +141,7 @@ export async function loadUsageSessionSummaries(params: {
         endMs,
         includeUntimestamped,
         dayBucket,
+        projection: params.projection,
       }),
     })),
   );
@@ -150,8 +156,8 @@ export async function loadUsageSessionSummaries(params: {
           "merged entries entry at session.entry index",
         );
         usage ??= createSessionCostSummaryAccumulator({
-          sessionId: merged.sessionId,
-          sessionFile: merged.sessionFile,
+          sessionId: merged.sessionId ?? merged.instances[0]?.sessionId,
+          sessionFile: merged.sessionFile ?? merged.instances[0]?.sessionFile,
         });
         usage.add(summary);
       }

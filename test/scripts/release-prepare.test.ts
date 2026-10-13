@@ -12,6 +12,9 @@ import {
   readWorktreeState,
   runReleasePrepareSteps,
 } from "../../scripts/release-prepare.ts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function worktreeState(
   overrides: Partial<{
@@ -33,15 +36,6 @@ function worktreeState(
 }
 
 describe("release preparation arguments", () => {
-  it("defaults to non-mutating shadow mode", () => {
-    expect(parseReleasePrepareArgs(["--version", "2026.7.2-beta.1"])).toMatchObject({
-      android: false,
-      jobs: 4,
-      mode: "shadow",
-      version: "2026.7.2-beta.1",
-    });
-  });
-
   it("rejects ambiguous modes and invalid concurrency", () => {
     expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--check", "--write"])).toThrow(
       "Use only one mode flag",
@@ -49,7 +43,30 @@ describe("release preparation arguments", () => {
     expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--jobs", "17"])).toThrow(
       "Expected 1 through 16",
     );
+    expect(() => parseReleasePrepareArgs(["--check", "--check", "--unknown"])).toThrow(
+      "Use only one mode flag; received --check and --check.",
+    );
+    expect(parseReleasePrepareArgs(["--jobs", "2", "--", "--jobs", "0x4"])).toMatchObject({
+      android: false,
+      jobs: 4,
+      mode: "shadow",
+    });
+    expect(() => parseReleasePrepareArgs(["--help", "--manifest", "-h"])).toThrow(
+      "Missing value for --manifest.",
+    );
   });
+});
+
+it("rejects alpha preparation before constructing write steps", () => {
+  expect(() =>
+    createReleasePrepareSteps({
+      android: false,
+      version: "2026.9.24-alpha.1",
+      rootDir: "/repo",
+      mode: "write",
+      jobs: 2,
+    }),
+  ).toThrow("Alpha releases are retired;");
 });
 
 describe("release preparation plan", () => {
@@ -81,29 +98,6 @@ describe("release preparation plan", () => {
       "--jobs",
       "6",
     ]);
-  });
-
-  it("does not execute commands in shadow mode", () => {
-    const steps = createReleasePrepareSteps({
-      android: false,
-      jobs: 4,
-      mode: "shadow",
-      rootDir: "/repo",
-      version: "2026.7.2",
-    });
-    let calls = 0;
-    const results = runReleasePrepareSteps({
-      cwd: "/repo",
-      mode: "shadow",
-      runStep: () => {
-        calls += 1;
-        return 0;
-      },
-      steps,
-    });
-
-    expect(calls).toBe(0);
-    expect(results.map((result) => result.status)).toEqual(["planned", "planned"]);
   });
 
   it("stops after a failed prerequisite and records the blocked step", () => {
@@ -141,7 +135,7 @@ describe("release preparation plan", () => {
       process.exitCode = status;
     `;
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", "tsx", "--input-type=module", "-e", harness],
       {
         cwd: process.cwd(),

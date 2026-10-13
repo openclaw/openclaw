@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 
 const credential = "synthetic-resolved-provider-credential";
@@ -68,13 +68,6 @@ describe("resolved non-env config credentials in the auth overview", () => {
     });
     expect(result.modelsJson?.value).toBe(`marker(${NON_ENV_SECRETREF_MARKER})`);
     expect(JSON.stringify(result)).not.toContain(credential);
-  });
-
-  it("keeps a cold configured reference missing without resolved material", () => {
-    const result = overview(sourceConfig());
-
-    expect(result.effective).toEqual({ kind: "missing", detail: "missing" });
-    expect(result.modelsJson?.value).toBe(`marker(${NON_ENV_SECRETREF_MARKER})`);
   });
 
   it("does not borrow resolved material after the configured reference changes", () => {

@@ -15,6 +15,16 @@ function parseSvg(svg: string): Element {
   return new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
 }
 
+function parseTranslate(element: Element): { x: number; y: number } {
+  const match = /^translate\(([-\d.]+), ([-\d.]+)\)$/u.exec(
+    element.getAttribute("transform") ?? "",
+  );
+  if (!match) {
+    throw new Error("Expected a translated Mermaid element.");
+  }
+  return { x: Number(match[1]), y: Number(match[2]) };
+}
+
 // The renderer belongs to the page, so these cases share its warm engine.
 // Error cases still dispose it; the file boundary owns final page teardown.
 afterAll(() => {
@@ -100,11 +110,56 @@ G --> S`;
     ["sequence", "sequenceDiagram\nAlice->>Bob: Hello\nBob-->>Alice: Ready", "Alice"],
     ["class", "classDiagram\nVehicle <|-- Car\nVehicle : +move()", "Vehicle"],
     ["state", "stateDiagram-v2\n[*] --> Ready\nReady --> Running\nRunning --> [*]", "Running"],
+    ["mindmap", "mindmap\n  root((OpenClaw))\n    Gateway\n    Runtime", "Gateway"],
+    [
+      "swimlane",
+      "swimlane-beta LR\n  subgraph Gateway\n    Admit[Admit]\n  end\n  subgraph Runtime\n    Execute[Execute]\n  end\n  Admit --> Execute",
+      "Execute",
+    ],
+    [
+      "architecture",
+      "architecture-beta\nservice gateway(server)[Gateway]\nservice runtime(server)[Runtime]\ngateway:R -- L:runtime",
+      "Gateway",
+    ],
+    ["math", 'flowchart LR\nA["$$x^2$$"] --> B[Result]', "Result"],
   ])("preserves %s diagram content in the passive image", async (_name, source, label) => {
     const root = parseSvg(await renderMermaidSvg(source, theme));
     expect(root.textContent).toContain(label);
     expect(root.querySelector("path,rect,line,polygon")).not.toBeNull();
     expect(root.querySelector("style,script,a,image,foreignObject,[style],[href]")).toBeNull();
+  });
+
+  it("preserves diagram-specific mindmap and swimlane layouts", async () => {
+    const mindmap = parseSvg(
+      await renderMermaidSvg(
+        "mindmap\n  root((OpenClaw))\n    Gateway\n      Admission\n    Runtime\n      Execution",
+        theme,
+      ),
+    );
+    const swimlane = parseSvg(
+      await renderMermaidSvg(
+        "swimlane-beta LR\n  subgraph Gateway\n    Admit[Admit]\n  end\n  subgraph Runtime\n    Execute[Execute]\n  end\n  Admit --> Execute",
+        theme,
+      ),
+    );
+    const mindmapNodes = Array.from(
+      mindmap.querySelectorAll<SVGGElement>('[id*="-node_"][transform]'),
+    );
+    const root = mindmapNodes.find((node) => node.id.endsWith("-node_0"));
+    expect(root).toBeDefined();
+    const rootY = parseTranslate(root!).y;
+    const childY = mindmapNodes
+      .filter((node) => node !== root)
+      .map((node) => parseTranslate(node).y);
+    expect(childY.some((y) => y < rootY)).toBe(true);
+    expect(childY.some((y) => y > rootY)).toBe(true);
+
+    expect(swimlane.querySelector("#Gateway")).not.toBeNull();
+    expect(swimlane.querySelector("#Runtime")).not.toBeNull();
+    const admit = parseTranslate(swimlane.querySelector('[id*="-flowchart-Admit-"]')!);
+    const execute = parseTranslate(swimlane.querySelector('[id*="-flowchart-Execute-"]')!);
+    expect(admit.x).toBe(execute.x);
+    expect(admit.y).not.toBe(execute.y);
   });
 
   it("enforces host source and edge limits despite source configuration, then recovers", async () => {
@@ -116,6 +171,15 @@ G --> S`;
       await renderMermaidSvg("flowchart LR\nA[Recovered] --> B[Ready]", theme),
     );
     expect(recovered.textContent).toContain("Recovered");
+  });
+
+  it("preserves Unicode at the sandbox error boundary", async () => {
+    const prefix = "No diagram type detected matching given configuration for text: ";
+    const source = `${"x".repeat(935)}😀`;
+
+    await expect(renderMermaidSvg(source, theme)).rejects.toMatchObject({
+      message: `${prefix}${"x".repeat(935)}`,
+    });
   });
 
   it("blocks image decoding inside Mermaid before the SVG reaches the host", async () => {

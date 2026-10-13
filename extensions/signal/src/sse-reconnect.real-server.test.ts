@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { runSignalSseLoop, type SignalStatusSink } from "./sse-reconnect.js";
 
 const servers: Server[] = [];
@@ -42,10 +43,6 @@ afterEach(async () => {
   );
 });
 
-function createRuntime() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-}
-
 describe("runSignalSseLoop native HTTP boundary", () => {
   it("publishes one terminal status and stops after a permanent rejection", async () => {
     const abort = new AbortController();
@@ -64,7 +61,7 @@ describe("runSignalSseLoop native HTTP boundary", () => {
       baseUrl: endpoint.baseUrl,
       account: "+15555550100",
       abortSignal: abort.signal,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       onEvent: vi.fn(),
       statusSink,
     });
@@ -89,7 +86,7 @@ describe("runSignalSseLoop native HTTP boundary", () => {
       baseUrl: endpoint.baseUrl,
       account: "+15555550100",
       abortSignal: abort.signal,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       onEvent: vi.fn(),
       policy: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
       statusSink: (patch) => {

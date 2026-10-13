@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import {
   prepareTsdownBuildExecution,
   TSDOWN_DECLARATION_EXTENSIONS,
@@ -18,6 +19,7 @@ import {
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { publishStagedDeclarations } from "./declaration-stage.mts";
 import { withDistArtifactOwnership } from "./dist-artifact-ownership.mts";
+import { hasUnjoinedWork } from "./managed-child-process.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "./tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationStage,
@@ -42,6 +44,7 @@ export async function writeTsdownDeclarations(
   try {
     // The private child retains declared cwd ownership; snapshot/output paths are physical.
     await withDistArtifactOwnership(process.cwd(), async () => {
+      await ensureKyselyTypes(root);
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
       const staging = createStage();
@@ -50,15 +53,12 @@ export async function writeTsdownDeclarations(
         JSON.stringify([name, process.env[name] ?? ""]),
       );
       const generatorInputs = resolveTsdownDeclarationGeneratorInputs(root, generatorEntry);
-      const snapshot = () =>
-        new CompilerInputSnapshot(root, {
-          toolchainFiles: resolveTsdownCompilerFiles(),
-          generatorInputs,
-          isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
-        });
-      // All groups share the same before/after reads of configuration, topology,
-      // tools and overlapping sources. Only compiler membership differs.
-      const before = snapshot();
+      // All groups share configuration, topology, tools and overlapping source reads.
+      const before = new CompilerInputSnapshot(root, {
+        toolchainFiles: resolveTsdownCompilerFiles(),
+        generatorInputs,
+        isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+      });
       const liveDist = path.join(root, "dist");
       const prepared = groups.map((name) => {
         const config = configs.find((candidate: { name?: string }) => candidate.name === name);
@@ -72,7 +72,7 @@ export async function writeTsdownDeclarations(
         ) {
           throw new Error(`Missing canonical declaration group ${name}`);
         }
-        // Runtime worker entries are absolute; declaration partitions are checkout-relative.
+        // Runtime worker entries are absolute; declaration roots are checkout-relative.
         const entries = Object.entries(config.entry).map(
           ([entry, inputs]) =>
             [entry, [inputs].flat().map((input) => path.resolve(root, input))] as const,
@@ -123,8 +123,7 @@ export async function writeTsdownDeclarations(
           cache: {
             env: TSDOWN_UNIFIED_CACHE_ENV,
             inputs: generatorInputs,
-            // An empty canonical partition still owns its successful compiler
-            // receipt. Ordinary cache records never admit an empty inventory.
+            // Successful publication includes the compiler membership receipt.
             outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }, receipt],
             requiredOutputs: [...required.map((entry) => `dist/${entry}`), receipt],
             restore: "always",
@@ -157,19 +156,15 @@ export async function writeTsdownDeclarations(
       if (!required.length) {
         throw new Error("Canonical declaration selection is empty");
       }
-      const startedAt = Date.now();
       for (const group of prepared) {
         if (group.state?.fresh && !restoreBuildStepCacheOutputs(group.state, group.params)) {
           throw new Error("Declaration cache changed before restoration; rerun the build");
         }
       }
-      // Keep the existing bounded, sequential executor. Hits never enter a
-      // compiler; misses cannot publish or refresh caches before every group joins.
+      const misses = prepared.filter((group) => !group.state?.fresh);
       const plan = {
         ...prepared[0]!.plan,
-        invocations: prepared.flatMap((group) =>
-          group.state?.fresh ? [] : group.plan.invocations,
-        ),
+        invocations: misses.flatMap((group) => group.plan.invocations),
       };
       await publishStagedDeclarations(
         plan,
@@ -179,22 +174,16 @@ export async function writeTsdownDeclarations(
         required,
         previousOutputs(root).map((file) => portableRelativePath(liveDist, file)),
         () => {
-          const after = snapshot();
           for (const group of prepared) {
-            const sealed = after.seal(
-              "tsconfig.json",
-              group.identity,
-              readDeclarationInputs(group.output, group.name),
-              before,
-              startedAt,
-              liveDist,
-            );
-            if (group.state?.fresh && sealed.signature !== group.state.signature) {
-              throw new Error(`Cached declaration membership changed: ${group.name}`);
-            }
+            const inputs = readDeclarationInputs(group.output, group.name);
             if (group.state) {
-              group.state.signature = sealed.signature;
-              group.state.consumedInputs = sealed.inputs;
+              group.state.signature = before.signature(
+                "tsconfig.json",
+                group.identity,
+                inputs,
+                liveDist,
+              );
+              group.state.consumedInputs = inputs;
             }
           }
         },
@@ -211,7 +200,9 @@ export async function writeTsdownDeclarations(
   } catch (error) {
     failures.push(error);
   }
-  for (const stage of stages) {
+  // An unjoined child may still be writing a stage; retain its inputs and error
+  // under the checkout's existing fail-closed ownership until explicit recovery.
+  for (const stage of failures.some(hasUnjoinedWork) ? [] : stages) {
     try {
       fs.rmSync(stage, { recursive: true, force: true });
     } catch (error) {

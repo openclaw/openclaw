@@ -13,57 +13,77 @@ function createResponseBodyTimeoutError(message: string): Error {
 export async function withResponseBodyTimeout<T>(params: {
   timeoutMs: number | undefined;
   onTimeout: TimeoutErrorFactory | undefined;
+  signal?: AbortSignal;
   cancel: (error: Error) => Promise<unknown>;
   read: (refreshTimeout?: () => void) => Promise<T>;
 }): Promise<T> {
-  if (params.timeoutMs === undefined) {
+  if (params.timeoutMs === undefined && !params.signal) {
     return await params.read();
   }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timeoutError: Error | undefined;
+  let stoppedError: Error | undefined;
 
   return await new Promise<T>((resolve, reject) => {
     const clear = () => {
+      params.signal?.removeEventListener("abort", onAbort);
       if (timeoutId !== undefined) {
         clearTimeout(timeoutId);
         timeoutId = undefined;
       }
     };
 
-    timeoutId = setTimeout(() => {
-      const error =
-        params.onTimeout?.({ timeoutMs }) ??
-        createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`);
-      timeoutError = error;
+    const stop = (error: Error) => {
+      if (stoppedError) {
+        return;
+      }
+      stoppedError = error;
       clear();
       void params.cancel(error).catch(() => undefined);
       reject(error);
-    }, timeoutMs);
-    if (typeof timeoutId === "object" && "unref" in timeoutId) {
-      timeoutId.unref();
+    };
+    const onAbort = () => stop(toErrorObject(params.signal?.reason, "Response body read aborted"));
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    if (params.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    if (params.timeoutMs !== undefined) {
+      const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+      timeoutId = setTimeout(() => {
+        stop(
+          params.onTimeout?.({ timeoutMs }) ??
+            createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`),
+        );
+      }, timeoutMs);
+      if (typeof timeoutId === "object" && "unref" in timeoutId) {
+        timeoutId.unref();
+      }
     }
 
     void Promise.resolve()
-      .then(() =>
-        params.read(() => {
-          // A late read must not restart an expired deadline or consume another chunk.
-          if (timeoutError) {
-            throw timeoutError;
+      .then(() => {
+        if (stoppedError) {
+          throw stoppedError;
+        }
+        return params.read(() => {
+          // A late read must not restart a stopped deadline or consume another chunk.
+          if (stoppedError) {
+            throw stoppedError;
           }
           timeoutId?.refresh();
-        }),
-      )
+        });
+      })
       .then(
         (value) => {
           clear();
-          if (!timeoutError) {
+          if (!stoppedError) {
             resolve(value);
           }
         },
         (error: unknown) => {
           clear();
-          if (!timeoutError) {
+          if (!stoppedError) {
             reject(toErrorObject(error, "Non-Error rejection"));
           }
         },

@@ -1,4 +1,9 @@
-import type { WorkboardCard, WorkboardClaim } from "@openclaw/workboard-contract";
+import type {
+  WorkboardCard,
+  WorkboardClaim,
+  WorkboardExecution,
+  WorkboardMetadata,
+} from "@openclaw/workboard-contract";
 import {
   isFutureDateTimestampMs,
   MAX_DATE_TIMESTAMP_MS,
@@ -15,6 +20,8 @@ export const MAX_CARD_PROOF = 40;
 export const MAX_CARD_ARTIFACTS = 40;
 export const MAX_CARD_ATTACHMENTS = 20;
 export const MAX_CARD_WORKER_LOGS = 40;
+export const MAX_WORKER_CONTEXT_PARENTS = 6;
+export const MAX_WORKER_CONTEXT_RECENT_CARDS = 5;
 export const MAX_ATTACHMENT_BYTES = 256 * 1024;
 export const MAX_CARD_DIAGNOSTICS = 12;
 export const MAX_CARD_NOTIFICATIONS = 20;
@@ -33,7 +40,12 @@ export function isWorkboardClaimReclaimable(
   return Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
 }
 
-export function workboardCardConsumesOwnerSlot(card: WorkboardCard, now: number): boolean {
+type WorkboardOwnerSlotCard = Pick<WorkboardCard, "status" | "agentId"> & {
+  execution?: Pick<WorkboardExecution, "status">;
+  metadata?: Pick<WorkboardMetadata, "claim" | "archivedAt">;
+};
+
+export function workboardCardConsumesOwnerSlot(card: WorkboardOwnerSlotCard, now: number): boolean {
   const claim = card.metadata?.claim;
   const activeClaim = claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now });
   return (
@@ -45,7 +57,7 @@ export function workboardCardConsumesOwnerSlot(card: WorkboardCard, now: number)
   );
 }
 
-export function workboardCardSlotOwner(card: WorkboardCard, now?: number): string {
+export function workboardCardSlotOwner(card: WorkboardOwnerSlotCard, now?: number): string {
   const claim = card.metadata?.claim;
   // Ready candidates pass now to ignore expired claims. Occupied slots omit it
   // so the claim owner keeps its slot through the heartbeat-reclaim grace period.

@@ -131,7 +131,7 @@ export function resolveGatewayHeapNodeOptions(
   return limit === null ? "" : `--max-old-space-size=${Math.min(GATEWAY_HEAP_CAP_MIB, limit)}`;
 }
 
-function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
+export function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
   const entrypointIndex = resolveServiceEntrypointIndex(programArguments);
   return parseHeapControls(programArguments.slice(1, entrypointIndex ?? 1));
 }

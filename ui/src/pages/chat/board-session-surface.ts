@@ -1,14 +1,18 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { html } from "lit";
+import { html, nothing } from "lit";
+import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
+import { t } from "../../i18n/index.ts";
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import { livePresentation, type PresentationValue } from "../../lit/presentation-binding.ts";
 
 type BoardSessionSurfaceProps = {
-  active: boolean;
+  active: PresentationValue;
   session: BoardGetParams;
-  snapshot: BoardSnapshot;
+  snapshot: BoardSnapshot | undefined;
   activeTabId: string;
+  pageWidgetName?: string;
   canMutate: boolean;
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
@@ -26,27 +30,31 @@ export async function ensureBoardViewElement(): Promise<boolean> {
   return true;
 }
 
-function renderBoardView(props: BoardSessionSurfaceProps) {
-  return html`
-    <div class="board-session-surface__board">
-      <openclaw-board-view
-        .active=${props.active}
-        .session=${props.session}
-        .snapshot=${props.snapshot}
-        .activeTabId=${props.activeTabId}
-        .widgetFrameUrl=${props.widgetFrameUrl}
-        .callbacks=${props.callbacks}
-        .canMutate=${props.canMutate}
-        .canGrant=${props.canGrant}
-      ></openclaw-board-view>
-    </div>
-  `;
-}
-
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
   return html`
-    <div class="board-session-surface" ?hidden=${!props.active} ?inert=${!props.active}>
-      ${renderBoardView(props)}
+    <div
+      class="board-session-surface"
+      ?hidden=${livePresentation(props.active, true)}
+      ?inert=${livePresentation(props.active, true)}
+    >
+      <div class="board-session-surface__board">
+        <openclaw-board-view
+          .active=${livePresentation(props.active)}
+          .session=${props.session}
+          .snapshot=${props.snapshot}
+          .activeTabId=${props.activeTabId}
+          .pageWidgetName=${props.pageWidgetName ?? ""}
+          .widgetFrameUrl=${props.widgetFrameUrl}
+          .callbacks=${props.callbacks}
+          .canMutate=${props.canMutate}
+          .canGrant=${props.canGrant}
+        ></openclaw-board-view>
+        ${
+          customElements.get("openclaw-board-view")
+            ? nothing
+            : renderPanelLoadingSkeleton("board", t("common.loading"), false, true)
+        }
+      </div>
     </div>
   `;
 }

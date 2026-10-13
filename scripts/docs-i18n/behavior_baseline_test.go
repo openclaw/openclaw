@@ -49,8 +49,6 @@ func (tr *behaviorFixtureTranslator) TranslateRaw(_ context.Context, text, _, _ 
 	return tr.run("raw", text), nil
 }
 
-func (tr *behaviorFixtureTranslator) Close() {}
-
 func (tr *behaviorFixtureTranslator) run(method, text string) string {
 	tr.t.Helper()
 	for _, rule := range tr.rules {
@@ -86,7 +84,8 @@ func matchesAll(text string, fragments []string) bool {
 }
 
 func TestDocsI18nBehaviorBaselines(t *testing.T) {
-	t.Parallel()
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", "15000")
 
 	root := filepath.Join("testdata", "behavior")
 	entries, err := os.ReadDir(root)
@@ -149,7 +148,7 @@ func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 	case "doc_body_chunked":
 		got, err = translateDocBodyChunked(context.Background(), translator, fixture.RelPath, source, "en", "zh-CN")
 	case "frontmatter_scalar":
-		got, err = translateSnippet(
+		got = translateSnippet(
 			context.Background(),
 			translator,
 			&TranslationMemory{entries: map[string]TMEntry{}},

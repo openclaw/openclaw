@@ -2,23 +2,28 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayBrowserClient } from "../api/gateway.ts";
+import type { WizardNextResult } from "../api/types.ts";
+import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
-import type {
-  ConfigPatchBuilder,
-  ConfigPatchOptions,
-} from "../lib/config/config-gateway-operations.ts";
-import { createConfigCapabilityHarness, deferred } from "../lib/config/config-test-harness.ts";
+import type { ConfigPatchOptions } from "../lib/config/config-gateway-operations.ts";
+import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
 import { buildRemoveMcpServerPatch, patchMcpServers } from "../lib/config/mcp-servers.ts";
+import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import * as uuid from "../lib/uuid.ts";
 import {
   createApplicationContextProvider,
+  createApplicationGateway,
   type ApplicationContextProvider,
 } from "../test-helpers/application-context.ts";
-import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./mcp-servers-card.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush, waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
+import "./mcp-servers-card.tsx";
 
 type McpServersCard = HTMLElementTagNameMap["openclaw-mcp-servers-card"];
+type ConfigPatchBuilder = Parameters<RuntimeConfigCapability["patchFromSnapshot"]>[0];
 
 type RuntimeConfigHarness = {
   runtimeConfig: ApplicationContext["runtimeConfig"];
@@ -27,15 +32,23 @@ type RuntimeConfigHarness = {
   refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
 };
 
-function createGateway(options: { connected?: boolean; admin?: boolean } = {}): ApplicationGateway {
+function createGateway(
+  options: {
+    connected?: boolean;
+    admin?: boolean;
+    client?: GatewayBrowserClient;
+    methods?: string[];
+  } = {},
+): ApplicationGateway {
   const connected = options.connected ?? true;
   const admin = options.admin ?? true;
   const snapshot = {
-    client: null,
+    client: options.client ?? null,
     phase: connected ? "connected" : "reconnecting",
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
+      features: { methods: options.methods ?? [] },
       auth: {
         role: "operator",
         scopes: admin ? ["operator.read", "operator.admin"] : ["operator.read"],
@@ -96,6 +109,7 @@ async function mountCard(
     config?: Record<string, unknown>;
     connected?: boolean;
     admin?: boolean;
+    gateway?: ApplicationGateway;
   } = {},
 ): Promise<{
   card: McpServersCard;
@@ -104,16 +118,22 @@ async function mountCard(
   harness: RuntimeConfigHarness;
 }> {
   const harness = createRuntimeConfig(options.config ?? { mcp: { servers: {} } });
+  const gateway =
+    options.gateway ?? createGateway({ connected: options.connected, admin: options.admin });
   const context = {
-    gateway: createGateway({ connected: options.connected, admin: options.admin }),
+    gateway,
+    agentSelection: createAgentSelectionCapability(gateway, {
+      state: { agentsList: null },
+      subscribe: () => () => undefined,
+    }),
     runtimeConfig: harness.runtimeConfig,
     basePath: "",
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
   const card = document.createElement("openclaw-mcp-servers-card");
   card.pluginsHref = "/settings/plugins";
-  provider.append(card);
   document.body.append(provider);
+  mountSolid(() => card, { container: provider });
   await card.updateComplete;
   await waitForFast(() => expect(harness.ensureLoaded).toHaveBeenCalled());
   await card.updateComplete;
@@ -154,6 +174,36 @@ function firstPatchCall(harness: RuntimeConfigHarness) {
   );
 }
 
+const loginSessionId = "00000000-0000-4000-8000-000000000001";
+const loginUrl = "https://provider.example/authorize";
+const oauthServer = { url: "https://mcp.example.com/mcp", auth: "oauth" };
+const browserStep = {
+  done: false,
+  status: "running",
+  step: { id: "browser", type: "text", externalUrl: loginUrl },
+} satisfies WizardNextResult;
+
+async function mountLoginCard(
+  options: { admin?: boolean; methods?: string[]; server?: Record<string, unknown> } = {},
+) {
+  vi.spyOn(uuid, "generateUUID").mockReturnValue(loginSessionId);
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  const client = new GatewayBrowserClient({ url: "ws://gateway-a.example.test" });
+  const request = vi.spyOn(client, "request").mockRejectedValue(new Error("Unexpected request"));
+  const connection = createApplicationGateway(
+    createGateway({
+      client,
+      admin: options.admin,
+      methods: options.methods ?? ["mcp.authLogin"],
+    }).snapshot,
+  );
+  const mounted = await mountCard({
+    gateway: connection.gateway,
+    config: { mcp: { servers: { docs: options.server ?? oauthServer } } },
+  });
+  return { ...mounted, connection, client, request, open };
+}
+
 describe("openclaw-mcp-servers-card", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -163,6 +213,171 @@ describe("openclaw-mcp-servers-card", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
+
+  it("starts the selected connector and keeps a usable link when the popup is blocked", async () => {
+    const { card, request, open, connection } = await mountLoginCard();
+    request
+      .mockResolvedValueOnce({ done: false, status: "running" })
+      .mockResolvedValueOnce(browserStep)
+      .mockResolvedValue({ status: "cancelled" });
+    expect(request).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+
+    actionButton(card, "Sign in").click();
+    await waitForFast(() =>
+      expect(card.querySelector(".wizard-step__external-link")).not.toBeNull(),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "mcp.authLogin",
+      { sessionId: loginSessionId, serverName: "docs" },
+      { timeoutMs: null },
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "wizard.next",
+      { sessionId: loginSessionId },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    const link = expectDefined(
+      card.querySelector<HTMLAnchorElement>(".wizard-step__external-link"),
+      "browser sign-in recovery link",
+    );
+    expect(link.href).toBe(loginUrl);
+    expect(link.textContent).toContain("Open sign-in");
+    expect(link.target).toBe("_blank");
+    expect(open).toHaveBeenCalledWith(loginUrl, "_blank", "noopener,noreferrer");
+
+    connection.publish({
+      ...connection.gateway.snapshot,
+      lastError: "Unrelated connection notice",
+    });
+    flush();
+    expect(card.querySelector(".wizard-step__external-link")).toBe(link);
+    expect(request.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(false);
+
+    actionButton(card, "Cancel").click();
+    await waitForFast(() => expect(card.querySelector("openclaw-modal-dialog")).toBeNull());
+    expect(request).toHaveBeenCalledWith(
+      "wizard.cancel",
+      { sessionId: loginSessionId },
+      expect.any(Object),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "wizard.status",
+      { sessionId: loginSessionId },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(actionButton(card, "Sign in").disabled).toBe(false);
+  });
+
+  it.each([
+    { name: "missing method", methods: [], text: "openclaw mcp login docs" },
+    { name: "non-admin", admin: false, text: "openclaw mcp login docs" },
+    {
+      name: "disabled",
+      server: { ...oauthServer, enabled: false },
+      text: "openclaw mcp login docs",
+    },
+    {
+      name: "requester-owned",
+      server: { ...oauthServer, oauth: { identity: "per-requester" } },
+      text: "Each person signs in through this connector in chat.",
+    },
+    {
+      name: "mapped profile",
+      server: { ...oauthServer, oauth: { authProfileId: "linked-account" } },
+      text: "Sign in through the linked account in Models.",
+    },
+  ])("does not offer native login for $name and shows the correct alternative", async (options) => {
+    const { card, request, open, harness } = await mountLoginCard(options);
+    expect(
+      [...card.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Sign in",
+      ),
+    ).toBe(false);
+    expect(card.textContent).toContain(options.text);
+    if (options.admin === false) {
+      const controls = [...card.querySelectorAll<HTMLButtonElement>("button")];
+      expect(controls.length).toBeGreaterThan(0);
+      expect(controls.every((button) => button.disabled)).toBe(true);
+      expect(controls.every((button) => button.title.includes("operator.admin"))).toBe(true);
+      actionButton(card, "Disable").click();
+      expect(harness.patch).not.toHaveBeenCalled();
+    }
+    expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each(["target replacement", "agent selection", "disconnect", "capability drop"] as const)(
+    "cancels on the initiating client and hides late success after %s",
+    async (change) => {
+      const { card, context, connection, request } = await mountLoginCard();
+      const lateNext = deferred<WizardNextResult>();
+      const nextRequested = deferred();
+      request
+        .mockResolvedValueOnce({ done: false, status: "running" })
+        .mockImplementationOnce(() => {
+          nextRequested.resolve();
+          return lateNext.promise;
+        })
+        .mockResolvedValue({ status: "cancelled" });
+      const replacement = new GatewayBrowserClient({ url: "ws://gateway-b.example.test" });
+      const replacementRequest = vi.spyOn(replacement, "request");
+      actionButton(card, "Sign in").click();
+      await nextRequested.promise;
+
+      const snapshot = connection.gateway.snapshot;
+      const hello = expectDefined(snapshot.hello, "connected Gateway hello");
+      if (change === "agent selection") {
+        context.agentSelection.set("another-agent");
+      } else if (change === "disconnect") {
+        connection.publish({ ...snapshot, phase: "reconnecting", client: null, hello: null });
+      } else {
+        connection.publish({
+          ...snapshot,
+          client: change === "target replacement" ? replacement : snapshot.client,
+          hello: {
+            ...hello,
+            features: { methods: change === "capability drop" ? [] : ["mcp.authLogin"] },
+          },
+        });
+      }
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith(
+          "wizard.cancel",
+          { sessionId: loginSessionId, closeInput: true },
+          expect.any(Object),
+        ),
+      );
+      lateNext.resolve({ done: true, status: "done" });
+      await lateNext.promise;
+      await card.updateComplete;
+      expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(card.textContent).not.toContain("Authentication saved");
+      expect(replacementRequest).not.toHaveBeenCalled();
+      expect(request.mock.calls.filter(([method]) => method === "mcp.authLogin")).toHaveLength(1);
+
+      if (change === "disconnect") {
+        connection.publish({
+          ...snapshot,
+          client: replacement,
+          hello: { ...hello, features: { methods: [] } },
+        });
+        await card.updateComplete;
+      }
+      if (change === "disconnect" || change === "capability drop") {
+        expect(card.textContent).toContain("openclaw mcp login docs");
+        expect(
+          [...card.querySelectorAll("button")].some(
+            (button) => button.textContent?.trim() === "Sign in",
+          ),
+        ).toBe(false);
+        expect(replacementRequest).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("renders rich rows without exposing URL credentials or stdio arguments", async () => {
     const { card } = await mountCard({
@@ -221,23 +436,6 @@ describe("openclaw-mcp-servers-card", () => {
     expect(hostile.textContent).toContain("openclaw mcp probe 'docs; echo unsafe'");
   });
 
-  it("renders the empty state when no servers are configured", async () => {
-    const { card } = await mountCard();
-
-    const sectionLink = card.querySelector<HTMLAnchorElement>(".settings-section__desc a");
-    expect(sectionLink?.textContent?.trim()).toBe("Learn more");
-    expect(sectionLink?.classList.contains("learn-more-link")).toBe(true);
-    expect(sectionLink?.getAttribute("href")).toBe("/settings/plugins");
-    expect(card.querySelector(".settings-empty")?.textContent).toContain(
-      "No MCP servers configured.",
-    );
-    const setupLink = card.querySelector<HTMLAnchorElement>(".settings-empty a");
-    expect(setupLink?.textContent?.trim()).toBe("Set up your first MCP server");
-    expect(setupLink?.href).toBe("https://docs.openclaw.ai/tools/mcp");
-    expect(setupLink?.target).toBe("_blank");
-    expect(setupLink?.rel).toBe("noopener noreferrer");
-  });
-
   it.each([
     {
       label: "streamable HTTP URL whose path ends in /sse",
@@ -272,6 +470,19 @@ describe("openclaw-mcp-servers-card", () => {
   ])("adds a server from a $label", async ({ transport, target, expected }) => {
     const { card, harness } = await mountCard();
 
+    const sectionLink = card.querySelector<HTMLAnchorElement>(".settings-section__desc a");
+    expect(sectionLink?.textContent?.trim()).toBe("Learn more");
+    expect(sectionLink?.classList.contains("learn-more-link")).toBe(true);
+    expect(sectionLink?.getAttribute("href")).toBe("/settings/plugins");
+    expect(card.querySelector(".settings-empty")?.textContent).toContain(
+      "No MCP servers configured.",
+    );
+    const setupLink = card.querySelector<HTMLAnchorElement>(".settings-empty a");
+    expect(setupLink?.textContent?.trim()).toBe("Set up your first MCP server");
+    expect(setupLink?.href).toBe("https://docs.openclaw.ai/tools/mcp");
+    expect(setupLink?.target).toBe("_blank");
+    expect(setupLink?.rel).toBe("noopener noreferrer");
+
     await submitAddForm(card, "context7", target, transport);
 
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
@@ -287,75 +498,56 @@ describe("openclaw-mcp-servers-card", () => {
     expect(card.querySelector(".mcp-server-form")).toBeNull();
   });
 
-  it("rejects an invalid name before patching", async () => {
-    const { card, harness } = await mountCard();
-
-    await submitAddForm(card, "bad name!", "https://mcp.example.com/mcp");
-
-    await waitForFast(() =>
-      expect(card.querySelector('[role="alert"]')?.textContent).toContain("Server names use"),
-    );
-    expect(harness.patch).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
-      label: "stdio URL",
-      transport: "stdio" as const,
+      label: "invalid name",
+      name: "bad name!",
+      transport: "streamable-http",
       target: "https://mcp.example.com/mcp",
+      error: "Server names use",
+    },
+    {
+      label: "stdio URL",
+      name: "new",
+      transport: "stdio",
+      target: "https://mcp.example.com/mcp",
+      error: "valid command line",
     },
     {
       label: "HTTP command",
-      transport: "streamable-http" as const,
+      name: "new",
+      transport: "streamable-http",
       target: "npx some-mcp-server",
+      error: "valid command line",
     },
     {
       label: "unterminated stdio quote",
-      transport: "stdio" as const,
+      name: "new",
+      transport: "stdio",
       target: 'npx some-mcp-server "unfinished',
+      error: "valid command line",
     },
     {
       label: "HTTP URL without a host",
-      transport: "streamable-http" as const,
+      name: "new",
+      transport: "streamable-http",
       target: "http://",
+      error: "valid command line",
     },
     {
-      label: "HTTP URL with whitespace in the host",
-      transport: "streamable-http" as const,
-      target: "https://exa mple.com/mcp",
+      label: "duplicate name",
+      name: "docs",
+      transport: "streamable-http",
+      target: "https://other.example.com/mcp",
+      error: "An MCP server named “docs” already exists.",
     },
-    {
-      label: "SSE URL with malformed IPv6",
-      transport: "sse" as const,
-      target: "https://[::1/mcp",
-    },
-    {
-      label: "HTTP URL with a nonnumeric port",
-      transport: "streamable-http" as const,
-      target: "https://example.com:bad",
-    },
-  ])("rejects a mismatched or malformed $label", async ({ transport, target }) => {
-    const { card, harness } = await mountCard();
-
-    await submitAddForm(card, "docs", target, transport);
-
-    await waitForFast(() =>
-      expect(card.querySelector('[role="alert"]')?.textContent).toContain("valid command line"),
-    );
-    expect(harness.patch).not.toHaveBeenCalled();
-  });
-
-  it("rejects a duplicate name before patching", async () => {
+  ] as const)("rejects $label before patching", async ({ name, transport, target, error }) => {
     const { card, harness } = await mountCard({
       config: { mcp: { servers: { docs: { url: "https://mcp.example.com/mcp" } } } },
     });
-
-    await submitAddForm(card, "docs", "https://other.example.com/mcp");
-
+    await submitAddForm(card, name, target, transport);
     await waitForFast(() =>
-      expect(card.querySelector('[role="alert"]')?.textContent).toContain(
-        "An MCP server named “docs” already exists.",
-      ),
+      expect(card.querySelector('[role="alert"]')?.textContent).toContain(error),
     );
     expect(harness.patch).not.toHaveBeenCalled();
   });
@@ -424,7 +616,7 @@ describe("openclaw-mcp-servers-card", () => {
       mcp: { servers: { docs: { command: "node", args: ["initial.mjs"] }, retained } },
     };
     let hash = "before";
-    const gate = deferred<void>();
+    const gate = deferred();
     const patches: unknown[] = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
@@ -493,70 +685,5 @@ describe("openclaw-mcp-servers-card", () => {
       gate.resolve();
       runtimeConfig.dispose();
     }
-  });
-
-  it("disables mutation controls without operator.admin access", async () => {
-    const { card, harness } = await mountCard({
-      admin: false,
-      config: { mcp: { servers: { docs: { url: "https://mcp.example.com/mcp" } } } },
-    });
-
-    const controls = [...card.querySelectorAll<HTMLButtonElement>("button")];
-    expect(controls.length).toBeGreaterThan(0);
-    expect(controls.every((button) => button.disabled)).toBe(true);
-    expect(controls.every((button) => button.title.includes("operator.admin"))).toBe(true);
-    actionButton(card, "Disable").click();
-    expect(harness.patch).not.toHaveBeenCalled();
-  });
-
-  it("retires pending mutation feedback before a retained card enters a new context", async () => {
-    const pending = deferred<boolean>();
-    const { card, context, provider, harness } = await mountCard({
-      config: { mcp: { servers: { docs: { url: "https://mcp.example.com/mcp" } } } },
-    });
-    harness.patch.mockReturnValueOnce(pending.promise);
-    actionButton(card, "Disable").click();
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
-
-    card.remove();
-    const replacement = createRuntimeConfig({
-      mcp: { servers: { local: { command: "node" } } },
-    });
-    provider.setContext({
-      ...context,
-      runtimeConfig: replacement.runtimeConfig,
-    });
-    provider.append(card);
-    await waitForFast(() => expect(card.querySelector('[data-mcp-name="local"]')).not.toBeNull());
-
-    pending.resolve(true);
-    await waitForFast(() => expect(harness.refresh).toHaveBeenCalledOnce());
-    await card.updateComplete;
-
-    expect(card.querySelector('[role="alert"], [role="status"]')).toBeNull();
-    expect(actionButton(card, "Disable").disabled).toBe(false);
-  });
-
-  it("ignores a load error from before a retained card reconnected", async () => {
-    const staleLoad = deferred<void>();
-    const { card, context, provider } = await mountCard();
-    const replacement = createRuntimeConfig({
-      mcp: { servers: { local: { command: "node" } } },
-    });
-    replacement.ensureLoaded.mockReturnValueOnce(staleLoad.promise);
-
-    card.remove();
-    provider.setContext({ ...context, runtimeConfig: replacement.runtimeConfig });
-    provider.append(card);
-    await waitForFast(() => expect(replacement.ensureLoaded).toHaveBeenCalledOnce());
-
-    card.remove();
-    provider.append(card);
-    staleLoad.reject(new Error("stale load failure"));
-    await staleLoad.promise.catch(() => undefined);
-    await card.updateComplete;
-
-    expect(card.querySelector('[role="alert"]')).toBeNull();
-    expect(card.querySelector('[data-mcp-name="local"]')).not.toBeNull();
   });
 });

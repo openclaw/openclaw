@@ -26,18 +26,7 @@ vi.mock("../../../plugins/host-hook-state.js", () => ({
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveImageGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveVideoGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveMusicGenerationTaskPromptContextForSession",
-  ).mockReturnValue(undefined);
+  vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -90,12 +79,10 @@ async function createTurnFixture(systemPromptOverride?: string) {
     ],
   });
   return async (progress?: string) => {
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockReturnValue(
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
       progress
-        ? `- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
-        : undefined,
+        ? `## Media Generation Tasks\n- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
+        : "## Media Generation Tasks\n- tool=image_generate; none",
     );
     let systemPromptText = BASE;
     const setActiveSessionSystemPrompt = (next: string) => {
@@ -128,7 +115,6 @@ async function createTurnFixture(systemPromptOverride?: string) {
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
       sessionAgentId: "main",
-      setActiveSessionSystemPrompt,
       systemPromptText,
       toolResultPromptProjectionState: {
         replacements: new Map(),
@@ -142,11 +128,8 @@ async function createTurnFixture(systemPromptOverride?: string) {
 }
 
 describe("#85203 media facts preserve the complete assembled system prompt", () => {
-  it.each([
-    { scenario: "existing boundary", override: undefined },
-    { scenario: "marker-free hook override", override: OVERRIDE },
-  ])("keeps static hooks and model identity stable with $scenario", async ({ override }) => {
-    const prepareTurn = await createTurnFixture(override);
+  it("keeps static hooks and model identity stable with a marker-free hook override", async () => {
+    const prepareTurn = await createTurnFixture(OVERRIDE);
     const rendering = await prepareTurn("Rendering image");
     const encoding = await prepareTurn("Encoding image");
     const idle = await prepareTurn();
@@ -167,7 +150,7 @@ describe("#85203 media facts preserve the complete assembled system prompt", () 
     const split = splitSystemPromptCacheBoundary(idle.systemPromptForHook);
     expect(split).toBeDefined();
     expect(split?.stablePrefix).toContain(HOOK);
-    expect(split?.stablePrefix).toContain(override ?? "Stable workspace prefix");
+    expect(split?.stablePrefix).toContain(OVERRIDE);
     expect(split?.stablePrefix).not.toContain("Current model identity:");
     expect(split?.dynamicSuffix).toContain("Current model identity:");
   });

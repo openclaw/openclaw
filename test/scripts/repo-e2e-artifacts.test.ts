@@ -2,11 +2,80 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { transferRepoE2eArtifacts } from "../../scripts/repo-e2e-artifacts.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const workflowHarnesses = new Map<string, string>();
+
+function transferThroughWorkflowHarness(
+  operation: "pack" | "restore",
+  artifact: string,
+  profile: string,
+  root: string,
+) {
+  const jobName = operation === "pack" ? "build" : "test";
+  let harness = workflowHarnesses.get(jobName);
+  if (!harness) {
+    const workflow = parse(
+      fs.readFileSync(".github/workflows/openclaw-repo-e2e-reusable.yml", "utf8"),
+    );
+    const checkout = workflow.jobs[jobName].steps.find(
+      (step: { name?: string }) => step.name === "Checkout trusted artifact harness",
+    )?.with;
+    if (typeof checkout?.["sparse-checkout"] !== "string") {
+      throw new Error("Expected the workflow's bounded artifact-harness checkout");
+    }
+    harness = path.join(tempDirs.make("repo-e2e-sparse-harness-"), "harness");
+    // Real Git acquisition and native Node expose dependencies hidden by the
+    // test process's complete checkout and module loader.
+    execFileSync("git", ["clone", "--quiet", "--shared", "--no-checkout", process.cwd(), harness]);
+    execFileSync(
+      "git",
+      [
+        "sparse-checkout",
+        "set",
+        checkout["sparse-checkout-cone-mode"] === false ? "--no-cone" : "--cone",
+        "--stdin",
+      ],
+      { cwd: harness, input: checkout["sparse-checkout"] },
+    );
+    execFileSync("git", ["checkout", "--quiet", "--detach", "HEAD"], { cwd: harness });
+    // Exercise working changes too, but never materialize a path excluded by
+    // the workflow. Skip-worktree entries retain Git's `S` prefix, not `H`.
+    const selectedPaths = checkout["sparse-checkout"]
+      .trim()
+      .split("\n")
+      .map((entry: string) => entry.trim().replace(/^\/|\/$/gu, ""));
+    const acquired = execFileSync("git", ["ls-files", "-t", "-z", "--", ...selectedPaths], {
+      cwd: harness,
+      encoding: "utf8",
+    });
+    for (const entry of acquired.split("\0")) {
+      if (!entry.startsWith("H ")) {
+        continue;
+      }
+      const file = entry.slice(2);
+      const destination = path.join(harness, file);
+      if (fs.lstatSync(destination).isFile()) {
+        fs.copyFileSync(path.resolve(file), destination);
+      }
+    }
+    expect(fs.existsSync(path.join(harness, "src/index.ts"))).toBe(false);
+    workflowHarnesses.set(jobName, harness);
+  }
+  execFileSync(
+    process.execPath,
+    [path.join(harness, "scripts/repo-e2e-artifacts.mts"), operation, artifact, profile],
+    {
+      cwd: root,
+      env: { PATH: process.env.PATH, OPENCLAW_BUILD_PRIVATE_QA: "1" },
+      stdio: "pipe",
+    },
+  );
+}
 
 function fixture() {
   const root = fs.realpathSync(tempDirs.make("repo-e2e-artifacts-"));
@@ -48,8 +117,8 @@ function fixture() {
   write("dist/index.js", "#!/usr/bin/env node\nconsole.log('artifact');\n");
   fs.chmodSync(path.join(root, "dist/index.js"), 0o755);
   write("dist/private-qa.js", "private QA\n");
-  write("dist/.buildstamp", JSON.stringify({ head }));
-  write("dist/.runtime-postbuildstamp", JSON.stringify({ head }));
+  write("dist/.buildstamp", JSON.stringify({ head, inputsClean: true }));
+  write("dist/.runtime-postbuildstamp", JSON.stringify({ head, inputsClean: true }));
   write("packages/demo/dist/index.d.ts", "export declare const ready: true;\n");
   fs.mkdirSync(path.join(root, "dist-runtime"));
   fs.symlinkSync("../dist/index.js", path.join(root, "dist-runtime/index.js"));
@@ -80,10 +149,10 @@ describe("repo E2E artifact transfer", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it.each(["full", "ciArtifacts"])(
-    "restores a complete %s build without rebuilding a newer checkout",
+    "restores a complete %s build through the workflow harness without rebuilding",
     (profile) => {
       const { root, artifact } = fixture();
-      transferRepoE2eArtifacts("pack", artifact, profile, root);
+      transferThroughWorkflowHarness("pack", artifact, profile, root);
       for (const output of [
         "dist",
         "dist-runtime",
@@ -98,7 +167,7 @@ describe("repo E2E artifact transfer", () => {
       expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeLessThan(
         fs.statSync(path.join(root, "package.json")).mtimeMs,
       );
-      transferRepoE2eArtifacts("restore", artifact, profile, root);
+      transferThroughWorkflowHarness("restore", artifact, profile, root);
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });
       expect(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs).toBeGreaterThanOrEqual(
         fs.statSync(path.join(root, "package.json")).mtimeMs,
@@ -120,6 +189,23 @@ describe("repo E2E artifact transfer", () => {
       expect(
         fs.statSync(path.join(root, "dist/.runtime-postbuildstamp")).mtimeMs,
       ).toBeGreaterThanOrEqual(fs.statSync(path.join(root, "dist/.buildstamp")).mtimeMs);
+    },
+  );
+
+  it.each([false, null, undefined])(
+    "preserves unclean or legacy producer provenance (%s)",
+    (inputsClean) => {
+      const { root, artifact } = fixture();
+      const buildStamp = path.join(root, "dist/.buildstamp");
+      const recorded = JSON.parse(fs.readFileSync(buildStamp, "utf8"));
+      recorded.inputsClean = inputsClean;
+      const original = JSON.stringify(recorded);
+      fs.writeFileSync(buildStamp, original);
+      transferRepoE2eArtifacts("pack", artifact, "full", root);
+      fs.rmSync(path.join(root, "dist"), { recursive: true });
+      transferRepoE2eArtifacts("restore", artifact, "full", root);
+      expect(fs.readFileSync(buildStamp, "utf8")).toBe(original);
+      expect(requirement(root).shouldBuild).toBe(true);
     },
   );
 

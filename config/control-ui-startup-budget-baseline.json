@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 350377,
-  "reason": "Current main b6a4d0dad430 measures 350377 B startup gzip in Linux CI after integrated UI changes (+812 B, 0.23%); pristine-main and candidate builds measured 350363 B and 350380 B, within the existing 64 B variance allowance. Fixed 358400 B cap and existing growth allowance retained.",
-  "updatedAt": "2026-09-04"
+  "startupJsGzipBytes": 374285,
+  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
+  "updatedAt": "2026-10-12"
 }

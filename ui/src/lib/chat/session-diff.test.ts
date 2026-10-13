@@ -64,10 +64,11 @@ describe("parseSessionDiffPatch", () => {
   });
 
   it("bounds output and reports truncation", () => {
-    const body = Array.from({ length: 50 }, (_, i) => `+line ${i}`).join("\n");
-    const patch = `--- a/x\n+++ b/x\n@@ -1,0 +1,50 @@\n${body}\n`;
-    const { lines, truncated } = parseSessionDiffPatch(patch, gap, 10);
+    const body = Array.from({ length: 601 }, (_, i) => `+line ${i}`).join("\n");
+    const patch = `--- a/x\n+++ b/x\n@@ -1,0 +1,601 @@\n${body}\n`;
+    const { lines, truncated } = parseSessionDiffPatch(patch, gap);
     expect(truncated).toBe(true);
-    expect(lines).toHaveLength(10);
+    expect(lines).toHaveLength(600);
+    expect(lines.at(-1)).toEqual({ kind: "add", lineNo: 600, text: "line 599" });
   });
 });

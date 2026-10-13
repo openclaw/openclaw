@@ -2,11 +2,25 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
+import {
+  materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
+  resolveInstalledNativeCompiler,
+  writeNativeFixtureFile,
+} from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const sourceRoot = process.cwd();
+// Commit only the wrapper's runtime closure: staging all of scripts/lib (~480
+// files) exceeded the fixture's Git budget on loaded hosts. The CLI shim loads
+// the implementation and its tsx loader by path, so they are explicit inputs.
+const WRAPPER_FILES = collectRuntimeImportClosure(
+  sourceRoot,
+  ["scripts/run-tsgo.mjs", "scripts/run-tsgo.mts", "scripts/tsx.mjs"],
+  { includeDynamicImports: true },
+);
 
 function createLinkedCheckoutFixture() {
   const directory = fs.realpathSync.native(roots.make("native-wrapper-worktree-"));
@@ -52,16 +66,10 @@ function createLinkedCheckoutFixture() {
   writeNativeFixtureFile(primary, "package.json", '{"private":true,"type":"module"}\n');
   writeNativeFixtureFile(primary, "pnpm-workspace.yaml", "packages: []\n");
   writeNativeFixtureFile(primary, ".gitignore", "node_modules/\n.artifacts/\n");
-  for (const file of [
-    "scripts/run-tsgo.mjs",
-    "scripts/run-tsgo.mts",
-    "scripts/tsx.mjs",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib",
-  ]) {
+  for (const file of WRAPPER_FILES) {
     const target = path.join(primary, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.cpSync(path.join(sourceRoot, file), target, { recursive: true });
+    fs.copyFileSync(path.join(sourceRoot, file), target);
   }
   git(["add", "."]);
   git(["commit", "-qm", "Synthetic compiler wrapper fixture"]);
@@ -72,13 +80,17 @@ function createLinkedCheckoutFixture() {
   return { primary, root, git };
 }
 
-function installCheckoutTools(root: string) {
-  const native = materializeNativeCompiler(root);
+function linkCheckoutTools(root: string) {
   for (const name of ["tsx", "@openclaw/fs-safe"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.join(sourceRoot, "node_modules", name), target, "junction");
   }
+}
+
+function installCheckoutTools(root: string) {
+  const native = materializeNativeCompiler(root, { javaScriptApi: false });
+  linkCheckoutTools(root);
   return native;
 }
 
@@ -100,7 +112,8 @@ describe("run-tsgo linked worktree entry", () => {
   it("selects its own root compiler from src while preserving relative project semantics", () => {
     const { primary, root } = createLinkedCheckoutFixture();
     installCheckoutTools(primary);
-    const native = installCheckoutTools(root);
+    linkCheckoutTools(root);
+    const native = resolveInstalledNativeCompiler();
     const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
     const compilerOptions = {
       module: "NodeNext",
@@ -129,13 +142,17 @@ process.exitCode = result.status ?? 1;
     );
     fs.chmodSync(path.join(root, "native-compiler.mjs"), 0o755);
     const launcher = path.join(root, "node_modules/.bin/tsgo");
-    fs.unlinkSync(launcher);
+    fs.mkdirSync(path.dirname(launcher), { recursive: true });
     fs.symlinkSync("../../native-compiler.mjs", launcher, "file");
     if (process.platform === "win32") {
       write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
     }
+    overrideNativeFixtureExecutable(root, launcher);
     const cwd = path.join(root, "src");
-    const result = runTsgoEntry(root, ["-p", "tsconfig.json"], { cwd });
+    const result = runTsgoEntry(root, ["-p", "tsconfig.json"], {
+      cwd,
+      env: { ...process.env, OPENCLAW_CI_STATIC_EVIDENCE: "1" },
+    });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const selected: { cwd: string; args: string[] } = JSON.parse(
@@ -143,6 +160,26 @@ process.exitCode = result.status ?? 1;
     );
     expect(selected.cwd).toBe(cwd);
     expect(selected.args.slice(0, 2)).toEqual(["-p", "tsconfig.json"]);
+    if (process.platform !== "win32") {
+      const receipts = result.stdout.trim().split("\n");
+      expect(receipts).toHaveLength(2);
+      const leaf = JSON.parse(receipts[0]!.slice(receipts[0]!.indexOf(" ") + 1));
+      expect(leaf).toEqual({
+        version: 1,
+        id: expect.any(String),
+        config: "tsconfig.json",
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      });
+      expect(JSON.parse(receipts[1]!.slice(receipts[1]!.indexOf(" ") + 1))).toEqual({
+        version: 1,
+        id: expect.any(String),
+        planned: 1,
+        completed: 1,
+        leaves: [leaf.id],
+      });
+    }
     expect(fs.lstatSync(path.join(cwd, "node_modules"), { throwIfNoEntry: false })).toBeUndefined();
   }, 30_000);
 
@@ -176,12 +213,13 @@ process.exitCode = result.status ?? 1;
         "--tsBuildInfoFile",
         ".artifacts/should-not-exist.tsbuildinfo",
       ],
-      { env: { ...process.env, OPENCLAW_TSGO_SPARSE_SKIP: "1" } },
+      { env: { ...process.env, OPENCLAW_TSGO_SPARSE_SKIP: "1", OPENCLAW_CI_STATIC_EVIDENCE: "1" } },
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stderr).toContain("skipping sparse-missing project");
     expect(result.stderr).toContain("OPENCLAW_TSGO_SPARSE_SKIP=1");
+    expect(result.stdout).not.toContain("[ci-static:tsgo:");
     expect(
       fs.lstatSync(path.join(root, "node_modules"), { throwIfNoEntry: false }),
     ).toBeUndefined();

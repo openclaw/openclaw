@@ -39,7 +39,7 @@ function createContext() {
   );
   const context = {
     getRuntimeConfig: () => ({
-      agents: { list: [{ id: "work", default: true }] },
+      agents: { entries: { work: {} } },
       session: { mainKey: "home" },
     }),
     sessionViewerPresence: { replace },
@@ -117,7 +117,7 @@ describe("sessions.viewers.set", () => {
     const replace = vi.fn((_connId: string, sessionKeys: readonly string[]) => sessionKeys);
     const context = {
       getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
       }),
       sessionViewerPresence: { replace },
     } as unknown as GatewayRequestContext;
@@ -173,6 +173,35 @@ describe("sessions.subscribe", () => {
       { subscribed: true, list: { count: 1 } },
       undefined,
       undefined,
+    );
+  });
+
+  it("rejects invalid list params before registering events", async () => {
+    const subscribeSessionEvents = vi.fn();
+    const respond = vi.fn();
+    sessionsListHandler.mockClear();
+
+    await expectDefined(
+      sessionSubscriptionHandlers["sessions.subscribe"],
+      'sessionSubscriptionHandlers["sessions.subscribe"] test invariant',
+    )({
+      req: { id: "req-subscribe-invalid", method: "sessions.subscribe" } as never,
+      params: { activityPulseBoundaries: [1, 1] },
+      respond,
+      context: { subscribeSessionEvents } as unknown as GatewayRequestContext,
+      client: { connId: "control-ui-1" } as never,
+      isWebchatConnect: () => false,
+    } satisfies GatewayRequestHandlerOptions);
+
+    expect(subscribeSessionEvents).not.toHaveBeenCalled();
+    expect(sessionsListHandler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
+      }),
     );
   });
 });

@@ -7,8 +7,15 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  getOfficialExternalPluginCatalogEntryForPackage,
+  getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalPluginId,
+} from "../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -22,11 +29,10 @@ type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
 };
 
-type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
-
-type ChannelDmPolicyMetadata = {
+export type ChannelDmPolicyMetadata = {
   id: string;
   dmAllowFromMode?: ChannelDmAllowFromMode;
+  openDmRequiresAllowFromWildcard?: boolean;
 };
 
 type ChannelDmPolicyMetadataRecord = ChannelDmPolicyMetadata & {
@@ -43,6 +49,27 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
 
 const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
   ChannelHeartbeatVisibilitySchema.unwrap().toJSONSchema({ target: "draft-07" });
+const CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH = 256;
+
+function assertChannelConfigSchemaTraversalDepth(
+  value: unknown,
+  depth = 0,
+  seen = new Set<object>(),
+): void {
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return;
+  }
+  if (depth > CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH) {
+    throw new Error(
+      `channel config schema exceeds maximum traversal depth of ${CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH}`,
+    );
+  }
+  seen.add(value);
+  const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
+  for (const child of children) {
+    assertChannelConfigSchemaTraversalDepth(child, depth + 1, seen);
+  }
+}
 
 function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const normalized = structuredClone(schema);
@@ -132,6 +159,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
 ): PluginUiMetadata[] {
+  const requestOwners = collectPluginProviderRequestOwners(registry.plugins);
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -154,7 +182,17 @@ export function collectPluginSchemaMetadataCore(
         (entry) => entry.path,
       ),
       configUiHints: record.configUiHints,
+      configGroups: record.configGroups,
       configSchema: record.configSchema,
+      providerRequest: record.providerRequest
+        ? {
+            providers: Object.fromEntries(
+              [...requestOwners]
+                .filter(([, owner]) => owner.plugin === record)
+                .map(([provider, { policy }]) => [provider, policy]),
+            ),
+          }
+        : undefined,
       originRank: nextRank,
     });
   }
@@ -169,27 +207,30 @@ function prepareChannelConfigSchema(
   channelId: string,
   schema: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (origin === "bundled") {
-    return widenOfficialExternalChannelSecretSchema({ channelId, schema });
-  }
   try {
-    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    if (schema !== undefined) {
+      assertChannelConfigSchemaTraversalDepth(schema);
+    }
+    const coreOwnedSchema =
+      origin === "bundled" || schema === undefined
+        ? schema
+        : normalizeCoreOwnedChannelSchema(schema);
     return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
-  } catch {
+  } catch (error) {
+    if (origin === "bundled") {
+      throw error;
+    }
     // Normalization and official-channel widening both clone and walk the schema, so a deeply
-    // nested external manifest overflows here, before any validator runs. Surfacing the raw
-    // schema keeps metadata collection total and leaves the diagnostic to the one owner of it,
-    // validatePluginSchemaValue.
+    // nested external manifest is rejected here, before any validator runs. Surfacing the raw
+    // schema keeps metadata collection total and leaves the diagnostic to the validation owner.
     return schema;
   }
 }
 
-/** Collects per-channel config metadata with the plugin that supplied the selected schema. */
-export function collectChannelSchemaMetadataWithOwnership(
+function collectSelectedChannelOwners(
   registry: PluginManifestRegistry,
   selectedPluginIds?: ReadonlySet<string>,
-): ChannelSchemaMetadataWithOwnership[] {
-  const byChannelId = new Map<string, ChannelMetadataRecord>();
+): ReadonlyMap<string, string> {
   const selectedOwners = new Map<string, string>();
   for (const record of registry.plugins.toSorted(
     (left, right) => PLUGIN_ORIGIN_RANK[left.origin] - PLUGIN_ORIGIN_RANK[right.origin],
@@ -204,6 +245,16 @@ export function collectChannelSchemaMetadataWithOwnership(
       }
     }
   }
+  return selectedOwners;
+}
+
+/** Collects per-channel config metadata with the plugin that supplied the selected schema. */
+export function collectChannelSchemaMetadataWithOwnership(
+  registry: PluginManifestRegistry,
+  selectedPluginIds?: ReadonlySet<string>,
+): ChannelSchemaMetadataWithOwnership[] {
+  const byChannelId = new Map<string, ChannelMetadataRecord>();
+  const selectedOwners = collectSelectedChannelOwners(registry, selectedPluginIds);
 
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
@@ -314,16 +365,24 @@ export function collectChannelSchemaMetadataCore(
 /** Collects channel DM policy metadata without importing doctor/runtime command modules. */
 export function collectChannelDmPolicyMetadata(
   registry: PluginManifestRegistry,
-): ChannelDmPolicyMetadata[] {
+  selectedPluginIds?: ReadonlySet<string>,
+): ReadonlyMap<string, ChannelDmPolicyMetadata> {
   const byChannelId = new Map<string, ChannelDmPolicyMetadataRecord>();
+  const selectedOwners = collectSelectedChannelOwners(registry, selectedPluginIds);
 
   const put = (
     channelId: string | undefined,
     originRank: number,
+    pluginId: string,
     dmAllowFromMode?: ChannelDmAllowFromMode,
+    openDmRequiresAllowFromWildcard?: boolean,
   ): void => {
     const id = channelId?.trim();
     if (!id) {
+      return;
+    }
+    const selectedOwner = selectedOwners.get(id);
+    if (selectedOwner !== undefined && selectedOwner !== pluginId) {
       return;
     }
     const current = byChannelId.get(id);
@@ -333,6 +392,9 @@ export function collectChannelDmPolicyMetadata(
     byChannelId.set(id, {
       id,
       ...(dmAllowFromMode ? { dmAllowFromMode } : {}),
+      ...(typeof openDmRequiresAllowFromWildcard === "boolean"
+        ? { openDmRequiresAllowFromWildcard }
+        : {}),
       originRank,
     });
   };
@@ -340,17 +402,39 @@ export function collectChannelDmPolicyMetadata(
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
     const packageChannelId = record.packageChannel?.id?.trim();
-    const dmAllowFromMode = record.packageChannel?.doctorCapabilities?.dmAllowFromMode;
-    for (const channelId of record.channels) {
-      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
-    }
-    put(packageChannelId, originRank, dmAllowFromMode);
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
-      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
+    const officialEntry = getOfficialExternalPluginCatalogEntryForPackage(record.packageName);
+    const officialChannel =
+      officialEntry && resolveOfficialExternalPluginId(officialEntry) === record.id
+        ? getOfficialExternalPluginCatalogManifest(officialEntry)?.channel
+        : undefined;
+    const officialCapabilities =
+      packageChannelId && officialChannel?.id?.trim() === packageChannelId
+        ? officialChannel.doctorCapabilities
+        : undefined;
+    const doctorCapabilities = {
+      ...officialCapabilities,
+      ...record.packageChannel?.doctorCapabilities,
+    };
+    const dmAllowFromMode = doctorCapabilities?.dmAllowFromMode;
+    const openDmRequiresAllowFromWildcard = doctorCapabilities?.openDmRequiresAllowFromWildcard;
+    for (const channelId of [
+      ...record.channels,
+      packageChannelId,
+      ...Object.keys(record.channelConfigs ?? {}),
+    ]) {
+      put(
+        channelId,
+        originRank,
+        record.id,
+        channelId === packageChannelId ? dmAllowFromMode : undefined,
+        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
+      );
     }
   }
 
-  return [...byChannelId.values()]
-    .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+  return new Map(
+    [...byChannelId.values()]
+      .toSorted((left, right) => left.id.localeCompare(right.id))
+      .map(({ originRank: _originRank, ...entry }) => [entry.id, entry]),
+  );
 }

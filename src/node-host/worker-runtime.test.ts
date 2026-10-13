@@ -4,20 +4,29 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { validateNodeHostStatsPayload } from "../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
+import * as pathEnv from "../infra/path-env.js";
+import * as terminalUpload from "../infra/terminal-file-upload.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { NodeHostConfig } from "./config.js";
 import type { ExecEventPayload } from "./invoke-types.js";
+import * as pluginNodeHost from "./plugin-node-host.js";
 
 const fixture = vi.hoisted(() => ({
+  loadConfig: vi.fn<() => Promise<NodeHostConfig | null>>(),
   prepare: vi.fn(),
   start: vi.fn(),
   handleInvoke: vi.fn<typeof import("./invoke.js").handleInvoke>(),
@@ -26,14 +35,14 @@ const fixture = vi.hoisted(() => ({
     invoke: vi.fn(),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => undefined),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(),
   },
 }));
 vi.mock("node:readline", () => ({ createInterface: () => fixture.input }));
-vi.mock("./startup-state-migrations.js", () => ({ runStartupMigrations: async () => {} }));
-vi.mock("./config.js", () => ({ loadNodeHostConfig: async () => ({}) }));
+vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
+vi.mock("./config.js", () => ({ loadNodeHostConfig: fixture.loadConfig }));
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: fixture.prepare }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
 vi.mock("../infra/terminal-file-upload.js", async (importOriginal) => ({
@@ -55,8 +64,13 @@ vi.mock("./plugin-node-host.js", () => ({
 }));
 import { runNodeHostWorker } from "./worker.js";
 
+const { prepareNodeHostRuntime } =
+  await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
+
 beforeEach(() => {
   vi.clearAllMocks();
+  fixture.loadConfig.mockResolvedValue(null);
+  fixture.runtime.close.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -71,11 +85,15 @@ function startWorkerFixture(
   workerHostingDisabledReason?: string,
   options: {
     prepared?: PreparedRuntime;
+    desktopSharingEnabled?: boolean;
+    initialWorkerCapacity?: { total: number; available: number } | null;
     gatewayResponse?: (
       message: Record<string, unknown>,
     ) => { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } };
   } = {},
 ) {
+  // The private worker owns stdin; this shared test process does not.
+  const destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
   const events = new EventEmitter();
   const input = Object.assign(events, {
     close: () => {
@@ -84,10 +102,12 @@ function startWorkerFixture(
   });
   fixture.input = input;
   const messages: Array<Record<string, unknown>> = [];
+  const messageEvents = new EventEmitter();
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     const message = JSON.parse(String(chunk));
     messages.push(message);
+    messageEvents.emit("message", message);
     if (message.type === "gateway-request") {
       queueMicrotask(() =>
         input.emit(
@@ -104,8 +124,10 @@ function startWorkerFixture(
     return true;
   });
   fixture.start.mockImplementation((callbacks) => {
-    if (workerHostingEnabled) {
-      callbacks.onRunnerCapacityChanged?.({ total: 2, available: 2 });
+    if (workerHostingEnabled && options.initialWorkerCapacity !== null) {
+      callbacks.onRunnerCapacityChanged?.(
+        options.initialWorkerCapacity ?? { total: 2, available: 2 },
+      );
     }
     return fixture.runtime;
   });
@@ -121,16 +143,18 @@ function startWorkerFixture(
   const previousExitCode = process.exitCode;
   const interruptListeners = process.listeners("SIGINT");
   const terminateListeners = process.listeners("SIGTERM");
-  const running = runNodeHostWorker();
+  const running = runNodeHostWorker({ desktopSharingEnabled: options.desktopSharingEnabled });
   return {
     input,
     messages,
+    messageEvents,
     stderr,
     stdout,
     stop: async () => {
       try {
         input.close();
         await running;
+        expect(destroyStdin).toHaveBeenCalled();
         if (!options.prepared) {
           expect(fixture.runtime.close).toHaveBeenCalledOnce();
           expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
@@ -144,13 +168,132 @@ function startWorkerFixture(
   };
 }
 
-it("publishes hosting through the app route and retires it on disconnect", async () => {
-  const { input, messages, stderr, stop } = startWorkerFixture();
+it("refreshes runner facts only for the current private bridge generation", async () => {
+  const { input, messages, stop } = startWorkerFixture();
   try {
     await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
-    expect(fixture.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ enableWorkerRuns: true }),
+    input.emit(
+      "line",
+      JSON.stringify({
+        type: "gateway-connection",
+        generation: 2,
+        connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
+      }),
     );
+    await setImmediate();
+    const publications = () =>
+      messages.filter((message) => message.method === "node.runnerInventory.update");
+    expect(publications()).toHaveLength(1);
+    const cancelsBefore = fixture.runtime.cancelAll.mock.calls.length;
+    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 1 }));
+    await setImmediate();
+    expect(publications()).toHaveLength(1);
+    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 2 }));
+    await setImmediate();
+    expect(publications()).toHaveLength(2);
+    expect(publications().at(-1)).toMatchObject({
+      generation: 2,
+      params: { workerHost: { enabled: true, capacity: { total: 2, available: 2 } } },
+    });
+    expect(fixture.runtime.cancelAll).toHaveBeenCalledTimes(cancelsBefore);
+    input.emit(
+      "line",
+      JSON.stringify({ type: "gateway-connection", generation: 3, connection: null }),
+    );
+    input.emit("line", JSON.stringify({ type: "runner-inventory-refresh", generation: 3 }));
+    await setImmediate();
+    expect(publications()).toHaveLength(2);
+  } finally {
+    await stop();
+  }
+});
+
+it("keeps the private app worker unrestricted by a saved headless command allowlist", async () => {
+  fixture.loadConfig.mockResolvedValue({
+    version: 1,
+    nodeId: "headless-node",
+    commands: ["openclaw.sessions.list.v1"],
+  });
+  vi.spyOn(pathEnv, "ensureOpenClawCliOnPath").mockImplementation(() => {});
+  vi.spyOn(terminalUpload, "ensureTerminalUploadCleanup").mockResolvedValue();
+  vi.spyOn(pluginNodeHost, "ensureNodeHostPluginRegistry").mockResolvedValue();
+  vi.spyOn(pluginNodeHost, "listRegisteredNodeHostCapsAndCommands").mockReturnValue({
+    commands: ["openclaw.sessions.list.v1"],
+    caps: ["sessions"],
+    nodePluginTools: [],
+  });
+  fixture.prepare.mockImplementationOnce(async (params) => ({
+    ...(await prepareNodeHostRuntime({
+      ...params,
+      config: {
+        nodeHost: { workerRuns: { enabled: true, isolation: "none" }, skills: { enabled: false } },
+      },
+      env: {},
+    })),
+    start: fixture.start,
+  }));
+  const { messages, stop } = startWorkerFixture();
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect.soft(messages).toContainEqual(
+      expect.objectContaining({
+        type: "ready",
+        manifest: expect.objectContaining({ commands: expect.arrayContaining(["system.run"]) }),
+      }),
+    );
+    const prepared = await fixture.prepare.mock.results[0]?.value;
+    expect.soft(prepared.workerHostingEnabled).toBe(true);
+    expect.soft(prepared.restrictedSurface).toBeUndefined();
+  } finally {
+    await stop();
+  }
+});
+
+it.each([
+  { desktopSharingEnabled: undefined, configured: false, enabled: false },
+  { desktopSharingEnabled: false, configured: true, enabled: false },
+])(
+  "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
+  async ({ desktopSharingEnabled, configured, enabled }) => {
+    fixture.prepare.mockImplementationOnce(async (params) => ({
+      ...(await prepareNodeHostRuntime({
+        ...params,
+        config: { desktop: { host: { enabled: configured } } },
+        env: {},
+        platform: "darwin",
+      })),
+      start: fixture.start,
+    }));
+    const { messages, stop } = startWorkerFixture(false, undefined, { desktopSharingEnabled });
+    try {
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.type === "ready")).toBe(true),
+      );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          type: "ready",
+          manifest: expect.objectContaining({
+            commands: enabled
+              ? expect.arrayContaining(["desktop.stream"])
+              : expect.not.arrayContaining(["desktop.stream"]),
+          }),
+        }),
+      );
+    } finally {
+      await stop();
+    }
+  },
+);
+
+it("publishes hosting through the app route and retires it on disconnect", async () => {
+  const { input, messages, stderr, stop } = startWorkerFixture();
+  const resumeInvocation = createDeferredCore();
+  const capacityPublished = createDeferredCore();
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+      workerHostingEnabled: true,
+    });
     const connection = {
       url: "wss://gateway.example.test/current",
       protocol: 4,
@@ -171,6 +314,19 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenCalledWith(
       expect.objectContaining({ url: connection.url }),
     );
+    fixture.runtime.invoke.mockImplementationOnce(async () => {
+      await resumeInvocation.promise;
+      fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 1 });
+      capacityPublished.resolve();
+    });
+    input.emit(
+      "line",
+      JSON.stringify({
+        type: "invoke",
+        generation: 1,
+        request: { id: "old-route", nodeId: "node", command: "system.run" },
+      }),
+    );
     input.emit(
       "line",
       JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
@@ -186,9 +342,8 @@ it("publishes hosting through the app route and retires it on disconnect", async
     const count = messages.length;
     // Capacity is owned by the supervisor; cleanup from an old invocation can
     // notify it after reconnect without acquiring that invocation's authority.
-    callbacks.client.withConnection(1, () =>
-      callbacks.onRunnerCapacityChanged({ total: 2, available: 1 }),
-    );
+    resumeInvocation.resolve();
+    await capacityPublished.promise;
     await vi.waitFor(() =>
       expect(messages.slice(count)).toContainEqual(
         expect.objectContaining({
@@ -203,6 +358,8 @@ it("publishes hosting through the app route and retires it on disconnect", async
         }),
       ),
     );
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
     input.emit(
       "line",
@@ -212,241 +369,267 @@ it("publishes hosting through the app route and retires it on disconnect", async
         request: { id: "stale", nodeId: "node", command: "system.worker.start" },
       }),
     );
-    expect(fixture.runtime.invoke).not.toHaveBeenCalled();
+    expect(fixture.runtime.invoke).toHaveBeenCalledTimes(1);
     expect(stderr).not.toHaveBeenCalled();
   } finally {
+    resumeInvocation.resolve();
     await stop();
   }
 });
 
-it.runIf(process.platform !== "win32").each([
-  { scenario: "same Gateway reconnect", target: "a", elapsedMs: 0, rejectRefresh: false },
-  { scenario: "replacement within cache TTL", target: "b", elapsedMs: 0, rejectRefresh: false },
-  { scenario: "replacement after cache TTL", target: "b", elapsedMs: 90_001, rejectRefresh: false },
-  { scenario: "replacement refresh failure", target: "b", elapsedMs: 90_001, rejectRefresh: true },
-])("scopes skill-authorized execution to the worker connection: $scenario", async (scenario) => {
-  await withTestDir({ prefix: "openclaw-skill-exec-" }, async (dir) => {
-    await withEnvAsync(
-      {
-        OPENCLAW_HOME: dir,
-        OPENCLAW_STATE_DIR: path.join(dir, "state"),
-        OPENCLAW_NODE_EXEC_HOST: undefined,
-        OPENCLAW_NODE_EXEC_FALLBACK: "0",
-        PATH: "/usr/bin:/bin",
-      },
-      async () => {
-        closeOpenClawStateDatabaseForTest();
-        execApprovalsStoreTesting.reset();
-        const now = Date.now;
-        let elapsedMs = 0;
-        vi.spyOn(Date, "now").mockImplementation(() => now() + elapsedMs);
-        let stop: (() => Promise<void>) | undefined;
-        try {
-          fs.accessSync(fs.realpathSync("/usr/bin/true"), fs.constants.X_OK);
-          setRuntimeConfigSnapshot({ tools: { exec: { mode: "allowlist" } } });
-          saveExecApprovals({
-            version: 1,
-            defaults: {
-              security: "allowlist",
-              ask: "off",
-              askFallback: "deny",
-              autoAllowSkills: true,
-            },
-            agents: {},
-          });
-          // Exec-host selection is captured on import. This lane exercises real
-          // Node policy/commit/spawn; native app execution has its own proof.
-          const { handleInvoke } =
-            await vi.importActual<typeof import("./invoke.js")>("./invoke.js");
-          fixture.handleInvoke.mockImplementation(handleInvoke);
-          const { prepareNodeHostRuntime } =
-            await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
-          const prepared = await prepareNodeHostRuntime({
-            config: { nodeHost: { skills: { enabled: false } } },
-            enableDuplexPluginCommands: true,
-            enableWorkerRuns: true,
-          });
-          let rejectSameGatewayRefresh = false;
-          const worker = startWorkerFixture(false, undefined, {
-            prepared,
-            gatewayResponse: (message) => {
-              if (message.method !== "skills.bins") {
-                return { ok: true, result: {} };
-              }
-              if (message.generation === 1 || scenario.target === "a") {
-                return rejectSameGatewayRefresh
-                  ? {
-                      ok: false,
-                      error: { code: "UNAVAILABLE", message: "same Gateway unavailable" },
-                    }
-                  : { ok: true, result: { bins: ["true"] } };
-              }
-              return scenario.rejectRefresh
-                ? { ok: false, error: { code: "UNAVAILABLE", message: "replacement unavailable" } }
-                : { ok: true, result: { bins: [] } };
-            },
-          });
-          stop = worker.stop;
-          const { input, messages } = worker;
-          const connect = (generation: number, target: string) => {
-            input.emit(
-              "line",
-              JSON.stringify({
-                type: "gateway-connection",
-                generation,
-                connection: {
-                  url: `wss://gateway-${target}.example.test`,
-                  protocol: 4,
-                  capabilities: [],
-                },
-              }),
-            );
-          };
-          const invoke = async (generation: number, id: string) => {
-            input.emit(
-              "line",
-              JSON.stringify({
-                type: "invoke",
-                generation,
-                request: {
-                  id,
-                  nodeId: "node",
-                  command: "system.run",
-                  paramsJSON: JSON.stringify({
-                    // A shell-wrapped `true` has independent builtin trust.
-                    // Bare argv requires the actual skill entry in this lane.
-                    command: ["true"],
-                    cwd: dir,
-                    agentId: "main",
-                    sessionKey: "agent:main:skill-trust-proof",
-                    runId: id,
-                    timeoutMs: 2_000,
-                  }),
-                },
-              }),
-            );
-            const message = await vi.waitFor(
-              () => {
-                const result = messages.find(
-                  (entry) =>
-                    entry.type === "invoke-result" &&
-                    (entry.result as { id?: string } | undefined)?.id === id,
-                );
-                if (!result) {
-                  throw new Error(`missing worker invocation result: ${id}`);
-                }
-                return result;
-              },
-              { timeout: 5_000 },
-            );
-            expect(message).toMatchObject({ generation, result: { id } });
-            return message.result as {
-              ok: boolean;
-              payloadJSON?: string;
-              error?: { code: string; message: string };
-            };
-          };
-          const eventsFor = (id: string) =>
-            messages
-              .filter((message) => message.type === "node-event")
-              .map((message) => {
-                const event = message.event as { event: string; payloadJSON: string };
-                return {
-                  generation: message.generation,
-                  event: event.event,
-                  payload: JSON.parse(event.payloadJSON) as ExecEventPayload,
-                };
-              })
-              .filter((event) => event.payload.runId === id);
-          const expectExecuted = (
-            result: Awaited<ReturnType<typeof invoke>>,
-            generation: number,
-            id: string,
-          ) => {
-            expect(result).toMatchObject({ ok: true });
-            expect(JSON.parse(result.payloadJSON ?? "null")).toEqual({
-              exitCode: 0,
-              timedOut: false,
-              success: true,
-              stdout: "",
-              stderr: "",
-              error: null,
-            });
-            expect(eventsFor(id)).toEqual([
-              {
-                generation,
-                event: "exec.finished",
-                payload: expect.objectContaining({
-                  runId: id,
-                  host: "node",
-                  success: true,
-                  exitCode: 0,
-                }),
-              },
-            ]);
-          };
-          const skillRequests = () =>
-            messages.filter((message) => message.method === "skills.bins");
-          await vi.waitFor(() =>
-            expect(messages.some((message) => message.type === "ready")).toBe(true),
-          );
-          connect(1, "a");
-          for (const id of ["a-warm", "a-cached-control"]) {
-            expectExecuted(await invoke(1, id), 1, id);
-          }
-          expect(skillRequests()).toHaveLength(1);
-          input.emit(
-            "line",
-            JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
-          );
-          // Advance expiry only after both real processes have completed.
-          elapsedMs = scenario.elapsedMs;
-          connect(3, scenario.target);
-          const replacement = await invoke(3, "new-invoke");
-          if (scenario.target === "a") {
-            expectExecuted(replacement, 3, "new-invoke");
-            const requestsAfterReconnect = skillRequests().length;
-            expectExecuted(await invoke(3, "a-reconnected-cached"), 3, "a-reconnected-cached");
-            expect(skillRequests()).toHaveLength(requestsAfterReconnect);
-            elapsedMs = 90_001;
-            rejectSameGatewayRefresh = true;
-            expectExecuted(await invoke(3, "a-refresh-failed"), 3, "a-refresh-failed");
-            expect(skillRequests()).toHaveLength(requestsAfterReconnect + 1);
-            expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
-          } else {
-            expect(replacement).toMatchObject({
-              ok: false,
-              error: { code: "SYSTEM_RUN_DENIED", message: "SYSTEM_RUN_DENIED: allowlist miss" },
-            });
-            expect(eventsFor("new-invoke")).toEqual([
-              {
-                generation: 3,
-                event: "exec.denied",
-                payload: expect.objectContaining({
-                  runId: "new-invoke",
-                  host: "node",
-                  reason: "allowlist-miss",
-                }),
-              },
-            ]);
-            expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
-          }
-          expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
-        } finally {
-          try {
-            await stop?.();
-          } finally {
-            fixture.handleInvoke.mockReset();
-            execApprovalsStoreTesting.reset();
-            closeOpenClawStateDatabaseForTest();
-            clearRuntimeConfigSnapshot();
-            clearExecutablePathCache();
-          }
-        }
-      },
-    );
+it("reports hosting only after supervisor capacity exists", async () => {
+  const { messages, stop } = startWorkerFixture(true, undefined, { initialWorkerCapacity: null });
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+      workerHostingEnabled: false,
+    });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
+    const callbacks = fixture.start.mock.calls[0]?.[0];
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
+    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([
+      { type: "worker-hosting", enabled: true },
+    ]);
+  } finally {
+    await stop();
+  }
+  expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
+    type: "worker-hosting",
+    enabled: false,
   });
 });
+
+it.runIf(process.platform !== "win32").for([
+  { scenario: "same Gateway reconnect", target: "a", elapsedMs: 0, rejectRefresh: false },
+  { scenario: "replacement within cache TTL", target: "b", elapsedMs: 0, rejectRefresh: false },
+  { scenario: "replacement refresh failure", target: "b", elapsedMs: 90_001, rejectRefresh: true },
+])(
+  "scopes skill-authorized execution to the worker connection: $scenario",
+  async (scenario, { signal }) => {
+    await withTestDir({ prefix: "openclaw-skill-exec-" }, async (dir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: dir,
+          OPENCLAW_STATE_DIR: path.join(dir, "state"),
+          OPENCLAW_NODE_EXEC_HOST: undefined,
+          OPENCLAW_NODE_EXEC_FALLBACK: "0",
+          PATH: "/usr/bin:/bin",
+        },
+        async () => {
+          closeOpenClawStateDatabaseForTest();
+          execApprovalsStoreTesting.reset();
+          const now = Date.now;
+          let elapsedMs = 0;
+          vi.spyOn(Date, "now").mockImplementation(() => now() + elapsedMs);
+          let stop: (() => Promise<void>) | undefined;
+          try {
+            fs.accessSync(fs.realpathSync("/usr/bin/true"), fs.constants.X_OK);
+            setRuntimeConfigSnapshot({ tools: { exec: { mode: "allowlist" } } });
+            saveExecApprovals({
+              version: 1,
+              defaults: {
+                security: "allowlist",
+                ask: "off",
+                askFallback: "deny",
+                autoAllowSkills: true,
+              },
+              agents: {},
+            });
+            // Exec-host selection is captured on import. This lane exercises real
+            // Node policy/commit/spawn; native app execution has its own proof.
+            const { handleInvoke } =
+              await vi.importActual<typeof import("./invoke.js")>("./invoke.js");
+            fixture.handleInvoke.mockImplementation(handleInvoke);
+            const prepared = await prepareNodeHostRuntime({
+              config: { nodeHost: { skills: { enabled: false } } },
+            });
+            let rejectSameGatewayRefresh = false;
+            const worker = startWorkerFixture(false, undefined, {
+              prepared,
+              gatewayResponse: (message) => {
+                if (message.method !== "skills.bins") {
+                  return { ok: true, result: {} };
+                }
+                if (message.generation === 1 || scenario.target === "a") {
+                  return rejectSameGatewayRefresh
+                    ? {
+                        ok: false,
+                        error: { code: "UNAVAILABLE", message: "same Gateway unavailable" },
+                      }
+                    : { ok: true, result: { bins: ["true"] } };
+                }
+                return scenario.rejectRefresh
+                  ? {
+                      ok: false,
+                      error: { code: "UNAVAILABLE", message: "replacement unavailable" },
+                    }
+                  : { ok: true, result: { bins: [] } };
+              },
+            });
+            stop = worker.stop;
+            const { input, messages } = worker;
+            const connect = (generation: number, target: string) => {
+              input.emit(
+                "line",
+                JSON.stringify({
+                  type: "gateway-connection",
+                  generation,
+                  connection: {
+                    url: `wss://gateway-${target}.example.test`,
+                    protocol: 4,
+                    capabilities: [],
+                  },
+                }),
+              );
+            };
+            const invoke = async (generation: number, id: string) => {
+              const response = createDeferredCore<Record<string, unknown>>();
+              const onMessage = (message: Record<string, unknown>) => {
+                if (
+                  message.type === "invoke-result" &&
+                  (message.result as { id?: string } | undefined)?.id === id
+                ) {
+                  response.resolve(message);
+                }
+              };
+              worker.messageEvents.on("message", onMessage);
+              try {
+                input.emit(
+                  "line",
+                  JSON.stringify({
+                    type: "invoke",
+                    generation,
+                    request: {
+                      id,
+                      nodeId: "node",
+                      command: "system.run",
+                      paramsJSON: JSON.stringify({
+                        // A shell-wrapped `true` has independent builtin trust.
+                        // Bare argv requires the actual skill entry in this lane.
+                        command: ["true"],
+                        cwd: dir,
+                        agentId: "main",
+                        sessionKey: "agent:main:skill-trust-proof",
+                        runId: id,
+                        timeoutMs: 2_000,
+                      }),
+                    },
+                  }),
+                );
+                const message = await withinTest(response.promise, signal);
+                expect(message).toMatchObject({ generation, result: { id } });
+                return message.result as {
+                  ok: boolean;
+                  payloadJSON?: string;
+                  error?: { code: string; message: string };
+                };
+              } finally {
+                worker.messageEvents.off("message", onMessage);
+              }
+            };
+            const eventsFor = (id: string) =>
+              messages
+                .filter((message) => message.type === "node-event")
+                .map((message) => {
+                  const event = message.event as { event: string; payloadJSON: string };
+                  return {
+                    generation: message.generation,
+                    event: event.event,
+                    payload: JSON.parse(event.payloadJSON) as ExecEventPayload,
+                  };
+                })
+                .filter((event) => event.payload.runId === id);
+            const expectExecuted = (
+              result: Awaited<ReturnType<typeof invoke>>,
+              generation: number,
+              id: string,
+            ) => {
+              expect(result).toMatchObject({ ok: true });
+              expect(JSON.parse(result.payloadJSON ?? "null")).toEqual({
+                exitCode: 0,
+                timedOut: false,
+                success: true,
+                stdout: "",
+                stderr: "",
+                error: null,
+              });
+              expect(eventsFor(id)).toEqual([
+                {
+                  generation,
+                  event: "exec.finished",
+                  payload: expect.objectContaining({
+                    runId: id,
+                    host: "node",
+                    success: true,
+                    exitCode: 0,
+                  }),
+                },
+              ]);
+            };
+            const skillRequests = () =>
+              messages.filter((message) => message.method === "skills.bins");
+            await vi.waitFor(() =>
+              expect(messages.some((message) => message.type === "ready")).toBe(true),
+            );
+            connect(1, "a");
+            for (const id of ["a-warm", "a-cached-control"]) {
+              expectExecuted(await invoke(1, id), 1, id);
+            }
+            expect(skillRequests()).toHaveLength(1);
+            input.emit(
+              "line",
+              JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
+            );
+            // Advance expiry only after both real processes have completed.
+            elapsedMs = scenario.elapsedMs;
+            connect(3, scenario.target);
+            const replacement = await invoke(3, "new-invoke");
+            if (scenario.target === "a") {
+              expectExecuted(replacement, 3, "new-invoke");
+              const requestsAfterReconnect = skillRequests().length;
+              expectExecuted(await invoke(3, "a-reconnected-cached"), 3, "a-reconnected-cached");
+              expect(skillRequests()).toHaveLength(requestsAfterReconnect);
+              elapsedMs = 90_001;
+              rejectSameGatewayRefresh = true;
+              expectExecuted(await invoke(3, "a-refresh-failed"), 3, "a-refresh-failed");
+              expect(skillRequests()).toHaveLength(requestsAfterReconnect + 1);
+              expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
+            } else {
+              expect(replacement).toMatchObject({
+                ok: false,
+                error: { code: "SYSTEM_RUN_DENIED", message: "SYSTEM_RUN_DENIED: allowlist miss" },
+              });
+              expect(eventsFor("new-invoke")).toEqual([
+                {
+                  generation: 3,
+                  event: "exec.denied",
+                  payload: expect.objectContaining({
+                    runId: "new-invoke",
+                    host: "node",
+                    reason: "allowlist-miss",
+                  }),
+                },
+              ]);
+              expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
+            }
+            expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+          } finally {
+            try {
+              await stop?.();
+            } finally {
+              fixture.handleInvoke.mockReset();
+              execApprovalsStoreTesting.reset();
+              closeOpenClawStateDatabaseForTest();
+              clearRuntimeConfigSnapshot();
+              clearExecutablePathCache();
+            }
+          }
+        },
+      );
+    });
+  },
+);
 
 it("publishes host stats through the native bridge only while connected", async () => {
   const { input, messages, stop } = startWorkerFixture(false);
@@ -463,6 +646,7 @@ it("publishes host stats through the native bridge only while connected", async 
         connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
       }),
     );
+    await vi.advanceTimersByTimeAsync(0);
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
       type: "node-event",
@@ -485,7 +669,7 @@ it("publishes host stats through the native bridge only while connected", async 
   }
 });
 
-it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
+it.each(["prepared failure", "later failure"] as const)(
   "keeps worker hosting diagnostics local across reconnects: %s",
   async (scenario) => {
     const secret = "fixture-secret";
@@ -511,6 +695,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
         expect(messages.some((message) => message.type === "ready")).toBe(true),
       );
       expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({ type: "ready", workerHostingEnabled: laterFailure });
       if (preparedFailure) {
         expectDiagnostic();
         expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
@@ -532,6 +717,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
         expect(inventories()).toHaveLength(1);
         expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
         fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
+        fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 2 });
         await setImmediate();
         expectDiagnostic();
       }
@@ -546,11 +732,7 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
       await setImmediate();
       expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
       expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
-      if (scenario === "configured opt-out") {
-        expect(stderr).not.toHaveBeenCalled();
-      } else {
-        expectDiagnostic();
-      }
+      expectDiagnostic();
       const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(output).not.toContain(secret);
       expect(output).not.toContain(reason);
@@ -558,6 +740,9 @@ it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
       expect(output).not.toContain("worker hosting disabled");
       expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
       expect(messages.some((message) => message.type === "manifest")).toBe(false);
+      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
+        laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
+      );
     } finally {
       await stop();
     }

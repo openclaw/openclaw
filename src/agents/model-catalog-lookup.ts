@@ -9,14 +9,28 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 type ModelThinkingCompat = {
   thinkingFormat?: ModelCompatConfig["thinkingFormat"];
   supportedReasoningEfforts?: readonly string[] | null;
+};
+
+type ModelRunCapabilityEntry = {
+  provider: string;
+  id: string;
+  api?: string;
+  baseUrl?: string;
+  input?: readonly ModelInputType[];
+  compat?: unknown;
 };
 
 export type PreparedModelThinkingCapability = Readonly<{
@@ -51,8 +65,8 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
 
 /** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
-  entry: ModelCatalogEntry | undefined;
-  route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  entry: ModelRunCapabilityEntry | undefined;
+  route?: Pick<ModelRunCapabilityEntry, "api" | "baseUrl">;
   agentRuntime: string;
 }): PreparedModelThinkingCapability | undefined {
   const compat = projectModelThinkingCompat(params.entry?.compat);
@@ -84,7 +98,7 @@ export function resolvePreparedModelThinkingCompat(params: {
     compat?: Model["compat"] | ModelThinkingCompat;
   };
   agentRuntime: string;
-}): ModelThinkingCompat | undefined {
+}): Pick<ModelCompatConfig, "thinkingFormat" | "supportedReasoningEfforts"> | undefined {
   const capability = params.capability;
   if (!capability) {
     return undefined;
@@ -99,9 +113,8 @@ export function resolvePreparedModelThinkingCompat(params: {
   ) {
     return undefined;
   }
-  const { compat, route } = capability;
-  const efforts = compat.supportedReasoningEfforts;
-  if (route || efforts === undefined) {
+  const { supportedReasoningEfforts: efforts, ...compat } = capability.compat;
+  if (efforts === undefined) {
     return compat;
   }
   // "none" disables reasoning; it is not an enabled effort tier. Harness-wide
@@ -110,15 +123,21 @@ export function resolvePreparedModelThinkingCompat(params: {
   const enabledEfforts = efforts?.filter((effort) => effort !== "none");
   return {
     ...compat,
-    supportedReasoningEfforts: routeEfforts?.includes("none")
-      ? ["none", ...(enabledEfforts ?? [])]
-      : (enabledEfforts ?? efforts),
+    // Unknown metadata clears earlier capabilities; runtime arrays belong to this model.
+    supportedReasoningEfforts: capability.route
+      ? efforts?.slice()
+      : routeEfforts?.includes("none")
+        ? ["none", ...(enabledEfforts ?? [])]
+        : enabledEfforts,
   };
 }
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
 export function prepareModelRunCapabilities(
-  [catalog, configuredCatalog]: readonly [ModelCatalogEntry[] | undefined, ModelCatalogEntry[]],
+  [catalog, configuredCatalog]: readonly [
+    readonly ModelRunCapabilityEntry[] | undefined,
+    readonly ModelRunCapabilityEntry[],
+  ],
   [provider, modelId, agentRuntime]: readonly [string, string, string],
 ) {
   const entry = findModelInCatalog(catalog ?? [], provider, modelId);
@@ -148,11 +167,33 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   modelId: string,
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const providerCatalog = catalog.filter(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
-  );
-  const identity = resolveModelCatalogIdentityKey({ provider, id: modelId.trim() });
-  const exact = providerCatalog.find((entry) => resolveModelCatalogIdentityKey(entry) === identity);
+  const trimmedModelId = modelId.trim();
+  const providerCatalog: T[] = [];
+  let literal: T | undefined;
+  catalog.some((entry) => {
+    if (normalizeProviderId(entry.provider) !== normalizedProvider) {
+      return false;
+    }
+    if (entry.id === trimmedModelId) {
+      literal = entry;
+      return true;
+    }
+    providerCatalog.push(entry);
+    return false;
+  });
+  if (literal) {
+    return literal;
+  }
+  // One synchronous lookup uses one policy owner instead of reloading it for every row.
+  const surface = resolveProviderModelPolicySurface(normalizedProvider);
+  const identityOf = (id: string) =>
+    resolveProviderModelCatalogId({
+      provider: normalizedProvider,
+      modelId: splitTrailingAuthProfile(id).model,
+      surface,
+    }) ?? id;
+  const identity = identityOf(trimmedModelId);
+  const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
   if (exact) {
     return exact;
   }
@@ -178,10 +219,9 @@ export function findModelCatalogEntry(
     return findModelInCatalog(catalog, provider, modelId);
   }
 
+  const keyOf = createModelCatalogIdentityKeyResolver();
   const exact = catalog.filter(
-    (entry) =>
-      resolveModelCatalogIdentityKey(entry) ===
-      resolveModelCatalogIdentityKey({ provider: entry.provider, id: modelId }),
+    (entry) => keyOf(entry) === keyOf({ provider: entry.provider, id: modelId }),
   );
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const matches = exact.length

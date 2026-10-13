@@ -1,12 +1,28 @@
 import { realpath } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
+import {
+  readBackgroundProcesses,
+  stopBackgroundProcess,
+} from "../agents/bash-process-observation.js";
+import {
+  getActiveBackgroundExecSessionCount,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
 import { toErrorObject } from "../infra/errors.js";
 import { createBoundedLineFramer } from "../process/bounded-line-framer.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import { parseWorkerProcessRequest, type WorkerProcessResult } from "./worker-process-protocol.js";
+import {
+  takeNativeInferenceStartup,
+  type NativeInferenceStartup,
+} from "./native-inference-startup.js";
+import {
+  parseWorkerProcessRequest,
+  type WorkerProcessMessage,
+  type WorkerProcessResult,
+} from "./worker-process-protocol.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 type RunWorkerCommandOptions = {
@@ -15,6 +31,7 @@ type RunWorkerCommandOptions = {
   output: Writable;
   browserRuntime?: WorkerBrowserRuntime;
   managed?: boolean;
+  nativeInference?: NativeInferenceStartup;
 };
 
 export type WorkerCommandLifetime = {
@@ -25,15 +42,27 @@ export type WorkerCommandLifetime = {
   terminateOwnedTree: () => void;
 };
 
+function workerInputBytes(raw: unknown, label: string): Buffer {
+  if (typeof raw === "string" || raw instanceof Uint8Array) {
+    return Buffer.from(raw);
+  }
+  throw new Error(`${label} input must be bytes`);
+}
+
 async function runManagedWorkerCommand(
   options: RunWorkerCommandOptions,
   signal: AbortSignal,
 ): Promise<void> {
   let environment: Awaited<ReturnType<typeof createWorkerRuntimeEnvironment>> | undefined;
   let binding: string | undefined;
+  let processBinding:
+    | { environmentId: string; sessionId: string; ownerEpoch: number; agentId: string }
+    | undefined;
   let lastTurnId: string | undefined;
   let active: { turnId: string; controller: AbortController } | undefined;
   let running: Promise<void> | undefined;
+  let idleCleanup: Promise<void> | undefined;
+  let draining: Promise<void> | undefined;
   let closed = false;
   const framer = createBoundedLineFramer(
     WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
@@ -59,6 +88,24 @@ async function runManagedWorkerCommand(
           resolve();
         }
       };
+      const write = (response: WorkerProcessMessage) =>
+        new Promise<void>((resolveWrite, rejectWrite) => {
+          const onClose = () => rejectWrite(new Error("managed worker result output closed"));
+          // A failed write reports through both the callback and the stream. The callback owns
+          // the result; retain one listener to consume the matching runtime error event.
+          const onError = () => {};
+          options.output.once("close", onClose);
+          options.output.once("error", onError);
+          options.output.write(`${JSON.stringify(response)}\n`, (error) => {
+            options.output.off("close", onClose);
+            if (error) {
+              rejectWrite(error);
+            } else {
+              options.output.off("error", onError);
+              resolveWrite();
+            }
+          });
+        });
       const onLine = (line: Buffer) => {
         let value: unknown;
         try {
@@ -67,6 +114,33 @@ async function runManagedWorkerCommand(
           throw new Error("managed worker request is not valid JSON");
         }
         const request = parseWorkerProcessRequest(value);
+        if (request.type === "process") {
+          const owner = processBinding;
+          const matches =
+            owner &&
+            owner.environmentId === request.environmentId &&
+            owner.sessionId === request.sessionId &&
+            owner.ownerEpoch === request.ownerEpoch;
+          // Observation serves idle retained workers without creating a model turn or
+          // consuming the output and completion notifications still owed to the agent.
+          const scope = owner && {
+            scopeKeys: ["worker:" + owner.sessionId],
+            agentId: owner.agentId,
+          };
+          const response =
+            matches && scope
+              ? {
+                  result:
+                    request.operation.action === "list"
+                      ? { sessionId: owner.sessionId, ...readBackgroundProcesses(scope) }
+                      : stopBackgroundProcess(scope, request.operation),
+                }
+              : { error: "Worker process owner changed; refresh the process list." };
+          void write({ type: "process-result", requestId: request.requestId, ...response }).catch(
+            finish,
+          );
+          return;
+        }
         if (request.type === "cancel") {
           if (active?.turnId === request.turnId) {
             active.controller.abort(new Error("worker turn cancelled"));
@@ -81,8 +155,7 @@ async function runManagedWorkerCommand(
         lastTurnId = request.turnId;
         const current = { turnId: request.turnId, controller: new AbortController() };
         active = current;
-        running = (async () => {
-          const descriptor = request.descriptor;
+        running = (async (descriptor: WorkerLaunchDescriptor, idleRetention?: true) => {
           const workspaceDir = await realpath(descriptor.assignment.workspaceDir);
           const workerContainmentRoot = await realpath(
             descriptor.assignment.workerContainmentRoot ?? workspaceDir,
@@ -92,6 +165,7 @@ async function runManagedWorkerCommand(
             sessionId: descriptor.admission.sessionId,
             ownerEpoch: descriptor.admission.ownerEpoch,
             agentId: descriptor.assignment.agentId,
+            inference: descriptor.assignment.inference,
             permissionMode: descriptor.assignment.permissionMode,
             workspaceDir,
             workerContainmentRoot,
@@ -100,10 +174,17 @@ async function runManagedWorkerCommand(
             throw new Error("managed worker environment binding changed; relaunch required");
           }
           binding = nextBinding;
+          processBinding = {
+            environmentId: descriptor.admission.environmentId,
+            sessionId: descriptor.admission.sessionId,
+            ownerEpoch: descriptor.admission.ownerEpoch,
+            agentId: descriptor.assignment.agentId,
+          };
           if (closed) {
             return;
           }
           environment ??= await createWorkerRuntimeEnvironment(descriptor.admission.sessionId);
+          await idleCleanup;
           if (closed) {
             return;
           }
@@ -113,15 +194,11 @@ async function runManagedWorkerCommand(
               assignment:
                 descriptor.assignment.permissionMode === undefined
                   ? { ...descriptor.assignment, workspaceDir }
-                  : {
-                      ...descriptor.assignment,
-                      workspaceDir,
-                      permissionMode: descriptor.assignment.permissionMode,
-                      workerContainmentRoot,
-                    },
+                  : { ...descriptor.assignment, workspaceDir, workerContainmentRoot },
             },
             {
               environmentStateDir: environment.stateDir,
+              nativeInference: options.nativeInference,
               signal: current.controller.signal,
               ...(options.lifetime
                 ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
@@ -132,50 +209,65 @@ async function runManagedWorkerCommand(
           if (closed) {
             return;
           }
-          const retainWorker =
-            (result.status === "completed" || result.status === "failed") &&
-            getActiveBackgroundExecSessionCount() > 0;
-          const response: WorkerProcessResult = {
+          const stateDir = environment.stateDir;
+          const scopeKey = `worker:${descriptor.admission.sessionId}`;
+          const disposeProfile = async () => {
+            const { disposeWorkerGitHubEnvironment } = await import("./github-binding.runtime.js");
+            await disposeWorkerGitHubEnvironment(stateDir, descriptor.assignment.turnId);
+          };
+          const canRetain = result.status === "completed" || result.status === "failed";
+          let retention: WorkerProcessResult["retention"] =
+            canRetain && getActiveBackgroundExecSessionCount() > 0
+              ? "background"
+              : canRetain && idleRetention && !current.controller.signal.aborted
+                ? "idle"
+                : undefined;
+          if (retention === "idle") {
+            await waitForExecScope(scopeKey);
+            await disposeProfile();
+            if (current.controller.signal.aborted) {
+              retention = undefined;
+            }
+          }
+          if (closed) {
+            return;
+          }
+          const retainWorker = retention !== undefined;
+          if (retainWorker) {
+            active = undefined;
+          }
+          await write({
             type: "result",
             turnId: current.turnId,
             result,
             retainWorker,
-          };
-          if (retainWorker) {
-            active = undefined;
-          }
-          await new Promise<void>((resolveWrite, rejectWrite) => {
-            const onClose = () => rejectWrite(new Error("managed worker result output closed"));
-            options.output.once("close", onClose);
-            options.output.write(`${JSON.stringify(response)}\n`, (error) => {
-              options.output.off("close", onClose);
-              if (error) {
-                rejectWrite(error);
-              } else {
-                resolveWrite();
-              }
-            });
+            ...(idleRetention && retention ? { retention } : {}),
           });
+          if (retention === "background") {
+            const isCurrent = () => !closed && !active && lastTurnId === current.turnId;
+            draining = Promise.all([draining, waitForExecScope(scopeKey)])
+              .then(async () => {
+                // Remove this turn's profile even if a newer turn is already running.
+                await (idleCleanup = disposeProfile());
+                if (idleRetention && isCurrent()) {
+                  await write({ type: "idle-ready", turnId: current.turnId });
+                }
+              })
+              .catch(finish);
+          }
+
           if (!retainWorker) {
             active = undefined;
             finish();
           }
-        })().catch(finish);
+        })(request.descriptor, request.idleRetention).catch(finish);
       };
       const onData = (raw: unknown) => {
         if (closed) {
           return;
         }
         try {
-          const chunk =
-            typeof raw === "string"
-              ? Buffer.from(raw)
-              : raw instanceof Uint8Array
-                ? Buffer.from(raw)
-                : undefined;
-          if (!chunk) {
-            throw new Error("managed worker input must be bytes");
-          }
+          const chunk = workerInputBytes(raw, "managed worker");
           for (const line of framer.push(chunk)) {
             onLine(line);
             if (closed) {
@@ -213,6 +305,7 @@ async function runManagedWorkerCommand(
     try {
       await running;
       await environment?.close();
+      await draining;
     } finally {
       removeListeners();
     }
@@ -220,30 +313,19 @@ async function runManagedWorkerCommand(
 }
 
 async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescriptor> {
-  const chunks: Buffer[] = [];
-  let byteLength = 0;
-  for await (const rawChunk of input as AsyncIterable<unknown>) {
-    const chunk =
-      typeof rawChunk === "string"
-        ? Buffer.from(rawChunk)
-        : rawChunk instanceof Uint8Array
-          ? Buffer.from(rawChunk)
-          : undefined;
-    if (!chunk) {
-      throw new Error("worker launch descriptor input must be bytes");
-    }
-    byteLength += chunk.byteLength;
-    if (byteLength > WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
-      throw new Error("worker launch descriptor exceeds the protocol payload limit");
-    }
-    chunks.push(chunk);
-  }
-  if (byteLength === 0) {
+  const bytes = await readByteStreamWithLimit(
+    input.map((chunk: unknown) => workerInputBytes(chunk, "worker launch descriptor")),
+    {
+      maxBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+      onOverflow: () => new Error("worker launch descriptor exceeds the protocol payload limit"),
+    },
+  );
+  if (bytes.length === 0) {
     throw new Error("worker launch descriptor is required on stdin");
   }
   let decoded: unknown;
   try {
-    decoded = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    decoded = JSON.parse(bytes.toString("utf8"));
   } catch (error) {
     throw new Error("worker launch descriptor is not valid JSON", { cause: error });
   }
@@ -251,7 +333,9 @@ async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescri
 }
 
 /** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
-export async function runWorkerCommand(options: RunWorkerCommandOptions): Promise<void> {
+export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<void> {
+  const startup = takeNativeInferenceStartup();
+  const options = { ...input, nativeInference: input.nativeInference ?? startup };
   const abortController = new AbortController();
   const stop = () => abortController.abort(new Error("worker interrupted"));
   let lifetimeEnded = false;
@@ -284,6 +368,7 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
       return;
     }
     const result = await runWorkerDescriptor(descriptor, {
+      nativeInference: options.nativeInference,
       signal: abortController.signal,
       ...(options.lifetime
         ? { onConnectionFailure: options.lifetime.reportConnectionFailure }

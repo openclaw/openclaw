@@ -1,7 +1,7 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   recordChannelBotPairLoopAndCheckSuppression,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -9,15 +9,11 @@ import {
   createChannelMessageReplyPipeline,
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-outbound";
-/**
- * Converts authorized ClickClack messages into OpenClaw agent/model replies and
- * routes resulting outbound text back to ClickClack.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
-import { createClickClackClient } from "./http-client.js";
+import { ClickClackHttpError, createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
 import {
   createClickClackAgentProgressPublisher,
@@ -48,8 +44,7 @@ function hasClickClackReplyMedia(payload: {
   mediaUrls?: readonly string[];
 }): boolean {
   return Boolean(
-    payload.mediaUrl?.trim() ||
-    payload.mediaUrls?.some((mediaUrl) => typeof mediaUrl === "string" && mediaUrl.trim()),
+    payload.mediaUrl?.trim() || payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim()),
   );
 }
 
@@ -61,6 +56,7 @@ async function stageClickClackInboundMedia(params: {
   account: ResolvedClickClackAccount;
   cfg: CoreConfig;
   message: ClickClackMessage;
+  isCurrent: () => boolean;
   correlationId?: string;
   abortSignal?: AbortSignal;
 }) {
@@ -69,10 +65,17 @@ async function stageClickClackInboundMedia(params: {
     return [];
   }
   const runtime = getClickClackRuntime();
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    if (!params.isCurrent()) {
+      throw new Error("ClickClack attachment admission is no longer current");
+    }
+  };
   const client = createClickClackClient({
     baseUrl: params.account.apiEndpoint,
     token: params.account.token,
     correlationId: params.correlationId,
+    beforeRequest: assertCurrent,
   });
   const maxBytes = Math.min(
     resolveChannelMediaMaxBytes({
@@ -95,8 +98,9 @@ async function stageClickClackInboundMedia(params: {
     const sourceUrl = `${params.account.apiEndpoint}/api/uploads/${encodeURIComponent(attachment.id)}`;
     const saved = await client.consumeUpload(
       attachment.id,
-      (response) =>
-        runtime.channel.media.saveResponseMedia(response, {
+      (response) => {
+        assertCurrent();
+        return runtime.channel.media.saveResponseMedia(response, {
           sourceUrl,
           filePathHint: attachment.filename,
           originalFilename: attachment.filename,
@@ -104,7 +108,8 @@ async function stageClickClackInboundMedia(params: {
           maxBytes,
           readIdleTimeoutMs: CLICKCLACK_UPLOAD_READ_IDLE_TIMEOUT_MS,
           subdir: "inbound",
-        }),
+        });
+      },
       params.abortSignal,
     );
     staged.push({
@@ -116,11 +121,14 @@ async function stageClickClackInboundMedia(params: {
   return toInboundMediaFacts(staged);
 }
 
-function isPermanentMediaRejection(error: unknown): boolean {
-  return (
-    error instanceof ClickClackPermanentMediaError ||
-    (error instanceof MediaFetchError && error.code === "max_bytes")
-  );
+function permanentMediaRejectionNotice(error: unknown): string | undefined {
+  if (error instanceof ClickClackHttpError && error.status === 404) {
+    return "I could not process this attachment because it is no longer available in ClickClack. Please upload it again.";
+  }
+  if (error instanceof ClickClackPermanentMediaError || extractErrorCode(error) === "max_bytes") {
+    return "I could not process this attachment because it exceeds this bot's media limit.";
+  }
+  return undefined;
 }
 
 async function sendClickClackInboundNotice(params: {
@@ -171,7 +179,6 @@ async function dispatchModelReply(params: {
   route: { agentId: string };
   target: string;
   correlationId?: string;
-  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
   const result = await runtime.llm.complete({
@@ -222,10 +229,6 @@ async function dispatchModelReply(params: {
   });
 }
 
-/**
- * Dispatches one already-fetched ClickClack message through the configured
- * reply mode for its account.
- */
 export async function handleClickClackInbound(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
@@ -244,7 +247,7 @@ export async function handleClickClackInbound(params: {
       config: params.config,
       message,
     }));
-  if (!access.shouldDispatch || !access.channelIngress) {
+  if (!access.shouldDispatch || !access.channelIngress || !access.isCurrent()) {
     return;
   }
   const conversationId = message.channel_id || message.direct_conversation_id;
@@ -281,15 +284,17 @@ export async function handleClickClackInbound(params: {
       account: params.account,
       cfg: params.config,
       message,
+      isCurrent: access.isCurrent,
       correlationId: params.correlationId,
       abortSignal: params.abortSignal,
     });
   } catch (error) {
-    if (!isPermanentMediaRejection(error)) {
-      throw error;
-    }
-    if (params.abortSignal?.aborted) {
+    if (params.abortSignal?.aborted || !access.isCurrent()) {
       return;
+    }
+    const notice = permanentMediaRejectionNotice(error);
+    if (!notice) {
+      throw error;
     }
     if (
       isClickClackDirectReplySuppressed({
@@ -304,12 +309,12 @@ export async function handleClickClackInbound(params: {
       cfg: params.config,
       message,
       target,
-      text: "I could not process this attachment because it exceeds this bot's media limit.",
+      text: notice,
       correlationId: params.correlationId,
     });
     return;
   }
-  if (params.abortSignal?.aborted) {
+  if (params.abortSignal?.aborted || !access.isCurrent()) {
     return;
   }
   const progress = params.account.nativeProgress
@@ -367,7 +372,7 @@ export async function handleClickClackInbound(params: {
   // attribution metadata onto activity rows and the final reply message.
   let turnProvenance: ClickClackMessageProvenance | undefined;
   let activity: ClickClackActivityPublisher | undefined;
-  if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
+  if (params.account.agentActivity) {
     activity = createClickClackActivityPublisher({
       client: createClickClackClient({
         baseUrl: params.account.apiEndpoint,
@@ -388,10 +393,11 @@ export async function handleClickClackInbound(params: {
   const senderName = message.author?.display_name || message.author_id;
   // Preserve both normalized channel fields and ClickClack-native ids so reply
   // routing, session recovery, and command authorization see the same message.
-  const body = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config as OpenClawConfig,
     route,
-  })({
+  });
+  const body = buildEnvelope({
     channel: "ClickClack",
     from: senderName,
     timestamp: new Date(message.created_at),
@@ -485,10 +491,7 @@ export async function handleClickClackInbound(params: {
           if (hasClickClackReplyMedia(payload)) {
             throw new Error("ClickClack media reply requires durable delivery");
           }
-          const text =
-            payload && typeof payload === "object" && "text" in payload
-              ? ((payload as { text?: string }).text ?? "")
-              : "";
+          const text = payload.text ?? "";
           if (!text.trim()) {
             return;
           }

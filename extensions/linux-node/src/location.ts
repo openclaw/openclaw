@@ -1,29 +1,16 @@
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  clamp,
-  formatToolError,
-  isCapabilityEnabledForHost,
-  parseParams,
-  readFiniteNumber,
-  type RunCommand,
-} from "./command-utils.js";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { asFiniteNumber as readFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { clamp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { formatToolError, isCapabilityEnabledForHost, parseParams } from "./command-utils.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
-import type { ExecutableResolver } from "./executables.js";
+import { resolveExecutable } from "./executables.js";
 
 const GEOCLUE_DEMO_PATHS = [
   "/usr/libexec/geoclue-2.0/demos/where-am-i",
   "/usr/lib/geoclue-2.0/demos/where-am-i",
 ] as const;
 const GEOCLUE_TIMESTAMP_RESOLUTION_MS = 1000;
-
-type LocationCommandDeps = {
-  config: ResolvedLinuxNodePluginConfig;
-  platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
-  resolveExecutable: ExecutableResolver;
-  runCommand: RunCommand;
-  now: () => Date;
-};
 
 function isLocationDisabledOutput(output: string): boolean {
   // GeoClue reports both an explicit disable and, on headless hosts without an
@@ -33,7 +20,6 @@ function isLocationDisabledOutput(output: string): boolean {
 
 function parseLocationOutput(
   output: string,
-  now: () => Date,
   maxAgeMs?: number,
 ): {
   lat: number;
@@ -73,8 +59,8 @@ function parseLocationOutput(
     const heading = /Heading:\s*([-+\d.]+)/u.exec(block)?.[1];
     const timestamp = epochSeconds
       ? new Date(Number(epochSeconds) * 1000).toISOString()
-      : now().toISOString();
-    const ageMs = now().getTime() - Date.parse(timestamp);
+      : new Date().toISOString();
+    const ageMs = Date.now() - Date.parse(timestamp);
     if (
       maxAgeMs !== undefined &&
       (ageMs < 0 || ageMs >= maxAgeMs + GEOCLUE_TIMESTAMP_RESOLUTION_MS)
@@ -95,22 +81,25 @@ function parseLocationOutput(
 }
 
 export function createLinuxLocationCommand(
-  deps: LocationCommandDeps,
+  config: ResolvedLinuxNodePluginConfig,
 ): OpenClawPluginNodeHostCommand {
-  const findWhereAmI = (env = deps.env) =>
-    deps.resolveExecutable("where-am-i", env, GEOCLUE_DEMO_PATHS);
+  const platform = process.platform;
+  const env = process.env;
+  const findWhereAmI = (searchEnv = env) =>
+    resolveExecutable("where-am-i", searchEnv, GEOCLUE_DEMO_PATHS);
   return {
     command: "location.get",
+    hasActiveWork: () => false,
     cap: "location",
     isAvailable: (context) =>
-      deps.platform === "linux" &&
+      platform === "linux" &&
       isCapabilityEnabledForHost(context, "location") &&
       findWhereAmI(context.env) !== null,
     handle: async (paramsJSON) => {
-      if (deps.platform !== "linux") {
+      if (platform !== "linux") {
         throw new Error("LOCATION_DISABLED: Linux node host required");
       }
-      if (!deps.config.location.enabled) {
+      if (!config.location.enabled) {
         throw new Error(
           "LOCATION_DISABLED: enable plugins.entries.linux-node.config.location.enabled and restart the node service",
         );
@@ -131,7 +120,7 @@ export function createLinuxLocationCommand(
         params.desiredAccuracy === "coarse" ? 4 : params.desiredAccuracy === "precise" ? 8 : 6;
       let streamedOutput = "";
       let observedTimestamps = 0;
-      const result = await deps.runCommand(
+      const result = await runCommandWithTimeout(
         // where-am-i `-t` is "exit after T seconds" (a process timeout), not the
         // `-i` time-threshold (update throttle, default 0), so no fix is withheld.
         [whereAmI, "-t", String(Math.ceil(timeoutMs / 1000)), "-a", String(desiredAccuracy)],
@@ -155,7 +144,7 @@ export function createLinuxLocationCommand(
               return true;
             }
             observedTimestamps = timestampCount;
-            return parseLocationOutput(streamedOutput, deps.now, maxAgeMs) === null;
+            return parseLocationOutput(streamedOutput, maxAgeMs) === null;
           },
         },
       );
@@ -163,11 +152,7 @@ export function createLinuxLocationCommand(
       if (isLocationDisabledOutput(toolOutput)) {
         throw new Error("LOCATION_DISABLED: GeoClue location services are disabled");
       }
-      const location = parseLocationOutput(
-        `${result.stdout}\n${streamedOutput}`,
-        deps.now,
-        maxAgeMs,
-      );
+      const location = parseLocationOutput(`${result.stdout}\n${streamedOutput}`, maxAgeMs);
       if (!location) {
         if (result.termination === "timeout" || result.code === 0) {
           throw new Error("LOCATION_TIMEOUT: no fix in time");

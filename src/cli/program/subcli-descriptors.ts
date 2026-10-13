@@ -10,9 +10,6 @@ import { isSystemMachineOutput } from "../system-output-mode.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
-/** Descriptor shape for root-level sub-CLI commands. */
-export type SubCliDescriptor = NamedCommandDescriptor;
-
 const subCliCommandDescriptors = [
   { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
   {
@@ -84,7 +81,8 @@ const subCliCommandDescriptors = [
   },
   {
     name: "devices",
-    description: "Device pairing and auth tokens",
+    description:
+      "Device pairing and auth tokens (for mobile app setup codes, use `openclaw qr` instead)",
     hasSubcommands: true,
     machineOutput: ({ argv }) => isDevicesMachineOutput(argv),
     parentDefaultHelp: true,
@@ -113,11 +111,6 @@ const subCliCommandDescriptors = [
   {
     name: "sandbox",
     description: "Manage sandbox containers (Docker-based agent isolation)",
-    hasSubcommands: true,
-  },
-  {
-    name: "fleet",
-    description: "Provision and manage isolated tenant cells (experimental)",
     hasSubcommands: true,
   },
   {
@@ -254,26 +247,22 @@ const subCliCommandDescriptors = [
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
-] as const satisfies ReadonlyArray<SubCliDescriptor>;
+] as const satisfies ReadonlyArray<NamedCommandDescriptor>;
 
-/** Visible sub-CLI descriptors after private QA gating. */
 export const SUB_CLI_DESCRIPTORS = getSubCliEntriesCore();
 
-/** Return visible sub-CLI descriptors in help/registration order. */
-export function getSubCliEntriesCore(): ReadonlyArray<SubCliDescriptor> {
+export function getSubCliEntriesCore(): ReadonlyArray<NamedCommandDescriptor> {
   return isPrivateQaCliEnabled()
     ? subCliCommandDescriptors
     : subCliCommandDescriptors.filter((descriptor) => descriptor.name !== "qa");
 }
 
-/** Return visible sub-CLI names that own child subcommands. */
 export function getSubCliCommandsWithSubcommands(): string[] {
   return getSubCliEntriesCore()
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name);
 }
 
-/** Return visible sub-CLI names whose parent command should show help by default. */
 export function getSubCliParentDefaultHelpCommands(): string[] {
   return getSubCliEntriesCore()
     .filter((descriptor) => descriptor.parentDefaultHelp)

@@ -7,13 +7,12 @@ import WebKit
 @MainActor
 final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let sessionKey: String
-    private let root: URL
     private let sessionDir: URL
     private let schemeHandler: CanvasSchemeHandler
     let webView: WKWebView
     private let watcher: CanvasFileWatcher
     private let container: HoverChromeContainerView
-    let presentation: CanvasPresentation
+    private let anchorProvider: () -> NSRect?
     var preferredPlacement: CanvasPlacement?
     private var debugStatusEnabled = false
     private var debugStatusTitle: String?
@@ -23,10 +22,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    init(sessionKey: String, root: URL, presentation: CanvasPresentation) throws {
+    init(sessionKey: String, root: URL, anchorProvider: @escaping () -> NSRect?) throws {
         self.sessionKey = sessionKey
-        self.root = root
-        self.presentation = presentation
+        self.anchorProvider = anchorProvider
 
         canvasWindowLogger.debug("CanvasWindowController init start session=\(sessionKey, privacy: .public)")
         let safeSessionKey = CanvasWindowController.sanitizeSessionKey(sessionKey)
@@ -42,11 +40,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         config.userContentController = WKUserContentController()
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.tabFocusesLinks = true
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         canvasWindowLogger.debug("CanvasWindowController init config ready")
-        for scheme in CanvasScheme.allSchemes {
-            config.setURLSchemeHandler(self.schemeHandler, forURLScheme: scheme)
-        }
+        config.setURLSchemeHandler(self.schemeHandler, forURLScheme: CanvasScheme.scheme)
         canvasWindowLogger.debug("CanvasWindowController init scheme handler installed")
 
         canvasWindowLogger.debug("CanvasWindowController init creating WKWebView")
@@ -61,8 +56,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
                 guard let webView else { return }
 
                 // Only auto-reload when we are showing local canvas content.
-                guard let scheme = webView.url?.scheme,
-                      CanvasScheme.allSchemes.contains(scheme) else { return }
+                guard webView.url?.scheme == CanvasScheme.scheme else { return }
 
                 let path = webView.url?.path ?? ""
                 if path == "/" || path.isEmpty {
@@ -80,7 +74,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         }
 
         self.container = HoverChromeContainerView(containing: self.webView)
-        let window = Self.makeWindow(for: presentation, contentView: self.container)
+        let window = Self.makePanel(contentView: self.container)
         canvasWindowLogger.debug("CanvasWindowController init makeWindow done")
         super.init(window: window)
 
@@ -106,32 +100,15 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         self.watcher.stop()
     }
 
-    func applyPreferredPlacement(_ placement: CanvasPlacement?) {
-        self.preferredPlacement = placement
-    }
-
     func showCanvas(path: String? = nil) {
-        if case let .panel(anchorProvider) = presentation {
-            presentAnchoredPanel(anchorProvider: anchorProvider)
-            if let path {
-                self.load(target: path)
-            }
-            return
-        }
-
-        // The window is built in init, so skip showWindow(_:); it would make the
-        // window key and steal focus from the user's current window.
-        window?.orderFrontRegardless()
+        self.presentAnchoredPanel(anchorProvider: self.anchorProvider)
         if let path {
             self.load(target: path)
         }
-        self.setCanvasVisible(true)
     }
 
     func hideCanvas() {
-        if case .panel = self.presentation {
-            persistFrameIfPanel()
-        }
+        self.persistFrame()
         window?.orderOut(nil)
         self.setCanvasVisible(false)
     }
@@ -140,7 +117,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if CanvasScheme.allSchemes.contains(scheme) {
+            if scheme == CanvasScheme.scheme {
                 canvasWindowLogger.debug("canvas load app-local URL")
                 self.webView.load(URLRequest(url: url))
                 return
@@ -175,7 +152,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     func updateFilePollingForCommittedNavigation(to url: URL) {
         // Requested navigations can fail or redirect, so polling follows the
         // committed main-frame document rather than the requested target.
-        self.watchesLocalCanvasFiles = CanvasScheme.allSchemes.contains(url.scheme?.lowercased() ?? "")
+        self.watchesLocalCanvasFiles = url.scheme?.lowercased() == CanvasScheme.scheme
         self.updateFilePolling()
     }
 
@@ -188,6 +165,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     }
 
     func updateDebugStatus(enabled: Bool, title: String?, subtitle: String?) {
+        self.webView.configuration.preferences.setValue(enabled, forKey: "developerExtrasEnabled")
         self.debugStatusEnabled = enabled
         self.debugStatusTitle = title
         self.debugStatusSubtitle = subtitle

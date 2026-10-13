@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {},
   "sessionRouteStateOwners": [
@@ -829,7 +830,7 @@
   "modelPricing": {
     "providers": {
       "google-gemini-cli": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "google"
         },
         "liteLLM": {
@@ -976,6 +977,14 @@
       "nativeDocumentInputs": ["pdf"]
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

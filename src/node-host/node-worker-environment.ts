@@ -11,6 +11,9 @@ const POSIX_WORKER_ENV_KEYS = new Set([
   "LANG",
   "LANGUAGE",
   "TZ",
+  "DISPLAY",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "XDG_RUNTIME_DIR",
   "NODE_EXTRA_CA_CERTS",
   "NODE_USE_SYSTEM_CA",
   "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
@@ -27,7 +30,10 @@ const WINDOWS_WORKER_ENV_KEYS = new Set([
 ]);
 
 /** Freeze the minimal non-secret environment inherited by node-host workers. */
-export function snapshotNodeWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function snapshotNodeWorkerEnv(
+  source: NodeJS.ProcessEnv,
+  homeDir?: string,
+): NodeJS.ProcessEnv {
   const windows = process.platform === "win32";
   const snapshot: NodeJS.ProcessEnv = {};
   const retainedWindowsKeys = new Map<string, string>();
@@ -50,6 +56,20 @@ export function snapshotNodeWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.Process
       retainedWindowsKeys.set(normalized, key);
     }
     snapshot[key] = value;
+  }
+  if (homeDir) {
+    for (const key of Object.keys(snapshot)) {
+      if (
+        (windows ? key.toUpperCase() : key) === "HOME" ||
+        (windows && key.toUpperCase() === "USERPROFILE")
+      ) {
+        delete snapshot[key];
+      }
+    }
+    snapshot.HOME = homeDir;
+    if (windows) {
+      snapshot.USERPROFILE = homeDir;
+    }
   }
   const hostCacheFenced =
     source.NODE_DISABLE_COMPILE_CACHE !== undefined &&

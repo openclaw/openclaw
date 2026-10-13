@@ -27,13 +27,13 @@ export function registerTeamReportsGatewayMethods(
   const register = (
     name: string,
     scope: "operator.read" | "operator.admin",
-    run: (params: unknown) => unknown,
+    run: (params: unknown) => Promise<unknown>,
   ) => {
     api.registerGatewayMethod(
       `team-reports.${name}`,
-      ({ params, respond }) => {
+      async ({ params, respond }) => {
         try {
-          respond(true, run(params ?? {}));
+          respond(true, await run(params ?? {}));
         } catch (error) {
           const message = error instanceof Error ? error.message : "Team Reports request failed";
           respond(
@@ -53,21 +53,26 @@ export function registerTeamReportsGatewayMethods(
     z.strictObject({}).parse(params);
     return access.scheduler().status();
   });
-  register("list", "operator.read", (params) => ({
-    periods: access.store().listPeriods(listSchema.parse(params)),
+  register("list", "operator.read", async (params) => ({
+    periods: await access.store().listPeriods(listSchema.parse(params)),
   }));
-  register("get", "operator.read", (params) => {
+  register("get", "operator.read", async (params) => {
     const { period, key, format } = getSchema.parse(params);
     describePeriod(period, key);
-    const stored = access.store().getPeriod(period, key);
+    if (format === "markdown") {
+      const stored = await access.store().getPeriod(period, key);
+      if (!stored) {
+        throw new Error("Report not found; generate the requested UTC day first");
+      }
+      return { markdown: stored.markdown };
+    }
+    const stored = await access.store().getPeriodDocument(period, key);
     if (!stored) {
       throw new Error("Report not found; generate the requested UTC day first");
     }
-    return format === "markdown"
-      ? { markdown: stored.markdown }
-      : { report: stored.report, summary: stored.summary };
+    return stored;
   });
-  register("generate", "operator.admin", (params) => ({
-    runId: access.scheduler().generate(generateSchema.parse(params)),
+  register("generate", "operator.admin", async (params) => ({
+    runId: await access.scheduler().generate(generateSchema.parse(params)),
   }));
 }

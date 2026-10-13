@@ -50,7 +50,6 @@ describe("bootstrap diagnostic observation", () => {
       JSON.stringify({ method: "Runtime.consoleAPICalled", params: { args: ["private-content"] } }),
     );
     callbacks.onMessage("private-malformed");
-    diagnostic.peer({ name: "private-peer", version: "private-version" });
     diagnostic.flush();
     expect(receive.mock.calls[0]).toEqual([command]);
     expect(receive).toHaveBeenCalledTimes(2);

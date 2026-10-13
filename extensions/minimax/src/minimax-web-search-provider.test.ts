@@ -31,13 +31,10 @@ describe("minimax web search provider", () => {
       const fetchMock = vi.spyOn(globalThis, "fetch");
       for (const result of ["initial", "fresh", "uncached"]) {
         fetchMock.mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({
-              organic: [{ title: result, link: `https://example.test/${result}` }],
-              base_resp: { status_code: 0 },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
+          Response.json({
+            organic: [{ title: result, link: `https://example.test/${result}` }],
+            base_resp: { status_code: 0 },
+          }),
         );
       }
       const createTool = (cacheTtlMinutes: number) => {
@@ -85,12 +82,9 @@ describe("minimax web search provider", () => {
   );
 
   it("does not send an already canceled MiniMax search", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ organic: [], base_resp: { status_code: 0 } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ organic: [], base_resp: { status_code: 0 } }));
     const tool = createMiniMaxWebSearchProvider().createTool({
       config: {
         plugins: {
@@ -205,12 +199,9 @@ describe("minimax web search provider", () => {
     const config = "config" in entry ? entry.config : {};
     const region = "region" in entry ? entry.region : undefined;
     Object.assign(process.env, env);
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ organic: [], base_resp: { status_code: 0 } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ organic: [], base_resp: { status_code: 0 } }));
     const tool = createMiniMaxWebSearchProvider().createTool({
       config: {
         ...config,

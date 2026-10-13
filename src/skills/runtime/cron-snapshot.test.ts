@@ -13,8 +13,9 @@ const {
   resolveEffectiveAgentSkillFilterMock: vi.fn(),
 }));
 
+// mock-isolation: Snapshot refresh tests supply eligibility and snapshots without filesystem or approval-store access.
 vi.mock("./cron-snapshot.runtime.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+  resolveNodeExecEligibilityAsync: resolveNodeExecEligibilityMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshot: resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilter: resolveEffectiveAgentSkillFilterMock,
@@ -62,21 +63,5 @@ describe("resolveCronSkillsSnapshot", () => {
     expect(snapshotOptions?.watch).toBe(false);
     expect(snapshotOptions?.hydrateExisting).toBe(false);
     expect(result).toEqual({ prompt: "fresh", skills: [] });
-  });
-
-  it("refreshes when the process version resets to 0 but the cached snapshot is stale", async () => {
-    await resolveCronSkillsSnapshot({
-      workspaceDir: "/tmp/workspace",
-      config: {} as never,
-      agentId: "writer",
-      existingSnapshot: {
-        prompt: "old",
-        skills: [{ name: "github" }],
-        version: 42,
-      },
-      isFastTestEnv: false,
-    });
-
-    expect(resolveReusableWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
   });
 });

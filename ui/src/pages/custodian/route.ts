@@ -9,22 +9,16 @@ export type CustodianRouteData = {
   intent: "new-agent" | null;
 };
 
-function resolveCustodianIntent(search: string): CustodianRouteData["intent"] {
-  return new URLSearchParams(search).get("intent") === "new-agent" ? "new-agent" : null;
-}
-
 export const page = definePage({
   ...routePageSpec("custodian"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: (_context: ApplicationContext, { location }): CustodianRouteData => ({
     onboarding: resolveOnboardingMode(location.search),
-    intent: resolveCustodianIntent(location.search),
+    intent: new URLSearchParams(location.search).get("intent") === "new-agent" ? "new-agent" : null,
   }),
   component: () =>
-    import("./custodian-page.ts").then(() =>
-      import("./route-view.ts").then(({ renderCustodianRoute }) => ({
-        header: true,
-        render: (data: CustodianRouteData | undefined) => renderCustodianRoute(data),
-      })),
-    ),
+    import("./custodian-page.ts").then(({ renderCustodianRoute }) => ({
+      header: true,
+      render: renderCustodianRoute,
+    })),
 });

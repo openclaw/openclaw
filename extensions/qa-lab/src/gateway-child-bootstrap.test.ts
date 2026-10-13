@@ -3,12 +3,14 @@ import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearRealTimeout, setTimeout as realTimeout } from "node:timers";
+import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 // RPC is outside these process-lifetime tests. HTTP readiness and all processes stay real.
@@ -23,6 +25,13 @@ type FixtureRecord = {
   descendant?: number;
   tempRoot?: string;
   submittedKey?: string;
+  runtime?: "bun" | "node";
+  execPath?: string;
+  buildPrivateQa?: string | null;
+  enablePrivateQaCli?: string | null;
+  nodeOptions?: string | null;
+  gatewayOnlyEnvKeys?: string[];
+  profile?: string | null;
 };
 
 // The fixture never contacts a provider or stores auth. Its independent failsafes
@@ -30,6 +39,7 @@ type FixtureRecord = {
 const fixtureSource = String.raw`
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 const [record, phase, mode, command, ...args] = process.argv.slice(2);
@@ -46,7 +56,15 @@ if (command === "descendant") {
   if (command === "models") for await (const chunk of process.stdin) input += chunk;
   const current = command === "models" ? args[args.indexOf("--provider") + 1]
     : command === "update" ? (args.includes("--help") ? "help" : "repair") : command;
-  write(current);
+  write(current, {
+    profile: process.env.OPENCLAW_PROFILE ?? null,
+    buildPrivateQa: process.env.OPENCLAW_BUILD_PRIVATE_QA ?? null,
+    enablePrivateQaCli: process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI ?? null,
+    nodeOptions: process.env.NODE_OPTIONS ?? null,
+    gatewayOnlyEnvKeys: Object.keys(process.env)
+      .filter((key) => ["OPENCLAW_BUILD_PRIVATE_QA", "OPENCLAW_ENABLE_PRIVATE_QA_CLI", "NODE_OPTIONS"].includes(key.toUpperCase()))
+      .sort(),
+  });
   if (current === phase) {
     process.on("SIGTERM", () => {
       if (mode === "running") for (const [fd, label] of [[1, "stdout"], [2, "stderr"]]) {
@@ -64,14 +82,34 @@ if (command === "descendant") {
       fs.writeSync(2, "plugin registry still pending apiKey=synthetic-stderr-secret\n::error::stderr diagnostic\nstderr ready\n");
       fs.writeSync(1, "diagnostic ".repeat(400) + "\nplugin scan still pending Authorization: Bearer synthetic-stdout-secret\n##[error]stdout diagnostic\nstdout ready\n");
     }
-    if (mode !== "running") {
+    if (mode === "progress") {
+      let phaseIndex = 0;
+      process.on("SIGUSR1", () => {
+        const phases = ["preflight", "doctor", "plugins", "completionCache"];
+        const step = "finalize:" + phases[Math.min(phaseIndex++, phases.length - 1)];
+        fs.writeSync(2, '[update finalize] ' + JSON.stringify({step, status: "in_progress"}) + "\n");
+        write("progress");
+      });
+      process.on("SIGUSR2", () => { process.stdout.write("repair-complete"); process.exit(0); });
+    }
+    if (mode !== "running" && mode !== "progress") {
       if (mode === "failure") fs.writeSync(2, "Authorization: Bearer " + input.trim() + "\ncontext retained\n" + "diagnostic ".repeat(400));
       process.stdout.write("fixture-output");
       process.exit(mode === "failure" ? 17 : 0);
     }
   } else if (current === "gateway") {
+    fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), String(process.pid));
     http.createServer((_request, response) => response.end("ok"))
       .listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
+  } else if (current === "message") {
+    const ownerPid = Number(fs.readFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), "utf8"));
+    process.kill(ownerPid, 0);
+    if (args.includes("--gateway-only")) throw new Error("Gateway-only argument reached scenario CLI");
+    if (args.includes("--unsupported")) {
+      console.error("candidate does not support this action");
+      process.exit(2);
+    }
+    console.log(JSON.stringify({ ownerPid, args, cwd: process.cwd(), marker: process.env.QA_CLI_MARKER }));
   } else {
     if (current === "help") process.stdout.write("--accept-capabilities");
     process.exit(0);
@@ -224,6 +262,139 @@ async function fixture(phase: string, mode: string) {
 }
 
 describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", () => {
+  it("uses the direct candidate CLI while its Gateway owns the state", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "operator-parent");
+    const f = await fixture("hang", "running");
+    const repoRoot = path.join(f.root, "harness");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "index.js"),
+      'throw new Error("harness CLI must not touch candidate-owned state");\n',
+    );
+    const gateway = await f.owner.start({
+      repoRoot,
+      command: { ...f.command, cwd: f.root, argsSuffix: ["--gateway-only"] },
+      providerMode: "mock-openai",
+      controlUiEnabled: false,
+      transportBaseUrl: "http://127.0.0.1:1",
+      runtimeEnvPatch: {
+        OPENCLAW_PROFILE: "operator-patch",
+        NODE_OPTIONS: "--no-warnings",
+        Node_Options: "--trace-warnings",
+        OpenClaw_Build_Private_QA: "foreign",
+        OpenClaw_Enable_Private_QA_Cli: "foreign",
+        QA_CLI_MARKER: "gateway",
+      },
+    });
+    const env = {
+      gateway,
+      repoRoot,
+      providerMode: "mock-openai" as const,
+      primaryModel: "openai/gpt-5",
+      alternateModel: "openai/gpt-5",
+    };
+    await expect(
+      runQaCli(env, ["message", "edit", "--json"], {
+        json: true,
+        env: { QA_CLI_MARKER: "scenario" },
+      }),
+    ).resolves.toEqual({
+      ownerPid: gateway.pid,
+      args: ["edit", "--json"],
+      cwd: f.root,
+      marker: "scenario",
+    });
+    await expect(runQaCli(env, ["message", "edit", "--unsupported"])).rejects.toThrow(
+      "qa cli failed (2): candidate does not support this action",
+    );
+    expect(f.records().map((entry) => entry.kind)).toEqual([
+      "openai",
+      "anthropic",
+      "help",
+      "repair",
+      "gateway",
+      "message",
+      "message",
+    ]);
+    const profiles = new Set(f.records().map((entry) => entry.profile));
+    expect(profiles.size).toBe(1);
+    const [profile] = profiles;
+    expect(profile).toMatch(/^[a-z0-9][a-z0-9_-]{0,63}$/u);
+    expect(profile).not.toBe("operator-parent");
+    expect(profile).not.toBe("operator-patch");
+    const runtimeEnv = ({ buildPrivateQa, enablePrivateQaCli, nodeOptions }: FixtureRecord) => ({
+      buildPrivateQa,
+      enablePrivateQaCli,
+      nodeOptions,
+    });
+    const bootstrapRecords = f
+      .records()
+      .filter((entry) => ["openai", "anthropic", "help", "repair"].includes(entry.kind));
+    expect(bootstrapRecords.map(runtimeEnv)).toEqual(
+      Array.from({ length: 4 }, () => ({
+        buildPrivateQa: null,
+        enablePrivateQaCli: null,
+        nodeOptions: null,
+      })),
+    );
+    expect(bootstrapRecords.map((entry) => entry.gatewayOnlyEnvKeys)).toEqual([[], [], [], []]);
+    expect(
+      f
+        .records()
+        .filter((entry) => entry.kind === "gateway" || entry.kind === "message")
+        .map(runtimeEnv),
+    ).toEqual(
+      Array.from({ length: 3 }, () => ({
+        buildPrivateQa: "1",
+        enablePrivateQaCli: "1",
+        nodeOptions: "--no-warnings",
+      })),
+    );
+    expect(isQaPosixProcessGroupAlive(gateway.pid!)).toBe(true);
+  });
+
+  it("preloads each direct Gateway launch, restart, and child CLI command", async () => {
+    const f = await fixture("hang", "running");
+    const preloadPath = path.join(f.root, "runtime-preload.mjs");
+    await fs.writeFile(
+      preloadPath,
+      [
+        'import fs from "node:fs";',
+        `fs.appendFileSync(${JSON.stringify(path.join(f.root, "events.jsonl"))}, JSON.stringify({ kind: "preload", pid: process.pid, pgid: -1, runtime: process.versions.bun ? "bun" : "node", execPath: process.execPath }) + "\\n");`,
+      ].join("\n"),
+    );
+    const gateway = await f.owner.start({
+      repoRoot: process.cwd(),
+      command: f.command,
+      providerMode: "mock-openai",
+      controlUiEnabled: false,
+      transportBaseUrl: "http://127.0.0.1:1",
+      runtimePreloads: [pathToFileURL(preloadPath).href],
+    });
+
+    await gateway.runCli(["message", "edit", "--json"]);
+    await gateway.restartAfterStateMutation(async () => {});
+
+    const records = f.records();
+    const preloadedLaunches = records.filter((entry) => entry.kind === "preload");
+    expect(preloadedLaunches).toHaveLength(3);
+    expect(new Set(preloadedLaunches.map((entry) => entry.runtime))).toEqual(
+      new Set([process.versions.bun ? "bun" : "node"]),
+    );
+    expect(new Set(preloadedLaunches.map((entry) => entry.execPath))).toEqual(
+      new Set([process.execPath]),
+    );
+    for (const preload of preloadedLaunches) {
+      const index = records.indexOf(preload);
+      expect(records[index + 1]).toMatchObject({ pid: preload.pid });
+    }
+    expect(preloadedLaunches.map((entry) => records[records.indexOf(entry) + 1]?.kind)).toEqual([
+      "gateway",
+      "message",
+      "gateway",
+    ]);
+  });
+
   it.each([
     { phase: "openai", mode: "running" },
     { phase: "anthropic", mode: "running" },
@@ -285,6 +456,84 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     },
   );
+
+  it("allows progressing repair phases past the whole-command deadline and settles descendants", async () => {
+    const f = await fixture("repair", "progress");
+    const lifetime = new QaGatewayChildLifecycle();
+    cleanups.push(async () => {
+      await lifetime.stop();
+    });
+    const registration = vi.spyOn(lifetime, "register");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let settled = false;
+    const command = f
+      .track(
+        runQaGatewayCliCommand({
+          ...f.command,
+          lifetime,
+          args: ["update", "repair", "--json"],
+          cwd: f.root,
+          env: { HOME: f.root },
+        }),
+      )
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+    await f.ready();
+    const child = registration.mock.calls[0]![0];
+    for (let phase = 1; phase <= 4; phase++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+      await bounded(
+        new Promise<void>((resolve) => {
+          child.stderr!.once("data", () => resolve());
+          child.kill("SIGUSR1");
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(phase),
+      );
+    }
+    child.kill("SIGUSR2");
+    expect(await bounded(command)).toBe("repair-complete");
+    f.assertStopped();
+  });
+
+  it("still times out a repair stalled after forward progress and settles its real tree", async () => {
+    const f = await fixture("repair", "progress");
+    const lifetime = new QaGatewayChildLifecycle();
+    cleanups.push(async () => {
+      await lifetime.stop();
+    });
+    const registration = vi.spyOn(lifetime, "register");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const command = f.track(
+      runQaGatewayCliCommand({
+        ...f.command,
+        lifetime,
+        args: ["update", "repair"],
+        cwd: f.root,
+        env: { HOME: f.root },
+      }),
+    );
+    await f.ready();
+    const child = registration.mock.calls[0]![0];
+    await bounded(
+      new Promise<void>((resolve) => {
+        child.stderr!.once("data", () => resolve());
+        child.kill("SIGUSR1");
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(1),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    const error = await bounded(command);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("no update repair phase progress for 120000ms");
+    f.assertStopped();
+  });
 
   it.each(["timeout", "cancel", "stdout", "stderr", "stdin", "process"] as const)(
     "retains bounded redacted diagnostics after %s failure and settles the real CLI tree",

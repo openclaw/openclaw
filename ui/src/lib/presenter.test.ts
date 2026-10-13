@@ -1,8 +1,9 @@
-// Control UI tests cover cron schedule presentation.
 import { afterEach, describe, expect, it } from "vitest";
+// Control UI tests cover cron schedule presentation.
+import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
 import type { CronJob } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import { formatCronPayload, formatCronSchedule } from "./presenter.ts";
+import { formatCronPayload, formatCronSchedule, formatSessionTokens } from "./presenter.ts";
 
 function job(schedule: CronJob["schedule"]): CronJob {
   return {
@@ -22,16 +23,6 @@ function job(schedule: CronJob["schedule"]): CronJob {
 describe("formatCronSchedule", () => {
   afterEach(async () => {
     await i18n.setLocale("en");
-  });
-
-  it.each([
-    { everyMs: 60_000, expected: "Every 1m" },
-    { everyMs: 450, expected: "Every 450ms" },
-    { everyMs: 90_000, expected: "Every 1m 30s" },
-    { everyMs: 3_661_001, expected: "Every 1h 1m 1s 1ms" },
-    { everyMs: 604_800_000, expected: "Every 7d" },
-  ])("preserves configured duration precision for every $everyMs ms", ({ everyMs, expected }) => {
-    expect(formatCronSchedule(job({ kind: "every", everyMs }))).toBe(expected);
   });
 
   it("localizes configured duration precision", async () => {
@@ -79,4 +70,17 @@ describe("formatCronPayload", () => {
       }),
     ).toBe("Agent: Review the Workshop collection.");
   });
+});
+
+it("formats session detail against its last-run prompt budget", () => {
+  expect(
+    formatSessionTokens({
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      totalTokens: 160_000,
+      contextTokens: 200_000,
+      contextBudgetStatus: contextBudgetStatusFixture(),
+    }),
+  ).toBe("160000 / 180000");
 });

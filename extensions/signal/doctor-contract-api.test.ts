@@ -1,13 +1,114 @@
 // Signal tests cover doctor contract api plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { resolveSignalAccount } from "./src/accounts.js";
 import { migrateLegacySignalTransportConfig } from "./src/config-compat.js";
+import { signalDoctor } from "./src/doctor.js";
+import { signalSetupAdapter } from "./src/setup-core.js";
 
 function signalConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { signal: entry } } as never;
 }
+
+describe("Signal Doctor account key repair", () => {
+  it("makes the complete named account resolvable and leaves other channels intact", () => {
+    const entry = {
+      account: "+12025550123",
+      transport: { kind: "external-native" as const, url: "http://127.0.0.1:18996" },
+      dmPolicy: "disabled" as const,
+      textChunkLimit: 321,
+      replyToMode: "off" as const,
+    };
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: { accounts: { "Work Phone": entry, personal: { enabled: false } } },
+        telegram: { accounts: { "Work Phone": { enabled: false } } },
+      },
+    };
+    const result = normalizeCompatibilityConfig({ cfg });
+    expect(result.config.channels?.signal?.accounts).toEqual({
+      "work-phone": entry,
+      personal: { enabled: false },
+    });
+    expect(resolveSignalAccount({ cfg: result.config, accountId: "work-phone" })).toMatchObject({
+      configured: true,
+      config: entry,
+    });
+    expect(result.config.channels?.telegram).toEqual(cfg.channels?.telegram);
+    expect(cfg.channels?.signal?.accounts).toHaveProperty("Work Phone");
+    expect(normalizeCompatibilityConfig({ cfg: result.config }).changes).toEqual([]);
+  });
+
+  it.each(["Work Phone", "Default.", "!!!"])(
+    "normalizeCompatibilityConfig and doctor preserve an account without its own number for %s",
+    async (key) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          signal: { account: "+12025550123", accounts: { [key]: { enabled: false } } },
+        },
+      };
+      const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "signal",
+        setupSurface: signalSetupAdapter,
+      });
+      const result = normalizeCompatibilityConfig({ cfg: promoted });
+      const accountId = key === "Work Phone" ? "work-phone" : "default";
+      expect(resolveSignalAccount({ cfg: result.config, accountId }).config.account).toBe(
+        "+12025550123",
+      );
+      expect(result.config.channels?.signal?.accounts).toEqual(cfg.channels?.signal?.accounts);
+      expect((await signalDoctor.cleanStaleConfig?.({ cfg: result.config }))?.warnings).toEqual([
+        expect.stringContaining("Doctor preserved it to avoid changing a working account"),
+      ]);
+    },
+  );
+
+  it.each(["Work.Phone", "work-phone", "WORK-PHONE"])(
+    "reports colliding %s without choosing an entry",
+    async (key) => {
+      const accounts = {
+        "Work Phone": { account: "+12025550123" },
+        [key]: { account: "+12025550124" },
+      };
+      const cfg: OpenClawConfig = { channels: { signal: { accounts } } };
+      const result = normalizeCompatibilityConfig({ cfg });
+      expect(result.config.channels?.signal?.accounts).toEqual(accounts);
+      expect(result.changes).toEqual([]);
+      expect((await signalDoctor.cleanStaleConfig?.({ cfg: result.config }))?.warnings).toEqual([
+        expect.stringContaining('resolve to "work-phone". Doctor preserved them; rename them'),
+      ]);
+    },
+  );
+
+  it("normalizeCompatibilityConfig keeps root transport while normalizing accounts with owned numbers", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          transport: { kind: "external-native", url: "http://127.0.0.1:18996" },
+          accounts: {
+            "Default.": { account: "+12025550124" },
+            "Work Phone": { account: "+12025550123" },
+          },
+        },
+      },
+    };
+    const result = normalizeCompatibilityConfig({ cfg });
+    expect(Object.keys(result.config.channels?.signal?.accounts ?? {})).toEqual([
+      "default",
+      "work-phone",
+    ]);
+    expect(resolveSignalAccount({ cfg: result.config, accountId: "default" }).baseUrl).toBe(
+      "http://127.0.0.1:18996",
+    );
+    expect(resolveSignalAccount({ cfg: result.config, accountId: "default" }).config.account).toBe(
+      "+12025550124",
+    );
+  });
+});
 
 describe("signal streaming legacy config rules", () => {
   const rootRule = legacyConfigRules.find((rule) => rule.path.join(".") === "channels.signal");
@@ -359,25 +460,6 @@ describe("signal transport compatibility", () => {
     });
   });
 
-  it("allocates distinct managed ports while materializing named account ownership", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: signalConfig({
-        account: "+15555550123",
-        httpPort: 8080,
-        accounts: { work: { account: "+15555550124" } },
-      }),
-    });
-
-    expect(result.config.channels?.signal?.transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8080,
-    });
-    expect(result.config.channels?.signal?.accounts?.work?.transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8081,
-    });
-  });
-
   it("keeps migrated managed connection URLs aligned with reassigned bind ports", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({
@@ -603,21 +685,31 @@ describe("signal transport compatibility", () => {
     });
   });
 
-  it("keeps explicit native auto-start endpoints managed", async () => {
+  it("does not turn an invalid socket opt-in into HTTP during legacy repair", async () => {
+    const cfg = signalConfig({
+      account: "+15555550123",
+      cliPath: "signal-cli",
+      transport: { kind: "managed-native", socketPath: "relative.sock" },
+    });
+    const result = await migrateLegacySignalTransportConfig({ cfg });
+    expect(result.config).toEqual(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings?.join(" ")).toContain("invalid transport.socketPath");
+  });
+
+  it("preserves canonical sockets while allocating a legacy sibling's HTTP port", async () => {
+    const transport = { kind: "managed-native", socketPath: "/tmp/signal-private/daemon.sock" };
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({
-        apiMode: "native",
-        autoStart: true,
-        httpHost: "127.0.0.1",
-        httpPort: 8181,
-        httpUrl: "http://127.0.0.1:8181",
+        account: "+15555550123",
+        transport,
+        accounts: { http: { account: "+15555550124", autoStart: true, cliPath: "signal-cli" } },
       }),
     });
-
-    expect(result.config.channels?.signal?.transport).toEqual({
+    expect(result.config.channels?.signal?.transport).toEqual(transport);
+    expect(result.config.channels?.signal?.accounts?.http?.transport).toMatchObject({
       kind: "managed-native",
-      httpHost: "127.0.0.1",
-      httpPort: 8181,
+      httpPort: 8080,
     });
   });
 
@@ -706,25 +798,22 @@ describe("signal transport compatibility", () => {
     ]);
   });
 
-  it.each(["bad host", "signal.example/proxy", "signal.example?mode=native"])(
-    "defers malformed host %s used to derive legacy endpoints",
-    async (httpHost) => {
-      const cfg = signalConfig({
-        apiMode: "native",
-        autoStart: true,
-        httpHost,
-      });
+  it("defers malformed hosts used to derive legacy endpoints", async () => {
+    const cfg = signalConfig({
+      apiMode: "native",
+      autoStart: true,
+      httpHost: "bad host",
+    });
 
-      expect(() => normalizeCompatibilityConfig({ cfg })).not.toThrow();
-      const result = await migrateLegacySignalTransportConfig({ cfg });
+    expect(() => normalizeCompatibilityConfig({ cfg })).not.toThrow();
+    const result = await migrateLegacySignalTransportConfig({ cfg });
 
-      expect(result.config).toBe(cfg);
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([
-        "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.",
-      ]);
-    },
-  );
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.",
+    ]);
+  });
 
   it("ignores a retired bind port when an explicit container URL owns the endpoint", async () => {
     const result = await migrateLegacySignalTransportConfig({
@@ -842,4 +931,98 @@ describe("signal transport compatibility", () => {
     });
     expect(result.warnings).toBeUndefined();
   });
+});
+
+describe("Signal pending transport migration results", () => {
+  const invalidPort =
+    "- channels.signal: legacy httpPort must be an integer between 1 and 65535; correct httpPort, then run openclaw doctor --fix.";
+  const unavailable =
+    "- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online and rerun openclaw doctor --fix, or replace the retired fields with an explicit account-owned transport in openclaw.json.";
+  const cases: Array<
+    [string, Record<string, unknown>, string, "unused" | "invalid-port" | "reject" | "missing"]
+  > = [
+    [
+      "invalid socket before invalid HTTP fields",
+      {
+        cliPath: "signal-cli",
+        transport: { kind: "managed-native", socketPath: "relative" },
+        httpPort: 70_000,
+        httpUrl: "http://[bad",
+      },
+      "- channels.signal: invalid transport.socketPath configuration; correct the socket path and remove conflicting HTTP or receiveMode on-start options, then run openclaw doctor --fix.",
+      "unused",
+    ],
+    [
+      "invalid derived port before invalid host",
+      { apiMode: "native", httpPort: 70_000, httpHost: "bad host" },
+      invalidPort,
+      "unused",
+    ],
+    [
+      "invalid derived host",
+      { apiMode: "native", httpHost: "bad host" },
+      "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.",
+      "unused",
+    ],
+    [
+      "malformed URL",
+      { apiMode: "native", httpUrl: "http://[bad" },
+      "- channels.signal: legacy httpUrl is invalid; keep the current config, correct httpUrl, then run openclaw doctor --fix.",
+      "unused",
+    ],
+    [
+      "invalid managed port returned by detection",
+      { apiMode: "auto", httpUrl: "http://signal.test:8080" },
+      invalidPort,
+      "invalid-port",
+    ],
+    [
+      "unresolved auto transport",
+      { apiMode: "auto", httpUrl: "http://signal.test:8080" },
+      unavailable,
+      "reject",
+    ],
+    [
+      "accountless container after tentative migration",
+      { apiMode: "container", httpUrl: "http://signal.test:8080" },
+      "- channels.signal: legacy container transport requires an account number; add channels.signal.account (or the relevant channels.signal.accounts.*.account) and rerun openclaw doctor --fix.",
+      "unused",
+    ],
+    [
+      "missing detector",
+      { apiMode: "auto", httpUrl: "http://signal.test:8080" },
+      unavailable,
+      "missing",
+    ],
+  ];
+  it.each(cases)(
+    "preserves pending result ownership for %s",
+    async (_, entry, warning, detection) => {
+      const cfg = signalConfig(entry);
+      const original = structuredClone(cfg);
+      const detect = vi.fn<
+        NonNullable<Parameters<typeof migrateLegacySignalTransportConfig>[0]["detect"]>
+      >(async () => {
+        if (detection === "reject") {
+          throw new Error("offline");
+        }
+        return { kind: "managed-native", httpPort: 70_000 };
+      });
+      const params = { cfg, ...(detection === "missing" ? {} : { detect }) };
+      const first = await migrateLegacySignalTransportConfig(params);
+      const second = await migrateLegacySignalTransportConfig(params);
+      for (const result of [first, second]) {
+        expect(result).toEqual({ config: cfg, changes: [], warnings: [warning] });
+        expect(result.config).toBe(cfg);
+        expect(Object.keys(result)).toEqual(["config", "changes", "warnings"]);
+      }
+      expect(second).not.toBe(first);
+      expect(second.changes).not.toBe(first.changes);
+      expect(second.warnings).not.toBe(first.warnings);
+      expect(cfg).toEqual(original);
+      expect(detect).toHaveBeenCalledTimes(
+        detection === "invalid-port" || detection === "reject" ? 2 : 0,
+      );
+    },
+  );
 });

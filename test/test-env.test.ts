@@ -15,7 +15,7 @@ import {
 import { isCurrentProcessLaunchdServiceLabel } from "../src/daemon/launchd-current-service.js";
 import { detectGatewayRespawnSupervisor } from "../src/infra/supervisor-markers.js";
 import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import {
   captureFullEnv,
@@ -26,25 +26,10 @@ import {
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
-const ORIGINAL_ENV = { ...process.env };
+const originalEnv = captureFullEnv();
 
 const tempDirs = new Set<string>();
 const cleanupFns: Array<() => void> = [];
-
-function restoreProcessEnv(): void {
-  for (const key of Object.keys(process.env)) {
-    if (!(key in ORIGINAL_ENV)) {
-      deleteTestEnvValue(key);
-    }
-  }
-  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
-    if (value === undefined) {
-      deleteTestEnvValue(key);
-    } else {
-      setTestEnvValue(key, value);
-    }
-  }
-}
 
 // Compare every key without printing ambient credentials in assertion failures.
 function changedEnvKeys(expected: NodeJS.ProcessEnv): string[] {
@@ -92,13 +77,24 @@ afterEach(() => {
   while (cleanupFns.length > 0) {
     cleanupFns.pop()?.();
   }
-  restoreProcessEnv();
+  originalEnv.restore();
   vi.restoreAllMocks();
   vi.doUnmock("node:child_process");
   cleanupTempDirs(tempDirs);
 });
 
 describe("installTestEnv", () => {
+  it("isolates native manager sockets and restores the caller runtime directory", () => {
+    const callerRuntime = path.join(createTempHome(), "runtime");
+    withEnv({ XDG_RUNTIME_DIR: callerRuntime }, () => {
+      const testEnv = installTestEnv({ mode: "hermetic" });
+      cleanupFns.push(testEnv.cleanup);
+      expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
+      testEnv.cleanup();
+      expect(process.env.XDG_RUNTIME_DIR).toBe(callerRuntime);
+    });
+  });
+
   it.each([".openclaw", ".claude"])(
     "rolls back live staging failure at %s before another installation",
     (failedDirectory) => {
@@ -203,13 +199,12 @@ describe("installTestEnv", () => {
             workspace: "/Users/peter/Projects",
             agentDir: "/Users/peter/.openclaw/agents/main/agent",
           },
-          list: [
-            {
-              id: "dev",
+          entries: {
+            dev: {
               workspace: "/Users/peter/dev-workspace",
               agentDir: "/Users/peter/.openclaw/agents/dev/agent",
             },
-          ],
+          },
         },
         models: {
           providers: {
@@ -320,6 +315,9 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_HOME", openClawHome);
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
+    setTestEnvValue("FAL_KEY", "fal-sentinel-not-a-real-key-0123456789");
+    setTestEnvValue("OPENAI_API_KEY", "openai-sentinel-not-a-real-key-0123456789");
+    setTestEnvValue("TWILIO_AUTH_TOKEN", "twilio-sentinel-not-a-real-token-0123456789");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "~/custom-openclaw.json5");
     setTestEnvValue("OPENCLAW_TEST_HOME", priorIsolatedHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", path.join(priorIsolatedHome, ".openclaw"));
@@ -332,12 +330,15 @@ describe("installTestEnv", () => {
     expect(process.env.OPENCLAW_HOME).toBeUndefined();
     expect(process.env.OPENCLAW_TEST_HOME).toBe(testEnv.tempHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    expect(process.env.FAL_KEY).toBe("fal-sentinel-not-a-real-key-0123456789");
+    expect(process.env.OPENAI_API_KEY).toBe("openai-sentinel-not-a-real-key-0123456789");
+    expect(process.env.TWILIO_AUTH_TOKEN).toBeUndefined();
 
     const copiedConfigPath = path.join(testEnv.tempHome, ".openclaw", "openclaw.json");
     const copiedConfig = JSON.parse(fs.readFileSync(copiedConfigPath, "utf8")) as {
       agents?: {
         defaults?: Record<string, unknown>;
-        list?: Array<Record<string, unknown>>;
+        entries?: Record<string, Record<string, unknown>>;
       };
       models?: { providers?: Record<string, unknown> };
       channels?: {
@@ -355,7 +356,7 @@ describe("installTestEnv", () => {
     expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
 
     const agentDefaults = requireRecord(copiedConfig.agents?.defaults, "agent defaults");
-    const agentConfig = requireRecord(copiedConfig.agents?.list?.[0], "agent");
+    const agentConfig = requireRecord(copiedConfig.agents?.entries?.dev, "agent");
     expect(agentDefaults.workspace).toBeUndefined();
     expect(agentDefaults.agentDir).toBeUndefined();
     expect(agentConfig.workspace).toBeUndefined();
@@ -581,6 +582,30 @@ describe("installTestEnv", () => {
     testEnv.cleanup();
     expect(process.env[key]).toBe("test-channel-value");
   });
+
+  it.each(["live-aware", "hermetic"] as const)(
+    "removes and restores inherited provider credentials in non-live %s mode",
+    (mode) => {
+      withEnv(
+        {
+          LIVE: undefined,
+          OPENCLAW_LIVE_TEST: undefined,
+          OPENCLAW_LIVE_GATEWAY: undefined,
+          FAL_KEY: "fal-sentinel-not-a-real-key-0123456789",
+          OPENAI_API_KEY: "openai-sentinel-not-a-real-key-0123456789",
+        },
+        () => {
+          const testEnv = installTestEnv({ mode });
+          cleanupFns.push(testEnv.cleanup);
+          expect(process.env.FAL_KEY).toBeUndefined();
+          expect(process.env.OPENAI_API_KEY).toBeUndefined();
+          testEnv.cleanup();
+          expect(process.env.FAL_KEY).toBe("fal-sentinel-not-a-real-key-0123456789");
+          expect(process.env.OPENAI_API_KEY).toBe("openai-sentinel-not-a-real-key-0123456789");
+        },
+      );
+    },
+  );
 
   it.each(["live-aware", "hermetic"] as const)(
     "isolates and restores inherited supervisor identity in %s mode",

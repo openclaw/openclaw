@@ -189,6 +189,13 @@ export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTrans
   return { nodes, byId, ...navigation };
 }
 
+/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly unknown[],
+): string | undefined {
+  return scanSessionTranscriptTree(events).leafId ?? undefined;
+}
+
 export function scanSessionTranscriptNavigation<T>(
   entries: Iterable<T>,
   storage: SessionTranscriptNavigationStorage<T>,
@@ -330,38 +337,79 @@ export function selectSessionTranscriptActiveEntries<T, R>(params: {
     return [...params.entries];
   }
   const activePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const activeEntries = activePath.flatMap((node) => {
-    const entry = params.entries[node.index];
+  return [
+    ...selectSessionTranscriptActiveEntryIndexes({
+      tree,
+      entryCount: params.entries.length,
+      recordAt: (index) => records[index],
+      readPath: (leafId) =>
+        leafId === tree.leafId ? activePath : selectSessionTranscriptTreePathNodes(tree, leafId),
+    }),
+  ].flatMap((index) => {
+    const entry = params.entries[index];
     return entry === undefined ? [] : [entry];
   });
-  const firstActiveNode = activePath[0];
+}
+
+/** Selection policy is shared by memory readers and bounded, disk-backed archive readers. */
+export function* selectSessionTranscriptActiveEntryIndexes<T>(params: {
+  tree: Pick<SessionTranscriptTree<T>, "hasExplicitLeafUpdate" | "leafId">;
+  entryCount: number;
+  recordAt(index: number): unknown;
+  readPath(leafId: string | null): Iterable<SessionTranscriptTreeNode<T>>;
+}): Generator<number> {
+  if (!params.tree.hasExplicitLeafUpdate) {
+    for (let index = 0; index < params.entryCount; index += 1) {
+      yield index;
+    }
+    return;
+  }
+  const activePath = params.readPath(params.tree.leafId);
+  let firstActiveNode: SessionTranscriptTreeNode<T> | undefined;
+  for (const node of activePath) {
+    firstActiveNode = node;
+    break;
+  }
   for (let index = (firstActiveNode?.index ?? 0) - 1; index >= 0; index -= 1) {
-    const record = records[index];
+    const record = params.recordAt(index);
     if (!isRecord(record) || (record.type !== "compaction" && record.type !== "reset")) {
       continue;
-    }
-    const entry = params.entries[index];
-    if (entry === undefined) {
-      return activeEntries;
     }
     if (record.type === "reset") {
       const resetId = readNonEmptyString(record.id);
       const firstKeptEntryId = readNonEmptyString(record.firstKeptEntryId);
       if (resetId && firstKeptEntryId) {
-        const resetPath = selectSessionTranscriptTreePathNodes(tree, resetId);
-        const keptStart = resetPath.findIndex((node) => node.id === firstKeptEntryId);
-        if (keptStart >= 0) {
-          const retainedResetPath = resetPath.slice(keptStart).flatMap((node) => {
-            const retained = params.entries[node.index];
-            return retained === undefined ? [] : [retained];
-          });
-          return [...retainedResetPath, ...activeEntries];
+        let kept = false;
+        for (const node of params.readPath(resetId)) {
+          kept ||= node.id === firstKeptEntryId;
+          if (kept) {
+            yield node.index;
+          }
+        }
+        if (kept) {
+          break;
         }
       }
     }
-    return [entry, ...activeEntries];
+    yield index;
+    break;
   }
-  return activeEntries;
+  for (const node of params.readPath(params.tree.leafId)) {
+    yield node.index;
+  }
+}
+
+export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTree<T>) {
+  const referencedParents = new Set(
+    tree.nodes.flatMap((node) =>
+      isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
+    ),
+  );
+  return tree.nodes.filter(
+    (node) =>
+      !isSessionTranscriptLeafControl(node.entry) &&
+      (node.id === tree.leafId || !referencedParents.has(node.id)),
+  );
 }
 
 /** Select one normalized path, retaining a reachable suffix after missing ancestors. */
@@ -369,27 +417,36 @@ export function selectSessionTranscriptTreePathNodes<T>(
   tree: SessionTranscriptTree<T>,
   leafId: string | null,
 ): SessionTranscriptTreeNode<T>[] {
-  if (leafId === null) {
-    return [];
-  }
   const path: SessionTranscriptTreeNode<T>[] = [];
-  const seen = new Set<string>();
-  let currentId: string | null = leafId;
+  const valid = visitSessionTranscriptTreePathNodes(tree.byId, leafId, new Set(), (node) => {
+    path.push(node);
+  });
+  return valid ? path.toReversed() : [];
+}
+
+/** Visits leaf to root. Callers must discard every visited node when a cycle is found. */
+export function visitSessionTranscriptTreePathNodes<T>(
+  byId: Pick<SessionTranscriptNavigationStorage<T>["byId"], "get">,
+  leafId: string | null,
+  seen: Pick<TranscriptNavigationSet, "has" | "add">,
+  visit: (node: SessionTranscriptTreeNode<T>) => void,
+): boolean {
+  let currentId = leafId;
   while (currentId) {
     if (seen.has(currentId)) {
-      return [];
+      return false;
     }
     seen.add(currentId);
-    const current = tree.byId.get(currentId);
+    const current = byId.get(currentId);
     if (!current) {
       break;
     }
     if (!isSessionTranscriptLeafControl(current.entry)) {
-      path.push(current);
+      visit(current);
     }
     currentId = current.parentId;
   }
-  return path.toReversed();
+  return true;
 }
 
 /** Merge normalized paths in original file order and expose their retained parent links. */

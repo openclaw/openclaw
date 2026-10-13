@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChannelsStatusSnapshot } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -330,11 +331,31 @@ suite.define(() => {
         await page.addStyleTag({
           content: ".custodian__wizard-step * { transition: none !important; }",
         });
-        await page.getByLabel("Twitch").waitFor();
+        const channelPicker = page.getByRole("button", { name: "Which channel?", exact: true });
+        await channelPicker.click();
+        await expect.poll(() => page.getByRole("option").count()).toBe(5);
+        await gateway.setMethodResponse("openclaw.chat", {
+          sessionId: "e2e-rich-wizard",
+          reply: "Choose features.",
+          action: "none",
+          wizardInputPending: true,
+          step: {
+            id: "features",
+            type: "multiselect",
+            message: "Which features?",
+            options: [
+              { label: "Chat", value: "chat" },
+              { label: "Moderation", value: "moderation" },
+              { label: "Announcements", value: "announcements" },
+            ],
+          },
+        });
+        await page.getByRole("option", { name: "Twitch", exact: true }).click();
+        await page.getByLabel("Announcements").waitFor();
         expect(await page.locator("openclaw-option-card").count()).toBe(0);
         expect(await page.locator(".agent-chat__composer-shell").count()).toBe(0);
 
-        const twitchOption = page.locator(".wizard-step__option", { hasText: "Twitch" });
+        const featureOption = page.locator(".wizard-step__option", { hasText: "Announcements" });
         const continueButton = page.getByRole("button", { name: "Continue" });
         const cancelButton = page.getByRole("button", { name: "Cancel" });
         const readInteractionStyle = (element: Element) => {
@@ -346,16 +367,15 @@ suite.define(() => {
           };
         };
 
-        const optionRestingStyle = await twitchOption.evaluate(readInteractionStyle);
-        await twitchOption.hover();
-        const optionHoverStyle = await twitchOption.evaluate(readInteractionStyle);
+        const optionRestingStyle = await featureOption.evaluate(readInteractionStyle);
+        await featureOption.hover();
+        const optionHoverStyle = await featureOption.evaluate(readInteractionStyle);
         expect(optionRestingStyle.cursor).toBe("default");
         expect(optionHoverStyle.borderColor).not.toBe(optionRestingStyle.borderColor);
 
-        const disabledContinueStyle = await continueButton.evaluate(readInteractionStyle);
-        await continueButton.hover();
-        expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
-        expect(disabledContinueStyle.cursor).toBe("not-allowed");
+        expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+          "default",
+        );
         expect(await cancelButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
           "default",
         );
@@ -410,29 +430,6 @@ suite.define(() => {
 
         await gateway.setMethodResponse("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
-          reply: "Choose features.",
-          action: "none",
-          wizardInputPending: true,
-          step: {
-            id: "features",
-            type: "multiselect",
-            message: "Which features?",
-            options: [
-              { label: "Chat", value: "chat" },
-              { label: "Moderation", value: "moderation" },
-              { label: "Announcements", value: "announcements" },
-            ],
-          },
-        });
-        await page.getByLabel("Twitch").check();
-        expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
-          "default",
-        );
-        await page.getByRole("button", { name: "Continue" }).click();
-        await page.getByLabel("Announcements").waitFor();
-
-        await gateway.setMethodResponse("openclaw.chat", {
-          sessionId: "e2e-rich-wizard",
           reply: "Enter the secret.",
           action: "none",
           sensitive: true,
@@ -446,7 +443,14 @@ suite.define(() => {
         });
         await page.getByLabel("Chat").check();
         await page.getByLabel("Announcements").check();
-        await page.getByRole("button", { name: "Continue" }).click();
+        await gateway.deferNext("openclaw.chat");
+        await continueButton.click();
+        await expect.poll(() => continueButton.isDisabled()).toBe(true);
+        const disabledContinueStyle = await continueButton.evaluate(readInteractionStyle);
+        await continueButton.hover();
+        expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
+        expect(disabledContinueStyle.cursor).toBe("not-allowed");
+        await gateway.resolveDeferred("openclaw.chat");
         const secretInput = page.getByRole("textbox", {
           name: "Twitch client secret",
         });
@@ -561,11 +565,19 @@ suite.define(() => {
     );
   });
 
-  it("stays silent during onboarding", async () => {
+  it("keeps health-event nudges silent during onboarding", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
         methodResponses: {
+          "channels.status": {
+            ts: 0,
+            channelOrder: ["telegram"],
+            channelLabels: { telegram: "Telegram" },
+            channels: { telegram: { configured: true, running: true, connected: true } },
+            channelAccounts: { telegram: [] },
+            channelDefaultAccountId: {},
+          } satisfies ChannelsStatusSnapshot,
           "openclaw.chat": {
             sessionId: "e2e-onboarding-custodian",
             reply: "Let's finish setup.",

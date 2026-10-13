@@ -1,0 +1,135 @@
+---
+summary: "Which workspace bootstrap files reach a Codex turn, and how they are carried"
+read_when:
+  - You need to know how AGENTS.md reaches Codex
+  - You are debugging persona or memory context in Codex turns
+  - You are hitting prepared-context size limits
+title: "Codex workspace bootstrap files"
+sidebarTitle: "Workspace bootstrap files"
+---
+
+How `AGENTS.md`, persona, skills, and memory files reach a native Codex turn. Part of the [Codex harness reference](/plugins/codex-harness-reference); [Where each section moved](/plugins/codex-harness-reference#where-each-section-moved) lists every section.
+
+## Workspace bootstrap files
+
+The full generic developer policy, including a `before_prompt_build.systemPrompt`
+replacement, remains native session configuration for compaction and native-child
+inheritance. Ordinary persistent cold or changed-configuration resumes require an
+uninterrupted app-server client and observed native unload before OpenClaw injects
+the full current policy. OpenClaw must be the sole lifecycle owner of the native
+conversation, including when its app-server runs remotely. Independent clients
+that can reload the same conversation during the handoff are outside this contract;
+observed unload does not reserve the conversation against a competing resume.
+Local and remote transports use the same conversation ID through unsubscribe and
+resume. Merely sending `developerInstructions` on `thread/resume` does not
+refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
+a withdrawal, not a fallback to older instructions.
+
+Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
+policy is rejected without sending another native turn or discarding the live
+conversation. Parent-local model-request instructions remain a separate surface.
+See [Hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) for recovery.
+
+Codex normally handles `AGENTS.md` itself through native project-doc discovery.
+OpenClaw does not write synthetic Codex project-doc files or depend on Codex
+fallback filenames for persona files, because Codex fallbacks only apply when
+`AGENTS.md` is missing. Ordinary policy-restricted turns have no native
+filesystem environment, so OpenClaw instead sends the bounded workspace
+`AGENTS.md` snapshot as thread-level developer instructions. Ring-zero,
+lightweight, message-only, and tool-disabled internal turns suppress that
+carrier.
+
+For OpenClaw workspace parity, local tool notes live in the `## Tools` section
+of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
+Codex harness forwards the other bootstrap files as developer instructions:
+
+- On managed direct stdio app-servers, including Desktop executables launched
+  by OpenClaw for Computer Use, `SOUL.md`, `IDENTITY.md`, and
+  `USER.md` are added to **parent-only model request instructions**. The
+  private relay leaves native base/catalog instructions and history intact,
+  so newly delivered persona and user-profile context are not automatically
+  inherited by native Codex subagents.
+- The compact loaded OpenClaw skills list uses the same parent-local layer.
+- The selected memory plugin's prompt builder receives the complete available
+  tool set, including deferred plugin tools. Its guidance uses the same
+  parent-local layer independently of `MEMORY.md` file routing.
+- Heartbeat turns receive generic initiative guidance through collaboration
+  mode. Monitor cron scratch is appended to the heartbeat prompt instead of
+  injected as workspace context.
+- `MEMORY.md` content from the configured agent workspace is not pasted into
+  native Codex turn input when memory tools are available for that
+  workspace; when it exists, the harness adds a small workspace-memory
+  pointer to the parent-local instruction layer and Codex
+  should use `memory_search` or `memory_get` when durable memory is relevant.
+  If tools are disabled, memory search is unavailable, or the active
+  workspace differs from the agent memory workspace, `MEMORY.md` uses the
+  bounded turn input reference path instead.
+- `BOOTSTRAP.md`, when present, uses the same turn input reference path.
+  These references are introduced on the first turn of a new native thread,
+  after a cold resume (including a Gateway restart), after native compaction,
+  or when their rendered content changes. Unchanged references are omitted
+  on subsequent warm turns once the complete reference block has been submitted.
+  If prompt fitting drops or truncates the block, a later turn introduces it again.
+  Tracking is process-local; reference content
+  remains ordinary user input in native history.
+
+The managed relay supports native API-key and ChatGPT accounts on the standard
+OpenAI endpoints and also works with Gateway-owned inference plus `remote-exec`. Its HTTP and WebSocket hops honor
+the Gateway's HTTP(S) proxy and TLS configuration. Native login, token refresh,
+backend routing, and approval-reviewer checks stay native-owned. It rejects oversized
+prepared context instead of truncating it (256 KiB maximum); model request bodies
+and WebSocket frames are bounded at 32 MiB. Reduce bootstrap/skills budgets or
+attached context when those limits are exceeded. The relay validates each native request
+and its current parent registration before forwarding. Requests that need no
+parent-local instructions keep their native JSON bytes, including existing zstd
+compression on HTTP. Requests with parent-local instructions still receive the
+same bounded instruction injection.
+
+Desktop executable selection and Computer Use permissions stay unchanged. The
+relay belongs to the direct stdio process OpenClaw starts, not to the Desktop
+application's other conversations.
+
+Custom commands, Desktop proxy attachments, external Unix/WebSocket connections,
+non-OpenAI native providers, custom upstream endpoints, unsupported native account
+modes, locked upstream configuration, and native `features.respect_system_proxy` profiles
+use the thread developer carrier below. OpenClaw does not reroute their inference
+or change their native account configuration.
+Previously embedded persona, conversation text, and explicit task handoffs are
+not removed from existing histories or full-history forks.
+
+<a id="skill-catalogs-without-a-managed-relay" />
+
+### Skills, persona, and memory without a managed relay
+
+On connections without a managed inference relay, eligible skills, shared persona
+(`SOUL.md`, `IDENTITY.md`, workspace-root `USER.md`), and memory guidance share a refreshable
+thread developer section. Model-owned collaboration instructions cannot replace
+this section. Native children can inherit this fallback context. Managed connections
+keep their existing parent-only request-local delivery.
+
+Selected personal `users/<profile-id>/USER.md` overlays are excluded from the
+fallback section. Thread configuration and history can both be inherited by native
+children, so neither is a parent-only carrier. These connections currently use
+shared user preferences only, log a warning when a personal overlay is omitted,
+and report zero injected characters for it. Personal-profile delivery on external
+connections is deferred until a parent-only carrier is available. Managed relay
+connections continue delivering the selected personal overlay to the parent.
+
+A changed or removed section cold-resumes the same ordinary persistent thread
+with the complete current developer instructions. That current configuration also
+survives native compaction. A live incognito thread cannot cold-resume: it receives
+the complete current section through an injected developer message without changing
+its immutable creation configuration. Missing sections are explicitly withdrawn.
+
+Incognito has two limitations: automatic compaction can restore creation-time
+instructions for the immediate continuation before OpenClaw re-delivers the current
+section; restoration applies to the following request. A fresh native child without
+inherited history can also receive creation-time instructions rather than subsequent
+injected edits. A full-history child can inherit the later handoff. Standalone
+compaction invalidates recorded delivery so the next turn refreshes it, including
+after a failed restore. These refreshes do not erase older instructions from history.
+
+Lightweight cron turns omit skills. On fallback connections sharing a thread
+with ordinary turns, that omission withdraws the thread-level catalog until the
+next ordinary turn. On managed connections it only omits the current request's
+catalog; it does not change native thread state.

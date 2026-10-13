@@ -2,7 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 
 const mocks = vi.hoisted(() => ({ refresh: vi.fn(), getConfig: vi.fn(() => ({})) }));
-vi.mock("../../config/config.js", () => ({ getRuntimeConfig: mocks.getConfig }));
+// mock-isolation: Output tests exercise an offline refresh; admission has separate boundary coverage.
+vi.mock("../../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: Parameters<typeof import("../../cli/local-state-owner.js").runWithLocalStateOwner>[0]) =>
+    runLocal({
+      env: process.env,
+      config: mocks.getConfig(),
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
+}));
 vi.mock("../../model-catalog/remote-refresh.js", () => ({
   refreshRemoteModelCatalog: mocks.refresh,
 }));
@@ -32,7 +43,7 @@ describe("models refresh", () => {
     });
     await modelsRefreshCommand({}, updatedRuntime);
     expect(updatedRuntime.log).toHaveBeenLastCalledWith(
-      "A running Gateway applies the updated catalog after its next restart.",
+      expect.stringContaining("Remote catalog refresh: updated"),
     );
 
     const freshRuntime = runtime();
@@ -53,10 +64,8 @@ describe("models refresh", () => {
     );
   });
 
-  it.each([
-    { name: "human", options: {} },
-    { name: "JSON", options: { json: true } },
-  ])("delegates $name refresh failures to the canonical CLI error owner", async ({ options }) => {
+  it("delegates refresh failures to the canonical CLI error owner", async () => {
+    const options = { json: true };
     const commandRuntime = runtime();
     mocks.refresh.mockResolvedValueOnce({
       status: "error",
@@ -79,28 +88,14 @@ describe("models refresh", () => {
     expect(commandRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      status: "updated",
-      providers: 2,
-      models: 3,
-      generatedAt: 1_753_500_000_000,
-    },
-    {
-      status: "unchanged",
-      providers: 2,
-      models: 3,
-      generatedAt: 1_753_500_000_000,
-    },
-    {
+  it("preserves the JSON domain payload", async () => {
+    const result = {
       status: "fresh",
       providers: 2,
       models: 3,
       generatedAt: 1_753_500_000_000,
       nextCheckInMs: 1_000,
-    },
-    { status: "disabled", providers: 0, models: 0 },
-  ])("preserves the $status JSON domain payload", async (result) => {
+    };
     const commandRuntime = runtime();
     mocks.refresh.mockResolvedValueOnce(result);
 

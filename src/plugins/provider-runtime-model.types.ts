@@ -1,7 +1,6 @@
-// Defines runtime model metadata supplied by provider plugins.
 import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 
 /**
@@ -13,6 +12,8 @@ export type ProviderRuntimeModel = Omit<Model, "compat"> & {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Unknown-model estimate, replaceable only by accepted same-route account metadata. */
+  contextWindowSource?: "synthetic";
   /** Host-resolved provenance for the top-level wire output cap. */
   maxTokensSource?: "configured" | "discovered";
   params?: Record<string, unknown>;

@@ -21,7 +21,7 @@ Xiaomi MiMo is the API platform for **MiMo** models. The official external
 | API              | OpenAI-compatible chat completions (`openai-completions`)                                                                                          |
 | Speech contract  | `speechProviders: ["xiaomi"]`                                                                                                                      |
 | Base URLs        | Pay-as-you-go: `https://api.xiaomimimo.com/v1`; Token Plan: `token-plan-{cn,sgp,ams}.xiaomimimo.com/v1`                                            |
-| Default models   | `xiaomi/mimo-v2.5`, `xiaomi-token-plan/mimo-v2.5-pro`                                                                                              |
+| Default models   | `xiaomi/mimo-v2.6-pro`, `xiaomi-token-plan/mimo-v2.6-pro`                                                                                          |
 | TTS default      | `mimo-v2.5-tts`, voice `mimo_default`; voicedesign model `mimo-v2.5-tts-voicedesign`                                                               |
 
 ## Getting started
@@ -30,8 +30,11 @@ Xiaomi MiMo is the API platform for **MiMo** models. The official external
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/xiaomi-provider
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
 
   <Step title="Get the right key">
@@ -73,10 +76,13 @@ Onboarding validates the key shape and warns when a `tp-...` key is entered into
 
 ## Pay-as-you-go catalog
 
-| Model ref              | Input       | Context   | Max output | Reasoning | Notes         |
-| ---------------------- | ----------- | --------- | ---------- | --------- | ------------- |
-| `xiaomi/mimo-v2.5`     | text, image | 1,048,576 | 131,072    | Yes       | Default model |
-| `xiaomi/mimo-v2.5-pro` | text        | 1,048,576 | 131,072    | Yes       | Flagship      |
+| Model ref                         | Input       | Context   | Max output | Reasoning | Notes                  |
+| --------------------------------- | ----------- | --------- | ---------- | --------- | ---------------------- |
+| `xiaomi/mimo-v2.6-pro`            | text, image | 1,048,576 | 131,072    | Yes       | Default flagship       |
+| `xiaomi/mimo-v2.6-flash`          | text, image | 1,048,576 | 131,072    | Yes       | Efficient model        |
+| `xiaomi/mimo-v2.6-pro-ultraspeed` | text, image | 1,048,576 | 131,072    | Yes       | Up to 20x output speed |
+| `xiaomi/mimo-v2.5`                | text, image | 1,048,576 | 131,072    | Yes       | Previous generation    |
+| `xiaomi/mimo-v2.5-pro`            | text        | 1,048,576 | 131,072    | Yes       | Previous generation    |
 
 ## Token Plan catalog
 
@@ -91,10 +97,12 @@ Choose the Token Plan auth choice that matches the regional base URL shown in Xi
 | `xiaomi-token-plan-sgp` | `https://token-plan-sgp.xiaomimimo.com/v1` |
 | `xiaomi-token-plan-ams` | `https://token-plan-ams.xiaomimimo.com/v1` |
 
-| Model ref                         | Input       | Context   | Max output | Reasoning | Notes         |
-| --------------------------------- | ----------- | --------- | ---------- | --------- | ------------- |
-| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 131,072    | Yes       | Default model |
-| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 131,072    | Yes       | Multimodal    |
+| Model ref                           | Input       | Context   | Max output | Reasoning | Notes               |
+| ----------------------------------- | ----------- | --------- | ---------- | --------- | ------------------- |
+| `xiaomi-token-plan/mimo-v2.6-pro`   | text, image | 1,048,576 | 131,072    | Yes       | Default model       |
+| `xiaomi-token-plan/mimo-v2.6-flash` | text, image | 1,048,576 | 131,072    | Yes       | Efficient model     |
+| `xiaomi-token-plan/mimo-v2.5-pro`   | text        | 1,048,576 | 131,072    | Yes       | Previous generation |
+| `xiaomi-token-plan/mimo-v2.5`       | text, image | 1,048,576 | 131,072    | Yes       | Previous generation |
 
 `xiaomi-token-plan` needs a regional base URL to resolve. The supported path
 is a Token Plan onboarding choice or an explicit
@@ -103,7 +111,7 @@ provider is not offered without one of those.
 
 ## Reasoning models
 
-`mimo-v2.5` and `mimo-v2.5-pro` support
+The MiMo V2.5 and V2.6 text models support
 OpenClaw's [`/think` directive](/tools/thinking) with levels `off`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` (default `high`).
 
@@ -129,7 +137,7 @@ message.
     provider: "xiaomi",
     providers: {
       xiaomi: {
-        apiKey: "xiaomi_api_key",
+        apiKey: "${XIAOMI_API_KEY}",
         model: "mimo-v2.5-tts",
         speakerVoice: "mimo_default",
         format: "mp3",
@@ -174,7 +182,7 @@ mono Opus with `ffmpeg` before delivery.
 ```json5
 {
   env: { vars: { XIAOMI_API_KEY: "your-key" } },
-  agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5" } } },
+  agents: { defaults: { model: { primary: "xiaomi/mimo-v2.6-pro" } } },
   models: {
     mode: "merge",
     providers: {
@@ -184,18 +192,18 @@ mono Opus with `ffmpeg` before delivery.
         apiKey: "XIAOMI_API_KEY",
         models: [
           {
-            id: "mimo-v2.5",
-            name: "Xiaomi MiMo V2.5",
+            id: "mimo-v2.6-pro",
+            name: "Xiaomi MiMo V2.6 Pro",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 1048576,
             maxTokens: 131072,
           },
           {
-            id: "mimo-v2.5-pro",
-            name: "Xiaomi MiMo V2.5 Pro",
+            id: "mimo-v2.6-flash",
+            name: "Xiaomi MiMo V2.6 Flash",
             reasoning: true,
-            input: ["text"],
+            input: ["text", "image"],
             contextWindow: 1048576,
             maxTokens: 131072,
           },
@@ -214,7 +222,7 @@ Token Plan:
 ```json5
 {
   env: { vars: { XIAOMI_TOKEN_PLAN_API_KEY: "tp-your-key" } },
-  agents: { defaults: { model: { primary: "xiaomi-token-plan/mimo-v2.5-pro" } } },
+  agents: { defaults: { model: { primary: "xiaomi-token-plan/mimo-v2.6-pro" } } },
   models: {
     mode: "merge",
     providers: {
@@ -224,16 +232,16 @@ Token Plan:
         apiKey: "XIAOMI_TOKEN_PLAN_API_KEY",
         models: [
           {
-            id: "mimo-v2.5-pro",
-            name: "Xiaomi MiMo V2.5 Pro",
+            id: "mimo-v2.6-pro",
+            name: "Xiaomi MiMo V2.6 Pro",
             reasoning: true,
-            input: ["text"],
+            input: ["text", "image"],
             contextWindow: 1048576,
             maxTokens: 131072,
           },
           {
-            id: "mimo-v2.5",
-            name: "Xiaomi MiMo V2.5",
+            id: "mimo-v2.6-flash",
+            name: "Xiaomi MiMo V2.6 Flash",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 1048576,
@@ -256,8 +264,10 @@ USD pricing, so its catalog rows use zero USD cost and the config example omits
   </Accordion>
 
   <Accordion title="Model details">
-    - **mimo-v2.5** - pay-as-you-go default and Token Plan multimodal V2.5 route.
-    - **mimo-v2.5-pro** - flagship reasoning model and Token Plan default.
+    - **mimo-v2.6-pro** - flagship reasoning model and default for both providers.
+    - **mimo-v2.6-flash** - efficient pay-as-you-go and Token Plan route.
+    - **mimo-v2.6-pro-ultraspeed** - pay-as-you-go flagship route with up to 20x output speed.
+    - **mimo-v2.5** and **mimo-v2.5-pro** - previous-generation compatibility routes.
 
     <Note>
     Pay-as-you-go models use the `xiaomi/` prefix. Token Plan models use the `xiaomi-token-plan/` prefix.

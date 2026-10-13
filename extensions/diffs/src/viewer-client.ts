@@ -1,4 +1,3 @@
-// Diffs plugin module implements viewer client behavior.
 import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type { FileDiffOptions, SupportedLanguages } from "@pierre/diffs";
 import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
@@ -242,7 +241,7 @@ function createToolbar(): HTMLElement {
   return toolbar;
 }
 
-function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined> {
+function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined, undefined> {
   return {
     theme: payload.options.theme,
     themeType: viewerState.theme,

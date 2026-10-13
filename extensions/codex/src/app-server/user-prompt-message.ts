@@ -11,30 +11,17 @@ import {
 
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 
-function buildSenderLabel(params: {
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-}): string | undefined {
-  const label = params.senderName ?? params.senderUsername ?? params.senderE164 ?? params.senderId;
-  if (!label) {
-    return undefined;
-  }
-  return !params.senderId || label.includes(params.senderId)
-    ? label
-    : `${label} (${params.senderId})`;
-}
-
 function buildFromPrepared(
   params: EmbeddedRunAttemptParams,
   preparedUserMessage: MirroredUserMessage | undefined,
-): AgentMessage {
+): MirroredUserMessage {
   const senderId = normalizeOptionalString(params.senderId);
   const senderName = normalizeOptionalString(params.senderName);
   const senderUsername = normalizeOptionalString(params.senderUsername);
   const senderE164 = normalizeOptionalString(params.senderE164);
-  const senderLabel = buildSenderLabel({ senderId, senderName, senderUsername, senderE164 });
+  const label = senderName ?? senderUsername ?? senderE164 ?? senderId;
+  const senderLabel =
+    label && senderId && !label.includes(senderId) ? `${label} (${senderId})` : label;
   const sourceChannel = normalizeOptionalString(
     params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
   );
@@ -52,20 +39,11 @@ function buildFromPrepared(
     role: "user",
     ...metadata,
     ...(preparedUserMessage ?? { content: params.transcriptPrompt ?? params.prompt }),
-  } as AgentMessage;
+  };
 }
 
-export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): MirroredUserMessage {
   return buildFromPrepared(params, params.userTurnTranscriptRecorder?.message);
-}
-
-function buildCodexUpstreamPromptMessage(
-  params: EmbeddedRunAttemptParams,
-  identity: string,
-  upstreamUserText?: string,
-): AgentMessage {
-  const message = attachCodexMirrorIdentity(buildCodexUserPromptMessage(params), identity);
-  return upstreamUserText ? attachUpstreamUserText(message, upstreamUserText) : message;
 }
 
 export function promptSnapshot(
@@ -73,14 +51,19 @@ export function promptSnapshot(
   turnId: string,
   upstreamUserText?: string,
 ): AgentMessage[] {
-  return params.suppressNextUserMessagePersistence
-    ? []
-    : [buildCodexUpstreamPromptMessage(params, `${turnId}:prompt`, upstreamUserText)];
+  if (params.suppressNextUserMessagePersistence) {
+    return [];
+  }
+  const message = attachCodexMirrorIdentity(
+    buildCodexUserPromptMessage(params),
+    `${turnId}:prompt`,
+  );
+  return [upstreamUserText ? attachUpstreamUserText(message, upstreamUserText) : message];
 }
 
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
-): Promise<AgentMessage> {
+): Promise<MirroredUserMessage> {
   const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
   return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
 }

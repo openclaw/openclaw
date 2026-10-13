@@ -24,6 +24,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../src/agents/cli-runner.test-helpers.js";
+import { createCliRunCurrentAssertion } from "../src/agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -194,7 +195,7 @@ describe("loopback ask_user Telegram channel transport", () => {
           await withQuestionGateway(async (gateway) => {
             const config: OpenClawConfig = {
               ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-              agents: { defaults: { workspace: dir }, entries: { main: { default: true } } },
+              agents: { defaults: { workspace: dir }, entries: { main: {} } },
               plugins: { enabled: false },
               tools: { profile: "full" },
               channels: {
@@ -213,8 +214,8 @@ describe("loopback ask_user Telegram channel transport", () => {
             const resolveTools = toolResolution.resolveGatewayScopedTools;
             const resolutions = vi
               .spyOn(toolResolution, "resolveGatewayScopedTools")
-              .mockImplementation((...args) => {
-                const scoped = resolveTools(...args);
+              .mockImplementation(async (...args) => {
+                const scoped = await resolveTools(...args);
                 for (const tool of scoped.tools) {
                   const execute = tool.execute;
                   vi.spyOn(tool, "execute").mockImplementation(async (...executeArgs) => {
@@ -288,7 +289,10 @@ describe("loopback ask_user Telegram channel transport", () => {
                   context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
                   "prepared CLI grant",
                 );
-                context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+                context.preparedBackend.mcpClientGrantCapture?.activate(
+                  captureKey,
+                  createCliRunCurrentAssertion(context.params),
+                );
                 expect(
                   resolveMcpLoopbackClientGrant({
                     token,

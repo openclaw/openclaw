@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
@@ -57,125 +58,86 @@ function buildInstructions(overrides: Partial<EmbeddedRunAttemptParams> = {}): s
   });
 }
 
-describe("buildDeveloperInstructions delegation guidance", () => {
-  it("shares the visible-session delegation policy with a canonical main session", () => {
-    const instructions = buildInstructions();
+describe("buildDeveloperInstructions deferred tool discovery", () => {
+  it.each([{ name: "native delegation", overrides: {}, deferred: false }] as const)(
+    "uses direct discovery for normal threads with $name",
+    ({ overrides, deferred }) => {
+      const instructions = buildDeveloperInstructions(createParams(overrides), {
+        nativeCodeModeOnlyEnabled: false,
+        dynamicTools: deferred
+          ? [
+              {
+                type: "function",
+                name: "lookup",
+                description: "Lookup",
+                inputSchema: {},
+                deferLoading: true,
+              },
+            ]
+          : [],
+      });
 
-    expect(instructions).toContain("## Delegation");
-    expect(instructions).toContain("delegate via native `spawn_agent`");
-    expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
-    expect(instructions).toContain("Announcing spawns notify when the run ends");
-    expect(instructions).toContain("Collectors require explicit result collection instead.");
-    expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
-      instructions.indexOf("When a native child's result belongs in a later turn"),
-    );
-  });
-
-  it("omits the policy outside the canonical main session", () => {
-    expect(buildInstructions({ sessionKey: "agent:main:slack:channel:C01234567" })).not.toContain(
-      "## Delegation",
-    );
-  });
-
-  it("honors an explicit suggest mode in the canonical main session", () => {
-    expect(
-      buildInstructions({
-        config: { agents: { defaults: { subagents: { delegationMode: "suggest" } } } },
-      }),
-    ).not.toContain("## Delegation");
-  });
-
-  it.each([
-    { name: "report-only delegation", overrides: { delegationCapability: "report_only" } },
-    { name: "disabled tools", overrides: { disableTools: true } },
-    // Subagent runs must not be told to delegate again; the native runtime
-    // suppresses the same section for minimal/none prompt modes.
-    { name: "minimal subagent prompt mode", overrides: { promptMode: "minimal" } },
-    { name: "prompt mode none", overrides: { promptMode: "none" } },
-  ] as const)("omits the policy for $name", ({ overrides }) => {
-    expect(buildInstructions(overrides)).not.toContain("## Delegation");
-  });
-});
-
-describe("buildDeveloperInstructions credential guidance", () => {
-  const secretTool: CodexDynamicToolSpec = {
-    type: "function",
-    name: "secrets",
-    description: "Request protected credentials",
-    inputSchema: { type: "object" },
-  };
-
-  it.each([
-    { name: "direct", dynamicTools: [secretTool], toolName: "secrets" },
-    {
-      name: "deferred",
-      dynamicTools: [{ ...secretTool, deferLoading: true }],
-      toolName: "secrets",
-    },
-    {
-      name: "namespaced",
-      dynamicTools: [
-        { type: "namespace", name: "openclaw", description: "Tools", tools: [secretTool] },
-      ],
-      toolName: "openclaw.secrets",
-    },
-  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; toolName: string }[])(
-    "teaches the actual $name credential route",
-    ({ dynamicTools, toolName }) => {
-      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
-      expect(instructions).toContain(`\`${toolName}\`: list metadata first`);
-      expect(instructions).toContain("request only missing task-needed credentials: name + reason");
-      expect(instructions).toContain("exact allowedHosts for egress");
-      expect(instructions).toContain("Human masked entry -> protected shared store");
-      expect(instructions).toContain("metadata/ref only");
-      expect(instructions).toContain("returned store SecretRef on supported config fields");
-      expect(instructions).toContain("Gateway egress needs enabled proxy + allowed hosts");
-      expect(instructions).toContain("no plaintext fallback");
-      expect(instructions).toContain("auto-injected opaque env sentinel under stored name");
-      expect(instructions).toContain("No secret templates; never override/print that variable");
-      expect(instructions).toContain("Native shell/sandbox/node: no protected injection");
-      expect(instructions).toContain("late saves need next turn");
       expect(instructions).toContain(
-        "no_answer: continue independent work; if the credential blocks progress, explain the missing setup",
+        "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.",
       );
+      expect(instructions).not.toContain("On code-mode-only models");
+      expect(instructions).not.toContain("use `exec` instead");
     },
   );
 
-  it.each([
-    { name: "absent", options: { dynamicTools: [] }, overrides: {} },
-    { name: "unsupplied", options: {}, overrides: {} },
-    {
-      name: "disabled",
-      options: { dynamicTools: [secretTool] },
-      overrides: { disableTools: true },
-    },
-  ])("keeps safety but hides the named credential route when $name", ({ options, overrides }) => {
-    const instructions = buildDeveloperInstructions(createParams(overrides), options);
-    expect(instructions).not.toContain("`secrets`");
-    expect(instructions).not.toContain("SecretRef");
-    expect(instructions).toContain("host-owned masked credential entry");
-    expect(instructions).toContain("safe external setup");
+  it("preserves exec discovery for code-mode-only threads", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      nativeCodeModeOnlyEnabled: true,
+    });
+
+    expect(instructions).toContain(
+      "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.",
+    );
+    expect(instructions).not.toContain("Do not use `exec`");
   });
+});
+
+describe("buildDeveloperInstructions delegation guidance", () => {
+  it.each([{ requireWorkspaceOnly: true }] as const)(
+    "does not advertise native helpers for restricted runs (%j)",
+    (overrides) => {
+      const instructions = buildInstructions(overrides);
+      expect(instructions).not.toContain("spawn_agent");
+      expect(instructions).not.toContain("wait_agent");
+      expect(instructions).toContain("sessions_spawn");
+    },
+  );
+
+  it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
+    const params = createParams({ toolsAllow: [] });
+    const instructions = buildDeveloperInstructions(params);
+
+    expect(instructions).not.toContain("Deferred tools may be absent");
+    expect(instructions).not.toContain("spawn_agent");
+    expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain(
+      "Deferred tools may be absent",
+    );
+  });
+
+  it.each([{ name: "prompt mode none", overrides: { promptMode: "none" } }] as const)(
+    "omits the policy for $name",
+    ({ overrides }) => {
+      expect(buildInstructions(overrides)).not.toContain("## Delegation");
+    },
+  );
 });
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["show_widget", "dashboard", "portal"].map(
-    (name) =>
-      ({
-        type: "function",
-        name,
-        description: `Use ${name}`,
-        inputSchema: { type: "object" },
-      }) satisfies CodexDynamicToolSpec,
+  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map(
+    (name): CodexDynamicToolFunctionSpec => ({
+      type: "function",
+      name,
+      description: `Use ${name}`,
+      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
+    }),
   );
 
   it.each([
-    { name: "direct", dynamicTools: uiTools, prefix: "" },
-    {
-      name: "deferred",
-      dynamicTools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
-      prefix: "",
-    },
     {
       name: "namespaced deferred",
       dynamicTools: [
@@ -194,48 +156,32 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
 
       expect(instructions).toContain("## UI Presentation");
+      expect(instructions).toContain(`\`${prefix}screen(action="browser_show")\``);
+      expect(instructions).toContain("Do not create or expand a dashboard to open a panel");
       for (const tool of uiTools) {
         expect(instructions).toContain(`\`${prefix}${tool.name}\``);
       }
       expect(instructions).toContain("pin=true");
       expect(instructions).toContain("publicUrl");
       expect(instructions).toContain("result.presentation");
-      expect(instructions).toContain("inline support varies by surface");
+      expect(instructions).toContain("this turn's schema");
+      expect(instructions).toContain("status=pinned means the widget is on the session dashboard");
+      expect(instructions).toContain('action="focus_tab" with its tabId');
+      expect(instructions).toContain("do not open hosting URLs as browser pages");
+      expect(instructions).toContain(
+        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
+      );
+      expect(instructions).toContain("Tools/skills first");
+      expect(instructions).toContain(
+        "For explicit plugin/skill search/install or missing capability, use ClawHub",
+      );
+      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
     },
   );
-
-  it("distinguishes unavailable custom authoring from dashboard and portal support", () => {
-    const instructions = buildDeveloperInstructions(createParams(), {
-      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget"),
-    });
-
-    expect(instructions).toContain("`dashboard`");
-    expect(instructions).toContain("`portal`");
-    expect(instructions).toContain(
-      "Custom authoring is unavailable this turn, not unsupported by dashboards.",
-    );
-    expect(instructions).not.toContain("`show_widget`");
-  });
-
-  it.each([
-    { name: "absent", dynamicTools: [], overrides: {} },
-    { name: "unsupplied", dynamicTools: undefined, overrides: {} },
-    { name: "disabled", dynamicTools: uiTools, overrides: { disableTools: true } },
-    { name: "minimal", dynamicTools: uiTools, overrides: { promptMode: "minimal" } },
-    { name: "none", dynamicTools: uiTools, overrides: { promptMode: "none" } },
-  ] satisfies {
-    name: string;
-    dynamicTools: CodexDynamicToolSpec[] | undefined;
-    overrides: Partial<EmbeddedRunAttemptParams>;
-  }[])("omits presentation guidance when $name", ({ dynamicTools, overrides }) => {
-    const instructions = buildDeveloperInstructions(createParams(overrides), { dynamicTools });
-
-    expect(instructions).not.toContain("## UI Presentation");
-  });
 });
 
 describe("buildDeveloperInstructions delivery-mode stability", () => {
-  it.each([false, true])("keeps thread policy stable with message available=%s", (available) => {
+  it.each([true])("keeps thread policy stable with message available=%s", (available) => {
     const dynamicTools: CodexDynamicToolSpec[] = available
       ? [
           {

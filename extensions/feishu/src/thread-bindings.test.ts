@@ -289,7 +289,7 @@ describe("Feishu thread bindings", () => {
         metadata: {
           agentId: "previous-agent",
           label: "child",
-          boundBy: "system",
+          boundBy: "ou_sender_1",
           deliveryTo: "user:ou_sender_1",
           deliveryThreadId: "om_topic_root",
           pluginBindingOwner: "plugin",
@@ -346,7 +346,7 @@ describe("Feishu thread bindings", () => {
             : {}),
           agentId: replace ? "main" : "previous-agent",
           label: "child",
-          boundBy: replace ? undefined : "system",
+          boundBy: replace ? undefined : "ou_sender_1",
           deliveryTo: "user:ou_sender_1",
           deliveryThreadId: "om_topic_root",
           lastActivityAt: 1_700_000_100_000,

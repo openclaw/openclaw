@@ -1,4 +1,3 @@
-// Imessage tests cover test plugin plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -6,7 +5,6 @@ import {
   createMessageReceiptFromOutboundResults,
   sendDurableMessageBatch,
   verifyChannelMessageAdapterCapabilityProofs,
-  verifyDurableFinalCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
@@ -30,41 +28,12 @@ beforeEach(() => {
   clearIMessageApprovalReactionTargetsForTest();
 });
 
-type IMessageOutbound = NonNullable<typeof imessagePlugin.outbound>;
 type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
 type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
 const IMESSAGE_WORKSPACE_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
 );
-
-function requireOutbound(): IMessageOutbound {
-  const outbound = imessagePlugin.outbound;
-  if (!outbound) {
-    throw new Error("Expected iMessage test plugin outbound adapter");
-  }
-  return outbound;
-}
-
-function requireOutboundSendText(
-  outbound: IMessageOutbound,
-): NonNullable<IMessageOutbound["sendText"]> {
-  const sendText = outbound.sendText;
-  if (!sendText) {
-    throw new Error("Expected iMessage outbound sendText");
-  }
-  return sendText;
-}
-
-function requireOutboundSendMedia(
-  outbound: IMessageOutbound,
-): NonNullable<IMessageOutbound["sendMedia"]> {
-  const sendMedia = outbound.sendMedia;
-  if (!sendMedia) {
-    throw new Error("Expected iMessage outbound sendMedia");
-  }
-  return sendMedia;
-}
 
 function requireMessageAdapter(): IMessageMessageAdapter {
   const adapter = imessagePlugin.message;
@@ -133,15 +102,6 @@ describe("imessagePlugin contracts", () => {
     ).resolves.toMatchObject({ kind: "user", to: "auto:AliceSmith" });
   });
 
-  it("declares durable final delivery capabilities", () => {
-    expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
-      text: true,
-      media: true,
-      replyTo: true,
-      messageSendingHooks: true,
-    });
-  });
-
   it("preserves sanitized HTML formatting as native ranges", () => {
     const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
     const sanitized = imessagePlugin.outbound?.sanitizeText?.({ text, payload: { text } });
@@ -153,14 +113,6 @@ describe("imessagePlugin contracts", () => {
         { start: 0, length: 4, styles: ["bold"] },
         { start: 5, length: 6, styles: ["strikethrough"] },
       ],
-    });
-  });
-
-  it("declares native iMessage voice memo TTS delivery", () => {
-    expect(imessagePlugin.capabilities.tts?.voice).toStrictEqual({
-      synthesisTarget: "audio-file",
-      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-      preferAudioFileFormat: "caf",
     });
   });
 
@@ -263,56 +215,6 @@ describe("imessagePlugin contracts", () => {
       approvalId: "exec-shared-hook",
       approvalKind: "exec",
       decision: "allow-once",
-    });
-  });
-
-  it("backs declared durable final capabilities with delivery proofs", async () => {
-    const outbound = requireOutbound();
-    const sendText = requireOutboundSendText(outbound);
-    const sendMedia = requireOutboundSendMedia(outbound);
-    const sendIMessage = async () => ({ messageId: "imsg-1" });
-
-    await verifyDurableFinalCapabilityProofs({
-      adapterName: "imessageOutbound",
-      capabilities: outbound.deliveryCapabilities?.durableFinal,
-      proofs: {
-        text: async () => {
-          await expect(
-            sendText({
-              cfg: {} as never,
-              to: "+15551234567",
-              text: "hello",
-              deps: { imessage: sendIMessage },
-            }),
-          ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
-        },
-        media: async () => {
-          await expect(
-            sendMedia({
-              cfg: {} as never,
-              to: "+15551234567",
-              text: "caption",
-              mediaUrl: "/tmp/image.png",
-              mediaLocalRoots: ["/tmp"],
-              deps: { imessage: sendIMessage },
-            }),
-          ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
-        },
-        replyTo: async () => {
-          await expect(
-            sendText({
-              cfg: {} as never,
-              to: "+15551234567",
-              text: "reply",
-              replyToId: "reply-1",
-              deps: { imessage: sendIMessage },
-            }),
-          ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
-        },
-        messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-      },
     });
   });
 

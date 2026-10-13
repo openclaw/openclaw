@@ -146,7 +146,7 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
     });
     const page = await context.newPage();
     const explicitGatewayUrl = "ws://127.0.0.1:29991/alternate";
-    const gateway = await installMockGateway(page, { basePath });
+    const gateway = await installMockGateway(page, { basePath, awaitInitialRoster: false });
 
     try {
       const url = new URL(`${basePath}/chat`, proxy.baseUrl);
@@ -155,9 +155,11 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
       expect(response?.status()).toBe(200);
 
       const confirmation = page.locator("openclaw-gateway-url-confirmation");
-      await confirmation.waitFor();
+      await confirmation.getByText(explicitGatewayUrl, { exact: true }).waitFor();
       expect(await confirmation.getByText(explicitGatewayUrl, { exact: true }).count()).toBe(1);
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
+        .click();
 
       await gateway.waitForRequest("connect");
       await page.locator("openclaw-app-shell").waitFor();

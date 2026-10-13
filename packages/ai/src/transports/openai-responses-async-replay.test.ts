@@ -1,6 +1,7 @@
 import type { AssistantMessage, Context, Model, ToolResultMessage } from "@openclaw/llm-core";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import {
@@ -30,6 +31,97 @@ const model: Model = {
 it.each([
   ["provider", convertProviderResponsesMessages],
   ["transport", convertResponsesMessages],
+] as const)("%s preserves tool-result caption positions and text bytes", (_name, convert) => {
+  const image = (data: string) => ({ type: "image" as const, mimeType: "image/png", data });
+  const text = (value: string) => ({ type: "text" as const, text: value });
+  const wireImage = (data: string) => ({
+    type: "input_image",
+    detail: "auto",
+    image_url: `data:image/png;base64,${data}`,
+  });
+  const wireText = (value: string) => ({ type: "input_text", text: value });
+  const cases: { content: ToolResultMessage["content"]; output: unknown }[] = [
+    {
+      content: [
+        text("Before:"),
+        image("aW1n"),
+        image("aW1nMg=="),
+        text("After:"),
+        image("aW1nMw=="),
+      ],
+      output: [
+        wireText("Before:"),
+        wireImage("aW1n"),
+        wireImage("aW1nMg=="),
+        wireText("\nAfter:"),
+        wireImage("aW1nMw=="),
+      ],
+    },
+    {
+      content: [
+        text("Before:"),
+        image("aW1n"),
+        text("After:"),
+        image("aW1nMg=="),
+        image("aW1nMw=="),
+      ],
+      output: [
+        wireText("Before:"),
+        wireImage("aW1n"),
+        wireText("\nAfter:"),
+        wireImage("aW1nMg=="),
+        wireImage("aW1nMw=="),
+      ],
+    },
+    {
+      content: [text("Captured screen"), image("aW1n")],
+      output: [wireText("Captured screen"), wireImage("aW1n")],
+    },
+    { content: [image("aW1n"), text("Caption")], output: [wireImage("aW1n"), wireText("Caption")] },
+    {
+      content: [
+        text("Before:"),
+        text("First screen"),
+        image("aW1n"),
+        text("After:"),
+        text("Second screen"),
+      ],
+      output: [
+        wireText("Before:\nFirst screen"),
+        wireImage("aW1n"),
+        wireText("\nAfter:\nSecond screen"),
+      ],
+    },
+    { content: [image("aW1n")], output: [wireImage("aW1n")] },
+    {
+      content: [image("aW1n"), image("aW1nMg==")],
+      output: [wireImage("aW1n"), wireImage("aW1nMg==")],
+    },
+    { content: [text("  first\n"), text(""), text("second  ")], output: "  first\n\nsecond  " },
+  ];
+  const imageModel: Model = { ...model, input: ["text", "image"] };
+  for (const { content, output } of cases) {
+    const result: ToolResultMessage = {
+      ...makeTextToolResult("call_compare|fc_compare", "compare", "", false, 2),
+      content,
+    };
+    const assistant: AssistantMessage = {
+      ...createOpenAIResponsesAssistantOutput(imageModel),
+      content: [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
+      stopReason: "toolUse",
+    };
+    const replay = convert(imageModel, { messages: [assistant, result] }, new Set(["openai"]));
+    expect(replay.find((item) => item.type === "function_call_output")).toEqual({
+      type: "function_call_output",
+      call_id: "call_compare",
+      output,
+    });
+  }
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
 ] as const)(
   "%s keeps retained runtime carriers with their own users when steering is appended",
   (_name, convert) => {
@@ -41,10 +133,20 @@ it.each([
     const context: Context = {
       messages: [
         user("first"),
-        { ...user("first context"), runtimeContextCarrier: true },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nfirst context",
+          timestamp: 0,
+          runtimeContext: {},
+        },
         answer("first answer"),
         user("second"),
-        { ...user("second context"), runtimeContextCarrier: true },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nsecond context",
+          timestamp: 0,
+          runtimeContext: {},
+        },
         answer("second answer"),
       ],
     };
@@ -59,10 +161,10 @@ it.each([
     expect(withSteering).toMatchObject(
       [
         "first",
-        "first context",
+        "OpenClaw runtime context:\nfirst context",
         "first answer",
         "second",
-        "second context",
+        "OpenClaw runtime context:\nsecond context",
         "second answer",
         "steering",
       ].map((text) => ({ content: [{ text }] })),
@@ -70,6 +172,64 @@ it.each([
     expect(context).toEqual(original);
   },
 );
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s anchors mixed-media shipped carriers before async replay", (_name, convert) => {
+  const imageModel: Model = { ...model, input: ["text", "image"] };
+  const prefix: AssistantMessage = {
+    ...createOpenAIResponsesAssistantOutput(imageModel),
+    responseId: "resp_async",
+    stopReason: "toolUse",
+    content: [
+      { type: "toolCall", id: "call_async|fc_async", name: "lookup", arguments: {}, async: true },
+    ],
+  };
+  const tail: AssistantMessage = {
+    ...createOpenAIResponsesAssistantOutput(imageModel),
+    responseId: "resp_async",
+    content: [{ type: "text", text: "answer", textSignature: encodeTextSignatureV1("msg_tail") }],
+  };
+  const carrier = {
+    role: "user" as const,
+    content: [
+      { type: "text" as const, text: "runtime facts" },
+      { type: "image" as const, mimeType: "image/png", data: "aW1n" },
+    ],
+    timestamp: 2,
+    runtimeContextCarrier: true as const,
+  };
+  const result = makeTextToolResult("call_async|fc_async", "lookup", "found", false, 3);
+  const context: Context = {
+    messages: [
+      { role: "user", content: "question", timestamp: 1 },
+      prefix,
+      result,
+      carrier,
+      tail,
+      { role: "user", content: "steering", timestamp: 4 },
+    ],
+  };
+
+  const replay = convert(imageModel, context, new Set(["openai"]));
+
+  expect(replay.map((item) => item.type)).toEqual([
+    "message",
+    "message",
+    "function_call",
+    "message",
+    "function_call_output",
+    "message",
+  ]);
+  expect(replay[1]).toMatchObject({
+    role: "user",
+    content: [
+      { type: "input_text", text: "runtime facts" },
+      { type: "input_image", image_url: "data:image/png;base64,aW1n" },
+    ],
+  });
+});
 
 it.each([
   ["provider early result", convertProviderResponsesMessages, true, false],
@@ -102,14 +262,13 @@ it.each([
         },
       ],
     };
-    const toolResult: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: "call_async|fc_async",
-      toolName: "lookup",
-      content: [{ type: "text", text: "found" }],
-      isError: false,
-      timestamp: 2,
-    };
+    const toolResult: ToolResultMessage = makeTextToolResult(
+      "call_async|fc_async",
+      "lookup",
+      "found",
+      false,
+      2,
+    );
     const context: Context = {
       messages: [
         { role: "user", content: "look up", timestamp: 1 },
@@ -224,14 +383,13 @@ it.each(["before", "after"] as const)(
         { type: "toolCall", id: "call_1|fc_1", name: "lookup", arguments: {}, async: true },
       ],
     };
-    const result: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: "call_1|fc_1",
-      toolName: "lookup",
-      content: [{ type: "text", text: "found" }],
-      isError: false,
-      timestamp: 2,
-    };
+    const result: ToolResultMessage = makeTextToolResult(
+      "call_1|fc_1",
+      "lookup",
+      "found",
+      false,
+      2,
+    );
     const input = { type: "function_call_output", call_id: "call_1", output: "found" };
     const response: AssistantMessage = {
       ...createOpenAIResponsesAssistantOutput(model),

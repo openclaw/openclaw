@@ -23,8 +23,19 @@ const censusArgs = args => delayed && args?.[2]?.endsWith("ci-windows-process-ce
   ? ["-I", "-S", "-c", "import runpy,sys,time; time.sleep(1.1); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')", ...args.slice(2)]
   : args;
 const spawn = cp.spawn, spawnSync = cp.spawnSync;
+// POSIX has no census interpreter to delay; its first native query instead
+// spends as long as a loaded host can, on the supervisor's clock.
+let slowNativeQuery = delayed && process.argv[2] === "supervise";
 // Delay the actual interpreter entry point, including the pre-fix synchronous path.
-cp.spawnSync = (command, args, options) => spawnSync(command, censusArgs(args), options);
+cp.spawnSync = (command, args, options) => {
+  const result = spawnSync(command, censusArgs(args), options);
+  if (slowNativeQuery && command === "/bin/ps") {
+    slowNativeQuery = false;
+    const now = Date.now;
+    Date.now = () => now() + 1_100;
+  }
+  return result;
+};
 cp.spawn = (command, args, options) => {
   const child = spawn(command, censusArgs(args), options);
   if (command === "python" && process.argv[2] === "supervise") {
@@ -60,10 +71,12 @@ export function expectCensusClosed(root: string, actorPids: number[]) {
 }
 
 export function registerWindowsCensusTests() {
+  const censusTestTimeoutMs = 55_000;
   // Exercise the real broker/stdio owner on any platform; only the native sampler
   // is replaced. The concurrent matrix and PID-reuse test retain native API proof.
   it.each([
     "ready",
+    "delayed",
     "startup",
     "query",
     "stderr-reply",
@@ -117,7 +130,20 @@ import fs from "node:fs";
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
-const [moduleUrl, fault, sampler] = process.argv.slice(1);
+const [moduleUrl, fault, sampler, deadlineText] = process.argv.slice(1);
+const deadline = Number(deadlineText);
+const succeeds = fault === "ready" || fault === "delayed";
+let now = Date.now(), clockAdvanced = false;
+const timers = new Map();
+if (fault === "delayed" || fault === "late") {
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, milliseconds) => {
+    const timer = { callback, at: now + milliseconds };
+    timers.set(timer, timer);
+    return timer;
+  };
+  globalThis.clearTimeout = timer => timers.delete(timer);
+}
 const root = fs.mkdtempSync(path.join(tmpdir(), "census-"));
 fs.writeFileSync(path.join(root, "lease"), "owned");
 const endpoint = path.join(root, "census.json");
@@ -161,8 +187,18 @@ cp.spawn = (command, args, options) => {
       }
     });
   }
-  if (fault === "late") child.stdout.prependListener("data", chunk => {
-    if (String(chunk).includes('"id"')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
+  if (fault === "delayed" || fault === "late") child.stdout.prependListener("data", chunk => {
+    if (clockAdvanced || !String(chunk).includes('"id"')) return;
+    clockAdvanced = true;
+    // Hold an actual sampler reply across a scheduling stall, without sleeping.
+    // Late delivery exercises reply validation before any timer callback can run.
+    now = fault === "late" ? deadline : now + 1_100;
+    if (fault === "delayed") {
+      assert(now < deadline, "delayed reply must remain inside its owning operation");
+      for (const timer of [...timers.values()]) {
+        if (timer.at <= now && timers.delete(timer)) timer.callback();
+      }
+    }
   });
   if (fault === "lease") {
     const write = child.stdin.write.bind(child.stdin);
@@ -185,7 +221,7 @@ try {
   // A sibling's ingress rejection must not hide stale success from an already
   // admitted lease or stderr-fault request.
   const pids = ["lease", "query", "stderr-reply"].includes(fault) ? [101] : [101, 202];
-  const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid])));
+  const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid], deadline)));
   assert.deepEqual(results.map(result => [...result.values()]), pids.map(pid => [
     { pid, alive: true, creationTime: pid === 101 ? "5001" : "6002" },
   ]));
@@ -196,12 +232,16 @@ assert.equal(children.length, 1);
 assert.equal(closes.length, 1, "retirement must join actual child/stdio close");
 assert.equal(closes[0].endpoint, fault !== "startup" && fault !== "retire", "endpoint retired before sampler close");
 assert(!fs.existsSync(endpoint));
-await assert.rejects(async () => requestWindowsProcessCensus(root, "owned", [101]));
-await assert.rejects(async () => owner.read([101]));
-assert.equal(accepted, fault === "ready", rejected);
-if (fault === "ready") assert.deepEqual(failures, []);
+await assert.rejects(async () => requestWindowsProcessCensus(root, "owned", [101], deadline));
+await assert.rejects(async () => owner.read([101], deadline));
+assert.equal(accepted, succeeds, rejected);
+if (succeeds) assert.deepEqual(failures, []);
 else assert(rejected, "fault was accepted");
-if (!["ready", "lease", "retire"].includes(fault)) assert.equal(failures.length, 1);
+if (!["ready", "delayed", "lease", "retire"].includes(fault)) assert.equal(failures.length, 1);
+if (fault === "delayed" || fault === "late") {
+  assert(clockAdvanced, "sampler did not deliver a reply across the scheduling stall");
+  assert.equal(timers.size, 0, "census timers survived retirement");
+}
 const diagnostics = owner.diagnostics();
 if (fault === "startup") assert(diagnostics.includes("injected sampler startup failure"), diagnostics);
 if (fault === "query") assert(diagnostics.includes("injected native query failure"), diagnostics);
@@ -215,13 +255,14 @@ if (fault === "stderr-reply") {
   assert.deepEqual(mixedReply?.observations, [{ pid: 101, alive: true, creationTime: "5001" }],
     "sampler must deliver a valid reply after stderr so rejection is not vacuous");
 }
-if (fault === "late") assert(/Late|ETIMEDOUT/.test(diagnostics));
+if (fault === "late") assert(diagnostics.includes("Census helper reply ETIMEDOUT"), diagnostics);
 console.log(JSON.stringify({ fault, accepted, rejected, diagnostics, closes, stderrObserved, mixedReply }));
 fs.rmSync(root, { recursive: true });
 `,
           new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,
           fault,
           sampler,
+          String(Date.now() + censusTestTimeoutMs),
         ],
         options: { stdio: ["ignore", "pipe", "pipe"] },
       });
@@ -236,20 +277,25 @@ fs.rmSync(root, { recursive: true });
         signal: null,
         groupJoined: process.platform !== "win32",
       });
-      expect(JSON.parse(stdout)).toMatchObject({ fault, accepted: fault === "ready" });
+      expect(JSON.parse(stdout)).toMatchObject({
+        fault,
+        accepted: fault === "ready" || fault === "delayed",
+      });
     },
-    55_000,
+    censusTestTimeoutMs,
   );
 
-  it.each(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(
+  it.for(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(
     "retains startup errors and joins census before registration (%s)",
-    async (fault) => {
+    { timeout: 55_000 },
+    async (fault, { signal }) => {
       await withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (root) => {
           writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
           const sampler = String.raw`
-import json, pathlib, runpy, sys
+import json, runpy, sys
 fault = sys.argv[3]
 if fault == "startup":
     raise RuntimeError("injected sampler startup failure")
@@ -259,7 +305,6 @@ for line in sys.stdin:
         raise RuntimeError("injected native query failure")
     request = json.loads(line)
     observations = runpy.run_path(sys.argv[2])["read_processes"](request["pids"])
-    pathlib.Path(sys.argv[1], "lease").write_text("replacement")
     print(json.dumps(dict(id=request["id"], observations=observations)), flush=True)
 `;
           return censusPreload(
@@ -268,8 +313,29 @@ for line in sys.stdin:
               ? 'if (process.argv[2] === "sentinel") throw new Error("injected sentinel startup failure");\n'
               : `if (process.argv[2] === "supervise") {
   const censusSpawn = cp.spawn;
-  cp.spawn = (command, args, options) => censusSpawn(command, command === "python"
-    ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
+  cp.spawn = (command, args, options) => {
+    const child = censusSpawn(command, command === "python"
+      ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
+    if (command === "python" && ${JSON.stringify(fault)} === "lease") {
+      let buffered = "", retired = false;
+      child.stdout.on("data", chunk => {
+        buffered += String(chunk);
+        for (;;) {
+          const newline = buffered.indexOf("\\n");
+          if (newline < 0) break;
+          const reply = JSON.parse(buffered.slice(0, newline));
+          buffered = buffered.slice(newline + 1);
+          if (!retired && reply.observations) {
+            retired = true;
+            // This listener precedes the broker's reply handler. The supervisor's
+            // synchronous writer closes before its teardown can unlink the lease.
+            fs.writeFileSync(path.join(root, "lease"), "replacement");
+          }
+        }
+      });
+    }
+    return child;
+  };
   syncFixtureBuiltinExports();
 }`,
           );
@@ -298,12 +364,12 @@ for line in sys.stdin:
         },
       );
     },
-    55_000,
   );
 
-  it("joins an unregistered sentinel before supervisor close on disconnect", async () => {
+  it("joins an unregistered sentinel before supervisor close on disconnect", async ({ signal }) => {
     await withCiCheckoutFixture(
       "early-leader-exit",
+      signal,
       (root) => {
         writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
         // Fault only the asynchronous startup boundary; keep the real safe preflight.
@@ -361,9 +427,10 @@ if (mode === "supervise") {
     );
   }, 55_000);
 
-  it.each(["direct-child-close", "truthful-final-census"])(
+  it.for(["direct-child-close", "truthful-final-census"])(
     "rejects expired supervisor cleanup and joins census (%s)",
-    async (fault) => {
+    { timeout: 55_000 },
+    async (fault, { signal }) => {
       type BoundaryEvent = {
         event: string;
         role?: string;
@@ -383,6 +450,7 @@ if (mode === "supervise") {
       let failure: unknown;
       await withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (directory) => {
           root = directory;
           writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
@@ -540,6 +608,5 @@ if (mode === "supervise") {
       // Every spawned writer above also has a creator-held close; failures retain evidence.
       rmSync(directory, { recursive: true });
     },
-    55_000,
   );
 }

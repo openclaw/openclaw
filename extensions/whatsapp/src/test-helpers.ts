@@ -3,7 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTimezone } from "openclaw/plugin-sdk/time-runtime";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -140,18 +144,16 @@ function sanitizeEnvelopeHeaderPart(value: string) {
 function resolveEnvelopeOptionsMock(cfg?: {
   agents?: {
     defaults?: {
-      envelopeTimezone?: string;
-      envelopeTimestamp?: "on" | "off";
-      envelopeElapsed?: "on" | "off";
       userTimezone?: string;
     };
   };
 }): TestEnvelopeOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.envelopeTimezone,
-    includeTimestamp: defaults?.envelopeTimestamp !== "off",
-    includeElapsed: defaults?.envelopeElapsed !== "off",
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
+    includeTimestamp: true,
+    includeElapsed: true,
     userTimezone: defaults?.userTimezone,
   };
 }
@@ -457,7 +459,8 @@ vi.mock("./inbound/runtime-api.js", () => ({
   })),
 }));
 
-vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
+vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auto-reply/monitor/runtime-api.js")>()),
   buildHistoryContextFromEntries: (params: {
     entries: Array<{ sender?: string; body: string; timestamp?: number }>;
     currentMessage: string;
@@ -485,7 +488,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
-  resolveInboundSessionEnvelopeContext: (params: {
+  resolveInboundSessionEnvelopeContextAsync: async (params: {
     cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
     agentId: string;
   }) => ({
@@ -591,19 +594,6 @@ vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({
 
 vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
   formatInboundEnvelope: formatInboundEnvelopeMock,
-  resolveMessagePrefix: (
-    cfg: {
-      channels?: { whatsapp?: { messagePrefix?: string; allowFrom?: string[] } };
-    },
-    _agentId: string,
-    params?: { configured?: string; hasAllowFrom?: boolean },
-  ) => {
-    const configured = params?.configured ?? cfg.channels?.whatsapp?.messagePrefix;
-    if (configured !== undefined) {
-      return configured;
-    }
-    return params?.hasAllowFrom === true ? "" : "[openclaw]";
-  },
 }));
 
 vi.mock("./auth-store.runtime.js", () => ({

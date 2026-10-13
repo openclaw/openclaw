@@ -4,10 +4,10 @@ import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
-import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
-import { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
-import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
-import { createSlashMenuState } from "./chat-composer-slash-menu.ts";
+import { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
+import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
+import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
@@ -15,14 +15,18 @@ function createChatComposerState(): ChatComposerState {
     ...createSlashMenuState(),
     ...createSkillMenuState(),
     composerComposing: false,
+    editRevision: 0,
     mentionMenu: new HumanMentionMenu(),
+    emojiMenu: new ComposerEmojiMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
     goalComposer: null,
-    activeGatewayQuestionId: null,
-    gatewayQuestionCollapsed: false,
+    activeQuestionKey: null,
+    gatewayQuestionIds: new Set(),
+    asyncQuestionIds: new Set(),
+    questionCollapsed: false,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
     composerInput: null,
@@ -33,7 +37,7 @@ function createChatComposerState(): ChatComposerState {
     textareaRef: null,
     composerInputRef: null,
     dictation: null,
-    composerDraftScopeKey: null,
+    composerDraftScope: null,
     dictationError: null,
     dictationSelection: null,
   };
@@ -63,7 +67,9 @@ export function isCurrentSessionSubmittedProgress(
   return (
     item.sessionKey === sessionKey &&
     !item.pendingRunId &&
-    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (item.sendState === "submitting" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-model") &&
     (status == null || item.sendRunId !== status.runId)
   );
 }
@@ -96,14 +102,27 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const hadMentions = (props.getMentions?.() ?? props.mentions ?? []).length > 0;
+  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
+  getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  if (hadMentions || mentions?.length) {
+  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
+  // Moving a token while typing prose changes its span, not the recipient strip.
+  if (
+    previousMentions.length !== nextMentions.length ||
+    previousMentions.some((previous, index) => {
+      const next = nextMentions[index]!;
+      return (
+        previous.profileId !== next.profileId ||
+        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
+      );
+    })
+  ) {
     props.onRequestUpdate?.();
   }
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
+  state.editRevision += 1;
   state.composerInputIntentKey = key;
 }
 
@@ -121,10 +140,6 @@ export function clearPendingClearedSubmittedDraft(state: ChatComposerState, key:
   }
 }
 
-function isExplicitComposerInsertion(event: InputEvent): boolean {
-  return event.inputType === "insertFromPaste" || event.inputType === "insertFromDrop";
-}
-
 export function suppressStaleSubmittedDraftReplay(
   target: HTMLTextAreaElement,
   event: InputEvent,
@@ -133,10 +148,13 @@ export function suppressStaleSubmittedDraftReplay(
   state: ChatComposerState,
 ): boolean {
   const pending = state.pendingClearedSubmittedDraft;
-  if (!pending) {
-    return false;
-  }
-  if (target.value !== pending.value || hasInputIntent || isExplicitComposerInsertion(event)) {
+  if (
+    !pending ||
+    target.value !== pending.value ||
+    hasInputIntent ||
+    event.inputType === "insertFromPaste" ||
+    event.inputType === "insertFromDrop"
+  ) {
     return false;
   }
 
@@ -146,8 +164,9 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.emojiMenu.close();
   state.mentionMenu.dispose();
-  state.composerDraftScopeKey = null;
+  state.composerDraftScope = null;
   state.dictation?.dispose();
   state.microphonePicker?.dispose();
   if (state.composerInput) {
@@ -157,8 +176,6 @@ function disposeChatComposerState(state: ChatComposerState) {
 
 export function resetChatComposerState(paneId?: string) {
   if (paneId) {
-    // Goal elapsed timers are keyed by element and cleaned up when their
-    // element leaves the DOM, so a per-pane reset does not need to touch them.
     const paneState = composerStates.get(paneId);
     if (paneState) {
       disposeChatComposerState(paneState);
@@ -170,5 +187,4 @@ export function resetChatComposerState(paneId?: string) {
     disposeChatComposerState(state);
   }
   composerStates.clear();
-  clearGoalElapsedTimers();
 }

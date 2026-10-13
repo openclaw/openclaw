@@ -20,6 +20,7 @@ Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
 ## Surface
 
 - Providers: `novita`, `novita-ai`, `novitaai`
+- Contracts: `videoGenerationProviders`
 
 ## Related docs
 

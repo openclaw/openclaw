@@ -4,15 +4,22 @@ import { probeSlack } from "./probe.js";
 
 const authTestMock = vi.hoisted(() => vi.fn());
 const createSlackReadClientMock = vi.hoisted(() => vi.fn());
+const probeDispatcher = vi.hoisted(() => ({ destroy: vi.fn() }));
+const createSlackProbeDispatcherMock = vi.hoisted(() => vi.fn(() => probeDispatcher));
 
 vi.mock("./client.js", () => ({
   createSlackReadClient: createSlackReadClientMock,
+}));
+vi.mock("./client-options.js", () => ({
+  createSlackProbeDispatcher: createSlackProbeDispatcherMock,
 }));
 
 describe("probeSlack", () => {
   beforeEach(() => {
     authTestMock.mockReset();
     createSlackReadClientMock.mockReset();
+    createSlackProbeDispatcherMock.mockClear();
+    probeDispatcher.destroy.mockReset().mockResolvedValue(undefined);
 
     createSlackReadClientMock.mockReturnValue({
       auth: {
@@ -39,11 +46,16 @@ describe("probeSlack", () => {
       bot: { id: "U123", name: "openclaw-bot" },
       team: { id: "T123", name: "OpenClaw" },
     });
-    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-      timeout: 2500,
-    });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith(
+      "xoxb-test",
+      {
+        rejectRateLimitedCalls: true,
+        retryConfig: { retries: 0 },
+        timeout: 2500,
+      },
+      probeDispatcher,
+    );
+    expect(probeDispatcher.destroy).toHaveBeenCalledOnce();
   });
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {
@@ -115,23 +127,15 @@ describe("probeSlack", () => {
     expect(result.elapsedMs).toBe(35);
     expect(result.bot).toStrictEqual({ id: undefined, name: undefined });
     expect(result.team).toStrictEqual({ id: undefined, name: undefined });
-    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-      timeout: 2500,
-    });
-  });
-
-  it("passes a custom probe deadline to Slack's abortable read transport", async () => {
-    authTestMock.mockResolvedValue({ ok: true });
-
-    await expect(probeSlack("xoxb-test", 175)).resolves.toMatchObject({ ok: true });
-
-    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-      timeout: 175,
-    });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith(
+      "xoxb-test",
+      {
+        rejectRateLimitedCalls: true,
+        retryConfig: { retries: 0 },
+        timeout: 2500,
+      },
+      probeDispatcher,
+    );
   });
 
   it("keeps the normal health result when the Slack read transport aborts", async () => {
@@ -146,5 +150,6 @@ describe("probeSlack", () => {
       status: null,
       error: expect.any(String),
     });
+    expect(probeDispatcher.destroy).toHaveBeenCalledOnce();
   });
 });

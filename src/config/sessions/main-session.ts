@@ -106,8 +106,17 @@ export function canonicalizeMainSessionAlias(params: {
     return raw;
   }
 
-  const agentId = normalizeAgentId(params.agentId);
   const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
+  // Ordinary session keys cannot match a main alias; avoid constructing all four aliases.
+  if (
+    raw !== "main" &&
+    raw !== mainKey &&
+    !raw.endsWith(":main") &&
+    !(raw.endsWith(mainKey) && raw[raw.length - mainKey.length - 1] === ":")
+  ) {
+    return raw;
+  }
+  const agentId = normalizeAgentId(params.agentId);
   const agentMainSessionKey = buildAgentMainSessionKey({ agentId, mainKey });
   const agentMainAliasKey = buildAgentMainSessionKey({ agentId, mainKey: "main" });
 

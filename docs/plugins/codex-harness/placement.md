@@ -63,6 +63,10 @@ reconnecting under a new pairing, changing the workspace, or reaching the
 the exact placement authority, it offers only **Allow once**. Deny starts no
 process.
 
+If the launch approval expires or is denied, OpenClaw shows the execution-approval
+message and keeps the model's auth profile healthy. Retry the action and approve
+the new request to continue; signing in again does not resolve a launch refusal.
+
 Explicitly selected session **Full access** can substitute for the prompt only
 during the exact admitted turn and placement, and only when the node's own
 `tools.exec` policy and exec-approvals floors both allow full/off execution.
@@ -122,7 +126,7 @@ fresh attempt; it never resumes the disconnected stdio connection or its
 processes. Normal Codex turns are supported, but `/btw` side questions are not
 yet bound to paired-device placement and fail with an actionable explanation.
 See [Cloud workers and paired-device placement](/gateway/cloud-workers) and
-[Node command policy](/nodes#command-policy).
+[Node command policy](/nodes/command-policy#command-policy).
 
 ## Run Codex on a cloud worker
 

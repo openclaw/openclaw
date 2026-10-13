@@ -359,9 +359,9 @@ struct WatchSessionActivationGateTests {
         #expect(receiverSource.contains(
             "acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler)"))
         #expect(receiverSource.contains("acknowledgment?.accept()"))
-        #expect(receiverSource.contains("acknowledgment?.rejectUnsupportedPayload()"))
+        #expect(receiverSource.contains(#"acknowledgment?.reject(reason: "unsupported_payload")"#))
         #expect(receiverSource.contains(
-            "acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool"))
+            "acknowledgment: WatchMessageAcknowledgment? = nil)\n    {"))
         #expect(receiverSource.contains("guard activationState == .activated else { return }"))
         let callbackRegistration = try #require(
             serviceSource.range(of: "self.transport.setInboundEventHandler"))

@@ -6,6 +6,7 @@ import type {
   BrowserAnnotationEvent,
 } from "../../components/browser/browser-annotation.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import * as toast from "../../lib/toast.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
 import { receiveBrowserAnnotation } from "./chat-pane-browser-annotation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -70,9 +71,37 @@ describe("browser annotation admission", () => {
       detail: draft("Rejected context"),
       cancelable: true,
     });
-    expect(receiveBrowserAnnotation(state, true, event)).toBe(false);
+    expect(receiveBrowserAnnotation(state, true, event, 0)).toBe(false);
     expect(event.defaultPrevented).toBe(false);
     expect((event as BrowserAnnotationEvent).rejection).toBe("limit");
     expect(state.chatAttachments).toHaveLength(4);
+  });
+
+  it("counts in-flight reads against the send's frame budget", () => {
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    // 12 bytes over the envelope slack leaves a 9-byte decoded budget; the capture decodes to 5.
+    const state = {
+      chatAttachments: [],
+      hello: {
+        policy: { maxPayload: 256 * 1024 + 12, attachments: { maxBytes: 100, maxImageBytes: 100 } },
+      },
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const capture = () =>
+      new CustomEvent<BrowserAnnotationDraft>("openclaw:browser-annotation", {
+        detail: draft("Page context"),
+        cancelable: true,
+      });
+
+    const rejected = capture();
+    expect(receiveBrowserAnnotation(state, true, rejected, 5)).toBe(false);
+    expect(rejected.defaultPrevented).toBe(false);
+    expect(state.chatAttachments).toEqual([]);
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Too large to send: annotated-page.png",
+    });
+
+    expect(receiveBrowserAnnotation(state, true, capture(), 0)).toBe(true);
+    expect(state.chatAttachments).toHaveLength(1);
   });
 });

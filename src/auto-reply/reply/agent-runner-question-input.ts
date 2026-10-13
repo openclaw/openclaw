@@ -1,17 +1,16 @@
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/gateway-question.js";
+import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
-import {
-  admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
-  resolveFollowupAbortSignal,
-} from "./queue/types.js";
+import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 
@@ -30,6 +29,13 @@ type ReplyQuestionInputParams = Pick<
 type ReplyQuestionInputResult =
   | { handled: false }
   | { handled: true; payload: ReplyPayload | undefined };
+
+function questionErrorReply(text: string): ReplyQuestionInputResult {
+  return {
+    handled: true,
+    payload: markReplyPayloadForSourceSuppressionDelivery({ text, isError: true }),
+  };
+}
 
 /** Question-only runtimes accept answers without exposing ordinary steering. */
 export async function runReplyQuestionInput(
@@ -61,6 +67,7 @@ export async function runReplyQuestionInput(
     ctx: params.sessionCtx,
     sessionEntry: params.sessionEntry,
     senderIsOwner: followupRun.run.senderIsOwner === true,
+    operatorAuthority: followupRun.operatorAuthority,
     toolsAllow: followupRun.toolsAllow,
     disableTools: followupRun.disableTools === true,
   });
@@ -69,9 +76,10 @@ export async function runReplyQuestionInput(
   const assertSourceCurrent = () => {
     sourceAbort?.throwIfAborted();
     queuedAbort?.throwIfAborted();
+    followupRun.operatorAuthority?.assertCurrent();
   };
   const state = resolveReplyOperationRunState(opts);
-  let outcome: { status: "answered" } | { status: "indeterminate"; errorMessage: string };
+  let unconfirmedAnswer: string | undefined;
   try {
     const claimed = await claimPendingAgentQuestionAnswerFromCaller({
       sessionKey,
@@ -79,35 +87,54 @@ export async function runReplyQuestionInput(
       caller,
       assertSourceCurrent,
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
+      onAnswerProcessed: () => {
+        if (state) {
+          state.questionInputHandled = true;
+        }
+      },
     });
     if (!claimed) {
       return { handled: false };
     }
-    outcome = { status: "answered" };
   } catch (error) {
+    if (error instanceof QuestionDispatchUnsupportedError) {
+      assertSourceCurrent();
+      return { handled: false };
+    }
     if (error instanceof QuestionDispatchRefusedError) {
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-refused" };
       }
-      return {
-        handled: true,
-        payload: markReplyPayloadForSourceSuppressionDelivery({
-          text: `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
-          isError: true,
-        }),
-      };
+      return questionErrorReply(
+        `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
+      );
+    }
+    // Validation precedes commitment: keep the question open and explain how to retry.
+    const rejection = readQuestionRejection(error);
+    if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
+      const detail = error instanceof Error ? error.message.trim() : "";
+      if (state) {
+        state.admission = { status: "skipped", reason: "question-response-rejected" };
+      }
+      return questionErrorReply(
+        `${
+          detail
+            ? `The answer was not accepted: ${detail}.`
+            : "The answer was not accepted because a question is still unanswered."
+        } The question is still open, so reply again and answer every question by number or question id.`,
+      );
     }
     if (!(error instanceof QuestionAnswerUnconfirmedError)) {
       throw error;
     }
-    outcome = { status: "indeterminate", errorMessage: error.message };
+    unconfirmedAnswer = error.message;
   }
 
   // Publish custody before adoption can fail or cancel this incoming dispatch.
   // Neither outcome permits replay or aborting the independent question creator.
   if (state) {
     state.admission =
-      outcome.status === "indeterminate"
+      unconfirmedAnswer !== undefined
         ? { status: "skipped", reason: "question-response-indeterminate" }
         : { status: "accepted", mode: "steer" };
   }
@@ -118,14 +145,7 @@ export async function runReplyQuestionInput(
   } finally {
     completeFollowupRunLifecycle(followupRun, "consumed");
   }
-  return {
-    handled: true,
-    payload:
-      outcome.status === "indeterminate"
-        ? markReplyPayloadForSourceSuppressionDelivery({
-            text: outcome.errorMessage,
-            isError: true,
-          })
-        : undefined,
-  };
+  return unconfirmedAnswer !== undefined
+    ? questionErrorReply(unconfirmedAnswer)
+    : { handled: true, payload: undefined };
 }

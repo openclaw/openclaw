@@ -1,24 +1,27 @@
 import { vi } from "vitest";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
-  loadEntryReadOnly: vi.fn(),
-  reset: vi.fn(),
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
   executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
 }));
 
-vi.mock("./agent-runner-session-reset.js", () => ({
-  resetReplyRunSession: (...args: unknown[]) => followupTurnTestState.reset(...args),
-}));
-
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: (...args: unknown[]) =>
-    followupTurnTestState.loadEntryReadOnly(...args),
-}));
+// mock-isolation: Forward the real persistence owners without loading the unrelated accessor barrel graph.
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const { bindSessionPendingInputSources } =
+    await import("../../config/sessions/session-accessor.pending-inputs.js");
+  const { loadSessionEntry, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.sqlite-entry.js");
+  return {
+    bindSessionPendingInputSources,
+    loadSessionEntry,
+    replaceSessionEntry,
+  };
+});
 
 const { executeFollowupTurn } = await import("./followup-turn-execution.js");
 
@@ -73,7 +76,7 @@ export function createFollowupTurnTestTurn(
         blockReplyBreak: "message_end",
       },
     },
-    operation: { abortSignal: new AbortController().signal } as AdmittedFollowupTurn["operation"],
+    operation: createMockReplyOperation().replyOperation,
     config: {},
     session: {
       kind: "session",
@@ -90,7 +93,6 @@ export function createFollowupTurnTestTurn(
 
 export function resetFollowupTurnTestState() {
   vi.clearAllMocks();
-  followupTurnTestState.loadEntryReadOnly.mockReturnValue(undefined);
   followupTurnTestState.execute.mockResolvedValue({
     runId: "run-1",
     outcome: { kind: "rejected", payload: { text: "done" } },

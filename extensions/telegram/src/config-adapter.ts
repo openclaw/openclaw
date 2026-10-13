@@ -1,4 +1,3 @@
-// Telegram plugin module implements shared config adapter behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -15,8 +14,6 @@ import {
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
-
-const TELEGRAM_CHANNEL = "telegram" as const;
 
 type TelegramConfigAccessorAccount = {
   config: TelegramAccountConfig;
@@ -36,7 +33,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedTelegramAccount,
   TelegramConfigAccessorAccount
 >({
-  sectionKey: TELEGRAM_CHANNEL,
+  sectionKey: "telegram",
   listAccountIds: listTelegramAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
   resolveAccessorAccount: resolveTelegramConfigAccessorAccount,

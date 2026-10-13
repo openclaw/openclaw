@@ -1,10 +1,10 @@
-import { vi } from "vitest";
-import type { RouteId } from "../../app-route-paths.ts";
+import { flush } from "solid-js";
+import { onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
@@ -69,44 +69,18 @@ export function gatewayContext(
     basePath,
     gateway: {
       connection: { gatewayUrl: "" },
-      snapshot: { client },
+      snapshot: { client, phase: "connected" },
     },
-  } as unknown as ApplicationContext<RouteId>;
-}
-
-export function deferred(): {
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-} {
-  let resolve: () => void = () => undefined;
-  let reject: (error: Error) => void = () => undefined;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-export function deferredValue<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
+  } as unknown as ApplicationContext;
 }
 
 export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
-  // Cells appear during the view's own update, and a cell can schedule a further update
-  // while completing, so both levels drain to Lit's settled state. Anything less lets a
-  // frame's ticket-refresh timer be armed after the test has moved the clock on.
-  await settleLitElement(view);
+  flush();
+  await view.updateComplete;
   const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
-  await settleLitElements(cells);
-  await settleLitElement(view);
+  await Promise.all(cells.map((cell) => cell.updateComplete));
+  flush();
+  await view.updateComplete;
   return cells;
 }
 
@@ -116,7 +90,7 @@ export async function mount(
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     canMutate?: boolean;
     canGrant?: boolean;
   } = {},
@@ -128,13 +102,12 @@ export async function mount(
   view.callbacks = options.callbacks ?? callbacks();
   view.canMutate = options.canMutate ?? true;
   view.canGrant = options.canGrant ?? true;
-  if (options.context) {
-    const provider = createApplicationContextProvider(options.context);
-    provider.append(view);
-    document.body.append(provider);
-  } else {
-    document.body.append(view);
+  const root = options.context ? createApplicationContextProvider(options.context) : view;
+  if (root !== view) {
+    root.append(view);
   }
+  const mounted = mountSolid(() => root);
+  onTestFinished(() => mounted.unmount());
   await settleCells(view);
   return view;
 }

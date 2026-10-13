@@ -5,33 +5,21 @@ import {
   canMaterializeGatewayAuthSecretRefsWithoutExec,
   materializeGatewayAuthSecretRefs,
 } from "../../../gateway/auth-config-utils.js";
-import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../../../gateway/auth.js";
+import { resolveGatewayAuth } from "../../../gateway/auth.js";
 import { randomToken } from "../../random-token.js";
 import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
 
-function activeGatewaySharedSecret(auth: ResolvedGatewayAuth): string {
-  if (auth.mode === "token") {
-    return normalizeOptionalString(auth.token) ?? "";
-  }
-  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
-    return normalizeOptionalString(auth.password) ?? "";
-  }
-  return "";
-}
-
 /** Rotate hooks.token when it matches the active Gateway token/password shared secret. */
-export function repairHooksTokenReuseGatewayAuth(
+export async function repairHooksTokenReuseGatewayAuth(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
   createToken: () => string = randomToken,
 ): Promise<DoctorConfigMutationResult> {
-  return repairHooksTokenReuseGatewayAuthAfterMaterializingRefs(cfg, env, createToken);
-}
+  const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
+  if (cfg.hooks?.enabled !== true || !hooksToken) {
+    return { config: cfg, changes: [] };
+  }
 
-async function materializeDoctorGatewayAuthRefs(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<OpenClawConfig> {
   const materializeParams = {
     cfg,
     env,
@@ -41,33 +29,21 @@ async function materializeDoctorGatewayAuthRefs(
     hasTokenFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
     hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   };
-  if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
-    return cfg;
-  }
-  try {
-    return await materializeGatewayAuthSecretRefs(materializeParams);
-  } catch {
-    return cfg;
-  }
-}
-
-async function repairHooksTokenReuseGatewayAuthAfterMaterializingRefs(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  createToken: () => string,
-): Promise<DoctorConfigMutationResult> {
-  const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled !== true || !hooksToken) {
-    return { config: cfg, changes: [] };
-  }
-
-  const materializedCfg = await materializeDoctorGatewayAuthRefs(cfg, env);
+  const materializedCfg = await (canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)
+    ? materializeGatewayAuthSecretRefs(materializeParams).catch(() => cfg)
+    : cfg);
   const auth = resolveGatewayAuth({
     authConfig: materializedCfg.gateway?.auth,
     tailscaleMode: materializedCfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
-  if (hooksToken !== activeGatewaySharedSecret(auth)) {
+  const sharedSecret =
+    auth.mode === "token"
+      ? auth.token
+      : auth.mode === "password" || auth.mode === "trusted-proxy"
+        ? auth.password
+        : undefined;
+  if (hooksToken !== (normalizeOptionalString(sharedSecret) ?? "")) {
     return { config: cfg, changes: [] };
   }
 

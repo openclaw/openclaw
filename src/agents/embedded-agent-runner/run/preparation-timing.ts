@@ -6,20 +6,16 @@ type EmbeddedAgentPreparationTimingOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function timingOptions(stage: string, options: EmbeddedAgentPreparationTimingOptions) {
-  return {
-    config: options.config,
-    env: options.env,
-    phase: "agent.prepare",
-    attributes: { stage },
-  };
-}
-
 /** Measures async pre-provider work under the canonical agent preparation span. */
 export function measureEmbeddedAgentPreparation<T>(
   stage: string,
   run: () => Promise<T> | T,
   options: EmbeddedAgentPreparationTimingOptions = {},
 ): Promise<T> {
-  return measureDiagnosticsTimelineSpan("agent.prepare", run, timingOptions(stage, options));
+  return measureDiagnosticsTimelineSpan("agent.prepare", run, {
+    config: options.config,
+    env: options.env,
+    phase: "agent.prepare",
+    attributes: { stage },
+  });
 }

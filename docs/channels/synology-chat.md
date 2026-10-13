@@ -37,7 +37,7 @@ Details: [Plugins](/tools/plugin)
 4. Finish setup in OpenClaw. Synology Chat appears in the same channel setup list in both flows:
    - Guided: `openclaw onboard` or `openclaw channels add`
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url> --webhook-url <public-outgoing-webhook-url>`
-5. Restart the Gateway and send a DM to the Synology Chat bot.
+5. Check `openclaw channels status --probe`, then send a DM to the Synology Chat bot. Start the Gateway if it is offline; config changes follow [hot reload](/gateway/configuration/hot-reload).
 
 Webhook auth details:
 
@@ -48,7 +48,7 @@ Webhook auth details:
   - `x-webhook-token`
   - `x-openclaw-token`
   - `Authorization: Bearer <token>`
-- Empty or missing tokens fail closed.
+- Empty or missing tokens are rejected.
 - Payloads may be `application/x-www-form-urlencoded` or `application/json`; `token`, `user_id`, and `text` are required.
 
 ## Inbound durability
@@ -90,7 +90,7 @@ For the default account, you can use env vars:
 
 Config values override env vars.
 
-`SYNOLOGY_CHAT_INCOMING_URL` and `SYNOLOGY_NAS_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security#workspace-env-files).
+`SYNOLOGY_CHAT_INCOMING_URL` and `SYNOLOGY_NAS_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security/secrets-and-storage#workspace-env-files).
 
 ## DM policy and access control
 
@@ -135,7 +135,7 @@ Give each enabled account a distinct `webhookPath`. OpenClaw rejects duplicate e
 and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
 If you intentionally need legacy inheritance for a named account, set
 `dangerouslyAllowInheritedWebhookPath: true` on that account or at `channels.synology-chat`,
-but duplicate exact paths are still rejected fail-closed. Prefer explicit per-account paths.
+but duplicate exact paths are still rejected. Prefer explicit per-account paths.
 
 ```json5
 {
@@ -167,7 +167,7 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 - Keep `token` secret and rotate it if leaked.
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
 - Inbound webhook requests are token-verified and rate-limited per sender (`rateLimitPerMinute`, default 30).
-- Invalid token checks use constant-time secret comparison and fail closed; repeated invalid-token attempts temporarily lock out the source IP.
+- Invalid token checks use constant-time secret comparison and reject the request; repeated invalid-token attempts temporarily lock out the source IP.
 - Inbound message text is sanitized against known prompt-injection patterns and truncated at 4000 characters.
 - Prefer `dmPolicy: "allowlist"` for production.
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
@@ -200,5 +200,5 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 
 - [Channels Overview](/channels) — all supported channels
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

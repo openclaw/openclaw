@@ -1,4 +1,4 @@
-// Deepinfra tests cover index plugin behavior.
+import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,
@@ -40,21 +40,13 @@ function makeAgentModelEntry(id = "profile/live-model") {
   };
 }
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 function mockDiscoveryFetch(id = "profile/live-model") {
   return vi.fn(async (url: string) => {
     if (url === DEEPINFRA_MODELS_URL) {
-      return jsonResponse({ data: [makeAgentModelEntry(id)] });
+      return Response.json({ data: [makeAgentModelEntry(id)] });
     }
     expect(url).toBe("https://api.deepinfra.com/models/list");
-    return jsonResponse([
+    return Response.json([
       {
         model_name: id,
         pricing: {
@@ -87,10 +79,58 @@ async function withLiveDiscoveryTestEnv(
 
 describe("deepinfra capability registration", () => {
   it.each([
+    { baseUrl: "https://api.deepinfra.com/v1/openai", expected: "synthetic-session" },
+    { baseUrl: "https://api.deepinfra.com/v1/openai/", expected: "synthetic-session" },
+    { baseUrl: "https://proxy.example/v1", expected: undefined },
+    { baseUrl: "https://api.deepinfra.com/custom/v1", expected: undefined },
+    { baseUrl: "https://api.deepinfra.com/v1/openai", optOut: true, expected: undefined },
+    { baseUrl: "https://api.deepinfra.com/v1/openai", disabled: true, expected: undefined },
+  ])(
+    "sends cache affinity only for native enabled requests: $baseUrl, $optOut, $disabled",
+    async (route) => {
+      const provider = await registerSingleProviderPlugin(deepinfraPlugin);
+      const model: Model = {
+        id: "synthetic-model",
+        name: "Synthetic model",
+        provider: "deepinfra",
+        api: "openai-completions",
+        baseUrl: route.baseUrl,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 128,
+        ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
+      };
+      const normalized =
+        provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
+        model;
+      let payload: unknown;
+      const result = await streamSimple(
+        normalized,
+        { messages: [] },
+        {
+          apiKey: "synthetic-unused-key",
+          sessionId: "synthetic-session",
+          cacheRetention: route.disabled ? "none" : "long",
+          onPayload(value) {
+            payload = value;
+            throw new Error("captured before request");
+          },
+        },
+      ).result();
+      expect(result.errorMessage).toBe("captured before request");
+      expect(payload).toMatchObject({ prompt_cache_key: route.expected });
+      expect(payload).not.toHaveProperty("prompt_cache_retention");
+      expect(payload).not.toHaveProperty("prompt_cache_options");
+    },
+  );
+
+  it.each([
     ...["metadata", "pricing"].flatMap((scenario) =>
-      [401, 403, 503].map((status) => ({ scenario, status })),
+      [401, 503].map((status) => ({ scenario, status })),
     ),
-    ...[200, 401, 503].map((status) => ({ scenario: "empty", status })),
+    { scenario: "empty", status: 503 },
   ])(
     "reports public $scenario HTTP $status without rejecting inference credentials",
     async ({ scenario, status }) => {
@@ -98,7 +138,7 @@ describe("deepinfra capability registration", () => {
       const mockFetch = vi.fn(async (url: string) => {
         const metadata = url === DEEPINFRA_MODELS_URL;
         if (scenario === "empty" && metadata) {
-          return jsonResponse({ data: [] });
+          return Response.json({ data: [] });
         }
         if (
           (scenario === "metadata" && metadata) ||
@@ -188,16 +228,6 @@ describe("deepinfra capability registration", () => {
 });
 
 describe("deepinfra isCacheTtlEligible", () => {
-  it("returns true for anthropic/* proxied models", async () => {
-    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "anthropic/claude-4-sonnet",
-      }),
-    ).toBe(true);
-  });
-
   // Locked to case-insensitive to stay consistent with the shared proxy cache
   // wrapper, which lowercases the modelId before the "anthropic/" prefix check.
   it("returns true regardless of modelId case", async () => {

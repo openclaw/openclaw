@@ -65,3 +65,42 @@ export function senderIdentityKey(sender: SenderIdentity | null | undefined): st
     sender.profileAvatarUrl ?? "",
   ].join("\u0000");
 }
+
+/** Keys a participant identity by its fields, so key order never splits one person. */
+export function sessionParticipantIdentityKey(identity: SessionParticipantIdentity): string {
+  switch (identity.type) {
+    case "profile":
+    case "agent":
+      return JSON.stringify([identity.type, identity.id]);
+    case "remote":
+      return JSON.stringify([
+        identity.type,
+        identity.pluginId,
+        identity.domain,
+        identity.idKind,
+        identity.id,
+      ]);
+    case "observation":
+      return JSON.stringify([
+        identity.type,
+        identity.pluginId,
+        identity.accountId,
+        identity.senderKind,
+        identity.id,
+      ]);
+    case "legacy":
+      return JSON.stringify([identity.type, identity.actorType, identity.source, identity.id]);
+    default:
+      return identity satisfies never;
+  }
+}
+
+/**
+ * Keys the signed-in viewer, the author of local messages that carry no sender
+ * metadata. Without a profile the viewer is still one distinct person.
+ */
+export function localParticipantIdentityKey(userId: string | null | undefined): string {
+  return userId
+    ? sessionParticipantIdentityKey({ type: "profile", id: userId })
+    : JSON.stringify(["local"]);
+}

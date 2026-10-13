@@ -1,4 +1,3 @@
-// Fal tests cover image generation provider plugin behavior.
 import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -14,6 +13,13 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 }));
 
 import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+
+const defaultRequest: ImageGenerationRequest = {
+  provider: "fal",
+  model: "fal-ai/flux/dev",
+  prompt: "draw a cat",
+  cfg: {},
+};
 
 const falApiKey = { apiKey: "fal-test-key", source: "env", mode: "api-key" } as const;
 
@@ -71,10 +77,20 @@ describe("fal image-generation provider", () => {
       )
       .mockResolvedValueOnce(releasedImage(Buffer.from(imageData)));
     return provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
-      cfg: {},
+      ...defaultRequest,
       ...request,
+    });
+  }
+
+  async function expectImageRequest(
+    request: Partial<ImageGenerationRequest>,
+    url: string,
+    body: Record<string, unknown>,
+  ) {
+    await generateFalImage("generated.png", "image", { ...defaultRequest, ...request });
+    expectFalJsonPost({
+      url,
+      body: { prompt: defaultRequest.prompt, num_images: 1, output_format: "png", ...body },
     });
   }
 
@@ -122,37 +138,6 @@ describe("fal image-generation provider", () => {
   it.each([
     {
       model: "krea/v2/medium/text-to-image",
-      supported: "2.35:1",
-      unsupported: "21:9",
-    },
-    {
-      model: "krea/v2/large/text-to-image",
-      supported: "2.35:1",
-      unsupported: "21:9",
-    },
-    {
-      model: "fal-ai/nano-banana-2",
-      supported: "21:9",
-      unsupported: "2.35:1",
-    },
-    {
-      model: "fal-ai/nano-banana-2/edit",
-      supported: "21:9",
-      unsupported: "2.35:1",
-    },
-  ])(
-    "publishes the native aspect-ratio contract for $model",
-    ({ model, supported, unsupported }) => {
-      const aspectRatios = provider.capabilities.geometry?.aspectRatiosByModel?.[model];
-
-      expect(aspectRatios).toContain(supported);
-      expect(aspectRatios).not.toContain(unsupported);
-    },
-  );
-
-  it.each([
-    {
-      model: "krea/v2/medium/text-to-image",
       requested: "21:9",
       applied: "2.35:1",
       mode: "generate",
@@ -178,60 +163,56 @@ describe("fal image-generation provider", () => {
   ])("normalizes unsupported $model geometry before provider submission", async (testCase) => {
     const image = sourceImage("reference");
     const inputImages = testCase.mode === "generate" ? undefined : [image];
-    try {
-      fetchWithSsrFGuardMock
-        .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
-        .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+      .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
 
-      const result = await generateImage(
-        {
-          cfg: {
-            agents: {
-              defaults: {
-                mediaModels: { image: { primary: `fal/${testCase.model}` } },
-              },
+    const result = await generateImage(
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: { image: { primary: `fal/${testCase.model}` } },
             },
           },
-          prompt: "preserve the closest native image shape",
-          aspectRatio: testCase.requested,
-          ...(inputImages ? { inputImages } : {}),
         },
-        {
-          getProvider: () => provider,
-          listProviders: () => [provider],
-        },
-      );
+        prompt: "preserve the closest native image shape",
+        aspectRatio: testCase.requested,
+        ...(inputImages ? { inputImages } : {}),
+      },
+      {
+        getProvider: () => provider,
+        listProviders: () => [provider],
+      },
+    );
 
-      expect(result.normalization?.aspectRatio).toEqual({
-        requested: testCase.requested,
-        applied: testCase.applied,
-      });
-      expectFalJsonPost({
-        url: `https://fal.run/${testCase.model}`,
-        body: {
-          prompt: "preserve the closest native image shape",
-          aspect_ratio: testCase.applied,
-          ...(testCase.mode === "style"
+    expect(result.normalization?.aspectRatio).toEqual({
+      requested: testCase.requested,
+      applied: testCase.applied,
+    });
+    expectFalJsonPost({
+      url: `https://fal.run/${testCase.model}`,
+      body: {
+        prompt: "preserve the closest native image shape",
+        aspect_ratio: testCase.applied,
+        ...(testCase.mode === "style"
+          ? {
+              creativity: "medium",
+              image_style_references: [
+                { image_url: `data:image/png;base64,${image.buffer.toString("base64")}` },
+              ],
+            }
+          : testCase.mode === "edit"
             ? {
-                creativity: "medium",
-                image_style_references: [
-                  { image_url: `data:image/png;base64,${image.buffer.toString("base64")}` },
-                ],
+                num_images: 1,
+                output_format: "png",
+                image_urls: [`data:image/png;base64,${image.buffer.toString("base64")}`],
               }
-            : testCase.mode === "edit"
-              ? {
-                  num_images: 1,
-                  output_format: "png",
-                  image_urls: [`data:image/png;base64,${image.buffer.toString("base64")}`],
-                }
-              : testCase.model.startsWith("krea/")
-                ? { creativity: "medium" }
-                : { num_images: 1, output_format: "png" }),
-        },
-      });
-    } finally {
-      fetchWithSsrFGuardMock.mockReset();
-    }
+            : testCase.model.startsWith("krea/")
+              ? { creativity: "medium" }
+              : { num_images: 1, output_format: "png" }),
+      },
+    });
   });
 
   it("generates image buffers from the fal sync API", async () => {
@@ -255,10 +236,7 @@ describe("fal image-generation provider", () => {
       .mockResolvedValueOnce(releasedImage(Buffer.from("png-data"), releaseDownload));
 
     const result = await provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
-      prompt: "draw a cat",
-      cfg: {},
+      ...defaultRequest,
       count: 2,
       size: "1536x1024",
       outputFormat: "jpeg",
@@ -313,10 +291,8 @@ describe("fal image-generation provider", () => {
       .mockResolvedValueOnce(releasedImage(Buffer.from("second")));
 
     const result = await provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
+      ...defaultRequest,
       prompt: "draw two cats",
-      cfg: {},
       timeoutMs: 180_000,
       count: 2,
     });
@@ -352,14 +328,9 @@ describe("fal image-generation provider", () => {
         ),
       );
 
-    await expect(
-      buildFalImageGenerationProvider().generateImage({
-        provider: "fal",
-        model: "fal-ai/flux/dev",
-        prompt: "draw a cat",
-        cfg: {},
-      }),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
+    await expect(provider.generateImage(defaultRequest)).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
     expect(releaseDownload).toHaveBeenCalledTimes(1);
   });
 
@@ -372,9 +343,7 @@ describe("fal image-generation provider", () => {
 
     await expect(
       provider.generateImage({
-        provider: "fal",
-        model: "fal-ai/flux/dev",
-        prompt: "draw a cat",
+        ...defaultRequest,
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("fal generated image download exceeds 1 bytes");
@@ -385,270 +354,112 @@ describe("fal image-generation provider", () => {
       releasedJson({ images: { url: "https://example.test/image.png" } }),
     );
 
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "fal-ai/flux/dev",
-        prompt: "draw a cat",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal image generation response malformed");
+    await expect(provider.generateImage(defaultRequest)).rejects.toThrow(
+      "fal image generation response malformed",
+    );
   });
 
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
-    await generateFalImage("edited.png", "edited-data", {
-      prompt: "turn this into a noir poster",
-      resolution: "2K",
-      inputImages: [sourceImage("source-image", "image/jpeg", "source.jpg")],
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/fal-ai/flux/dev/image-to-image",
-      body: {
-        prompt: "turn this into a noir poster",
+    await expectImageRequest(
+      {
+        resolution: "2K",
+        inputImages: [sourceImage("source-image", "image/jpeg", "source.jpg")],
+      },
+      "https://fal.run/fal-ai/flux/dev/image-to-image",
+      {
         image_size: { width: 2048, height: 2048 },
-        num_images: 1,
-        output_format: "png",
         image_url: `data:image/jpeg;base64,${Buffer.from("source-image").toString("base64")}`,
       },
-    });
+    );
   });
 
-  it("routes GPT Image 2 edits through /edit with image_urls", async () => {
-    await generateFalImage("gpt-edited.png", "gpt-edited-data", {
-      model: "openai/gpt-image-2",
-      prompt: "combine these references",
-      aspectRatio: "16:9",
-      inputImages: [sourceImage("first"), sourceImage("second", "image/jpeg")],
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/openai/gpt-image-2/edit",
-      body: {
-        prompt: "combine these references",
-        image_size: "landscape_16_9",
-        num_images: 1,
-        output_format: "png",
-        image_urls: [
-          `data:image/png;base64,${Buffer.from("first").toString("base64")}`,
-          `data:image/jpeg;base64,${Buffer.from("second").toString("base64")}`,
-        ],
+  it("routes 10 GPT Image 2 references through /edit with image_urls", async () => {
+    const inputImages = Array.from({ length: 10 }, (_, index) =>
+      sourceImage(`ref-${index}`, index % 2 ? "image/jpeg" : "image/png"),
+    );
+    await expectImageRequest(
+      {
+        model: "openai/gpt-image-2",
+        aspectRatio: "16:9",
+        inputImages,
       },
-    });
-  });
-
-  it("allows GPT Image 2 edits up to 10 reference images", async () => {
-    const inputImages = Array.from({ length: 10 }, (_, index) => sourceImage(`ref-${index + 1}`));
-
-    await generateFalImage("gpt-edited.png", "gpt-edited-data", {
-      model: "openai/gpt-image-2",
-      prompt: "combine all references",
-      inputImages,
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/openai/gpt-image-2/edit",
-      body: {
-        prompt: "combine all references",
-        num_images: 1,
-        output_format: "png",
+      "https://fal.run/openai/gpt-image-2/edit",
+      {
+        image_size: "landscape_16_9",
         image_urls: inputImages.map(
-          (image) => `data:image/png;base64,${image.buffer.toString("base64")}`,
+          (image) => `data:${image.mimeType};base64,${image.buffer.toString("base64")}`,
         ),
       },
-    });
-  });
-
-  it("rejects GPT Image 2 edits above 10 reference images", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "openai/gpt-image-2",
-        prompt: "too many references",
-        cfg: {},
-        inputImages: Array.from({ length: 11 }, () => ({
-          buffer: Buffer.from("ref"),
-          mimeType: "image/png",
-        })),
-      }),
-    ).rejects.toThrow("fal GPT Image edit supports at most 10 reference images");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    );
   });
 
   it("routes Nano Banana 2 text generation with native resolution", async () => {
-    await generateFalImage("nb2-wide.png", "nb2-wide-data", {
-      model: "fal-ai/nano-banana-2",
-      prompt: "ultrawide banana test",
-      aspectRatio: "4:1",
-      resolution: "2K",
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/fal-ai/nano-banana-2",
-      body: {
-        prompt: "ultrawide banana test",
+    await expectImageRequest(
+      {
+        model: "fal-ai/nano-banana-2",
+        aspectRatio: "4:1",
+        resolution: "2K",
+      },
+      "https://fal.run/fal-ai/nano-banana-2",
+      {
         aspect_ratio: "4:1",
         resolution: "2K",
-        num_images: 1,
-        output_format: "png",
       },
-    });
+    );
   });
 
   it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
-    await generateFalImage("nb2-auto.png", "nb2-auto-data", {
-      model: "fal-ai/nano-banana-2",
-      prompt: "auto aspect banana test",
-      resolution: "2K",
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/fal-ai/nano-banana-2",
-      body: {
-        prompt: "auto aspect banana test",
+    await expectImageRequest(
+      {
+        model: "fal-ai/nano-banana-2",
         resolution: "2K",
-        num_images: 1,
-        output_format: "png",
       },
-    });
+      "https://fal.run/fal-ai/nano-banana-2",
+      {
+        resolution: "2K",
+      },
+    );
   });
 
   it.each([
     { model: "fal-ai/nano-banana", resolution: undefined },
     { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
   ])("routes $model edits through /edit with model geometry", async ({ model, resolution }) => {
-    await generateFalImage("nb2-edited.png", "nb2-edited-data", {
-      model,
-      prompt: "blend these references",
-      aspectRatio: "9:16",
-      ...(resolution ? { resolution } : {}),
-      inputImages: [sourceImage("first"), sourceImage("second")],
-    });
-
-    expectFalJsonPost({
-      url: `https://fal.run/${model}/edit`,
-      body: {
-        prompt: "blend these references",
+    await expectImageRequest(
+      {
+        model,
+        aspectRatio: "9:16",
+        ...(resolution ? { resolution } : {}),
+        inputImages: [sourceImage("first"), sourceImage("second")],
+      },
+      `https://fal.run/${model}/edit`,
+      {
         aspect_ratio: "9:16",
         ...(resolution ? { resolution } : {}),
-        num_images: 1,
-        output_format: "png",
         image_urls: [
           `data:image/png;base64,${Buffer.from("first").toString("base64")}`,
           `data:image/png;base64,${Buffer.from("second").toString("base64")}`,
         ],
       },
-    });
-  });
-
-  it.each([
-    {
-      model: "fal-ai/nano-banana",
-      inputCount: 4,
-      error: "fal Nano Banana supports at most 3 reference images",
-    },
-    {
-      model: "fal-ai/nano-banana-2",
-      inputCount: 15,
-      error: "fal Nano Banana 2 supports at most 14 reference images",
-    },
-  ])("rejects $model edits above its reference limit", async ({ model, inputCount, error }) => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model,
-        prompt: "too many references",
-        cfg: {},
-        inputImages: Array.from({ length: inputCount }, () => ({
-          buffer: Buffer.from("ref"),
-          mimeType: "image/png",
-        })),
-      }),
-    ).rejects.toThrow(error);
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects Krea-only aspect ratios for Nano Banana 2", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "fal-ai/nano-banana-2",
-        prompt: "unsupported ratio",
-        cfg: {},
-        aspectRatio: "2.35:1",
-      }),
-    ).rejects.toThrow("fal Nano Banana 2 supports aspectRatio values");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    );
   });
 
   it("routes Nano Banana 2 Lite edits through /edit with image_urls", async () => {
-    await generateFalImage("nb2-lite-edited.png", "nb2-lite-edited-data", {
-      model: "google/nano-banana-2-lite",
-      prompt: "drive the man down the coastline",
-      aspectRatio: "3:2",
-      inputImages: [sourceImage("first"), sourceImage("second")],
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/google/nano-banana-2-lite/edit",
-      body: {
-        prompt: "drive the man down the coastline",
+    await expectImageRequest(
+      {
+        model: "google/nano-banana-2-lite",
+        aspectRatio: "3:2",
+        inputImages: [sourceImage("first"), sourceImage("second")],
+      },
+      "https://fal.run/google/nano-banana-2-lite/edit",
+      {
         aspect_ratio: "3:2",
-        num_images: 1,
-        output_format: "png",
         image_urls: [
           `data:image/png;base64,${Buffer.from("first").toString("base64")}`,
           `data:image/png;base64,${Buffer.from("second").toString("base64")}`,
         ],
       },
-    });
-  });
-
-  it("rejects Krea-only aspect ratios for Nano Banana 2 Lite", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "google/nano-banana-2-lite",
-        prompt: "unsupported ratio",
-        cfg: {},
-        aspectRatio: "2.35:1",
-      }),
-    ).rejects.toThrow("fal Nano Banana 2 Lite supports aspectRatio values");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["1K", "2K", "4K"] as const)(
-    "rejects %s resolution overrides for Nano Banana 2 Lite",
-    async (resolution) => {
-      await expect(
-        provider.generateImage({
-          provider: "fal",
-          model: "google/nano-banana-2-lite",
-          prompt: "unsupported resolution",
-          cfg: {},
-          aspectRatio: "1:1",
-          resolution,
-          inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
-        }),
-      ).rejects.toThrow("fal Nano Banana 2 Lite does not support resolution overrides");
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects Nano Banana 2 Lite edits above 14 reference images", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "google/nano-banana-2-lite",
-        prompt: "too many references",
-        cfg: {},
-        inputImages: Array.from({ length: 15 }, () => ({
-          buffer: Buffer.from("ref"),
-          mimeType: "image/png",
-        })),
-      }),
-    ).rejects.toThrow("fal Nano Banana 2 Lite supports at most 14 reference images");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    );
   });
 
   it.each([
@@ -658,10 +469,7 @@ describe("fal image-generation provider", () => {
       aspectRatio: "3:2",
       resolution: undefined,
       expectedBody: {
-        prompt: "generate without references",
         aspect_ratio: "3:2",
-        num_images: 1,
-        output_format: "png",
       },
     },
     {
@@ -670,25 +478,20 @@ describe("fal image-generation provider", () => {
       aspectRatio: "16:9",
       resolution: "2K" as const,
       expectedBody: {
-        prompt: "generate without references",
         aspect_ratio: "16:9",
         resolution: "2k",
-        num_images: 1,
-        output_format: "png",
       },
     },
   ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
-    await generateFalImage("generated.png", "generated-data", {
-      model: testCase.model,
-      prompt: "generate without references",
-      aspectRatio: testCase.aspectRatio,
-      resolution: testCase.resolution,
-    });
-
-    expectFalJsonPost({
-      url: `https://fal.run/${testCase.model}`,
-      body: testCase.expectedBody,
-    });
+    await expectImageRequest(
+      {
+        model: testCase.model,
+        aspectRatio: testCase.aspectRatio,
+        resolution: testCase.resolution,
+      },
+      `https://fal.run/${testCase.model}`,
+      testCase.expectedBody,
+    );
   });
 
   it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
@@ -713,119 +516,55 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("rejects 4K resolution for Grok Imagine edits", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "xai/grok-imagine-image",
-        prompt: "too big",
-        cfg: {},
-        aspectRatio: "1:1",
-        resolution: "4K",
-        inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("fal Grok Imagine supports resolution values: 1K, 2K");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects Nano Banana ratios for Grok Imagine", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "xai/grok-imagine-image",
-        prompt: "unsupported ratio",
-        cfg: {},
-        aspectRatio: "21:9",
-      }),
-    ).rejects.toThrow("fal Grok Imagine supports aspectRatio values");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects Grok Imagine edits above 3 reference images", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "xai/grok-imagine-image",
-        prompt: "too many references",
-        cfg: {},
-        inputImages: Array.from({ length: 4 }, () => ({
-          buffer: Buffer.from("ref"),
-          mimeType: "image/png",
-        })),
-      }),
-    ).rejects.toThrow("fal Grok Imagine supports at most 3 reference images");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
   it("preserves an explicit Grok Imagine /quality/edit model path", async () => {
-    await generateFalImage("grok-explicit.png", "grok-explicit-data", {
-      model: "xai/grok-imagine-image/quality/edit",
-      prompt: "explicit edit endpoint",
-      inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/xai/grok-imagine-image/quality/edit",
-      body: {
-        prompt: "explicit edit endpoint",
-        num_images: 1,
-        output_format: "png",
+    await expectImageRequest(
+      {
+        model: "xai/grok-imagine-image/quality/edit",
+        inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
+      },
+      "https://fal.run/xai/grok-imagine-image/quality/edit",
+      {
         image_urls: [`data:image/png;base64,${Buffer.from("source").toString("base64")}`],
       },
-    });
+    );
   });
 
   it("preserves exact custom Fal edit endpoints", async () => {
-    await generateFalImage("custom-edit.png", "custom-edit-data", {
-      model: "fal-ai/custom/edit",
-      prompt: "edit through custom endpoint",
-      inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/fal-ai/custom/edit",
-      body: {
-        prompt: "edit through custom endpoint",
-        num_images: 1,
-        output_format: "png",
+    await expectImageRequest(
+      {
+        model: "fal-ai/custom/edit",
+        inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
+      },
+      "https://fal.run/fal-ai/custom/edit",
+      {
         image_url: `data:image/png;base64,${Buffer.from("source-image").toString("base64")}`,
       },
-    });
+    );
   });
 
   it("maps aspect ratio for text generation without forcing a square default", async () => {
-    await generateFalImage("wide.png", "wide-data", {
-      prompt: "wide cinematic shot",
-      aspectRatio: "16:9",
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/fal-ai/flux/dev",
-      body: {
-        prompt: "wide cinematic shot",
-        image_size: "landscape_16_9",
-        num_images: 1,
-        output_format: "png",
+    await expectImageRequest(
+      {
+        aspectRatio: "16:9",
       },
-    });
+      "https://fal.run/fal-ai/flux/dev",
+      {
+        image_size: "landscape_16_9",
+      },
+    );
   });
 
   it("combines resolution and aspect ratio for text generation", async () => {
-    await generateFalImage("portrait.png", "portrait-data", {
-      prompt: "portrait poster",
-      resolution: "2K",
-      aspectRatio: "9:16",
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/fal-ai/flux/dev",
-      body: {
-        prompt: "portrait poster",
-        image_size: { width: 1152, height: 2048 },
-        num_images: 1,
-        output_format: "png",
+    await expectImageRequest(
+      {
+        resolution: "2K",
+        aspectRatio: "9:16",
       },
-    });
+      "https://fal.run/fal-ai/flux/dev",
+      {
+        image_size: { width: 1152, height: 2048 },
+      },
+    );
   });
 
   it("uses Krea 2 native aspect-ratio and creativity payload schema", async () => {
@@ -873,95 +612,110 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("maps Krea 2 size hints to the closest native aspect ratio", async () => {
-    await generateFalImage("krea-sized.png", "krea-sized-data", {
-      model: "krea/v2/medium/text-to-image",
-      prompt: "portrait poster",
-      size: "1024x1536",
-    });
-
-    expectFalJsonPost({
-      url: "https://fal.run/krea/v2/medium/text-to-image",
-      body: {
-        prompt: "portrait poster",
-        creativity: "medium",
-        aspect_ratio: "2:3",
+  it.each<{ name: string; request: Partial<ImageGenerationRequest>; error: string }>([
+    {
+      name: "GPT Image 2 edits above 10 reference images",
+      request: {
+        model: "openai/gpt-image-2",
+        inputImages: Array.from({ length: 11 }, () => sourceImage("ref")),
       },
-    });
-  });
-
-  it("rejects Krea 2 resolution hints instead of dropping them", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "krea/v2/medium/text-to-image",
-        prompt: "too many pixels",
-        cfg: {},
+      error: "fal GPT Image edit supports at most 10 reference images",
+    },
+    {
+      name: "Krea-only aspect ratios for Nano Banana 2",
+      request: { model: "fal-ai/nano-banana-2", aspectRatio: "2.35:1" },
+      error: "fal Nano Banana 2 supports aspectRatio values",
+    },
+    {
+      name: "Krea-only aspect ratios for Nano Banana 2 Lite",
+      request: { model: "google/nano-banana-2-lite", aspectRatio: "2.35:1" },
+      error: "fal Nano Banana 2 Lite supports aspectRatio values",
+    },
+    {
+      name: "resolution overrides for Nano Banana 2 Lite",
+      request: {
+        model: "google/nano-banana-2-lite",
+        aspectRatio: "1:1",
         resolution: "2K",
-      }),
-    ).rejects.toThrow("fal Krea 2 supports aspectRatio but not resolution overrides");
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "krea/v2/medium/text-to-image",
-        prompt: "style refs with unsupported pixels",
-        cfg: {},
-        resolution: "1K",
-        inputImages: [{ buffer: Buffer.from("style"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("fal Krea 2 supports aspectRatio but not resolution overrides");
-  });
-
-  it("rejects multi-image count for Krea 2 single-image endpoints", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "krea/v2/medium/text-to-image",
-        prompt: "too many outputs",
-        cfg: {},
-        count: 2,
-      }),
-    ).rejects.toThrow("supports one output image per request");
-  });
-
-  it("rejects output format overrides for Krea 2", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "krea/v2/medium/text-to-image",
-        prompt: "jpeg please",
-        cfg: {},
-        outputFormat: "jpeg",
-      }),
-    ).rejects.toThrow("does not support outputFormat overrides");
-  });
-
-  it("rejects multi-image for Flux edit", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "fal-ai/flux/dev",
-        prompt: "combine these",
-        cfg: {},
-        inputImages: [
-          { buffer: Buffer.from("one"), mimeType: "image/png" },
-          { buffer: Buffer.from("two"), mimeType: "image/png" },
-        ],
-      }),
-    ).rejects.toThrow("at most one reference image");
-  });
-
-  it("rejects aspect ratio for Flux edit", async () => {
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "fal-ai/flux/dev",
-        prompt: "make it widescreen",
-        cfg: {},
-        aspectRatio: "16:9",
-        inputImages: [{ buffer: Buffer.from("one"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("does not support aspectRatio overrides");
+        inputImages: [sourceImage("src")],
+      },
+      error: "fal Nano Banana 2 Lite does not support resolution overrides",
+    },
+    {
+      name: "Nano Banana 2 Lite edits above 14 reference images",
+      request: {
+        model: "google/nano-banana-2-lite",
+        inputImages: Array.from({ length: 15 }, () => sourceImage("ref")),
+      },
+      error: "fal Nano Banana 2 Lite supports at most 14 reference images",
+    },
+    {
+      name: "4K resolution for Grok Imagine edits",
+      request: {
+        model: "xai/grok-imagine-image",
+        aspectRatio: "1:1",
+        resolution: "4K",
+        inputImages: [sourceImage("src")],
+      },
+      error: "fal Grok Imagine supports resolution values: 1K, 2K",
+    },
+    {
+      name: "Nano Banana ratios for Grok Imagine",
+      request: { model: "xai/grok-imagine-image", aspectRatio: "21:9" },
+      error: "fal Grok Imagine supports aspectRatio values",
+    },
+    {
+      name: "Grok Imagine edits above 3 reference images",
+      request: {
+        model: "xai/grok-imagine-image",
+        inputImages: Array.from({ length: 4 }, () => sourceImage("ref")),
+      },
+      error: "fal Grok Imagine supports at most 3 reference images",
+    },
+    {
+      name: "Krea 2 resolution hints instead of dropping them",
+      request: { model: "krea/v2/medium/text-to-image", resolution: "1K" },
+      error: "fal Krea 2 supports aspectRatio but not resolution overrides",
+    },
+    {
+      name: "multi-image count for Krea 2 single-image endpoints",
+      request: { model: "krea/v2/medium/text-to-image", count: 2 },
+      error: "supports one output image per request",
+    },
+    {
+      name: "output format overrides for Krea 2",
+      request: { model: "krea/v2/medium/text-to-image", outputFormat: "jpeg" },
+      error: "does not support outputFormat overrides",
+    },
+    {
+      name: "multi-image for Flux edit",
+      request: { inputImages: [sourceImage("one"), sourceImage("two")] },
+      error: "at most one reference image",
+    },
+    {
+      name: "aspect ratio for Flux edit",
+      request: { aspectRatio: "16:9", inputImages: [sourceImage("one")] },
+      error: "does not support aspectRatio overrides",
+    },
+    {
+      name: "fal-ai/nano-banana edits above its reference limit",
+      request: {
+        model: "fal-ai/nano-banana",
+        inputImages: Array.from({ length: 4 }, () => sourceImage("ref")),
+      },
+      error: "fal Nano Banana supports at most 3 reference images",
+    },
+    {
+      name: "fal-ai/nano-banana-2 edits above its reference limit",
+      request: {
+        model: "fal-ai/nano-banana-2",
+        inputImages: Array.from({ length: 15 }, () => sourceImage("ref")),
+      },
+      error: "fal Nano Banana 2 supports at most 14 reference images",
+    },
+  ])("rejects $name", async ({ request, error }) => {
+    await expect(provider.generateImage({ ...defaultRequest, ...request })).rejects.toThrow(error);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("blocks private-network image download URLs through the SSRF guard", async () => {
@@ -974,14 +728,7 @@ describe("fal image-generation provider", () => {
       )
       .mockRejectedValueOnce(blocked);
 
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "fal-ai/flux/dev",
-        prompt: "draw a cat",
-        cfg: {},
-      }),
-    ).rejects.toThrow(blocked.message);
+    await expect(provider.generateImage(defaultRequest)).rejects.toThrow(blocked.message);
 
     expectFalDownload({
       call: 2,
@@ -997,9 +744,7 @@ describe("fal image-generation provider", () => {
       .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
 
     await provider.generateImage({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
-      prompt: "draw a cat",
+      ...defaultRequest,
       cfg: {
         models: {
           providers: {

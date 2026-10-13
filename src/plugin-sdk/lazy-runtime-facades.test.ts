@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const fetchFn = createProviderUsageFetch(() => {
@@ -81,6 +82,7 @@ const cases = [
   },
   {
     name: "prepareSimpleCompletionModelForAgent",
+    ownerExport: "acquireSimpleCompletionModelForAgent",
     owner: "../agents/simple-completion-runtime.js",
     args: [preparationParams],
     load: async () => {
@@ -119,7 +121,7 @@ describe("lazy SDK execution facades", () => {
       for (const entry of cases) {
         vi.doMock(entry.owner, () => {
           loaded.push(entry.owner);
-          return { [entry.name]: execute };
+          return { [entry.ownerExport ?? entry.name]: execute };
         });
       }
 

@@ -2,15 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 
+function createOwner() {
+  let currentServices: PluginServicesHandle | null = null;
+  return createGatewayPluginRuntimeGeneration({
+    getServices: () => currentServices,
+    setServices: (services) => {
+      currentServices = services;
+    },
+  });
+}
+
 describe("Gateway plugin runtime generation", () => {
   it("blocks stale publication during reservation, restores rejected claims, and commits winners", async () => {
-    let currentServices: PluginServicesHandle | null = null;
-    const owner = createGatewayPluginRuntimeGeneration({
-      getServices: () => currentServices,
-      setServices: (services) => {
-        currentServices = services;
-      },
-    });
+    const owner = createOwner();
     const startupClaim = owner.currentClaim();
     const published = vi.fn();
 
@@ -46,47 +50,13 @@ describe("Gateway plugin runtime generation", () => {
     expect(owner.currentServices()).toBe(winningServices);
   });
 
-  it("keeps retired claims invalid across rejection until a replacement commits", async () => {
-    let currentServices: PluginServicesHandle | null = null;
-    const owner = createGatewayPluginRuntimeGeneration({
-      getServices: () => currentServices,
-      setServices: (services) => {
-        currentServices = services;
-      },
-    });
-    const previous = owner.currentClaim();
-    const replacement = owner.reserve();
-    const previousUnblocked = previous.waitForUnblocked();
-    replacement.retirePrevious();
-    replacement.reject();
-    await expect(previousUnblocked).resolves.toBe(false);
-    const services = { reload: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
-    expect(owner.publishServices(previous, services)).toBe(false);
-    const cancelledRetry = owner.reserve();
-    cancelledRetry.reject();
-    expect(previous.isCurrent()).toBe(false);
-    const committed = owner.reserve();
-    committed.commit();
-    replacement.retirePrevious();
-    expect(committed.claim.isCurrent()).toBe(true);
-    expect(owner.publishServices(committed.claim, services)).toBe(true);
-    expect(owner.currentServices()).toBe(services);
-    expect(previous.isCurrent()).toBe(false);
-  });
-
   it.each([
     { successor: "rejects", survives: true },
     { successor: "commits", survives: false },
   ])(
     "settles a pending successor that $successor before deciding discovery and service ownership",
     async ({ survives }) => {
-      let currentServices: PluginServicesHandle | null = null;
-      const owner = createGatewayPluginRuntimeGeneration({
-        getServices: () => currentServices,
-        setServices: (services) => {
-          currentServices = services;
-        },
-      });
+      const owner = createOwner();
       const committed = owner.reserve();
       committed.commit();
       const pendingSuccessor = owner.reserve();

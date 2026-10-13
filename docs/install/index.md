@@ -10,7 +10,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 24.16+ or 26.1+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing.
+- **Node 24.16+ or 26.1+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing (see [Node.js compatibility](/install/node-compatibility)).
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
@@ -162,10 +162,21 @@ openclaw onboard --install-daemon
 
 `pnpm add --global "openclaw@link:$PWD"` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
 
+For a server checkout that only runs OpenClaw, use `pnpm build:runtime` to build
+the JavaScript, plugins, Control UI, and metadata without TypeScript declarations.
+Use `pnpm build` for development or packaging that needs declarations and their
+validation; CI typechecks still apply to runtime-only builds.
+
 Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
-If Corepack is unavailable, install that version explicitly with
-`npm install -g pnpm@12.3.4 --allow-scripts=pnpm@12.3.4`; keep npm install scripts and optional dependencies
-enabled so pnpm can provision its native executable.
+If Corepack is unavailable, read that version from the checkout and install it explicitly:
+
+```bash
+pnpm_spec=$(node -p "require('./package.json').packageManager.split('+')[0]")
+npm install -g "$pnpm_spec" --allow-scripts="$pnpm_spec"
+```
+
+The `+` suffix records Corepack's integrity hash and is not part of the npm package specifier.
+Keep npm install scripts and optional dependencies enabled so pnpm can provision its native executable.
 
 Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 

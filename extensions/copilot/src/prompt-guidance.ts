@@ -19,6 +19,7 @@ const COPILOT_HARNESS_IDENTITY =
 export function buildCopilotPromptGuidance(params: {
   attempt: AttemptParamsLike;
   callableToolNames: Iterable<string>;
+  toolSchemaDirectoryPrompt?: string;
   workspaceBootstrapInstructions?: string;
   requireExplicitMessageTarget?: boolean;
 }): string | undefined {
@@ -47,6 +48,7 @@ export function buildCopilotPromptGuidance(params: {
       : undefined;
   const sections = [
     COPILOT_HARNESS_IDENTITY,
+    params.toolSchemaDirectoryPrompt,
     callableTools.has(SKILL_WORKSHOP_TOOL_NAME)
       ? buildSkillWorkshopPromptSection().join("\n")
       : undefined,
@@ -56,9 +58,11 @@ export function buildCopilotPromptGuidance(params: {
       messageToolAvailable: callableTools.has("message"),
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
-    buildCredentialSafetyPrompt(
-      params.attempt.disableTools !== true && callableTools.has("secrets") ? "secrets" : undefined,
-    ),
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable:
+        params.attempt.disableTools !== true &&
+        (callableTools.has("openclaw") || callableTools.has("gateway")),
+    }),
     params.workspaceBootstrapInstructions?.trim(),
     extraSystemPrompt
       ? `${isMinimal ? "## Subagent Context" : "## Conversation Context"}\n${extraSystemPrompt}`

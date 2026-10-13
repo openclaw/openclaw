@@ -10,10 +10,7 @@ const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
 
 type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "timestamp-over-limit";
 
-type BuzzRoomHistoryPage = {
-  events: Event[];
-  overLimit: boolean;
-};
+type BuzzRoomHistoryPage = Awaited<ReturnType<typeof queryBuzzRoomHistoryPage>>;
 
 async function queryBuzzRoomHistoryPage(params: {
   relay: Relay;
@@ -24,7 +21,7 @@ async function queryBuzzRoomHistoryPage(params: {
   maxEvents: number;
   skipEventIds?: ReadonlySet<string>;
   signal?: AbortSignal;
-}): Promise<BuzzRoomHistoryPage> {
+}) {
   const events: Event[] = [];
   let overLimit = false;
   return await queryBuzzRelaySnapshot({
@@ -81,7 +78,7 @@ async function drainBuzzRoomHistoryRange(params: {
     skipEventIds: params.skipEventIds,
     signal: params.signal,
   });
-  if (!page.overLimit) {
+  if (!page.overLimit || params.since === params.until) {
     if (page.events.length === 0) {
       return "complete";
     }
@@ -96,21 +93,7 @@ async function drainBuzzRoomHistoryRange(params: {
     } finally {
       reservation.release();
     }
-    return "complete";
-  }
-  if (params.since === params.until) {
-    const reservation = await params.reserveCapacity(page.events.length);
-    if (!reservation) {
-      return "aborted";
-    }
-    try {
-      for (const event of page.events) {
-        params.onEvent(event, reservation);
-      }
-    } finally {
-      reservation.release();
-    }
-    return "timestamp-over-limit";
+    return page.overLimit ? "timestamp-over-limit" : "complete";
   }
 
   // NIP-01 has only a second-resolution time cursor. Split an overfull range
@@ -147,6 +130,9 @@ export async function catchUpBuzzRoomHistory(params: {
     }
     let page: BuzzRoomHistoryPage;
     try {
+      if (params.signal?.aborted) {
+        return "aborted";
+      }
       page = await queryBuzzRoomHistoryPage({
         relay: params.relay,
         channelId: params.channelId,

@@ -69,14 +69,13 @@ export function createCommandCompactionAccounting(params: {
           };
           if (fact.count > 0 && params.persistCounts) {
             await incrementCompactionCount({
-              agentId: fact.target.agentId,
+              ...fact.target,
               sessionEntry,
               sessionStore: params.sessionStore,
-              sessionKey: fact.target.sessionKey,
-              storePath: fact.target.storePath,
               expectedSession: fact.target,
               amount: fact.count,
               tokensAfter: fact.currentContextSnapshot?.tokens,
+              transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
             });
             params.refreshSessionEntry(fact.target.sessionKey);
           }

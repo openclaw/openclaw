@@ -44,20 +44,39 @@ describe("resolveInterruptedRunProgress", () => {
     expect(resolved?.deliveryError).toBeUndefined();
   });
 
-  it("marks an interrupted fired delivery as not delivered with the interruption error", () => {
-    const resolved = resolveInterruptedRunProgress({
-      progress: { completedCoreResult: outcome({}) },
-      job: webhookJob,
-      error: "cron webhook delivery cancelled: operator",
-    });
-    expect(resolved).toMatchObject({
-      status: "ok",
-      summary: "payload",
+  it.each([
+    { webhookDelivery: undefined, delivered: false, status: "not-delivered" },
+    {
+      webhookDelivery: { status: "unknown", error: "request timed out" },
+      delivered: undefined,
+      status: "unknown",
+    },
+    {
+      webhookDelivery: { status: "not-delivered", error: "getaddrinfo ENOTFOUND" },
       delivered: false,
-      deliveryError: "cron webhook delivery cancelled: operator",
-    });
-    expect(resolved?.error).toBeUndefined();
-  });
+      status: "not-delivered",
+    },
+  ] as const)(
+    "preserves interruption context with delivery $status",
+    ({ webhookDelivery, delivered, status }) => {
+      const resolved = resolveInterruptedRunProgress({
+        progress: { completedCoreResult: outcome({}), webhookDelivery },
+        job: webhookJob,
+        error: "cron webhook delivery cancelled: operator",
+      });
+      expect(resolved).toMatchObject({
+        status: "ok",
+        summary: "payload",
+        delivered,
+        deliveryState: { status },
+      });
+      expect(resolved?.deliveryError).toContain("cron webhook delivery cancelled: operator");
+      if (webhookDelivery?.error) {
+        expect(resolved?.deliveryError).toContain(webhookDelivery.error);
+      }
+      expect(resolved?.error).toBeUndefined();
+    },
+  );
 
   it("returns undefined when no core result completed", () => {
     const resolved = resolveInterruptedRunProgress({

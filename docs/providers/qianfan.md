@@ -18,12 +18,14 @@ Qianfan is Baidu's MaaS platform: a unified, OpenAI-compatible API that routes r
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/qianfan-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -73,7 +75,7 @@ You only need to override `models.providers.qianfan` when you need a custom base
 
 ## Config example
 
-This example explicitly selects the current DeepSeek flagship instead of the onboarding compatibility default.
+This example explicitly selects the current DeepSeek flagship, which is also the model onboarding sets as the default.
 
 ```json5
 {

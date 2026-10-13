@@ -1,6 +1,7 @@
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { resolveMSTeamsAccountStateNamespace } from "./sqlite-state.js";
 
 export const MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME = "msteams-delegated.json";
 export const MSTEAMS_DELEGATED_TOKEN_NAMESPACE = "delegated-token";
@@ -8,13 +9,12 @@ export const MSTEAMS_DELEGATED_TOKEN_KEY = "current";
 export const MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES = 1;
 
 function openDelegatedTokenStore(
-  env?: NodeJS.ProcessEnv,
-): PluginStateSyncKeyedStore<MSTeamsDelegatedTokens> {
-  return getMSTeamsRuntime().state.openSyncKeyedStore<MSTeamsDelegatedTokens>({
-    namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+  accountId?: string | null,
+): PluginStateKeyedStore<MSTeamsDelegatedTokens> {
+  return getMSTeamsRuntime().state.openKeyedStore<MSTeamsDelegatedTokens>({
+    namespace: resolveMSTeamsAccountStateNamespace(MSTEAMS_DELEGATED_TOKEN_NAMESPACE, accountId),
     maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
     overflowPolicy: "reject-new",
-    ...(env ? { env } : {}),
   });
 }
 
@@ -46,20 +46,20 @@ export function normalizeMSTeamsDelegatedTokens(value: unknown): MSTeamsDelegate
   };
 }
 
-export function loadMSTeamsDelegatedTokens(
-  env?: NodeJS.ProcessEnv,
-): MSTeamsDelegatedTokens | undefined {
-  const stored = openDelegatedTokenStore(env).lookup(MSTEAMS_DELEGATED_TOKEN_KEY);
+export async function loadMSTeamsDelegatedTokens(
+  accountId?: string | null,
+): Promise<MSTeamsDelegatedTokens | undefined> {
+  const stored = await openDelegatedTokenStore(accountId).lookup(MSTEAMS_DELEGATED_TOKEN_KEY);
   return normalizeMSTeamsDelegatedTokens(stored) ?? undefined;
 }
 
-export function saveMSTeamsDelegatedTokens(
+export async function saveMSTeamsDelegatedTokens(
   tokens: MSTeamsDelegatedTokens,
-  env?: NodeJS.ProcessEnv,
-): void {
+  accountId?: string | null,
+): Promise<void> {
   const normalized = normalizeMSTeamsDelegatedTokens(tokens);
   if (!normalized) {
     throw new Error("Invalid Microsoft Teams delegated token payload");
   }
-  openDelegatedTokenStore(env).register(MSTEAMS_DELEGATED_TOKEN_KEY, normalized);
+  await openDelegatedTokenStore(accountId).register(MSTEAMS_DELEGATED_TOKEN_KEY, normalized);
 }

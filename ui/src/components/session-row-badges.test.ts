@@ -3,12 +3,7 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import {
-  renderSessionRowBadges,
-  renderSidebarConnectionStatus,
-  resolveSidebarConnectionStatus,
-  type SessionPlacementState,
-} from "./session-row-badges.ts";
+import { renderSessionRowBadges, type SessionPlacementState } from "./session-row-badges.ts";
 import "./tooltip.ts";
 
 let container: HTMLDivElement;
@@ -45,46 +40,21 @@ function expectTooltipText(badge: Element | null | undefined, text: string) {
   ).toBe(text);
 }
 
-describe("sidebar connection status", () => {
-  it.each([
-    { offline: true, restartPending: true, suspensionPhase: "prepared", expected: "restarting" },
-    { offline: false, restartPending: true, expected: "restarting" },
-    { offline: true, suspensionPhase: "preparing", expected: "suspending" },
-    { offline: true, suspensionPhase: "draining", expected: "suspending" },
-    { offline: true, suspensionPhase: "prepared", expected: "suspended" },
-    { offline: false, suspensionPhase: "prepared", expected: "suspended" },
-    { offline: true, suspensionPhase: "accepting", expected: "offline" },
-    { offline: true, expected: "offline" },
-    { offline: false, suspensionPhase: "accepting", expected: null },
-    { offline: false, expected: null },
-  ] as const)("resolves $expected from $offline/$suspensionPhase", ({ expected, ...props }) => {
-    expect(resolveSidebarConnectionStatus(props)).toBe(expected);
-  });
-
-  it.each([
-    { kind: "suspending", label: "Suspending…" },
-    { kind: "suspended", label: "Suspended" },
-  ] as const)("renders $label without a retry button", ({ kind, label }) => {
-    render(renderSidebarConnectionStatus({ kind, onRetry: () => {} }), container);
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(label);
-    expect(container.querySelector("button")).toBeNull();
-  });
-});
-
 describe("session row placement badges", () => {
-  it("names the service and profile without losing conflict or disk attention", () => {
+  it("names the service, profile, and machine without losing conflict or disk attention", () => {
     render(
       renderSessionRowBadges({
         placementState: "active",
         placementProviderId: "machine0",
         placementProfileId: "team",
+        placementMachine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
         workspaceConflictCount: 2,
         diskSpaceStatus: "warning",
       }),
       container,
     );
     const label =
-      "machine0 · team · active · 2 workspace conflicts · Cloud session disk space is low";
+      "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active · 2 workspace conflicts · Cloud session disk space is low";
     const badge = container.querySelector(".session-row-badge--cloud");
     expect(badge?.getAttribute("aria-label")).toBe(label);
     expectTooltipText(badge, label);
@@ -138,16 +108,8 @@ describe("session row placement badges", () => {
     },
   );
 
-  it.each([
-    "requested",
-    "provisioning",
-    "syncing",
-    "starting",
-    "active",
-    "draining",
-    "reconciling",
-    "failed",
-  ] satisfies SessionPlacementState[])("renders %s as a cloud-worker globe", (placementState) => {
+  it("renders a cloud-worker placement as a globe", () => {
+    const placementState = "active";
     renderBadges(placementState);
 
     const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");

@@ -27,8 +27,10 @@ type LiveModelPolicyRef = ModelRef &
   Pick<Parameters<typeof resolveProviderModernModelRef>[0], "config" | "workspaceDir" | "env">;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-5-5",
   "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
+  "anthropic/claude-sonnet-5-5",
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
@@ -40,16 +42,17 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m3",
-  "openai/gpt-5.6",
+  "openai/gpt-5.6-luna",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
+  "xai/grok-4.7",
   "xai/grok-4.6",
   "xai/grok-4.5",
   "xai/grok-4.20-0309-reasoning",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/routers/glm-5p2-fast",
+  "fireworks/accounts/fireworks/routers/glm-5p3-fast",
   "minimax-portal/minimax-m3",
 ] as const;
 
@@ -75,7 +78,7 @@ const smallPriorityIndex = new Map<string, number>(
 );
 const excludedProviders = new Set(["codex", "codex-cli"]);
 const curatedProviders = new Set(["fireworks", "google", "openrouter", "xai"]);
-const directOpenAiModels = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const directOpenAiModels = new Set(["gpt-5.6-terra", "gpt-5.6-luna"]);
 
 function canonicalLiveModelRef(ref: ModelRef): string | undefined {
   const provider = normalizeProviderId(ref.provider ?? "");
@@ -301,6 +304,13 @@ type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;
 type DynamicModelPreparer = typeof prepareProviderDynamicModel;
 type DynamicModelNormalizer = (model: Model, agentDir: string) => Model | Promise<Model>;
+type AgentModelResolution = Awaited<
+  ReturnType<typeof import("../embedded-agent-runner/model.js").resolveModelAsync>
+>;
+type LiveModelDiscoveryStores = Pick<AgentModelResolution, "authStorage" | "modelRegistry">;
+const modelResolutionLoader = createLazyImportLoader(
+  () => import("../embedded-agent-runner/model.js"),
+);
 
 const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
   () => import("../../plugins/provider-runtime.js"),
@@ -325,7 +335,7 @@ async function normalizeDynamicModelDefault(
   agentDir: string,
   options: { config?: OpenClawConfig; workspaceDir?: string },
 ): Promise<Model> {
-  const { normalizeDiscoveredAgentModel } = await import("../agent-model-discovery.js");
+  const { normalizeDiscoveredAgentModel } = await import("../model-discovery-normalize.js");
   return normalizeDiscoveredAgentModel(model, agentDir, options);
 }
 
@@ -406,19 +416,20 @@ export function applyLiveProviderPluginDiscoveryCompat(params: {
 }
 
 /**
- * Append prioritized dynamic live models that are not already present.
- *
- * Provider hooks can prepare credentials/session state, resolve the current
- * model metadata, and then pass through the same model normalizer used by agent
- * discovery so downstream catalog code sees one canonical shape.
+ * Append missing live candidates through their owning resolution path.
+ * Explicit selections use agent resolution, including accepted bundled aliases;
+ * prioritized sweeps retain provider discovery without expanding static catalogs.
  */
-export async function appendPrioritizedDynamicLiveModels(params: {
+export async function appendLiveModelCandidates(params: {
   models: Model[];
   config?: OpenClawConfig;
   agentDir: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   modelRegistry: ProviderResolveDynamicModelContext["modelRegistry"];
+  resolution?:
+    | { kind: "prioritized" }
+    | { kind: "explicit"; getDiscoveryStores: () => Promise<LiveModelDiscoveryStores> };
   resolveDynamicModel?: DynamicModelResolver;
   prepareDynamicModel?: DynamicModelPreparer;
   normalizeModel?: DynamicModelNormalizer;
@@ -437,51 +448,67 @@ export async function appendPrioritizedDynamicLiveModels(params: {
 
   const models = [...params.models];
   const added: Model[] = [];
+  let discoveryStores: Promise<LiveModelDiscoveryStores> | undefined;
   for (const ref of refs) {
     const requestedKey = liveModelKey(ref.provider, ref.id);
     if (!requestedKey || seen.has(requestedKey)) {
       continue;
     }
-    const providerConfig = findNormalizedProviderValue(
-      params.config?.models?.providers,
-      ref.provider,
-    );
-    // Dynamic model hooks receive the originally requested provider/id so they
-    // can map aliases or live service identifiers before returning a catalog row.
-    const context = {
-      config: params.config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: ref.provider,
-      modelId: ref.id,
-      modelRegistry: params.modelRegistry,
-      providerConfig,
-    };
-    const prepared = await prepareDynamicModel({
-      provider: ref.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      context,
-    });
-    const resolved =
-      prepared ??
-      (await resolveDynamicModel({
+    let model: Model | undefined;
+    if (params.resolution?.kind === "explicit") {
+      const stores = await (discoveryStores ??= params.resolution.getDiscoveryStores());
+      const { resolveModelAsync } = await modelResolutionLoader.load();
+      const result = await resolveModelAsync(ref.provider, ref.id, params.agentDir, params.config, {
+        ...stores,
+        workspaceDir: params.workspaceDir,
+        allowBundledStaticCatalogFallback: true,
+      });
+      model = result.model;
+    } else {
+      const providerConfig = findNormalizedProviderValue(
+        params.config?.models?.providers,
+        ref.provider,
+      );
+      // Dynamic model hooks receive the originally requested provider/id so they
+      // can map aliases or live service identifiers before returning a catalog row.
+      const context = {
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        provider: ref.provider,
+        modelId: ref.id,
+        modelRegistry: params.modelRegistry,
+        providerConfig,
+      };
+      const prepared = await prepareDynamicModel({
         provider: ref.provider,
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
         context,
-      }));
-    if (!resolved) {
-      continue;
-    }
-    const model = params.normalizeModel
-      ? await params.normalizeModel(resolved as Model, params.agentDir)
-      : await normalizeDynamicModelDefault(resolved as Model, params.agentDir, {
+      });
+      const resolved =
+        prepared ??
+        (await resolveDynamicModel({
+          provider: ref.provider,
           config: params.config,
           workspaceDir: params.workspaceDir,
-        });
+          env: params.env,
+          context,
+        }));
+      if (!resolved) {
+        continue;
+      }
+      model = params.normalizeModel
+        ? await params.normalizeModel(resolved as Model, params.agentDir)
+        : await normalizeDynamicModelDefault(resolved as Model, params.agentDir, {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+          });
+    }
+    if (!model) {
+      continue;
+    }
     const resolvedKey = liveModelKey(model.provider, model.id);
     // De-dupe against the resolved identity as well as the requested ref; hooks
     // may canonicalize provider ids or return aliases.

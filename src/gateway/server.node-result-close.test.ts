@@ -2,7 +2,11 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
@@ -48,21 +52,21 @@ const RUNNER_ENVIRONMENT_ID = "environment-runner-socket-close";
 const RUNNER_BUNDLE_HASH = "a".repeat(64);
 
 async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
-  const environments = createWorkerEnvironmentStore();
+  const environments = await createWorkerEnvironmentStore();
   const placements = createWorkerSessionPlacementStore();
-  environments.createIntent({
+  await environments.createIntent({
     environmentId: RUNNER_ENVIRONMENT_ID,
     providerId: DEVICE_WORKER_PROVIDER_ID,
     profileId: `device:${nodeId}`,
     profileSnapshot: { install: "bundle", settings: { device: nodeId } },
     provisionOperationId: `provision:${RUNNER_ENVIRONMENT_ID}`,
   });
-  environments.transition({
+  await environments.transition({
     environmentId: RUNNER_ENVIRONMENT_ID,
     from: "requested",
     to: "provisioning",
   });
-  environments.transition({
+  await environments.transition({
     environmentId: RUNNER_ENVIRONMENT_ID,
     from: "provisioning",
     to: "ready",
@@ -74,7 +78,10 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       bootstrapReceipt: {
         bundleHash: RUNNER_BUNDLE_HASH,
         openclawVersion: "2026.8.19",
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
         installKind: "bundle",
       },
       credential: {
@@ -85,7 +92,7 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       },
     },
   });
-  const attached = environments.transition({
+  const attached = await environments.transition({
     environmentId: RUNNER_ENVIRONMENT_ID,
     from: "ready",
     to: "attached",
@@ -100,26 +107,26 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
     },
   });
 
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: RUNNER_SESSION_ID,
     sessionKey: RUNNER_SESSION_KEY,
     agentId: "main",
   });
-  placement = placements.transition({
+  placement = await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId: RUNNER_ENVIRONMENT_ID },
   });
-  placement = placements.transition({
+  placement = await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { environmentId: RUNNER_ENVIRONMENT_ID, workerBundleHash: RUNNER_BUNDLE_HASH },
   });
-  placement = placements.transition({
+  placement = await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "syncing",
     to: "starting",
@@ -131,7 +138,7 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       remoteWorkspaceDir: "/workspace/runner-socket-close",
     },
   });
-  placements.transition({
+  await placements.transition({
     sessionId: RUNNER_SESSION_ID,
     from: "starting",
     to: "active",
@@ -184,12 +191,11 @@ test.each([
   const url = `ws://127.0.0.1:${port}`;
   let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-  let resolveInvokeFrame:
-    | ((frame: { id: string; nodeId: string; command: string }) => void)
-    | undefined;
-  const invokeFrame = new Promise<{ id: string; nodeId: string; command: string }>((resolve) => {
-    resolveInvokeFrame = resolve;
-  });
+  const { promise: invokeFrame, resolve: resolveInvokeFrame } = createDeferred<{
+    id: string;
+    nodeId: string;
+    command: string;
+  }>();
 
   try {
     operator = await connectGatewayClient({
@@ -328,7 +334,7 @@ test.each([
   }
 });
 
-test("publishes one runner-availability edge before the socket-close refresh", async () => {
+test("publishes an offline device row on socket close without a session-list reload", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("runner availability proof requires the isolated Gateway state directory");
@@ -369,12 +375,8 @@ test("publishes one runner-availability edge before the socket-close refresh", a
   let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let armed = false;
   let availabilityEvents = 0;
-  let resolveOffline!: (value: unknown) => void;
-  let rejectOffline!: (reason: unknown) => void;
-  const offlineRefresh = new Promise<unknown>((resolve, reject) => {
-    resolveOffline = resolve;
-    rejectOffline = reject;
-  });
+  const { promise: availableRow, resolve: resolveAvailable } = createDeferred<unknown>();
+  const { promise: offlineRow, resolve: resolveOffline } = createDeferred<unknown>();
   const connectNode = () =>
     connectGatewayClient({
       url,
@@ -416,22 +418,25 @@ test("publishes one runner-availability edge before the socket-close refresh", a
       mode: GATEWAY_CLIENT_MODES.BACKEND,
       scopes: ["operator.admin", "operator.read", "operator.write"],
       onEvent: (event) => {
-        if (
-          !armed ||
-          event.event !== "sessions.changed" ||
-          (event.payload as { reason?: string } | undefined)?.reason !== "runner-availability"
-        ) {
+        const payload = event.payload as
+          | {
+              sessionKey?: string;
+              session?: { placement?: { runner?: { status?: string } } };
+            }
+          | undefined;
+        if (event.event !== "sessions.changed" || payload?.sessionKey !== RUNNER_SESSION_KEY) {
           return;
         }
-        availabilityEvents += 1;
-        if (availabilityEvents === 1) {
-          void operator
-            ?.request("sessions.list", {}, { timeoutMs: 10_000 })
-            .then(resolveOffline, rejectOffline);
+        if (payload.session?.placement?.runner?.status === "available") {
+          resolveAvailable(payload.session);
+        } else if (armed && payload.session?.placement?.runner?.status === "offline") {
+          availabilityEvents += 1;
+          resolveOffline(payload.session);
         }
       },
     });
     await seedActiveDevicePlacement(pairedNode.identity.deviceId);
+    await operator.request("sessions.subscribe", {});
     node = await connectNode();
     await node.request(
       "node.runnerInventory.update",
@@ -450,6 +455,10 @@ test("publishes one runner-availability edge before the socket-close refresh", a
     };
     const available = await operator.request("sessions.list", {}, { timeoutMs: 10_000 });
     expect(readRunnerStatus(available)).toBe("available");
+    expect(await availableRow).toMatchObject({
+      key: RUNNER_SESSION_KEY,
+      placement: { runner: { status: "available" } },
+    });
 
     armed = true;
     const rawNodeSocket = Reflect.get(node, "ws") as { terminate?: () => void } | null;
@@ -458,8 +467,10 @@ test("publishes one runner-availability edge before the socket-close refresh", a
     await stopped;
     node = undefined;
 
-    const offline = await offlineRefresh;
-    expect(readRunnerStatus(offline)).toBe("offline");
+    expect(await offlineRow).toMatchObject({
+      key: RUNNER_SESSION_KEY,
+      placement: { runner: { status: "offline" } },
+    });
     expect(availabilityEvents).toBe(1);
     expect(
       readRunnerStatus(await operator.request("sessions.list", {}, { timeoutMs: 10_000 })),

@@ -11,19 +11,15 @@ const GIT_TIMEOUT_MS = 3000;
 // checkouts that drifted off the mainline. "HEAD" is git's detached marker.
 const HIDDEN_BRANCHES = new Set(["main", "master", "HEAD"]);
 
-async function detectDevInstallGitBranch(params: {
-  root: string | null;
-  runCommand?: typeof runCommandWithTimeout;
-}): Promise<string | null> {
-  const run = params.runCommand ?? runCommandWithTimeout;
-  const root = params.root ? path.resolve(params.root) : null;
+async function detectDevInstallGitBranch(packageRoot: string | null): Promise<string | null> {
+  const root = packageRoot ? path.resolve(packageRoot) : null;
   if (!root) {
     return null;
   }
-  const topRes = await run(["git", "-C", root, "rev-parse", "--show-toplevel"], {
+  const topRes = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: GIT_TIMEOUT_MS,
-  }).catch(() => null);
-  if (!topRes || topRes.code !== 0) {
+  });
+  if (topRes.code !== 0) {
     return null;
   }
   // Same rule as update-check's installKind: only a package root that is
@@ -34,10 +30,13 @@ async function detectDevInstallGitBranch(params: {
   if (!top || path.resolve(top) !== path.resolve(rootReal)) {
     return null;
   }
-  const branchRes = await run(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
-    timeoutMs: GIT_TIMEOUT_MS,
-  }).catch(() => null);
-  if (!branchRes || branchRes.code !== 0) {
+  const branchRes = await runCommandWithTimeout(
+    ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
+    {
+      timeoutMs: GIT_TIMEOUT_MS,
+    },
+  );
+  if (branchRes.code !== 0) {
     return null;
   }
   const branch = branchRes.stdout.trim();
@@ -54,7 +53,7 @@ export function resolveDevInstallGitBranch(): Promise<string | null> {
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   })
-    .then((root) => detectDevInstallGitBranch({ root }))
+    .then(detectDevInstallGitBranch)
     .catch(() => null);
   return cached;
 }

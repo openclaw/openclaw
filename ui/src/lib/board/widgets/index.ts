@@ -19,7 +19,7 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("sessionProgressCard.widgetLabel");
     },
-    loadModule: () => import("./session-progress.ts"),
+    loadModule: () => import("./session-progress.tsx"),
     previewSafe: false,
   },
   {
@@ -28,8 +28,26 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindReport");
     },
-    loadModule: () => import("./report.ts"),
+    loadModule: () => import("./report.tsx"),
     previewSafe: true,
+  },
+  {
+    kind: "session:website",
+    tagName: "openclaw-website-widget",
+    get label() {
+      return t("board.widget.kindWebsite");
+    },
+    loadModule: () => import("./website.tsx"),
+    previewSafe: false,
+  },
+  {
+    kind: "browser:dashboard",
+    tagName: "openclaw-browser-dashboard-widget",
+    get label() {
+      return t("board.widget.kindBrowserDashboard");
+    },
+    loadModule: () => import("./browser.tsx"),
+    previewSafe: false,
   },
 ];
 

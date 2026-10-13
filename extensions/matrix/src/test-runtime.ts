@@ -5,17 +5,21 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenBlobStoreOptions,
   OpenKeyedStoreOptions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
+  resetPluginBlobStoreForTests,
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, vi } from "vitest";
 import { setMatrixRuntime } from "./runtime.js";
@@ -24,8 +28,14 @@ const defaultStateDir = fs.realpathSync(
   fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-test-state-")),
 );
 
-afterAll(() => {
+export async function resetMatrixTestStores(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginBlobStoreForTests({ closeDatabase: false });
   resetPluginStateStoreForTests();
+}
+
+afterAll(async () => {
+  await resetMatrixTestStores();
   fs.rmSync(defaultStateDir, {
     recursive: true,
     force: true,
@@ -41,13 +51,32 @@ type MatrixTestRuntimeOptions = {
   stateDir?: string;
 };
 
+type MatrixNoticeCall = [roomId: string, payload: { body?: string }];
+type MatrixNoticeSendMock = { mock: { calls: MatrixNoticeCall[] } };
+
+export function getSentNoticeBody(sendMessage: MatrixNoticeSendMock, index = 0): string {
+  return getSentNoticeBodyFromCall(sendMessage.mock.calls[index]);
+}
+
+export function getSentNoticeBodyFromCall(call: MatrixNoticeCall | undefined): string {
+  return call?.[1].body ?? "";
+}
+
+export function getSentNoticeBodies(sendMessage: MatrixNoticeSendMock): string[] {
+  return sendMessage.mock.calls.map(getSentNoticeBodyFromCall);
+}
+
 type MatrixRuntimeStub = {
   config: Pick<PluginRuntime["config"], "current" | "mutateConfigFile" | "replaceConfigFile">;
   channel?: PluginRuntime["channel"];
   logging?: PluginRuntime["logging"];
   state: Pick<
     NonNullable<PluginRuntime["state"]>,
-    "openBlobStore" | "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
+    | "openBlobStore"
+    | "openKeyedStore"
+    | "openKeyedStoreV2"
+    | "openSyncKeyedStore"
+    | "resolveStateDir"
   >;
 };
 
@@ -82,7 +111,9 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
     _env,
     _homeDir,
   ) => stateDir;
-  const resolvePluginStateEnv = (storeOptions: OpenKeyedStoreOptions): NodeJS.ProcessEnv => ({
+  const resolvePluginStateEnv = (
+    storeOptions: Pick<OpenKeyedStoreOptions, "env">,
+  ): NodeJS.ProcessEnv => ({
     ...(storeOptions.env ?? process.env),
     OPENCLAW_STATE_DIR:
       storeOptions.env?.OPENCLAW_STATE_DIR?.trim() || defaultStateDirResolver(storeOptions.env),
@@ -115,11 +146,21 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
           ...process.env,
           OPENCLAW_STATE_DIR: defaultStateDirResolver(process.env),
         })) as PluginRuntime["state"]["openBlobStore"],
-      openKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
+      openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("matrix", {
           ...storeOptions,
           env: resolvePluginStateEnv(storeOptions),
-        })) as PluginRuntime["state"]["openKeyedStore"],
+        }),
+      openKeyedStoreV2: <T>(
+        storeOptions: OpenAsyncKeyedStoreOptions,
+        authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+      ) => {
+        const store = createPluginStateKeyedStoreForTests<T>("matrix", {
+          ...storeOptions,
+          env: resolvePluginStateEnv(storeOptions),
+        });
+        return authority ? store.withCurrent(authority) : store;
+      },
       openSyncKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests<T>("matrix", {
           ...storeOptions,
@@ -143,6 +184,7 @@ export function installMatrixMonitorTestRuntime(
     cfg: options.cfg,
     stateDir: options.stateDir,
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       mentions: {
         buildMentionRegexes: () => [],
         matchesMentionPatterns:

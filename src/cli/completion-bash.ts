@@ -1,14 +1,13 @@
 // Bash completion owns shell-word normalization and Readline insertion spans.
-import type { Command } from "commander";
-import {
-  collectShellCompletionCommandTree,
-  type ShellCompletionContext,
+import type {
+  ShellCompletionCommandTree,
+  ShellCompletionContext,
 } from "./completion-command-tree.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
-export function generateBashCompletion(program: Command): string {
-  const rootCmd = program.name();
-  const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
+export function generateBashCompletion(tree: ShellCompletionCommandTree): string {
+  const { root, descendants: contexts } = tree;
+  const rootCmd = root.command.name();
   const commandPathUpdate = generateBashCommandPathUpdate(contexts);
   const choiceCompletion = generateBashOptionChoiceCompletion([root, ...contexts]);
   return `
@@ -16,6 +15,7 @@ _${rootCmd}_completion() {
     local cur opts command_path candidate_path value_options word flag i j cword remaining_line word_prefix
     local character next_character quote
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
+    local required_value_options options_ended=0 literal_opts=""
     local -a words=()
     # Before Bash 4.3, COMP_POINT is a byte offset; string spans must use the same units.
     if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
@@ -71,13 +71,29 @@ _${rootCmd}_completion() {
     word_prefix="\${words[cword+1]}"
     opts="${root.completions.join(" ")}"
     value_options="${root.valueOptions.join(" ")}"
+    required_value_options="${root.requiredValueOptions.join(" ")}"
     command_path=""
 
     for ((i = 1; i < cword; i++)); do
         word="\${words[i]}"
-        if [[ \${word} == -* ]]; then
+        if [[ \${word} == -- ]]; then
+            options_ended=1
+            continue
+        fi
+        if (( ! options_ended )) && [[ \${word} == -* ]]; then
             flag="\${word%%=*}"
-            if [[ \${word} != *=* && " \${value_options} " == *" \${flag} "* ]]; then
+            if [[ \${word} == -??* && \${word} != --* ]]; then
+                for ((short_index = 1; short_index < \${#word}; short_index++)); do
+                    short_flag="-\${word:short_index:1}"
+                    if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
+                        flag=""
+                        ((short_index == \${#word} - 1)) && flag="\${short_flag}"
+                        break
+                    fi
+                done
+            fi
+            if [[ \${word} != *=* && -n \${flag} && " \${value_options} " == *" \${flag} "* &&
+                ( \${words[i+1]} != -?* || " \${required_value_options} " == *" \${flag} "* ) ]]; then
                 i=$((i + 1))
             fi
             continue
@@ -87,33 +103,41 @@ _${rootCmd}_completion() {
 ${commandPathUpdate}
     done
 
-    choice_flag="\${words[cword-1]}"
-    choice_prefix="\${cur}"
-    choice_completion_prefix=""
-    if [[ "\${cur}" == --*=* ]]; then
-        choice_flag="\${cur%%=*}"
-        choice_prefix="\${cur#*=}"
-        choice_completion_prefix="\${choice_flag}="
-    fi
-    for short_group in "\${choice_flag}" "\${cur}"; do
-        [[ "\${short_group}" == -??* && "\${short_group}" != --* ]] || continue
-        short_group="\${short_group#-}"
-        for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
-            short_flag="-\${short_group:short_index:1}"
-            if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
-                if [[ "\${cur}" == "-\${short_group}" ]]; then
-                    choice_flag="\${short_flag}"
-                    choice_prefix="\${short_group:short_index+1}"
-                    choice_completion_prefix="-\${short_group:0:short_index+1}"
-                elif ((short_index == \${#short_group} - 1)); then
-                    choice_flag="\${short_flag}"
-                fi
-                break
-            fi
+    if (( options_ended )); then
+        for word in \${opts}; do
+            [[ \${word} == -* ]] || literal_opts+=" \${word}"
         done
-    done
+        opts="\${literal_opts}"
+    else
+
+        choice_flag="\${words[cword-1]}"
+        choice_prefix="\${cur}"
+        choice_completion_prefix=""
+        if [[ "\${cur}" == --*=* ]]; then
+            choice_flag="\${cur%%=*}"
+            choice_prefix="\${cur#*=}"
+            choice_completion_prefix="\${choice_flag}="
+        fi
+        for short_group in "\${choice_flag}" "\${cur}"; do
+            [[ "\${short_group}" == -??* && "\${short_group}" != --* ]] || continue
+            short_group="\${short_group#-}"
+            for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
+                short_flag="-\${short_group:short_index:1}"
+                if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
+                    if [[ "\${cur}" == "-\${short_group}" ]]; then
+                        choice_flag="\${short_flag}"
+                        choice_prefix="\${short_group:short_index+1}"
+                        choice_completion_prefix="-\${short_group:0:short_index+1}"
+                    elif ((short_index == \${#short_group} - 1)); then
+                        choice_flag="\${short_flag}"
+                    fi
+                    break
+                fi
+            done
+        done
 
 ${choiceCompletion}
+    fi
     COMPREPLY=( $(compgen -W "\${opts}" -- "\${cur}") )
     COMPREPLY=("\${COMPREPLY[@]#"\${word_prefix}"}")
 }
@@ -168,6 +192,7 @@ function generateBashCommandPathUpdate(contexts: ShellCompletionContext[]): stri
             command_path="\${candidate_path}"
             opts="${context.completions.join(" ")}"
             value_options="${context.valueOptions.join(" ")}"
+            required_value_options="${context.requiredValueOptions.join(" ")}"
             ;;`;
   });
   return cases.length

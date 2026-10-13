@@ -141,10 +141,7 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 export async function issueControlUiBrowserHandoff({
   httpUrl,
   wsUrl,
-}: ControlUiHandoffTarget["links"]): Promise<{
-  browserUrl: string;
-  expiresAtMs: number;
-}> {
+}: ControlUiHandoffTarget["links"]) {
   const issued = await issueDeviceBootstrapToken({
     profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   });
@@ -163,12 +160,6 @@ type ControlUiDocumentReadiness =
   | { ready: true; tlsFingerprint?: string }
   | { ready: false; reason: string; status?: number };
 
-type ControlUiDocumentReadinessDeps = {
-  fetch?: typeof fetchConfiguredLocalOriginWithSsrFGuard;
-  now?: () => number;
-  sleep?: (timeoutMs: number) => Promise<void>;
-};
-
 /** Wait only for an explicitly preparing dashboard; fail immediately for terminal HTTP states. */
 export async function waitForControlUiDocument(params: {
   url: string;
@@ -176,11 +167,8 @@ export async function waitForControlUiDocument(params: {
   timeoutMs?: number;
   waitForPending?: boolean;
   onPending?: () => void;
-  deps?: ControlUiDocumentReadinessDeps;
 }): Promise<ControlUiDocumentReadiness> {
-  const now = params.deps?.now ?? Date.now;
-  const sleepFor = params.deps?.sleep ?? sleep;
-  const deadline = now() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
+  const deadline = Date.now() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
   let tlsFingerprint: string | undefined;
   let tlsConnect: Record<string, unknown> | undefined;
 
@@ -213,7 +201,7 @@ export async function waitForControlUiDocument(params: {
   let pendingReported = false;
   const origin = new URL(params.url).origin;
   const requestDocument = async (method: "HEAD" | "GET", remainingMs: number) =>
-    await (params.deps?.fetch ?? fetchConfiguredLocalOriginWithSsrFGuard)({
+    await fetchConfiguredLocalOriginWithSsrFGuard({
       url: params.url,
       configuredLocalOriginBaseUrl: origin,
       policy: { allowedOrigins: [origin] },
@@ -228,7 +216,7 @@ export async function waitForControlUiDocument(params: {
       },
     });
   while (true) {
-    const remainingMs = deadline - now();
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       return { ready: false, reason: "Control UI assets did not finish preparing in time." };
     }
@@ -244,11 +232,12 @@ export async function waitForControlUiDocument(params: {
         if (request.response.status !== 503 || !retryAfter || params.waitForPending === false) {
           let detail: string | undefined;
           if (request.response.status === 503 && !retryAfter) {
-            // HEAD has no body; one bounded, credential-free GET preserves the
-            // Gateway owner's configured-root/build-failure repair diagnostic.
-            const diagnostic = await requestDocument("GET", Math.max(1, deadline - now())).catch(
-              () => undefined,
-            );
+            // One bounded, credential-free GET may add the Gateway owner's repair
+            // diagnostic; a failed request or body must preserve the HEAD result.
+            const diagnostic = await requestDocument(
+              "GET",
+              Math.max(1, deadline - Date.now()),
+            ).catch(() => undefined);
             if (diagnostic) {
               try {
                 const diagnosticType = diagnostic.response.headers
@@ -261,7 +250,7 @@ export async function waitForControlUiDocument(params: {
                     maxBytes: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     maxChars: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     timeoutMs: CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS,
-                  });
+                  }).catch(() => undefined);
                   detail = snippet ? sanitizeTerminalText(snippet) : undefined;
                 }
               } finally {
@@ -291,7 +280,7 @@ export async function waitForControlUiDocument(params: {
         pendingReported = true;
         params.onPending?.();
       }
-      await sleepFor(Math.min(pendingDelayMs, Math.max(0, deadline - now())));
+      await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
     } catch (error) {
       return {
         ready: false,

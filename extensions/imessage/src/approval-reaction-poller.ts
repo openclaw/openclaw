@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval reaction poller behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
@@ -52,10 +51,6 @@ function listTargetChatIds(
 
 function hasUnscopedTarget(targets: readonly PendingIMessageApprovalReactionPollTarget[]): boolean {
   return targets.some((target) => normalizeChatId(target.conversation.chatId) === null);
-}
-
-function uniqueChatIds(chatIds: readonly number[]): number[] {
-  return [...new Set(chatIds)];
 }
 
 function enumerateMessageGuidCandidates(value: string): string[] {
@@ -154,10 +149,10 @@ function buildConversationKeyFromMessage(message: HistoryMessage): IMessageAppro
   };
 }
 
-function bindObservedConversation(params: {
+async function bindObservedConversation(params: {
   target: PendingIMessageApprovalReactionPollTarget;
   message: HistoryMessage;
-}): void {
+}): Promise<void> {
   const nowMs = asDateTimestampMs(Date.now());
   const expiresAtMs = asDateTimestampMs(params.target.expiresAtMs);
   if (nowMs === undefined || expiresAtMs === undefined || expiresAtMs <= nowMs) {
@@ -169,20 +164,23 @@ function bindObservedConversation(params: {
     ...enumerateMessageGuidCandidates(params.target.messageId),
     ...enumerateMessageGuidCandidates(params.message.guid ?? ""),
   ]);
-  for (const messageId of messageIds) {
-    registerIMessageApprovalReactionTarget({
-      accountId: params.target.accountId,
-      conversation,
-      messageId,
-      approvalId: params.target.approvalId,
-      approvalKind: params.target.approvalKind,
-      allowedDecisions: params.target.allowedDecisions,
-      ttlMs,
-    });
-  }
+  await Promise.all(
+    [...messageIds].map((messageId) =>
+      registerIMessageApprovalReactionTarget({
+        accountId: params.target.accountId,
+        conversation,
+        messageId,
+        approvalId: params.target.approvalId,
+        approvalKind: params.target.approvalKind,
+        allowedDecisions: params.target.allowedDecisions,
+        ttlMs,
+      }),
+    ),
+  );
 }
 
 export async function pollPendingIMessageApprovalReactions(params: {
+  signal?: AbortSignal;
   client: IMessageRpcClient;
   cfg: OpenClawConfig;
   accountId: string;
@@ -193,7 +191,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
   const targets = await listPendingIMessageApprovalReactionPollTargets({
     accountId: params.accountId,
   });
-  if (targets.length === 0) {
+  if (params.signal?.aborted || targets.length === 0) {
     return;
   }
   const pendingByMessageId = buildPendingTargetsByMessageId(targets);
@@ -201,14 +199,14 @@ export async function pollPendingIMessageApprovalReactions(params: {
   // Send-side DM registration may know only a handle, not a chat id. Scan recent chats
   // for those typed GUID targets or a watch-missed tapback would silently resolve nothing.
   const shouldDiscoverRecentChats =
-    params.allowRecentChatDiscovery === true && targets.length > 0 && hasUnscopedTarget(targets);
+    params.allowRecentChatDiscovery === true && hasUnscopedTarget(targets);
   const chatIds = shouldDiscoverRecentChats
-    ? uniqueChatIds([...explicitChatIds, ...(await listRecentChatIds(params.client))])
+    ? [...new Set([...explicitChatIds, ...(await listRecentChatIds(params.client))])]
     : explicitChatIds;
-  if (chatIds.length === 0) {
-    return;
-  }
   for (const chatId of chatIds) {
+    if (params.signal?.aborted) {
+      return;
+    }
     let messages: HistoryMessage[];
     try {
       messages = await fetchRecentHistory({ client: params.client, chatId });
@@ -219,6 +217,9 @@ export async function pollPendingIMessageApprovalReactions(params: {
       continue;
     }
     for (const message of messages) {
+      if (params.signal?.aborted) {
+        return;
+      }
       const targetGuid = message.guid?.trim();
       if (!targetGuid) {
         continue;
@@ -229,8 +230,11 @@ export async function pollPendingIMessageApprovalReactions(params: {
       if (!target) {
         continue;
       }
-      bindObservedConversation({ target, message });
+      await bindObservedConversation({ target, message });
       for (const reaction of message.reactions ?? []) {
+        if (params.signal?.aborted) {
+          return;
+        }
         const reactionPayload = buildReactionPayload({ targetMessage: message, reaction });
         if (!reactionPayload) {
           continue;

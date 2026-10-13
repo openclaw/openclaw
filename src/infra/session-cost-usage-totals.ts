@@ -1,4 +1,3 @@
-// Shared arithmetic helpers for cost/usage token totals.
 import type { CostUsageTotals } from "./session-cost-usage.types.js";
 
 export function createEmptyCostUsageTotals(): CostUsageTotals {

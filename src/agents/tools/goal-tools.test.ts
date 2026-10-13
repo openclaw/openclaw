@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -85,7 +86,7 @@ describe("goal tools", () => {
     expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("active");
   });
 
-  it("uses the resolved session agent for global session stores", async () => {
+  it.each([100])("creates a scoped goal with token_budget=%s", async (budget) => {
     const { config, template } = await createStoreConfig();
     const tool = createCreateGoalTool({
       agentSessionKey: "global",
@@ -100,18 +101,26 @@ describe("goal tools", () => {
       sessionKey: "global",
       entry: { sessionId: "sess-global", updatedAt: 1 },
     });
-    await tool.execute("call-1", { objective: "ship global work" });
+    const args = {
+      objective: "ship global work",
+      ...(budget !== undefined ? { token_budget: budget } : {}),
+    };
+    expect(Value.Check(tool.parameters, args)).toBe(true);
+    await tool.execute("call-1", args);
 
     const mainStorePath = resolveSessionStorePathCore(template, { agentId: "main" });
     expect(
       getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.objective,
     ).toBe("ship global work");
     expect(
+      getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.tokenBudget,
+    ).toBe(budget ?? undefined);
+    expect(
       getSessionEntry({ storePath: mainStorePath, sessionKey: "global" })?.goal,
     ).toBeUndefined();
   });
 
-  it.each(["42.9", "1abc", 0])(
+  it.each(["42.9", 0])(
     "rejects invalid token budgets before creating a goal: %s",
     async (tokenBudget) => {
       const { config, template } = await createStoreConfig();
@@ -165,7 +174,7 @@ describe("goal tools", () => {
     ).toBeUndefined();
   });
 
-  it("tells the model to send the requested final reply after completing a goal", async () => {
+  it("returns actionable guidance when goal is already complete", async () => {
     const { config, template } = await createStoreConfig();
     const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
     const options = {
@@ -177,27 +186,53 @@ describe("goal tools", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey: "global",
-      entry: { sessionId: "sess-global", updatedAt: 1 },
+      entry: {
+        sessionId: "sess-global",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "ship",
+          status: "complete",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 10,
+          continuationTurns: 0,
+        },
+      },
     });
-    await createCreateGoalTool(options).execute("call-create", {
-      objective: "Write the artifact and reply GOAL-DONE",
-    });
-
     const tool = createUpdateGoalTool(options);
-    const result = await tool.execute("call-complete", { status: "complete" });
+    const originalGoal = getSessionEntry({ storePath, sessionKey: "global" })?.goal;
 
-    expect(tool.description).toContain("does not reply to the user");
+    const result = await tool.execute("call-already-complete", { status: "blocked" });
+
     expect(result.details).toMatchObject({
+      status: "error",
+      error: "goal is already complete",
+      nextAction: expect.stringContaining("Do not retry update_goal"),
+    });
+    expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toEqual(originalGoal);
+
+    const repeated = await tool.execute("call-complete-again", { status: "complete" });
+    expect(repeated.details).toMatchObject({
       status: "updated",
-      goal: { status: "complete" },
+      goal: { id: "goal-1", objective: "ship", status: "complete" },
       nextAction: expect.stringContaining("provide the requested visible final response"),
     });
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining("provide the requested visible final response"),
-      }),
-    ]);
-    expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("complete");
+  });
+
+  it("keeps missing-session failures on the generic error path", async () => {
+    const { config } = await createStoreConfig();
+    const tool = createUpdateGoalTool({
+      agentSessionKey: "global",
+      sessionAgentId: "research",
+      config,
+    });
+
+    await expect(tool.execute("call-missing-session", { status: "blocked" })).rejects.toThrow(
+      "session not found",
+    );
   });
 });

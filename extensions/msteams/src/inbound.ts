@@ -1,4 +1,3 @@
-// Msteams plugin module implements inbound behavior.
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 
 type MSTeamsQuoteInfo = {
@@ -12,10 +11,7 @@ type MSTeamsQuoteInfo = {
   id?: string;
 };
 
-/**
- * Strip HTML tags, preserving text content.
- */
-function htmlToPlainText(html: string): string {
+export function htmlToPlainText(html: string): string {
   return decodeHtmlEntities(html.replace(/<[^>]*>/g, " "))
     .replaceAll("\u00a0", " ")
     .replace(/\s+/g, " ")
@@ -47,12 +43,10 @@ export function extractMSTeamsQuoteInfo(
       continue;
     }
 
-    // Look for the Skype Reply schema blockquote.
     if (!content.includes("http://schema.skype.com/Reply")) {
       continue;
     }
 
-    // Extract sender from <strong itemprop="mri">.
     const senderMatch = /<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)<\/strong>/i.exec(content);
     const sender = senderMatch?.[1] ? htmlToPlainText(senderMatch[1]) : undefined;
 

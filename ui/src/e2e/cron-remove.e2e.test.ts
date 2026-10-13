@@ -1,7 +1,9 @@
 // Control UI tests own the destructive Automation removal flow through the rendered page.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -11,7 +13,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
 
-const job = {
+const job: CronJob = {
   id: "nightly-digest",
   name: "Nightly digest",
   enabled: true,
@@ -24,8 +26,8 @@ const job = {
   state: {},
 };
 
-function cronListResponse(jobs: unknown[]) {
-  return {
+function cronListResponse(jobs: CronJob[]) {
+  return cronListResponseFixture({
     jobs,
     snapshotRevision: jobs.length > 0 ? "cron-remove-present" : "cron-remove-empty",
     total: jobs.length,
@@ -33,7 +35,7 @@ function cronListResponse(jobs: unknown[]) {
     limit: 50,
     hasMore: false,
     nextOffset: null,
-  };
+  });
 }
 
 async function chooseRemove(page: Page) {

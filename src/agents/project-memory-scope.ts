@@ -1,5 +1,5 @@
 import path from "node:path";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseGitUrl } from "./utils/git.js";
 
@@ -7,7 +7,7 @@ const MAX_PROJECT_KEY_CACHE_ENTRIES = 128;
 // Cheap git reads elsewhere bound at 4s (see detectGitRoot in infra/update-check.ts).
 const GIT_CONFIG_TIMEOUT_MS = 4_000;
 
-const projectKeyByRepoRoot = new Map<string, Promise<string>>();
+const projectKeyByRepoRoot = new LruCache<Promise<string>>(MAX_PROJECT_KEY_CACHE_ENTRIES);
 
 function escapeProjectKeyForAnnotation(value: string): string {
   return value
@@ -48,12 +48,9 @@ export function resolveProjectKey(repoRoot: string): Promise<string> {
   const canonicalRoot = path.resolve(repoRoot);
   const cached = projectKeyByRepoRoot.get(canonicalRoot);
   if (cached) {
-    projectKeyByRepoRoot.delete(canonicalRoot);
-    projectKeyByRepoRoot.set(canonicalRoot, cached);
     return cached;
   }
   const pending = resolveUncachedProjectKey(canonicalRoot);
   projectKeyByRepoRoot.set(canonicalRoot, pending);
-  pruneMapToMaxSize(projectKeyByRepoRoot, MAX_PROJECT_KEY_CACHE_ENTRIES);
   return pending;
 }

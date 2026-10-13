@@ -11,55 +11,7 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import type { SessionActor } from "../config/sessions/session-entry-provenance.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
-/** Display row derived from a persisted session entry. */
-export type SessionDisplayRow = {
-  key: string;
-  updatedAt: number | null;
-  ageMs: number | null;
-  sessionId?: string;
-  sessionFile?: string;
-  spawnedBy?: string;
-  spawnedWorkspaceDir?: string;
-  spawnedCwd?: string;
-  parentSessionKey?: string;
-  forkedFromParent?: boolean;
-  spawnDepth?: number;
-  subagentRole?: SessionEntry["subagentRole"];
-  subagentControlScope?: SessionEntry["subagentControlScope"];
-  sessionStartedAt?: number;
-  lastInteractionAt?: number;
-  label?: string;
-  color?: string;
-  status?: SessionEntry["status"];
-  visibility?: SessionEntry["visibility"];
-  createdActor?: SessionEntry["createdActor"];
-  owner?: SessionEntry["owner"];
-  participants?: SessionEntry["participants"];
-  participantCount?: SessionEntry["participantCount"];
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  traceLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  responseUsage?: string;
-  groupActivation?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  totalTokensVersion?: 1;
-  model?: string;
-  modelProvider?: string;
-  providerOverride?: string;
-  modelOverride?: string;
-  contextTokens?: number;
-  runtimePolicySessionKey?: string;
-};
-
-/** Converts a persisted session entry into the shared display row shape. */
-export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDisplayRow {
+export function toSessionDisplayRow(key: string, entry: SessionEntry) {
   const updatedAt = entry?.updatedAt ?? null;
   return {
     key,
@@ -106,8 +58,9 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
   };
 }
 
-/** Converts and sorts a session store by most recent activity first. */
-export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
+export type SessionDisplayRow = ReturnType<typeof toSessionDisplayRow>;
+
+export function toSessionDisplayRows(store: Record<string, SessionEntry>) {
   return Object.entries(store)
     .map(([key, entry]) => toSessionDisplayRow(key, entry))
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -123,19 +76,16 @@ function truncateSessionKey(key: string): string {
   return `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
 }
 
-/** Formats a session key cell for table output. */
 export function formatSessionKeyCell(key: string, rich: boolean): string {
   const label = truncateSessionKey(sanitizeTerminalText(key));
   return rich ? theme.accent(label) : label;
 }
 
-/** Formats a relative session age cell for table output. */
 export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {
   const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
   return rich ? theme.muted(ageLabel) : ageLabel;
 }
 
-/** Formats a model cell for table output. */
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
   const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
@@ -145,7 +95,6 @@ function formatSessionActor(actor: SessionActor): string {
   return actor.label?.trim() || actor.id?.trim() || actor.type;
 }
 
-/** Formats compact per-session flags for table output. */
 export function formatSessionFlagsCell(
   row: Pick<
     SessionDisplayRow,
@@ -159,13 +108,12 @@ export function formatSessionFlagsCell(
     | "systemSent"
     | "abortedLastRun"
     | "sessionId"
-    | "runtimePolicySessionKey"
     | "visibility"
     | "createdActor"
     | "owner"
     | "participants"
     | "participantCount"
-  >,
+  > & { runtimePolicySessionKey?: string },
   rich: boolean,
 ): string {
   const owner = row.owner?.actor ?? row.createdActor;

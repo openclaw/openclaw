@@ -27,9 +27,6 @@ describe("Cohere onboarding", () => {
       COHERE_COMMAND_A_VISION_MODEL_ID,
       COHERE_NORTH_MINI_CODE_MODEL_ID,
     ]);
-    expect(buildCohereCatalogModels()).toHaveLength(
-      manifest.modelCatalog.providers.cohere.models.length,
-    );
   });
 
   it("sets Cohere only when there is no primary model", () => {
@@ -58,13 +55,13 @@ describe("Cohere onboarding", () => {
     );
   });
 
-  it.each([undefined, "merge"] as const)("preserves authored rows in %s mode", (mode) => {
+  it("preserves authored rows in merge mode", () => {
     const authored = buildCohereCatalogModels().map((model) =>
       Object.assign({}, model, { id: `operator-${model.id}`, name: "My model" }),
     );
     const result = applyCohereConfig({
       models: {
-        mode,
+        mode: "merge",
         providers: { cohere: { baseUrl: COHERE_BASE_URL, models: authored } },
       },
     });

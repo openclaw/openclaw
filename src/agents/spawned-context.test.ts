@@ -50,10 +50,10 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
   // config, then requester context so child runs stay in the expected checkout.
   const config = {
     agents: {
-      list: [
-        { id: "main", workspace: "/tmp/workspace-main" },
-        { id: "ops", workspace: "/tmp/workspace-ops" },
-      ],
+      entries: {
+        main: { workspace: "/tmp/workspace-main" },
+        ops: { workspace: "/tmp/workspace-ops" },
+      },
     },
   };
 

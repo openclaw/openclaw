@@ -1,7 +1,4 @@
-// Media Understanding Common module implements defaults behavior.
 import type { MediaUnderstandingCapability } from "./types.js";
-
-// Shared defaults for media-understanding limits, prompts, and concurrency.
 
 const MB = 1024 * 1024;
 

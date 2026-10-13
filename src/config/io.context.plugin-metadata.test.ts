@@ -3,24 +3,37 @@ import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
 } from "../plugins/candidate-install-owner.js";
-import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-types.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../plugins/plugin-metadata.test-support.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
-  resolvePluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshotInput: vi.fn(),
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
-  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshotInput,
+  resolvePluginMetadataSnapshotInput: mocks.resolvePluginMetadataSnapshotInput,
 }));
 
 const { resolveReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
 const { createConfigIoContext } = await import("./io.context.js");
 const { resolveConfigWidePluginMetadataSnapshot, resolveConfigWidePluginManifestRegistry } =
   await import("./io.plugin-metadata.js");
+
+const { createCanonicalAgentConfigFixture } = await import("../test-utils/config-roster.js");
+const { validateConfigObjectWithPlugins, validateConfigObjectWithPluginsAsync } =
+  await import("./validation.js");
 
 const agents = {
   ownership: "explicit" as const,
@@ -30,84 +43,44 @@ const agents = {
   },
 };
 
-function manifestRecord(params: {
-  id: string;
-  source: string;
-  channels?: string[];
-}): PluginManifestRecord {
-  return {
-    id: params.id,
-    name: params.id,
+function manifestRecord(id: string, source: string, channels: string[] = []): PluginManifestRecord {
+  return createPluginManifestRecordFixture({
+    id,
+    source,
+    rootDir: source,
+    origin: "workspace",
+    channels,
+    name: id,
     description: "test plugin",
     version: "1.0.0",
-    source: params.source,
-    rootDir: params.source,
-    manifestPath: `${params.source}/openclaw.plugin.json`,
-    origin: "workspace",
-    channels: params.channels ?? [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-  };
+  });
 }
 
 function workspaceSnapshot(
   workspaceDir: string,
   plugins: PluginManifestRecord[],
   disabledIds: readonly string[] = [],
+  policyHash = "test",
 ) {
-  const index: InstalledPluginIndex = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
+  const snapshot = createPluginMetadataSnapshotFixture({ plugins });
+  const index = {
+    ...snapshot.index,
     workspaceDir,
-    installRecords: {},
-    diagnostics: [],
-    plugins: plugins.map((plugin) => ({
-      pluginId: plugin.id,
-      source: plugin.source,
-      manifestPath: plugin.manifestPath,
-      manifestHash: "test",
-      rootDir: plugin.rootDir,
-      origin: plugin.origin,
-      enabled: !disabledIds.includes(plugin.id),
-      startup: { sidecar: false, memory: false, agentHarnesses: [] },
-      compat: [],
+    policyHash,
+    plugins: snapshot.index.plugins.map((plugin) => ({
+      ...plugin,
+      enabled: !disabledIds.includes(plugin.pluginId),
     })),
   };
   return restorePluginMetadataSnapshot({
+    ...snapshot,
     workspaceDir,
-    policyHash: "test",
+    policyHash,
     index,
     registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins, diagnostics: [] },
     plugins,
-    diagnostics: [],
+    manifestRegistry: { plugins, diagnostics: [] },
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: plugins.length,
-      manifestPluginCount: plugins.length,
-    },
     discovery: {
       candidates: plugins.map((plugin) =>
         recordPluginCandidateInstallOwner(
@@ -128,58 +101,115 @@ function workspaceSnapshot(
 
 describe("config IO plugin metadata snapshots", () => {
   beforeEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
-    mocks.resolvePluginMetadataSnapshot.mockReset();
+    mocks.resolvePluginMetadataSnapshotInput.mockReset();
   });
 
-  it("shares first-access inventory across config reads and alternating plugin selections", () => {
-    const primary = manifestRecord({ id: "primary", source: "/srv/ops/primary" });
-    const secondary = manifestRecord({ id: "secondary", source: "/srv/research/secondary" });
+  it.each(["sync", "async"] as const)(
+    "reuses Gateway metadata through %s config validation",
+    async (mode) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { ops: { workspace: "/srv/ops" } } },
+        logging: { level: "info" },
+      };
+      const prepared = manifestRecord("prepared", "/srv/ops/prepared");
+      const snapshot = workspaceSnapshot(
+        "/srv/ops",
+        [prepared],
+        [],
+        resolveInstalledPluginIndexPolicyHash(config, {}),
+      );
+      setGatewayPluginMetadataSnapshot(snapshot, { config, env: {} });
+      mocks.resolvePluginMetadataSnapshotInput.mockReturnValue(snapshot);
+      const nextConfig = { ...config, logging: { level: "debug" } };
+      const loader = createConfigIoContext({
+        env: {},
+        observe: false,
+      }).createValidationPluginMetadataSnapshotLoader({ env: {} });
+
+      const result = await withPluginCache(createPluginCache(), () =>
+        mode === "sync"
+          ? validateConfigObjectWithPlugins(nextConfig, {
+              env: {},
+              loadPluginMetadataSnapshot: loader.load,
+            })
+          : validateConfigObjectWithPluginsAsync(nextConfig, {
+              env: {},
+              loadPluginMetadataSnapshotAsync: loader.loadAsync,
+            }),
+      );
+
+      expect(result.ok).toBe(true);
+      expect(loader.getSnapshot()).toBe(snapshot);
+      expect(mocks.resolvePluginMetadataSnapshotInput).not.toHaveBeenCalled();
+    },
+  );
+
+  it("discovers the new workspace when reload changes legacy default ownership", async () => {
+    const legacyConfig = (defaultAgent: "ops" | "research") => ({
+      agents: {
+        defaults: { workspace: "/srv/base" },
+        entries: {
+          ops: { default: defaultAgent === "ops" },
+          research: { default: defaultAgent === "research" },
+        },
+      },
+    });
+    const config = createCanonicalAgentConfigFixture(legacyConfig("ops")).config;
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config, {});
+    const initial = workspaceSnapshot("/srv/base", [], [], policyHash);
+    setGatewayPluginMetadataSnapshot(initial, { config, env: {} });
+    const added = manifestRecord("new-workspace-plugin", "/srv/base/ops/plugin");
     const snapshots = new Map([
-      ["/srv/ops", workspaceSnapshot("/srv/ops", [primary])],
-      ["/srv/research", workspaceSnapshot("/srv/research", [secondary])],
+      ["/srv/base", workspaceSnapshot("/srv/base", [], [], policyHash)],
+      ["/srv/base/ops", workspaceSnapshot("/srv/base/ops", [added], [], policyHash)],
     ]);
-    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+    mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
       ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
     );
-    const config = { agents };
-    for (let read = 0; read < 2; read++) {
-      const context = createConfigIoContext({ env: {}, observe: false });
-      const loader = context.createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw: config,
+    const nextConfig = createCanonicalAgentConfigFixture(legacyConfig("research")).config;
+    const loader = createConfigIoContext({
+      env: {},
+      observe: false,
+    }).createValidationPluginMetadataSnapshotLoader({ env: {} });
+
+    const result = await withPluginCache(createPluginCache(), () =>
+      validateConfigObjectWithPluginsAsync(nextConfig, {
         env: {},
-      });
-      loader.load(config);
-      expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([
-        "primary",
-        "secondary",
-      ]);
-    }
-    for (const pluginId of ["primary", "secondary", "primary"]) {
-      expect(
-        resolveConfigWidePluginManifestRegistry({
-          config,
-          env: {},
-          pluginIds: [pluginId],
-        }).plugins.map((plugin) => plugin.id),
-      ).toEqual([pluginId]);
-    }
-    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+        loadPluginMetadataSnapshotAsync: loader.loadAsync,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([added.id]);
+    expect(
+      mocks.resolvePluginMetadataSnapshotInput.mock.calls.map(([params]) => params.workspaceDir),
+    ).toEqual(["/srv/base/ops", "/srv/base"]);
   });
 
   it("feeds merged workspace plugins to snapshot-backed read-only discovery", () => {
-    const primary = manifestRecord({ id: "primary", source: "/srv/ops/primary" });
-    const secondary = manifestRecord({
-      id: "research-chat-plugin",
-      source: "/srv/research/research-chat-plugin",
-      channels: ["research-chat"],
-    });
+    const primary = manifestRecord("primary", "/srv/ops/primary");
+    const secondary = manifestRecord("research-chat-plugin", "/srv/research/research-chat-plugin", [
+      "research-chat",
+    ]);
     const mergedRegistry = { plugins: [primary, secondary], diagnostics: [] };
+    const secondaryDiagnostic = {
+      level: "warn" as const,
+      code: "persisted-registry-stale-source" as const,
+      message: "Retained secondary registry metadata",
+    };
     const snapshots = new Map([
       ["/srv/ops", workspaceSnapshot("/srv/ops", [primary], ["primary"])],
-      ["/srv/research", workspaceSnapshot("/srv/research", [secondary])],
+      [
+        "/srv/research",
+        {
+          ...workspaceSnapshot("/srv/research", [secondary]),
+          registryDiagnostics: [secondaryDiagnostic],
+        },
+      ],
     ]);
-    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+    mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
       ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
     );
     const cfg = {
@@ -192,7 +222,6 @@ describe("config IO plugin metadata snapshots", () => {
     };
     const context = createConfigIoContext({ env: {}, observe: false });
     const loader = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: cfg,
       env: {},
     });
     loader.load(cfg);
@@ -204,6 +233,7 @@ describe("config IO plugin metadata snapshots", () => {
     ]);
     expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
     expect(snapshot?.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
+    expect(snapshot?.registryDiagnostics).toEqual([secondaryDiagnostic]);
     expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
     expect(structuredClone(snapshot?.manifestRegistry)).toEqual(mergedRegistry);
     expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(
@@ -230,16 +260,16 @@ describe("config IO plugin metadata snapshots", () => {
   });
 
   it("preserves shared source order and rejects conflicting IDs throughout the inventory", () => {
-    const primary = manifestRecord({ id: "primary", source: "/srv/ops/primary" });
-    const shared = manifestRecord({ id: "shared", source: "/plugins/shared" });
-    const secondary = manifestRecord({ id: "secondary", source: "/srv/research/secondary" });
+    const primary = manifestRecord("primary", "/srv/ops/primary");
+    const shared = manifestRecord("shared", "/plugins/shared");
+    const secondary = manifestRecord("secondary", "/srv/research/secondary");
     const snapshots = new Map([
       [
         "/srv/ops",
         workspaceSnapshot("/srv/ops", [
           primary,
           shared,
-          manifestRecord({ id: "conflict", source: "/srv/ops/conflict" }),
+          manifestRecord("conflict", "/srv/ops/conflict"),
         ]),
       ],
       [
@@ -247,11 +277,11 @@ describe("config IO plugin metadata snapshots", () => {
         workspaceSnapshot("/srv/research", [
           secondary,
           shared,
-          manifestRecord({ id: "conflict", source: "/srv/research/conflict" }),
+          manifestRecord("conflict", "/srv/research/conflict"),
         ]),
       ],
     ]);
-    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+    mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
       ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
     );
 

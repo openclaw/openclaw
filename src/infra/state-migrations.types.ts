@@ -1,13 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionScope } from "../config/sessions/types.js";
-import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationInventory,
+} from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
-import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
@@ -27,7 +29,12 @@ export type SessionStoreAliasPlan = {
   hasUnresolvedIdentity: boolean;
 };
 
-export type LegacyStateDetection = {
+type LegacyFileDetection = {
+  sourcePath: string;
+  hasLegacy: boolean;
+};
+
+export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" | "outcome"> & {
   doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
   targetMainKey: string;
@@ -36,8 +43,6 @@ export type LegacyStateDetection = {
   oauthDir: string;
   pluginSessionStoreAgentIds: readonly string[];
   sessions: {
-    legacyDir: string;
-    legacyStorePath: string;
     targetDir: string;
     targetStorePath: string;
     hasLegacy: boolean;
@@ -47,22 +52,15 @@ export type LegacyStateDetection = {
     targetStoreAliases: SessionStoreAliasPlan;
   };
   agentDir: {
-    legacyDir: string;
-    targetDir: string;
+    sources: Array<{ legacyDir: string; standalone: boolean; boundaryRoot: string }>;
+    targetDir?: string;
     hasLegacy: boolean;
   };
   pluginPlans?: {
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
   };
-  pluginStateSidecar: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  pluginInstallIndex: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  pluginInstallIndex: LegacyFileDetection;
   debugProxyCaptureSidecar: {
     sourcePath: string;
     blobDir: string;
@@ -78,58 +76,16 @@ export type LegacyStateDetection = {
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
-  taskStateSidecars: {
-    taskRunsPath: string;
-    flowRunsPath: string;
-    hasLegacy: boolean;
-  };
-  deliveryQueues: {
-    outboundPath: string;
-    sessionPath: string;
-    hasLegacy: boolean;
-  };
-  voiceWake: {
-    triggersPath: string;
-    routingPath: string;
-    hasLegacy: boolean;
-  };
-  updateCheck: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  configHealth: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  pluginBindingApprovals: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  currentConversationBindings: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  tuiLastSessions: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  commitments?: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
+  configHealth: LegacyFileDetection;
+  tuiLastSessions: LegacyFileDetection;
+  commitments?: LegacyFileDetection;
   auditLogs: LegacyAuditLogsDetection;
-  acpReplayLedger: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
   managedOutgoingImages: {
     sourceDir: string;
     hasLegacy: boolean;
   };
-  apns: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  apns: LegacyFileDetection;
   deviceAuth: {
     sourcePath: string;
     sourcePresent: boolean;
@@ -139,21 +95,13 @@ export type LegacyStateDetection = {
   execApprovals: LegacyExecApprovalsDetection;
   mcpOauth: LegacyMcpOAuthDetection;
   meetingTranscripts?: LegacyMeetingTranscriptsDetection;
-  restartSentinel?: LegacyRestartSentinelDetection;
   workspace: LegacyWorkspaceStateDetection;
   webPush: {
     subscriptionsPath: string;
     vapidKeysPath: string;
     hasLegacy: boolean;
   };
-  nodeHost: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  subagentRegistry: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  nodeHost: LegacyFileDetection;
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   warnings: string[];
@@ -179,14 +127,42 @@ export type MigrationMessages = {
   changes: string[];
   warnings: string[];
   notices?: string[];
-  /** The owner completed its required work and classified every warning as advisory. */
+  /** Active plugin owners whose required migration phases were inspected and completed. */
+  completedPluginIds?: readonly string[];
+  /** Actual loaded migration contracts, independent of detector or writer success. */
+  requiredPluginIds?: readonly string[];
+  /** Successful contract inspection found no state actions; this is not completion proof. */
+  statelessPluginIds?: readonly string[];
+  rehearsal?: { outsideRootLegacyFileCount: number };
+  /** The owner classified every warning as advisory, including a source-preserving skip. */
   warningDisposition?: "recoverable";
+  /** An intentional non-outcome can carry advisory warnings without becoming a refusal. */
+  outcome?: "skipped" | "deferred";
+  deferred?: Array<{
+    reason: "owner-mismatch";
+    recordedOwner: string;
+    configuredOwner: string;
+    path: string;
+  }>;
+  sqliteFamilies?: Array<{
+    database: string;
+    files: string[];
+    destination: string;
+    outcome: "deferred";
+    reason: "sqlite-family";
+  }>;
+  /** Every blocking warning is an ownership refusal confined to these agent databases. */
+  refusedAgentDatabasePaths?: readonly string[];
+  /** Wrong-owner copies successfully quarantined by this pass, after verifying the original. */
+  recoveredAgentDatabasePaths?: readonly string[];
 };
 
 export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
   "openclaw.legacyStateMigrationPlan.v1" as const;
 
 export type LegacyStateMigrationMode = "automatic" | "doctor";
+
+export type LegacyStateMigrationInvocationPurpose = "startup" | "doctor";
 
 export type LegacyStateMigrationEndpoint =
   | { kind: "path"; path: string }
@@ -205,11 +181,18 @@ export type LegacyStateMigrationStepPlan = {
 };
 
 export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
-  outcome: "completed" | "skipped" | "warning" | "refused";
+  outcome: "completed" | "skipped" | "warning" | "refused" | "deferred";
+  deferred?: MigrationMessages["deferred"];
+  sqliteFamilies?: MigrationMessages["sqliteFamilies"];
   changes: string[];
   warnings: string[];
   notices?: string[];
+  refusedAgentDatabasePaths?: readonly string[];
+  recoveredAgentDatabasePaths?: readonly string[];
+  rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
+  /** The first refused step that prevented this step's mutation. */
+  originatingRefusal?: { stepId: string; code: string; message: string };
 };
 
 export type PlannedPluginDoctorAction = {
@@ -221,6 +204,7 @@ export type PlannedPluginDoctorAction = {
 export type PreparedPostSessionPluginMigration = {
   step: Omit<LegacyStateMigrationStepPlan, "outcome">;
   plannedActions: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
 };
 
 type LegacyStateMigrationCandidate = {
@@ -249,4 +233,16 @@ export type LegacyStateMigrationPlan = {
   };
   steps: LegacyStateMigrationStepPlan[];
   planDigest: string;
+};
+
+export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  /** Read-only input validation may explain an independently refused, blocked writer. */
+  inspectRefusal?: () => LegacyStateMigrationStepPlan["refusal"];
+  runWithoutFileDetection?: boolean;
+  collectNotices?: boolean;
+  deferredExecution?: {
+    kind: "post-session-plugin";
+    migration: PreparedPostSessionPluginMigration;
+  };
+  run: () => MigrationMessages | Promise<MigrationMessages>;
 };

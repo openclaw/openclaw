@@ -54,14 +54,13 @@ export function createVpsAwareOAuthHandlers(params: {
       if (manualCodePromise) {
         return manualCodePromise;
       }
-      const code = await params.prompter.text({
+      return await params.prompter.text({
         message: prompt.message,
         placeholder: prompt.placeholder,
         sensitive: true,
         signal: params.manualPromptSignal,
         validate: validateRequiredInput,
       });
-      return code;
     },
   };
 }

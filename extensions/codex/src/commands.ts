@@ -1,17 +1,12 @@
-/**
- * Registers the `/codex` plugin command and lazy-loads the app-server command
- * handler implementation.
- */
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 
-type CodexCommandOptions = {
+export type CodexCommandOptions = {
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
   deps: CodexCommandDepsOverride;
 };
 
-/** Creates the reserved `/codex` command definition exposed by the plugin. */
 export function createCodexCommand(options: CodexCommandOptions): OpenClawPluginCommandDefinition {
   return {
     name: "codex",
@@ -34,8 +29,9 @@ export function createCodexCommand(options: CodexCommandOptions): OpenClawPlugin
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx) => {
+      const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
       const { handleCodexCommand } = await import("./command-dispatch.js");
-      return handleCodexCommand(ctx, options);
+      return handleCodexCommand(commandContext, options);
     },
   };
 }

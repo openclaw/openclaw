@@ -38,7 +38,7 @@ export function mockCallInput(
   return input as Record<string, unknown>;
 }
 
-export function expectContinueResult(
+export async function expectContinueResult(
   value: Awaited<ReturnType<typeof resolveReplyDirectives>>,
   fields: Record<string, unknown>,
 ) {
@@ -46,8 +46,13 @@ export function expectContinueResult(
   if (value.kind !== "continue") {
     throw new Error(`expected continue result, got ${value.kind}`);
   }
+  const levels =
+    Object.hasOwn(fields, "resolvedThinkLevel") || Object.hasOwn(fields, "resolvedReasoningLevel")
+      ? await value.result.resolveModelLevels()
+      : {};
+  const result = { ...value.result, ...levels };
   for (const [key, expected] of Object.entries(fields)) {
-    expect(value.result[key as keyof typeof value.result]).toEqual(expected);
+    expect(result[key as keyof typeof result]).toEqual(expected);
   }
 }
 

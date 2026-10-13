@@ -1,9 +1,10 @@
-/** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
 import { collectErrorGraphCandidates, extractErrorCode, readErrorCause } from "../infra/errors.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
+import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
+import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
 import type {
   PluginBundleFormat,
   PluginDiagnostic,
@@ -17,6 +18,7 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   formatPluginVerificationDiagnostic,
@@ -53,6 +55,7 @@ export function createPluginRecord(params: {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
@@ -113,12 +116,15 @@ export function createPluginRecord(params: {
     contracts: params.contracts,
     dashboard: params.dashboard,
     controlUi: params.controlUi,
+    uiCapabilities: params.uiCapabilities,
     mcpServers: params.mcpServers,
   };
 }
 
 /** Marks a discovered plugin inactive without discarding its metadata record. */
 export function markPluginActivationDisabled(record: PluginRecord, reason?: string): void {
+  record.status = "disabled";
+  record.error = reason;
   record.activated = false;
   record.activationSource = "disabled";
   record.activationReason = reason;
@@ -232,28 +238,35 @@ export function recordPluginError(params: {
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
       : null;
+  const errorCandidates = collectErrorGraphCandidates(params.error, readCauseOrNothing);
+  const errorCode = errorCandidates.map(extractErrorCode).find((code) => code !== undefined);
   // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
   const importHint =
     params.phase === "validation"
       ? undefined
-      : collectErrorGraphCandidates(params.error, readCauseOrNothing)
+      : errorCandidates
           .map((node) => resolvePluginImportHint(node, params.record, params.missingDependencyHint))
           .find((hint) => hint !== undefined);
   // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.
-  const hint = params.phase === "validation" ? undefined : (deprecatedApiHint ?? importHint?.hint);
+  const hint =
+    errorCode === "ENOSPC"
+      ? "ENOSPC: no space left on device; free space on the filesystem used by the plugin load and rerun Doctor"
+      : params.phase === "validation"
+        ? undefined
+        : (deprecatedApiHint ?? importHint?.hint);
   const displayError = hint ? `${hint} (${errorText})` : errorText;
-  params.logger?.error(`${params.logPrefix ?? ""}${displayError}`);
   params.record.status = "error";
   params.record.error = displayError;
   params.record.failedAt = new Date();
   params.record.failurePhase = params.phase;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.record.id, params.record.origin);
-  params.registry.diagnostics.push({
+  const diagnostic: PluginDiagnostic = {
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
     message: `${params.diagnosticMessagePrefix ?? ""}${displayError}`,
+    ...(errorCode ? { errorCode } : {}),
     ...(importHint?.sdkCompatibility
       ? {
           code: params.diagnosticCode ?? "sdk-incompatible",
@@ -262,19 +275,17 @@ export function recordPluginError(params: {
       : params.diagnosticCode
         ? { code: params.diagnosticCode }
         : {}),
-  });
+  };
+  params.registry.diagnostics.push(diagnostic);
+  recordPluginLoadDiagnostic(diagnostic);
+  params.logger?.error(`${params.logPrefix ?? ""}${displayError}`);
 }
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
-  for (const plugin of failedPlugins) {
-    const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase) ?? [];
-    ids.push(plugin.id);
-    grouped.set(phase, ids);
-  }
-  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
+  return [...groupPluginRecords(failedPlugins, (plugin) => plugin.failurePhase ?? "load")]
+    .map(([phase, plugins]) => `${phase}: ${plugins.map((plugin) => plugin.id).join(", ")}`)
+    .join("; ");
 }
 
 function describePluginModuleExportShape(
@@ -320,4 +331,48 @@ export function formatMissingPluginRegisterError(
     return message;
   }
   return `${message} (module shape: ${describePluginModuleExportShape(moduleExport).join("; ")})`;
+}
+
+export function recordBundleDiagnostics(params: {
+  record: PluginRecord;
+  registry: PluginRegistry;
+  inspectMcp: typeof import("./bundle-mcp.js").inspectBundleMcpRuntimeSupport;
+}): void {
+  const warn = (message: string) =>
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.record.source,
+      message,
+    });
+  const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
+    (capability) =>
+      !params.record.bundleFormat ||
+      !isBundleCapabilitySupported(params.record.bundleFormat, capability),
+  );
+  for (const capability of unsupportedCapabilities) {
+    warn(`bundle capability detected but not wired into OpenClaw yet: ${capability}`);
+  }
+  if (
+    params.record.enabled &&
+    params.record.rootDir &&
+    params.record.bundleFormat &&
+    (params.record.bundleCapabilities ?? []).includes("mcpServers")
+  ) {
+    const runtimeSupport = params.inspectMcp({
+      pluginId: params.record.id,
+      rootDir: params.record.rootDir,
+      bundleFormat: params.record.bundleFormat,
+    });
+    for (const message of runtimeSupport.diagnostics) {
+      warn(message);
+    }
+    if (runtimeSupport.unsupportedServerNames.length > 0) {
+      warn(
+        "bundle MCP servers use unsupported transports or incomplete configs " +
+          `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
+      );
+    }
+  }
+  params.registry.plugins.push(params.record);
 }

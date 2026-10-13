@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRootPathSync } from "../infra/boundary-path.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { FsSafeError } from "../infra/fs-safe.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { openPluginRootFileSync } from "./path-safety.js";
 import type {
   PluginEntryCheck,
   PluginFileCacheEntry,
@@ -15,11 +17,32 @@ import { bindPluginCacheRoot, getPluginCacheRoot } from "./plugin-cache.js";
 
 const DEFAULT_PLUGIN_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 
+function capturedPluginFile(
+  filePath: string,
+  rootRealPath: string,
+  contents: Buffer,
+  stat: fs.Stats,
+): Extract<PluginFileCacheEntry, { ok: true }> {
+  return {
+    ok: true,
+    path: filePath,
+    rootRealPath,
+    contents,
+    hash: crypto.createHash("sha256").update(contents).digest("hex"),
+    signature: { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs },
+  };
+}
+
 function entryKey(relativePath: string, rejectHardlinks: boolean): string {
   return JSON.stringify([path.normalize(relativePath), rejectHardlinks]);
 }
 
-function enforceFileSize(entry: PluginFileCacheEntry, maxBytes?: number): PluginFileCacheEntry {
+function enforceFileSize(
+  entry: PluginFileCacheEntry,
+  maxBytes?: number,
+  reason: "validation" | "io" = "validation",
+  filePath?: string,
+): PluginFileCacheEntry {
   if (
     entry.ok &&
     maxBytes !== undefined &&
@@ -29,8 +52,11 @@ function enforceFileSize(entry: PluginFileCacheEntry, maxBytes?: number): Plugin
       ok: false,
       failure: {
         ok: false,
-        reason: "validation",
-        error: new FsSafeError("too-large", `File exceeds ${maxBytes} bytes: ${entry.path}`),
+        reason,
+        error: new FsSafeError(
+          "too-large",
+          `File exceeds ${maxBytes} bytes: ${filePath ?? entry.path}`,
+        ),
       },
     };
   }
@@ -54,12 +80,21 @@ export function pluginCacheExistsSync(targetPath: string): boolean {
   return (facts.exists ??= fs.existsSync(targetPath));
 }
 
+function resolveRealpath(targetPath: string): string {
+  const absolute = path.resolve(targetPath);
+  if (absolute === targetPath && pluginCacheRealpathSync(targetPath, true) === targetPath) {
+    return targetPath;
+  }
+  // The JavaScript resolver supports paths that the native resolver may reject.
+  return fs.realpathSync(targetPath);
+}
+
 export function pluginCacheRealpathSync(targetPath: string, native = false): string | null {
   const facts = pathFacts(targetPath);
   const key = native ? "nativeRealpath" : "realpath";
   if (facts[key] === undefined) {
     try {
-      facts[key] = native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
+      facts[key] = native ? fs.realpathSync.native(targetPath) : resolveRealpath(targetPath);
       pathFacts(facts[key])[key] = facts[key];
     } catch {
       facts[key] = null;
@@ -74,15 +109,21 @@ export function refreshPluginCacheStat(targetPath: string): fs.Stats | null {
   return pluginCacheStatSync(targetPath);
 }
 
-export function pluginCacheStatSync(targetPath: string): fs.Stats | null {
+export function pluginCacheStatSync(targetPath: string, throwOnError = false): fs.Stats | null {
   const facts = pathFacts(targetPath);
   if (facts.stat === undefined) {
+    facts.statError = undefined;
     try {
       facts.stat = fs.statSync(targetPath);
       facts.exists = true;
-    } catch {
+    } catch (error) {
+      materializeErrorStack(error);
+      facts.statError = error;
       facts.stat = null;
     }
+  }
+  if (facts.stat === null && throwOnError) {
+    throw facts.statError;
   }
   return facts.stat;
 }
@@ -106,6 +147,7 @@ export function readPluginCacheDirectory(targetPath: string): fs.Dirent[] {
     try {
       root.directory = { ok: true, entries: fs.readdirSync(targetPath, { withFileTypes: true }) };
     } catch (error) {
+      materializeErrorStack(error);
       root.directory = { ok: false, error };
     }
   }
@@ -149,8 +191,10 @@ export function checkPluginCacheEntry(params: {
       checked = { ok: false, reason: "validation", error };
     }
   } else {
-    const opened = openRootFileSync({
-      absolutePath,
+    // A junction at the admitted root is trusted. Only replace the root spelling
+    // when Windows supplied a child through a different (for example 8.3) alias.
+    const opened = openPluginRootFileSync({
+      filePath: absolutePath,
       rootPath: params.rootDir,
       rootRealPath: params.rootRealPath,
       boundaryLabel: "plugin package directory",
@@ -164,6 +208,9 @@ export function checkPluginCacheEntry(params: {
       Object.assign(pathFacts(opened.path), { exists: true, stat: opened.stat });
       checked = { ok: true, path: opened.path, rootRealPath: opened.rootRealPath, exists: true };
     }
+  }
+  if (!checked.ok) {
+    materializeErrorStack(checked.error);
   }
   root.checkedEntries.set(key, checked);
   return checked;
@@ -186,15 +233,16 @@ export function readPluginCacheFile(params: {
   const limitKey = JSON.stringify([key, maxBytes]);
   // A successful strict check also satisfies the bundled/raw-reader policy;
   // its failures never stand in for a more permissive read.
-  const strictKey = entryKey(params.relativePath, true);
-  const strict = params.rejectHardlinks ? undefined : root.files.get(strictKey);
+  const strict = params.rejectHardlinks
+    ? undefined
+    : root.files.get(entryKey(params.relativePath, true));
   const cached =
     root.files.get(key) ?? root.files.get(limitKey) ?? (strict?.ok ? strict : undefined);
   if (cached) {
     return enforceFileSize(cached, maxBytes);
   }
   const requestedPath = path.resolve(lexicalRoot, params.relativePath);
-  const checked = root.checkedEntries.get(entryKey(params.relativePath, params.rejectHardlinks));
+  const checked = root.checkedEntries.get(key);
   if (pathFacts(requestedPath).exists === false || (checked && (!checked.ok || !checked.exists))) {
     const entry: PluginFileCacheEntry = {
       ok: false,
@@ -210,10 +258,10 @@ export function readPluginCacheFile(params: {
     return enforceFileSize(canonicalCached, maxBytes);
   }
   const absolutePath = path.resolve(canonicalRoot, params.relativePath);
-  const opened = openRootFileSync({
-    absolutePath,
-    rootPath: canonicalRoot,
+  const opened = openPluginRootFileSync({
+    filePath: absolutePath,
     rootRealPath: canonicalRoot,
+    rootPath: canonicalRoot,
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
     maxBytes,
@@ -238,20 +286,9 @@ export function readPluginCacheFile(params: {
         maxBytes === undefined
           ? fs.readFileSync(opened.fd)
           : readFileDescriptorBoundedSync(opened.fd, maxBytes);
-      entry = {
-        ok: true,
-        path: opened.path,
-        rootRealPath: opened.rootRealPath,
-        contents,
-        hash: crypto.createHash("sha256").update(contents).digest("hex"),
-        signature: {
-          size: opened.stat.size,
-          mtimeMs: opened.stat.mtimeMs,
-          ctimeMs: opened.stat.ctimeMs,
-        },
-      };
+      entry = capturedPluginFile(opened.path, opened.rootRealPath, contents, opened.stat);
       Object.assign(pathFacts(absolutePath), { exists: true, stat: opened.stat });
-      root.checkedEntries.set(entryKey(params.relativePath, params.rejectHardlinks), {
+      root.checkedEntries.set(key, {
         ok: true,
         path: opened.path,
         rootRealPath: opened.rootRealPath,
@@ -269,6 +306,9 @@ export function readPluginCacheFile(params: {
   }
   // fs-safe can report size rejection as a generic validation failure. Only successful
   // bytes satisfy other limits; failures retain the policy under which they were checked.
+  if (!entry.ok) {
+    materializeErrorStack(entry.failure.error);
+  }
   root.files.set(entry.ok ? key : limitKey, entry);
   return entry;
 }
@@ -297,17 +337,11 @@ function readPluginCacheRegularFile(params: {
         filePath: absolutePath,
         maxBytes: params.maxBytes,
       });
-      entry = {
-        ok: true,
-        path: path.join(canonicalRoot, filename),
-        rootRealPath: canonicalRoot,
-        contents,
-        hash: crypto.createHash("sha256").update(contents).digest("hex"),
-        signature: { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs },
-      };
+      entry = capturedPluginFile(path.join(canonicalRoot, filename), canonicalRoot, contents, stat);
       Object.assign(pathFacts(absolutePath), { exists: true, stat });
       root.files.set(key, entry);
     } catch (error) {
+      materializeErrorStack(error);
       entry = { ok: false, failure: { ok: false, reason: "io", error } };
       // A size rejection cannot stand in for an uncapped reader's policy.
       root.files.set(
@@ -319,24 +353,7 @@ function readPluginCacheRegularFile(params: {
       }
     }
   }
-  if (
-    entry.ok &&
-    params.maxBytes !== undefined &&
-    Math.max(entry.signature.size, entry.contents.length) > params.maxBytes
-  ) {
-    return {
-      ok: false,
-      failure: {
-        ok: false,
-        reason: "io",
-        error: new FsSafeError(
-          "too-large",
-          `File exceeds ${params.maxBytes} bytes: ${absolutePath}`,
-        ),
-      },
-    };
-  }
-  return entry;
+  return enforceFileSize(entry, params.maxBytes, "io", absolutePath);
 }
 
 export function readPluginCacheJsonFile(
@@ -360,6 +377,7 @@ export function parsePluginCacheJson(
         value: options.json5 ? parseJsonWithJson5Fallback(source) : JSON.parse(source),
       };
     } catch (error) {
+      materializeErrorStack(error);
       file[key] = { ok: false, error };
     }
   }

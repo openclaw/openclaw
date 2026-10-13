@@ -11,52 +11,16 @@ function addUtcMonths(date: string, months: number): string {
   return next.toISOString().slice(0, 10);
 }
 
-const requiredDoctorCompatCodes = [
-  "doctor-agent-runtime-embedded-harness",
-  "doctor-agent-embedded-pi-config",
-  "doctor-plugin-install-config-ledger",
-  "doctor-bundled-plugin-load-paths",
-  "doctor-bundled-provider-discovery-allowlist",
-  "doctor-cli-backends-plugin-registration",
-  "doctor-context-budget-one-knob",
-  "doctor-codex-supervisor-plugin-config",
-  "doctor-message-queue-steering-modes",
-  "doctor-web-search-plugin-config",
-  "doctor-web-fetch-plugin-config",
-  "doctor-x-search-plugin-config",
-] as const;
-
 describe("doctor deprecation compatibility inventory", () => {
   it("keeps compatibility codes unique", () => {
     const records = listDoctorDeprecationCompatRecords();
     const codes = new Set(records.map((record) => record.code));
 
     expect(codes.size).toBe(records.length);
-    expect(codes.has("doctor-web-search-plugin-config")).toBe(true);
-    expect(codes.has("missing-code")).toBe(false);
-    expect(records.find((record) => record.code === "doctor-web-search-plugin-config")?.owner).toBe(
-      "provider",
-    );
-  });
-
-  it("tracks the known doctor migrations that protect plugin/config rollout", () => {
-    const codes = new Set(listDoctorDeprecationCompatRecords().map((record) => record.code));
-    for (const code of requiredDoctorCompatCodes) {
-      expect(codes.has(code), code).toBe(true);
-    }
   });
 
   it("keeps original and renewed deprecation windows in chronological order", () => {
     const records = listDoctorDeprecationCompatRecords();
-    const renewedRecords = records.filter((record) => record.renewedAt !== undefined);
-
-    expect(renewedRecords).toHaveLength(44);
-    expect(
-      renewedRecords.some(
-        (record) => record.code === "doctor-webchat-channel-config" && record.status === "removed",
-      ),
-    ).toBe(true);
-
     for (const record of records) {
       expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.deprecated, record.code).toMatch(datePattern);

@@ -9,12 +9,15 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { renderUpdateGitRevisions } from "../components/update-git-revisions.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import "../components/modal-dialog.ts";
 import "../components/update-run-view.ts";
-import { postNativeUpdate } from "./native-link-routing.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
 import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
 
@@ -25,9 +28,8 @@ const UPDATE_ACCEPT_GRACE_MS = 4_000;
 const UPDATE_DIALOG_OPEN_CLASS = "update-dialog-open";
 
 type DialogPhase =
-  | { kind: "confirm" }
-  | { kind: "working"; connected: boolean }
-  | { kind: "run"; run: UpdateRunRecord; connected: boolean; readError?: string | null }
+  | { kind: "confirm" | "working" }
+  | { kind: "run"; run: UpdateRunRecord }
   | { kind: "failed"; message: string };
 
 let updateDialogOpen = false;
@@ -44,8 +46,12 @@ function formatInstalledAndAvailable(
   if (installed && available) {
     // A commit count already reads as a distance, so "Available 246 commits
     // behind" would double the framing; only a version needs the label.
+    const git = updateSchedule?.install?.git;
     const behind =
-      updateSchedule?.target?.kind === "git" || updateAvailable?.commitsBehind !== undefined;
+      git?.status === "behind" ||
+      git?.status === "diverged" ||
+      updateSchedule?.target?.kind === "git" ||
+      updateAvailable?.commitsBehind !== undefined;
     return t(behind ? "updates.confirm.versionsBehind" : "updates.confirm.versions", {
       available,
       installed,
@@ -65,7 +71,7 @@ export async function confirmAndStartUpdateRuntime(
 ): Promise<void> {
   // Native confirms block reentrancy; refuse a second request rather than
   // stacking a dialog over an update that is already being reported.
-  if (updateDialogOpen) {
+  if (updateDialogOpen || (!params.existingRun && !params.isCurrentTarget())) {
     return;
   }
   const host = document.createElement("div");
@@ -73,26 +79,19 @@ export async function confirmAndStartUpdateRuntime(
   // One surface owns the outcome at a time: the ambient copy stays hidden while
   // the dialog that started this update is still reporting it.
   document.body.classList.add(UPDATE_DIALOG_OPEN_CLASS);
-  const route = params.viaNativeApp
-    ? {
-        confirmLabel: t("updates.confirm.macAction"),
-        message: t("updates.confirm.macMessage"),
-        title: t("chat.sidebar.updateMacAndGateway"),
-      }
-    : {
-        confirmLabel: t("updates.confirm.action"),
-        message: t("updates.confirm.message"),
-        title: t("chat.sidebar.updateGateway"),
-      };
-  const details = formatInstalledAndAvailable(params.updateAvailable, params.updateSchedule);
+  let viaNativeApp = params.viaNativeApp;
+  let prepareRetry = params.prepareRetry;
+  let { updateAvailable, updateSchedule } = params;
   await new Promise<void>((resolve) => {
     let phase: DialogPhase = params.existingRun
-      ? { kind: "run", run: params.existingRun, connected: true }
+      ? { kind: "run", run: params.existingRun }
       : { kind: "confirm" };
     let settled = false;
     let stopWatching: (() => void) | undefined;
     let acceptTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let sawBusy = false;
+    let latestProgress: UpdateProgress | undefined;
+    let statusCheck: "idle" | "pending" | "success" | { error: string } = "idle";
 
     const close = () => {
       if (settled) {
@@ -115,6 +114,13 @@ export async function confirmAndStartUpdateRuntime(
       }
       close();
     };
+    const retainTarget = () => {
+      if (params.isCurrentTarget()) {
+        return true;
+      }
+      close();
+      return false;
+    };
     const watchProgress = (
       watch: NonNullable<ConfirmAndStartUpdateParams["watchUpdateProgress"]>,
       listener: (progress: UpdateProgress) => void,
@@ -123,6 +129,7 @@ export async function confirmAndStartUpdateRuntime(
         if (settled) {
           return;
         }
+        latestProgress = progress;
         // Restart retains the scoped row; its removal retires permission to display it.
         if (phase.kind === "run" && !progress.run) {
           close();
@@ -144,20 +151,36 @@ export async function confirmAndStartUpdateRuntime(
         return;
       }
       const current = phase;
+      const route = viaNativeApp
+        ? {
+            confirmLabel: t("updates.confirm.macAction"),
+            message: t("updates.confirm.macMessage"),
+            title: t("chat.sidebar.updateMacAndGateway"),
+          }
+        : {
+            confirmLabel: t("updates.confirm.action"),
+            message: t("updates.confirm.message"),
+            title: t("chat.sidebar.updateGateway"),
+          };
+
+      const details = formatInstalledAndAvailable(updateAvailable, updateSchedule);
       const run = current.kind === "run" ? current.run : null;
-      const readError = current.kind === "run" ? current.readError : null;
+      const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
-      const failed =
-        current.kind === "failed" ||
-        (run !== null && run.status !== "running" && run.status !== "succeeded");
       const finished = run !== null && run.status !== "running";
+      const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
+      const checkingStatus = statusCheck === "pending";
+      const statusCheckError = typeof statusCheck === "object" ? statusCheck.error : null;
+      const showRecovery =
+        failed || Boolean(readError) || (current.kind !== "confirm" && statusCheck !== "idle");
+      const disconnected = latestProgress?.connected === false;
       const body =
         current.kind === "run"
           ? (readError ?? "")
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? workingMessage(current.connected)
+              ? workingMessage(!disconnected)
               : `${route.message} ${t("updates.confirm.impact")}`;
       render(
         html`
@@ -169,33 +192,60 @@ export async function confirmAndStartUpdateRuntime(
                   <div class="exec-approval-sub" style="white-space: pre-line">${body}</div>
                 </div>
               </div>
+              <div role="status" aria-live="polite" class="exec-approval-sub">
+                ${
+                  disconnected && showRecovery
+                    ? t("updates.dialog.checkStatusDisconnected")
+                    : statusCheck === "success" && !readError
+                      ? t("updates.dialog.statusRefreshed")
+                      : nothing
+                }
+              </div>
+              ${statusCheckError ? html`<div role="alert" class="exec-approval-sub">${statusCheckError}</div>` : nothing}
               ${
-                details && current.kind === "confirm"
-                  ? html`<div class="exec-approval-command mono">${details}</div>`
+                details && current.kind === "confirm" && !checkingStatus && !statusCheckError
+                  ? html`<div class="exec-approval-command mono update-confirmation-details">
+                      <div>${details}</div>
+                      ${renderUpdateGitRevisions(updateSchedule, updateAvailable)}
+                    </div>`
                   : nothing
               }
               ${
                 current.kind === "run"
                   ? html`<openclaw-update-run-view
                       .run=${current.run}
-                      .connected=${current.connected}
+                      .connected=${!disconnected}
                     ></openclaw-update-run-view>`
                   : nothing
               }
               <div class="exec-approval-actions">
                 ${
-                  failed || finished || readError
-                    ? html` ${(failed || readError) && params.onCheckStatus ? html`<button type="button" class="btn" @click=${() => void params.onCheckStatus?.()}>${t("updates.dialog.checkStatus")}</button>` : nothing}
+                  finished || showRecovery
+                    ? html` ${
+                          showRecovery && params.onCheckStatus
+                            ? html`<button
+                                type="button"
+                                class="btn ${checkingStatus ? "btn--busy" : ""}"
+                                ?disabled=${checkingStatus || disconnected}
+                                @click=${checkStatus}
+                              >
+                                ${
+                                  checkingStatus
+                                    ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                          "updates.dialog.checkingStatus",
+                                        )}`
+                                    : t("updates.dialog.checkStatus")
+                                }
+                              </button>`
+                            : nothing
+                        }
                         ${
                           failed
                             ? html`<button
                                 type="button"
                                 class="btn primary"
-                                @click=${() => {
-                                  phase = { kind: "confirm" };
-                                  stopWatching?.();
-                                  draw();
-                                }}
+                                ?disabled=${checkingStatus || disconnected}
+                                @click=${retry}
                               >
                                 ${t("updates.dialog.retryUpdate")}
                               </button>`
@@ -221,16 +271,18 @@ export async function confirmAndStartUpdateRuntime(
                     : html`
                         <button
                           type="button"
-                          class="btn danger ${working ? "btn--busy" : ""}"
-                          ?disabled=${working}
+                          class="btn danger ${working || checkingStatus ? "btn--busy" : ""}"
+                          ?disabled=${working || checkingStatus}
                           @click=${confirm}
                         >
                           ${
-                            working
-                              ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                    "chat.updating",
-                                  )}`
-                              : route.confirmLabel
+                            checkingStatus
+                              ? t("updates.dialog.checkingStatus")
+                              : working
+                                ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                      "chat.updating",
+                                    )}`
+                                : route.confirmLabel
                           }
                         </button>
                         <button type="button" class="btn" autofocus @click=${finish}>
@@ -246,16 +298,133 @@ export async function confirmAndStartUpdateRuntime(
       );
     };
 
-    function confirm() {
-      if (phase.kind !== "confirm") {
+    async function refreshTarget(
+      prepare: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>,
+    ) {
+      if (!retainTarget()) {
+        return false;
+      }
+      statusCheck = "pending";
+      draw();
+      try {
+        const target = await prepare();
+        if (settled || !retainTarget()) {
+          return false;
+        }
+        if (!target) {
+          statusCheck = { error: t("updates.dialog.statusNotRefreshed") };
+          draw();
+          return false;
+        }
+        ({ updateAvailable, updateSchedule } = target);
+        statusCheck = "idle";
+        return true;
+      } catch (error) {
+        statusCheck = { error: formatUiError(error) };
+        draw();
+        return false;
+      }
+    }
+
+    function checkNativePermission(): boolean {
+      if (params.canStartNativeUpdate?.() !== true) {
+        statusCheck = { error: t("updates.adminRequired") };
+        draw();
+        return false;
+      }
+      return true;
+    }
+
+    function restoreNativeOwner(): "unchanged" | "restored" | "denied" {
+      if (
+        (!params.viaNativeApp && !params.prepareGatewayFallback) ||
+        viaNativeApp ||
+        !hasNativeUpdateBridge()
+      ) {
+        return "unchanged";
+      }
+      if (!checkNativePermission()) {
+        return "denied";
+      }
+      viaNativeApp = true;
+      prepareRetry = undefined;
+      return "restored";
+    }
+
+    async function retry() {
+      if (statusCheck === "pending" || latestProgress?.connected === false || !retainTarget()) {
         return;
       }
-      if (params.viaNativeApp && postNativeUpdate()) {
-        finish();
+      if (restoreNativeOwner() === "denied") {
         return;
+      }
+      if (prepareRetry && !(await refreshTarget(prepareRetry))) {
+        return;
+      }
+      phase = { kind: "confirm" };
+      statusCheck = "idle";
+      stopWatching?.();
+      draw();
+    }
+
+    async function checkStatus() {
+      if (
+        statusCheck === "pending" ||
+        latestProgress?.connected === false ||
+        !params.onCheckStatus ||
+        !retainTarget()
+      ) {
+        return;
+      }
+      statusCheck = "pending";
+      draw();
+      try {
+        statusCheck = (await params.onCheckStatus())
+          ? "success"
+          : latestProgress?.readError
+            ? "idle"
+            : { error: t("updates.dialog.statusNotRefreshed") };
+      } catch (error) {
+        statusCheck = { error: formatUiError(error) };
+      } finally {
+        draw();
+      }
+    }
+
+    async function confirm() {
+      if (phase.kind !== "confirm" || statusCheck === "pending" || !retainTarget()) {
+        return;
+      }
+      const nativeOwner = restoreNativeOwner();
+      if (nativeOwner !== "unchanged") {
+        if (nativeOwner === "restored") {
+          statusCheck = "idle";
+          draw();
+        }
+        return;
+      }
+      if (viaNativeApp) {
+        if (!checkNativePermission()) {
+          return;
+        }
+        if (postNativeUpdate()) {
+          finish();
+          return;
+        }
+        if (params.prepareGatewayFallback) {
+          if (await refreshTarget(params.prepareGatewayFallback)) {
+            viaNativeApp = false;
+            prepareRetry = params.prepareGatewayFallback;
+            draw();
+          }
+          return;
+        }
       }
       const watch = params.watchUpdateProgress;
       if (!watch) {
+        if (!retainTarget()) {
+          return;
+        }
         params.startGatewayUpdate();
         finish();
         return;
@@ -264,13 +433,16 @@ export async function confirmAndStartUpdateRuntime(
       if (acceptTimer !== undefined) {
         globalThis.clearTimeout(acceptTimer);
       }
-      phase = { kind: "working", connected: true };
+      phase = { kind: "working" };
       draw();
       // Start before subscribing: an accepted run clears the retained banner
       // synchronously, before its first await. Producers then emit that fresh
       // snapshot as the subscribe-time emit, so a failure still present on it
       // belongs to the previous attempt and is not this update's outcome —
       // a refused request is reported by the accept timer below instead.
+      if (!retainTarget()) {
+        return;
+      }
       params.startGatewayUpdate();
       let retainedEmit = true;
       watchProgress(watch, (progress) => {
@@ -281,23 +453,21 @@ export async function confirmAndStartUpdateRuntime(
         }
         if (progress.run && (!staleFailure || progress.run.status === "running")) {
           sawBusy = true;
-          phase = {
-            kind: "run",
-            run: progress.run,
-            connected: progress.connected,
-            readError: progress.readError,
-          };
+          phase = { kind: "run", run: progress.run };
           draw();
           return;
         }
-        const failure = progress.failure ?? progress.readError;
+        const failure =
+          progress.failure && progress.readError
+            ? `${progress.failure}\n${progress.readError}`
+            : (progress.failure ?? progress.readError);
         if (failure && !staleFailure) {
           phase = { kind: "failed", message: failure };
           draw();
           return;
         }
         sawBusy ||= progress.busy;
-        phase = { kind: "working", connected: progress.connected };
+        phase = { kind: "working" };
         draw();
       });
       if (settled) {
@@ -315,12 +485,7 @@ export async function confirmAndStartUpdateRuntime(
     if (params.existingRun && params.watchUpdateProgress) {
       watchProgress(params.watchUpdateProgress, (progress) => {
         if (progress.run) {
-          phase = {
-            kind: "run",
-            run: progress.run,
-            connected: progress.connected,
-            readError: progress.readError,
-          };
+          phase = { kind: "run", run: progress.run };
           draw();
         }
       });

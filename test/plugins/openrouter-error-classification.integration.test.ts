@@ -2,19 +2,24 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { aroundEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
 import { formatAssistantErrorText } from "../../src/agents/embedded-agent-helpers/error-text.js";
+import { recoverAfterTransportDrop } from "../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
 import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "../../src/agents/failover-error.js";
-import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../src/plugins/runtime/gateway-request-scope.js";
+import { sleepWithAbort } from "../../src/infra/backoff.js";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 
-const pluginRegistry = createEmptyPluginRegistry();
+vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/infra/backoff.js")>()),
+  sleepWithAbort: vi.fn(async () => {}),
+}));
+
+let providerOwner: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 beforeAll(async () => {
   const { default: openrouterPlugin } = await loadBundledPluginFacade<{
@@ -23,17 +28,8 @@ beforeAll(async () => {
     pluginId: "openrouter",
     artifactBasename: "index.js",
   });
-  const provider = await registerSingleProviderPlugin(openrouterPlugin);
-  pluginRegistry.providers.push({
-    pluginId: provider.id,
-    source: "test",
-    provider,
-  });
+  providerOwner = await registerSingleProviderPlugin(openrouterPlugin);
 });
-
-// Keep the real provider hooks in an owned scope, without cold discovery or
-// publishing a registry that can leak into another shared-worker test.
-aroundEach((runTest) => withPluginRuntimeRegistryScope(pluginRegistry, runTest));
 
 const model = {
   id: "example/model",
@@ -52,9 +48,16 @@ async function runAgainstOpenRouterError(params: {
   message: string;
   context: Context;
   status?: number;
-}): Promise<{ reason: string | null; requestBody: string }> {
+}): Promise<{
+  reason: string | null;
+  requestBody: string;
+  requestCount: number;
+  assistant: AssistantMessage;
+}> {
   let requestBody = "";
+  let requestCount = 0;
   const server = createServer((request, response) => {
+    requestCount += 1;
     request.setEncoding("utf8");
     request.on("data", (chunk: string) => {
       requestBody += chunk;
@@ -79,7 +82,12 @@ async function runAgainstOpenRouterError(params: {
     ).result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain(params.message);
-    return { reason: classifyAssistantFailoverReason(result), requestBody };
+    return {
+      reason: classifyAssistantFailoverReason(result, { providerOwner }),
+      requestBody,
+      requestCount,
+      assistant: result,
+    };
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -130,7 +138,7 @@ function expectFallbackBoundary(
   result: AssistantMessage,
   expected: { reason: "server_error" | "timeout"; status: number },
 ): void {
-  const reason = classifyAssistantFailoverReason(result);
+  const reason = classifyAssistantFailoverReason(result, { providerOwner });
   expect(reason).toBe(expected.reason);
   if (!reason) {
     throw new Error("expected streamed provider error to be classified");
@@ -152,6 +160,80 @@ function expectFallbackBoundary(
 }
 
 describe("OpenRouter runtime error classification", () => {
+  it.each([
+    "Prompt tokens limit exceeded: 24338 > 16443. To increase, visit https://example.invalid/organizations/synthetic/settings/keys and adjust the key's total limit",
+    "This request requires more credits, or fewer max_tokens. You requested up to 2048 tokens, but can only afford 1954. To increase, visit https://example.invalid/organizations/synthetic/settings/keys and adjust the key's total limit",
+  ])("does not retry an HTTP 402 key budget rejection: %s", async (message) => {
+    const result = await runAgainstOpenRouterError({
+      status: 402,
+      message,
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+    });
+    expect(result.assistant).toMatchObject({
+      provider: model.provider,
+      model: model.id,
+      errorCode: "402",
+      errorMessage: `402 ${message}`,
+    });
+    expect(JSON.parse(result.assistant.errorBody!)).toMatchObject({ code: 402, message });
+    expect(result.requestCount).toBe(1);
+    vi.mocked(sleepWithAbort).mockClear();
+    const fixture = await recoverAfterTransportDrop({
+      assistant: result.assistant,
+      providerOwner,
+      noTools: true,
+      replaySafe: true,
+    });
+    expect.soft(result.reason).toBe("billing");
+    expect.soft(fixture.recovery).toEqual({ action: "proceed" });
+    expect.soft(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expect.soft(fixture.markOwnedTranscriptRetry).not.toHaveBeenCalled();
+    expect.soft(fixture.onAgentEvent).not.toHaveBeenCalled();
+    expect.soft(sleepWithAbort).not.toHaveBeenCalled();
+    expect.soft(fixture.failoverRetryController.transientRetryCount).toBe(0);
+  });
+
+  it("keeps genuine HTTP 429 recovery at nine same-model retries", async () => {
+    const result = await runAgainstOpenRouterError({
+      status: 429,
+      message: "Rate limit exceeded",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+    });
+    vi.mocked(sleepWithAbort).mockClear();
+    const fixture = await recoverAfterTransportDrop({
+      assistant: result.assistant,
+      providerOwner,
+      noTools: true,
+      replaySafe: true,
+    });
+    expect(result.reason).toBe("rate_limit");
+    expect(fixture.recovery).toMatchObject({
+      action: "retry",
+      lastRetryFailoverReason: "rate_limit",
+    });
+    for (let retry = 2; retry <= 9; retry++) {
+      expect(await fixture.recover()).toMatchObject({
+        action: "retry",
+        lastRetryFailoverReason: "rate_limit",
+      });
+    }
+    expect(await fixture.recover()).toEqual({ action: "proceed" });
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(9);
+    expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(9);
+    expect(fixture.onAgentEvent).toHaveBeenCalledTimes(9);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(9);
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(9);
+    expect(fixture.onAgentEvent).toHaveBeenLastCalledWith({
+      stream: "run_status",
+      data: expect.objectContaining({
+        phase: "retrying",
+        reason: "rate_limit",
+        attempt: 10,
+        maxAttempts: 10,
+      }),
+    });
+  });
+
   it("keeps a bare streamed finish_reason error eligible for server failover", async () => {
     const result = await runAgainstOpenRouterStream(
       makeOpenRouterStreamEvent({ finishReason: "error" }),
@@ -191,7 +273,7 @@ describe("OpenRouter runtime error classification", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Rate limit exceeded");
-    const reason = classifyAssistantFailoverReason(result);
+    const reason = classifyAssistantFailoverReason(result, { providerOwner });
     expect(reason).toBe("rate_limit");
     if (!reason) {
       throw new Error("expected structured rate-limit error to be classified");

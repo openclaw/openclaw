@@ -13,9 +13,12 @@ import {
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import {
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   startControlUiE2eServer,
@@ -527,11 +530,11 @@ async function createBrowserPage(
   // Browser startup shares CI shard CPU. Bound navigation and the first
   // rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
-  await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
+  await confirmation.getByRole("dialog").waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation
-    .getByRole("button", { name: "Confirm", exact: true })
+    .getByRole("button", { name: `Switch to ${new URL(gatewayUrl).host}`, exact: true })
     .click({ timeout: controlUiSettleTimeoutMs });
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
@@ -543,17 +546,25 @@ async function captureChromiumScreenshot(
   fileName: string,
   surface: Locator,
   content: readonly Locator[],
+  scrollTo?: Locator,
 ): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  const image = await takeControlUiViewportScreenshot(surface.page(), surface, content);
+  const image = scrollTo
+    ? (
+        await takeControlUiScreenshotFrame(surface.page(), surface, content, {
+          scrollTo,
+          animations: "disabled",
+        })
+      ).png
+    : await takeControlUiViewportScreenshot(surface.page(), surface, content);
   await writeFile(path.join(artifactDir, fileName), image);
 }
 
 async function captureConnectedAuth(fileName: string, page: Page): Promise<void> {
   await captureChromiumScreenshot(fileName, page.locator(".shell"), [
-    page.getByRole("textbox", { name: "WebSocket URL", exact: true }),
+    page.getByRole("textbox", { name: "Gateway URL", exact: true }),
     page.getByText("Authenticated via trusted proxy.", { exact: true }),
   ]);
 }
@@ -706,11 +717,11 @@ suite.define(() => {
           .poll(() => rawEditorBefore.inputValue())
           .toContain(`"${configProofIdentifier}"`);
         await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
-        await rawEditorBefore.scrollIntoViewIfNeeded();
         await captureChromiumScreenshot(
           "01-real-config-id-before.png",
           connected.page.locator(".shell"),
           [rawEditorBefore],
+          rawEditorBefore,
         );
 
         const settingsUrl = new URL("settings/communications", gateway.httpUrl);
@@ -754,7 +765,6 @@ suite.define(() => {
         await rawEditor.waitFor();
         await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
         await expect.poll(() => rawEditor.inputValue()).toContain(configProofPrefixAfter);
-        await rawEditor.scrollIntoViewIfNeeded();
 
         const proof = {
           configSetRequests: configSetCount() - configSetCountBefore,
@@ -778,6 +788,7 @@ suite.define(() => {
           "02-real-config-id-after.png",
           connected.page.locator(".shell"),
           [rawEditor],
+          rawEditor,
         );
         expect(connected.errors).toEqual([]);
         await suite.closeBrowserContext(connected.context);
@@ -869,20 +880,18 @@ suite.define(() => {
           .waitFor({ timeout: controlUiSettleTimeoutMs });
 
         const seededEvidenceStart = proxy.evidence.length;
-        await connected.page.evaluate((gatewayUrl) => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          if (!app?.runtime) {
-            throw new Error("Control UI runtime is unavailable");
-          }
-          app.runtime.context.gateway.connect({
-            gatewayUrl,
-            token: "prior-gateway-token",
-            password: "prior-gateway-password",
-            bootstrapToken: "prior-gateway-bootstrap",
-          });
-        }, proxy.trustedUrl);
+        await evaluateControlUiContext(
+          connected.page,
+          (application, gatewayUrl) => {
+            application.gateway.connect({
+              gatewayUrl,
+              token: "prior-gateway-token",
+              password: "prior-gateway-password",
+              bootstrapToken: "prior-gateway-bootstrap",
+            });
+          },
+          proxy.trustedUrl,
+        );
         await waitForConnectionEvidence(
           (entry) =>
             entry.requestTarget === "/trusted" &&
@@ -892,33 +901,30 @@ suite.define(() => {
 
         const queryScopedUrl = `${proxy.trustedUrl}?credential-scope=next`;
         const queryEvidenceStart = proxy.evidence.length;
-        await connected.page.evaluate((gatewayUrl) => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          if (!app?.runtime) {
-            throw new Error("Control UI runtime is unavailable");
-          }
-          app.runtime.context.gateway.connect({ gatewayUrl });
-        }, queryScopedUrl);
+        await evaluateControlUiContext(
+          connected.page,
+          (application, gatewayUrl) => {
+            application.gateway.connect({ gatewayUrl });
+          },
+          queryScopedUrl,
+        );
         const queryEvidence = await waitForConnectionEvidence(
           (entry) =>
             entry.requestTarget === "/trusted?credential-scope=next" &&
             entry.browserConnect !== undefined,
           queryEvidenceStart,
         );
-        expect(queryEvidence.browserConnect?.authFields).toEqual(["token"]);
+        // The shared secret travels in both connect fields since the single secret field.
+        expect(queryEvidence.browserConnect?.authFields).toEqual(["password", "token"]);
 
         const originEvidenceStart = proxy.evidence.length;
-        await connected.page.evaluate((gatewayUrl) => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          if (!app?.runtime) {
-            throw new Error("Control UI runtime is unavailable");
-          }
-          app.runtime.context.gateway.connect({ gatewayUrl });
-        }, proxy.ipv4TrustedUrl);
+        await evaluateControlUiContext(
+          connected.page,
+          (application, gatewayUrl) => {
+            application.gateway.connect({ gatewayUrl });
+          },
+          proxy.ipv4TrustedUrl,
+        );
         const originEvidence = await waitForConnectionEvidence(
           (entry) => entry.requestTarget === "/trusted" && entry.gatewayResult?.ok === true,
           originEvidenceStart,

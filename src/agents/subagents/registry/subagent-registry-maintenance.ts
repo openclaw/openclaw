@@ -6,46 +6,29 @@
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { prepareSubagentMaintenanceRunsSnapshotForRead } from "./subagent-registry-state.js";
+import type { SubagentRunMaintenanceRecord } from "./subagent-registry.types.js";
 
-function isCleanupCompleteForMaintenance(entry: SubagentRunRecord): boolean {
-  return typeof entry.cleanupCompletedAt === "number";
-}
-
-function isActiveForMaintenance(entry: SubagentRunRecord): boolean {
-  return typeof entry.execution.endedAt !== "number";
-}
-
-function isPendingFinalDeliveryForMaintenance(entry: SubagentRunRecord): boolean {
-  return entry.delivery?.status === "pending" || isDeliverySuspended(entry);
-}
-
-function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunRecord): boolean {
-  return entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered";
-}
-
-function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
+function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
   if (entry.killReconciliation || entry.killIntent) {
     // The killed row is a reconciliation tombstone. Its session owns the
     // provider result until the sweeper accepts completion or finalizes cancellation.
     return true;
   }
-  if (isCleanupCompleteForMaintenance(entry)) {
+  if (typeof entry.cleanupCompletedAt === "number") {
     return false;
   }
-  if (isActiveForMaintenance(entry)) {
-    return true;
-  }
   return (
-    isAwaitingCompletionAnnounceForMaintenance(entry) || isPendingFinalDeliveryForMaintenance(entry)
+    typeof entry.execution.endedAt !== "number" ||
+    (entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered") ||
+    entry.delivery?.status === "pending" ||
+    isDeliverySuspended(entry)
   );
 }
 
-/** Lists child session keys protected from session-store maintenance pruning. */
-function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
+function protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecord>): string[] {
   const keys = new Set<string>();
-  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+  for (const entry of runs) {
     if (!shouldPreserveForMaintenance(entry)) {
       continue;
     }
@@ -57,4 +40,13 @@ function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
   return [...keys];
 }
 
-registerSessionMaintenancePreserveKeysProvider(listSessionMaintenanceProtectedSubagentSessionKeys);
+registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
+  const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(
+    subagentRuns,
+    native ? { live: true } : undefined,
+  );
+  return {
+    capture: () => protectedSubagentSessionKeys(prepared.capture().values()),
+    dispose() {},
+  };
+});

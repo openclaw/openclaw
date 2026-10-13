@@ -1,49 +1,20 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
 } from "../../lib/chat/outbox-store.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
-const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-
-afterEach(() => {
-  releaseChatAttachmentPayloads(attachmentsToRelease);
-  attachmentsToRelease.length = 0;
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function createStagedAttachment(id: string): ChatAttachment {
-  const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
-  const attachment = registerChatAttachmentPayload({
-    attachment: { id, mimeType: file.type, fileName: file.name, sizeBytes: file.size },
-    dataUrl: attachmentDataUrl,
-    file,
-  });
-  attachmentsToRelease.push(attachment);
-  return attachment;
-}
+useChatSendBrowserFixture();
 
 describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (command) => {
   const draft = `/${command} keep the correction available`;

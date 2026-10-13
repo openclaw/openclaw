@@ -123,7 +123,7 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
-    func `cancelled port sweep never touches its durable tunnel records`() async throws {
+    func `cancelled orphan cleanup never touches its durable tunnel records`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
         let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
@@ -133,17 +133,17 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        let sweep = Task {
+        let cleanup = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            await guardian.sweep(mode: .unconfigured)
+            await guardian.reapOrphanedTunnels()
         }
-        await sweep.value
+        await cleanup.value
 
         #expect(try store.records() == [orphan])
     }
 
     @Test
-    func `uncancelled unconfigured sweep still reaps orphaned tunnel records`() async throws {
+    func `orphan cleanup reaps stale tunnel records`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
         let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
@@ -153,7 +153,7 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        await guardian.sweep(mode: .unconfigured)
+        await guardian.reapOrphanedTunnels()
 
         #expect(try store.records().isEmpty)
     }
@@ -568,7 +568,18 @@ struct PortGuardianRecordStoreTests {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
 
-        for version in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] {
+        var repositoryRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            repositoryRoot.deleteLastPathComponent()
+        }
+        let manifestData = try Data(contentsOf: repositoryRoot.appendingPathComponent("package.json"))
+        let manifest = try #require(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let openclaw = try #require(manifest["openclaw"] as? [String: Any])
+        let schemaVersions = try #require(openclaw["schemaVersions"] as? [String: Any])
+        let currentSchemaVersion = try #require(schemaVersions["state"] as? Int)
+        try #require(currentSchemaVersion >= 4)
+
+        for version in 4...currentSchemaVersion {
             let databaseURL = fixture.root.appendingPathComponent("supported-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             let store = try PortGuardianRecordStore(databaseURL: databaseURL)
@@ -580,7 +591,7 @@ struct PortGuardianRecordStoreTests {
             #expect(try store.records() == [record])
         }
 
-        for version in [17, 99] {
+        for version in [currentSchemaVersion + 1, 99] {
             let databaseURL = fixture.root.appendingPathComponent("newer-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             #expect(throws: PortGuardianStoreError.self) {

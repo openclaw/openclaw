@@ -39,7 +39,6 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
       baseUrl: "https://nextcloud.example.com",
       botSecret: "secret", // pragma: allowlist secret
       webhookPath: "/nextcloud-talk-webhook",
-      webhookPort: 8788,
     },
   };
 }

@@ -46,10 +46,10 @@ extension GatewayConnectionControlTests {
                 AppStateStore.shared.profileAccentHex = previousAccent
             }
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
-            #expect(await self.waitForMainSessionKey("a-main"))
-            let initialDeadline = ContinuousClock.now + .seconds(2)
-            while AppStateStore.shared.profileAccentHex != nil, ContinuousClock.now < initialDeadline {
-                try await Task.sleep(for: .milliseconds(10))
+            try await TestWait.observed("Gateway A main session") { activity.mainSessionKey == "a-main" }
+            #expect(activity.mainSessionKey == "a-main")
+            try await TestWait.observed("initial profile accent") {
+                AppStateStore.shared.profileAccentHex == nil
             }
             #expect(AppStateStore.shared.profileAccentHex == nil)
 
@@ -57,7 +57,7 @@ extension GatewayConnectionControlTests {
             let buffered = await connection.subscribe()
             // Leave this real subscription unread while its owner advances. The
             // live Control consumer stays free to process work on the MainActor.
-            let producer = Task.detached {
+            async let producer: Void = { @Sendable in
                 if replacement.contains("shutdown") {
                     await connection._test_handlePush(
                         .event(EventFrame(type: "event", event: "shutdown")), socketGeneration: 1)
@@ -73,9 +73,8 @@ extension GatewayConnectionControlTests {
                 }
                 if replacement == "reconnect" || replacement == "shutdown" {
                     session.latestTask()?.emitReceiveFailure()
-                    let deadline = ContinuousClock.now + .seconds(2)
-                    while await connection._test_activeSocketGeneration() != nil, ContinuousClock.now < deadline {
-                        try await Task.sleep(for: .milliseconds(10))
+                    try await TestWait.state("retired primary socket") {
+                        await connection._test_activeSocketGeneration() == nil
                     }
                 } else {
                     if replacement != "shutdown" {
@@ -100,20 +99,26 @@ extension GatewayConnectionControlTests {
                             payload: OpenClawProtocol.AnyCodable(["ts": 1, "status": acknowledgement]))),
                         socketGeneration: socket)
                 }
-            }
+            }()
             do {
-                try await producer.value
+                try await producer
                 try await Self.assertBufferedOwnership(buffered, replacement: replacement)
             } catch {
                 await control.disconnect()
                 throw error
             }
-            let deadline = ContinuousClock.now + .seconds(2)
-            while control.lastHeartbeatEvent?.status != acknowledgement,
-                  !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
-                  ContinuousClock.now < deadline
-            {
-                try await Task.sleep(for: .milliseconds(10))
+            if ["unavailable", "adopted", "shutdown"].contains(replacement) {
+                let deadline = ContinuousClock.now + .seconds(2)
+                while control.lastHeartbeatEvent?.status != acknowledgement,
+                      !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
+                      ContinuousClock.now < deadline
+                {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+            } else {
+                try await TestWait.state("current primary heartbeat") {
+                    control.lastHeartbeatEvent?.status == acknowledgement
+                }
             }
             if replacement == "shutdown" {
                 guard case .degraded = control.state else {
@@ -137,21 +142,24 @@ extension GatewayConnectionControlTests {
 
     private nonisolated static func assertBufferedOwnership(
         _ stream: AsyncStream<GatewayConnection.PushDelivery>,
-        replacement: String) async throws
+        replacement: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
     {
         let admitsReplacement = ["admitted", "reconnect", "replaced-shutdown"].contains(replacement)
         let terminalEvent = admitsReplacement ? "heartbeat" : (replacement == "shutdown" ? "shutdown" : "agent")
-        let deliveries = try await AsyncTimeout.withTimeout(
-            seconds: 2,
-            onTimeout: { CancellationError() },
-            operation: {
-                var queued: [GatewayConnection.PushDelivery] = []
-                for await delivery in stream {
-                    queued.append(delivery)
-                    if case let .event(event) = delivery.push, event.event == terminalEvent { break }
-                }
-                return queued
-            })
+        var deliveries: [GatewayConnection.PushDelivery] = []
+        var reachedTerminal = false
+        for await delivery in stream {
+            deliveries.append(delivery)
+            if case let .event(event) = delivery.push, event.event == terminalEvent {
+                reachedTerminal = true
+                break
+            }
+        }
+        guard reachedTerminal, !Task.isCancelled else {
+            Issue.record("Still waiting for buffered \(terminalEvent) push", sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
         let oldDeliveries = deliveries.filter { $0.mainSessionKey == "a-main" }
         #expect(oldDeliveries.contains {
             if case .snapshot = $0.push {
@@ -194,6 +202,7 @@ extension GatewayConnectionControlTests {
             let gate = GatewayConnectionSuspensionGate()
             let deferAccent = LockIsolated(false)
             let replied = LockIsolated(false)
+            let replyRecorded = AsyncTestSignal()
             let session = GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                     guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message),
@@ -202,7 +211,10 @@ extension GatewayConnectionControlTests {
                     else { return }
                     if frame["method"] as? String == "users.prefs.get", deferAccent.value {
                         await gate.suspend()
-                        defer { replied.withValue { $0 = true } }
+                        defer {
+                            replied.withValue { $0 = true }
+                            replyRecorded.notify()
+                        }
                         if failResponse { throw URLError(.networkConnectionLost) }
                         socket.emitReceiveSuccess(.data(Data("""
                         {"type":"res","id":"\(id)","ok":true,
@@ -223,10 +235,7 @@ extension GatewayConnectionControlTests {
             defer { state.profileAccentHex = previousAccent }
             state.profileAccentHex = "#123456"
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
-            let initialDeadline = ContinuousClock.now + .seconds(2)
-            while state.profileAccentHex != nil, ContinuousClock.now < initialDeadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            try await TestWait.observed("initial profile accent") { state.profileAccentHex == nil }
             #expect(state.profileAccentHex == nil)
 
             deferAccent.withValue { $0 = true }
@@ -241,6 +250,7 @@ extension GatewayConnectionControlTests {
             while state.profileAccentHex == "#0000bb", ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
+            try await replyRecorded.wait("retired profile accent response") { replied.value }
             #expect(replied.value)
             #expect(state.profileAccentHex == "#0000bb")
             await control.disconnect()

@@ -1,8 +1,9 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
-const TERMINAL_ENVIRONMENT_STATES = new Set(["destroyed", "failed", "orphaned"]);
 const RECOVERY_BUNDLE_PLACEMENT_STATES = new Set([
   "syncing",
   "starting",
@@ -12,15 +13,22 @@ const RECOVERY_BUNDLE_PLACEMENT_STATES = new Set([
 ]);
 
 export function listRetainedWorkerBundleHashes(params: {
-  environments: Pick<WorkerEnvironmentRecord, "bootstrapReceipt" | "state">[];
+  environments: Pick<WorkerEnvironmentRecord, "bootstrapReceipt" | "profileSnapshot" | "state">[];
   placements: WorkerSessionPlacementRecord[];
 }): string[] {
   return uniqueStrings([
-    ...params.environments.flatMap((record) =>
-      record.bootstrapReceipt && !TERMINAL_ENVIRONMENT_STATES.has(record.state)
-        ? [record.bootstrapReceipt.bundleHash]
-        : [],
-    ),
+    ...params.environments.flatMap((record) => {
+      if (isTerminalWorkerEnvironmentState(record.state)) {
+        return [];
+      }
+      // Provisioning owns the admitted archive before readiness publishes its receipt.
+      const bundleHash =
+        record.bootstrapReceipt?.bundleHash ??
+        (record.state === "provisioning"
+          ? readWorkerProjectPreparation(record.profileSnapshot.project)?.artifacts.workerBundleHash
+          : undefined);
+      return bundleHash ? [bundleHash] : [];
+    }),
     ...params.placements.flatMap((placement) =>
       placement.workerBundleHash && RECOVERY_BUNDLE_PLACEMENT_STATES.has(placement.state)
         ? [placement.workerBundleHash]

@@ -3,21 +3,26 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBuildIdentityEnvironment } from "../../scripts/lib/build-identity.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
-const buildIdentityUrl = new URL("../../scripts/lib/build-identity.mts", import.meta.url).href;
-const tsxPreloadUrl = new URL("../../scripts/tsx.mjs", import.meta.url).href;
+const buildIdentityUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildIdentity);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env) {
   const result = spawnSync(
-    process.execPath,
+    testNodeExecPath,
     [
-      "--import",
-      tsxPreloadUrl,
+      ...resolveRuntimeWorkerArgv(buildIdentityUrl, testNodeExecPath).slice(0, -1),
       "--input-type=module",
       "--eval",
-      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl)}); process.stdout.write(JSON.stringify(readCurrentGitCommit()));`,
+      `const { readCurrentGitCommit } = await import(${JSON.stringify(buildIdentityUrl.href)}); process.stdout.write(JSON.stringify(readCurrentGitCommit()));`,
     ],
     {
       cwd,

@@ -3,14 +3,16 @@ import { defaultRangeExtractor, type Range, Virtualizer } from "@tanstack/virtua
 export function extractTranscriptRange(
   range: Range,
   rowIndexesByKey: ReadonlyMap<string, number>,
-  focusedRowKey: string | null,
+  retainedRowKeys: readonly (string | null)[],
 ): number[] {
   const indexes = defaultRangeExtractor(range);
-  const focused = focusedRowKey === null ? undefined : rowIndexesByKey.get(focusedRowKey);
-  if (focused === undefined || focused < 0 || focused >= range.count || indexes.includes(focused)) {
-    return indexes;
+  for (const key of retainedRowKeys) {
+    const index = key === null ? undefined : rowIndexesByKey.get(key);
+    if (index !== undefined && index >= 0 && index < range.count && !indexes.includes(index)) {
+      indexes.push(index);
+    }
   }
-  return [...indexes, focused].toSorted((left, right) => left - right);
+  return indexes.toSorted((left, right) => left - right);
 }
 
 export function previewTranscriptRowKeys(
@@ -25,7 +27,7 @@ export function previewTranscriptRowKeys(
     initialOffset: virtualizer.scrollOffset ?? virtualizer.options.initialOffset,
     initialRect: virtualizer.scrollRect ?? virtualizer.options.initialRect,
     onChange: () => undefined,
-    rangeExtractor: (range) => extractTranscriptRange(range, nextIndexes, focusedRowKey),
+    rangeExtractor: (range) => extractTranscriptRange(range, nextIndexes, [focusedRowKey]),
   });
   preview.scrollElement = virtualizer.scrollElement;
   // Isolate the fork's key-anchor transition so teardown selection cannot

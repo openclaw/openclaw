@@ -3,14 +3,13 @@ import type {
   SkillLibraryEntry,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
 import "../../components/modal-dialog.ts";
 
-export function renderLibraryIdentity(
-  entry: Pick<SkillLibraryEntry, "skillId" | "revision" | "name">,
-) {
+function renderLibraryIdentity(entry: Pick<SkillLibraryEntry, "skillId" | "revision" | "name">) {
   return html`<details class="muted" style="overflow-wrap: anywhere; min-width: 0;">
     <summary>${t("skillLibrary.technicalDetails")}</summary>
     <dl>
@@ -22,6 +21,21 @@ export function renderLibraryIdentity(
       <dd>${entry.name}</dd>
     </dl>
   </details>`;
+}
+
+function renderLibraryDialogHeader(title: string, onClose: () => void, busy = false) {
+  return html`<div class="exec-approval-header">
+    <strong class="exec-approval-title">${title}</strong
+    ><button
+      type="button"
+      class="btn btn--icon btn--ghost"
+      aria-label=${t("common.close")}
+      ?disabled=${busy}
+      @click=${onClose}
+    >
+      ${icons.x}
+    </button>
+  </div>`;
 }
 
 /** Session access grants a read of one pin, never the library editor or revision history. */
@@ -39,15 +53,10 @@ export function renderLibraryPinRead(props: {
     style="--openclaw-modal-width: 960px;"
     @modal-cancel=${props.onClose}
   >
-    <div class="md-preview-dialog__panel">
-      <div class="md-preview-dialog__header">
-        <strong>${read.entry.slug}</strong
-        ><button type="button" class="btn btn--sm" @click=${props.onClose}>
-          ${t("common.close")}
-        </button>
-      </div>
+    <div class="exec-approval-card skill-reader-dialog">
+      ${renderLibraryDialogHeader(read.entry.slug, props.onClose)}
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
       >
         <p>

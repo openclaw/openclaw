@@ -34,12 +34,14 @@ Reasoning-capable Cohere models support two Compatibility API reasoning modes. O
 
 ## Get started
 
-1. Install the official plugin and restart the Gateway:
+1. Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/cohere-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 2. Create a Cohere API key.
 3. Run onboarding:

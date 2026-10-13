@@ -1,34 +1,21 @@
-// Zalouser plugin module implements directory behavior.
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import { parseZalouserDirectoryGroupId } from "./session-route.js";
+import type { ZcaFriend } from "./types.js";
+import type { listZaloGroupMembers } from "./zalo-js.js";
 
 type ZalouserDirectoryDeps = {
-  listZaloGroupMembers: (
-    profile: string,
-    groupId: string,
-  ) => Promise<
-    Array<{
-      userId: string;
-      displayName?: string | null;
-      avatar?: string | null;
-    }>
-  >;
+  listZaloGroupMembers: typeof listZaloGroupMembers;
 };
 
-export function mapZalouserDirectoryUser(params: {
-  id: string;
-  name?: string | null;
-  avatarUrl?: string | null;
-  raw?: unknown;
-}): ChannelDirectoryEntry {
+export function mapZalouserDirectoryUser(user: ZcaFriend): ChannelDirectoryEntry {
   return {
     kind: "user",
-    id: params.id,
-    name: params.name ?? undefined,
-    avatarUrl: params.avatarUrl ?? undefined,
-    raw: params.raw,
+    id: user.userId,
+    name: user.displayName ?? undefined,
+    avatarUrl: user.avatar ?? undefined,
+    raw: user,
   };
 }
 
@@ -44,13 +31,6 @@ export async function listZalouserDirectoryGroupMembers(
   const account = resolveZalouserAccountSync({ cfg: params.cfg, accountId: params.accountId });
   const normalizedGroupId = parseZalouserDirectoryGroupId(params.groupId);
   const members = await deps.listZaloGroupMembers(account.profile, normalizedGroupId);
-  const rows = members.map((member) =>
-    mapZalouserDirectoryUser({
-      id: member.userId,
-      name: member.displayName,
-      avatarUrl: member.avatar ?? null,
-      raw: member,
-    }),
-  );
+  const rows = members.map(mapZalouserDirectoryUser);
   return typeof params.limit === "number" && params.limit > 0 ? rows.slice(0, params.limit) : rows;
 }

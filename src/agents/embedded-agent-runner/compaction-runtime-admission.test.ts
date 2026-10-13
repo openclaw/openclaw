@@ -39,7 +39,6 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 it.each([
   { nextProvider: "summary-new", locked: false },
   { nextProvider: "summary-new", locked: false, alias: true },
-  { nextProvider: "summary-new", locked: false, mutate: "input" },
   { nextProvider: "summary-new", locked: false, mutate: "recipe" },
   { nextProvider: undefined, locked: false },
   { nextProvider: "summary-new", locked: true },
@@ -97,7 +96,7 @@ it.each([
     });
     const previousConfig = config("summary-old");
     const committedConfig = config(nextProvider);
-    loadAndActivateRootPluginRegistry({
+    await loadAndActivateRootPluginRegistry({
       config: previousConfig,
       workspaceDir: gatewayWorkspace,
       onlyPluginIds: ["caller-provider"],
@@ -143,9 +142,7 @@ it.each([
     };
     const pending = acquireAgentRunPreparedModelRuntime(input, admissionOptions);
     const derive = admissionOptions.deriveRuntimePluginSelections;
-    if (mutate === "input") {
-      extra.provider = "summary-old";
-    } else if (mutate === "recipe") {
+    if (mutate === "recipe") {
       admissionOptions.deriveRuntimePluginSelections = () => [
         { ...requested, provider: "summary-old" },
       ];
@@ -154,7 +151,6 @@ it.each([
       resumePublication.resolve();
       await publishing;
       const lease = await pending;
-      extra.provider = "requested-extra";
       admissionOptions.deriveRuntimePluginSelections = derive;
       try {
         const providers = lease.snapshot.pluginRegistry?.providers.map(
@@ -180,21 +176,21 @@ it.each([
         ).toBe(lease.snapshot);
         const repeated = await acquireAgentRunPreparedModelRuntime(input, admissionOptions);
         expect(repeated.snapshot).toBe(lease.snapshot);
-        repeated.release();
+        await repeated[Symbol.asyncDispose]();
         expect(
           previous.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id),
         ).toEqual(["caller-provider", "requested-extra", "summary-old"]);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     } finally {
       resumePublication.resolve();
       await publishing;
       await pending.then(
-        (lease) => lease.release(),
+        (lease) => lease[Symbol.asyncDispose](),
         () => {},
       );
-      previous.release();
+      await previous[Symbol.asyncDispose]();
     }
   },
 );

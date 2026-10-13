@@ -20,10 +20,7 @@ export function attachModelProviderLocalServiceReconciler<TModel extends object>
   model: TModel,
   reconcile: ProviderLocalServiceReconciler | undefined,
 ): TModel {
-  // SAFETY: the spread preserves TModel; the intersection exposes only the symbol assigned below.
-  const next = { ...model } as TModel & ModelWithProviderLocalServiceReconciler;
-  next[MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL] = reconcile;
-  return next;
+  return { ...model, [MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL]: reconcile };
 }
 
 export function getModelProviderLocalServiceReconciler(

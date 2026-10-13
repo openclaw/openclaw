@@ -1,10 +1,22 @@
 // Discord tests cover sender-scoped media policy propagation for guild media actions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as discordGuildActionRuntime from "../send.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
-import { discordGuildActionRuntime } from "./runtime-deps.js";
 
-const originalGuildActionRuntime = { ...discordGuildActionRuntime };
+const guildActionMocks = vi.hoisted(() => ({
+  hasAnyChannelPermissionDiscord: vi.fn(async () => true),
+  hasAnyGuildPermissionDiscord: vi.fn(async () => true),
+  uploadEmojiDiscord: vi.fn(async () => ({ id: "emoji-1" })),
+  uploadStickerDiscord: vi.fn(async () => ({ id: "sticker-1" })),
+  resolveEventCoverImage: vi.fn(async () => "data:image/png;base64,aW1n"),
+  createScheduledEventDiscord: vi.fn(async () => ({ id: "event-1" })),
+}));
+
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return { ...actual, ...guildActionMocks };
+});
 
 const senderRoots = ["/srv/openclaw/workspace-sender"] as const;
 const mediaReadFile = async () => Buffer.from("png");
@@ -36,18 +48,15 @@ function expectSenderMediaPolicy(opts: unknown) {
 
 describe("Discord guild media actions forward the sender-scoped media policy", () => {
   beforeEach(() => {
-    Object.assign(discordGuildActionRuntime, originalGuildActionRuntime, {
-      hasAnyChannelPermissionDiscord: vi.fn(async () => true),
-      hasAnyGuildPermissionDiscord: vi.fn(async () => true),
-      uploadEmojiDiscord: vi.fn(async () => ({ id: "emoji-1" })),
-      uploadStickerDiscord: vi.fn(async () => ({ id: "sticker-1" })),
-      resolveEventCoverImage: vi.fn(async () => "data:image/png;base64,aW1n"),
-      createScheduledEventDiscord: vi.fn(async () => ({ id: "event-1" })),
-    });
+    for (const mock of Object.values(guildActionMocks)) {
+      mock.mockReset();
+    }
   });
 
   afterEach(() => {
-    Object.assign(discordGuildActionRuntime, originalGuildActionRuntime);
+    for (const mock of Object.values(guildActionMocks)) {
+      mock.mockReset();
+    }
   });
 
   it("passes the policy to the emoji upload loader options", async () => {

@@ -2,22 +2,6 @@ import type { SessionToolOverrides } from "./patch.ts";
 
 type BooleanOverrideGroup = "mcpServers" | "skills";
 
-function copyDynamicKeyRecord<T>(
-  values: Record<string, T> | undefined,
-  copyValue: (value: T) => T = (value) => value,
-): Record<string, T> {
-  const copy: Record<string, T> = {};
-  for (const [name, value] of Object.entries(values ?? {})) {
-    Object.defineProperty(copy, name, {
-      configurable: true,
-      enumerable: true,
-      value: copyValue(value),
-      writable: true,
-    });
-  }
-  return copy;
-}
-
 export function readOwnEntry<T>(
   values: Readonly<Record<string, T>> | null | undefined,
   name: string,
@@ -36,19 +20,33 @@ function setOwnValue<T>(values: Record<string, T>, name: string, value: T): void
 
 function copyOverrides(overrides: SessionToolOverrides | null | undefined): SessionToolOverrides {
   return {
-    ...(overrides?.mcpServers ? { mcpServers: copyDynamicKeyRecord(overrides.mcpServers) } : {}),
+    ...(overrides?.mcpServers ? { mcpServers: { ...overrides.mcpServers } } : {}),
     ...(overrides?.mcpToolsDeny
       ? {
-          mcpToolsDeny: copyDynamicKeyRecord(overrides.mcpToolsDeny, (tools) => [...tools]),
+          mcpToolsDeny: Object.fromEntries(
+            Object.entries(overrides.mcpToolsDeny).map(([name, tools]) => [name, [...tools]]),
+          ),
         }
       : {}),
-    ...(overrides?.skills ? { skills: copyDynamicKeyRecord(overrides.skills) } : {}),
+    ...(overrides?.skills ? { skills: { ...overrides.skills } } : {}),
     ...(overrides?.webSearch !== undefined ? { webSearch: overrides.webSearch } : {}),
   };
 }
 
 export function resolveToolOverrideState(baseEnabled: boolean, override: boolean | undefined) {
   return override ?? baseEnabled;
+}
+
+/**
+ * Effective web-search state for the session capability toggle.
+ * Global `tools.web.search.enabled: false` is a kill switch: a session
+ * `webSearch: true` override cannot re-enable search.
+ */
+export function resolveWebSearchToolOverrideState(
+  baseEnabled: boolean,
+  override: boolean | undefined,
+) {
+  return baseEnabled && (override ?? baseEnabled);
 }
 
 export function nextBooleanToolOverrides(
@@ -59,7 +57,7 @@ export function nextBooleanToolOverrides(
   baseEnabled: boolean,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
-  const values = copyDynamicKeyRecord(Object.hasOwn(next, group) ? next[group] : undefined);
+  const values = (Object.hasOwn(next, group) ? next[group] : undefined) ?? {};
   if (nextEnabled === baseEnabled) {
     delete values[name];
   } else {
@@ -79,6 +77,13 @@ export function nextWebSearchToolOverrides(
   baseEnabled = true,
 ): SessionToolOverrides {
   const next = copyOverrides(current);
+  // Clear stale enablement without discarding an explicit session suppression.
+  if (!baseEnabled) {
+    if (next.webSearch === true) {
+      delete next.webSearch;
+    }
+    return next;
+  }
   if (nextEnabled === baseEnabled) {
     delete next.webSearch;
   } else {
@@ -101,7 +106,7 @@ export function nextMcpToolsDenyOverrides(
   } else {
     deniedTools.delete(rawToolName);
   }
-  const mcpToolsDeny = copyDynamicKeyRecord(currentDeny, (tools) => [...tools]);
+  const mcpToolsDeny = currentDeny ?? {};
   if (deniedTools.size > 0) {
     setOwnValue(mcpToolsDeny, server, [...deniedTools].toSorted());
   } else {

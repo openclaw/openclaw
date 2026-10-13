@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import {
   getWebAuthAgeMs,
   hasWebCredsSync,
@@ -285,13 +286,9 @@ describe("auth-store", () => {
         "utf-8",
       );
 
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createRuntimeSpies();
 
-      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
+      await expect(logoutWeb({ authDir, runtime })).resolves.toBe(true);
       expect(fsSync.existsSync(authDir)).toBe(false);
     });
   });
@@ -327,17 +324,13 @@ describe("auth-store", () => {
       }
       return await originalRm.call(fs, target, options as never);
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     try {
       hoisted.oauthDir = authDir;
-      await expect(
-        logoutWeb({ authDir, isLegacyAuthDir: true, runtime: runtime as never }),
-      ).rejects.toThrow("EACCES");
+      await expect(logoutWeb({ authDir, isLegacyAuthDir: true, runtime })).rejects.toThrow(
+        "EACCES",
+      );
       expect(fsSync.existsSync(authDir)).toBe(true);
       expect(fsSync.existsSync(path.join(authDir, "oauth.json"))).toBe(true);
     } finally {
@@ -398,13 +391,9 @@ describe("auth-store", () => {
   it("does not delete unrelated non-empty directories on logout", async () => {
     const authDir = tempDirs.make("openclaw-wa-auth-unrelated-");
     fsSync.writeFileSync(path.join(authDir, "notes.txt"), "keep me", "utf-8");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
-    await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(false);
+    await expect(logoutWeb({ authDir, runtime })).resolves.toBe(false);
     expect(fsSync.existsSync(authDir)).toBe(true);
     expect(fsSync.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
   });

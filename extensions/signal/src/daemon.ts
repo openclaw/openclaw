@@ -1,4 +1,3 @@
-// Signal plugin module implements daemon behavior.
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { signalCheck } from "./client-adapter.js";
+import { prepareSignalSocketPath } from "./socket-path.js";
 
 type SignalDaemonOpts = {
   cliPath: string;
@@ -18,6 +18,7 @@ type SignalDaemonOpts = {
   account?: string;
   httpHost: string;
   httpPort: number;
+  socketPath?: string;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
@@ -26,10 +27,8 @@ type SignalDaemonOpts = {
 };
 
 export type SignalDaemonHandle = {
-  pid?: number;
   stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
-  isExited: () => boolean;
 };
 
 const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1_500;
@@ -51,8 +50,15 @@ function formatSignalDaemonEndpoint(httpHost: string, httpPort: number): string 
 export async function assertSignalDaemonEndpointAvailable(params: {
   httpHost: string;
   httpPort: number;
+  socketPath?: string;
   abortSignal?: AbortSignal;
 }): Promise<void> {
+  if (params.socketPath) {
+    params.abortSignal?.throwIfAborted();
+    await prepareSignalSocketPath(params.socketPath, params.abortSignal);
+    params.abortSignal?.throwIfAborted();
+    return;
+  }
   try {
     await ensurePortAvailable(params.httpPort, params.httpHost, params.abortSignal);
   } catch (error) {
@@ -81,8 +87,6 @@ export async function waitForSignalDaemonReady(params: {
   baseUrl: string;
   abortSignal?: AbortSignal;
   startupDeadlineMs: number;
-  logAfterMs: number;
-  logIntervalMs?: number;
   runtime: RuntimeEnv;
   waitForTransportReadyFn?: typeof waitForTransportReady;
 }): Promise<void> {
@@ -91,8 +95,8 @@ export async function waitForSignalDaemonReady(params: {
   await waitForTransportReadyFn({
     label: "signal daemon",
     timeoutMs,
-    logAfterMs: params.logAfterMs,
-    logIntervalMs: params.logIntervalMs,
+    logAfterMs: 10_000,
+    logIntervalMs: 10_000,
     pollIntervalMs: 150,
     abortSignal: params.abortSignal,
     runtime: params.runtime,
@@ -181,10 +185,17 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
     args.push("-a", opts.account);
   }
   args.push("daemon");
-  args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  if (opts.socketPath) {
+    args.push("--socket", opts.socketPath);
+  } else {
+    args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  }
   args.push("--no-receive-stdout");
 
-  if (opts.receiveMode) {
+  if (opts.socketPath) {
+    // The socket client explicitly subscribes; automatic subscriptions would duplicate events.
+    args.push("--receive-mode", "manual");
+  } else if (opts.receiveMode) {
     args.push("--receive-mode", opts.receiveMode);
   }
   if (opts.ignoreAttachments) {
@@ -210,17 +221,15 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
   let exited = false;
-  let settledExit = false;
   let stopPromise: Promise<void> | undefined;
   let resolveExit!: (value: SignalDaemonExitEvent) => void;
   const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
     resolveExit = resolve;
   });
   const settleExit = (value: SignalDaemonExitEvent) => {
-    if (settledExit) {
+    if (exited) {
       return;
     }
-    settledExit = true;
     exited = true;
     resolveExit(value);
   };
@@ -256,9 +265,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   });
 
   return {
-    pid: child.pid ?? undefined,
     exited: exitedPromise,
-    isExited: () => exited,
     stop: () => {
       if (exited) {
         return Promise.resolve();

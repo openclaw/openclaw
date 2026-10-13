@@ -1,8 +1,9 @@
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { ApplicationContext } from "./context.ts";
+import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 
-type GatewaySnapshot = ApplicationContext["gateway"]["snapshot"];
+type GatewaySnapshot = Pick<ApplicationContext["gateway"]["snapshot"], "phase" | "hello">;
 
 function isPanelAvailable(snapshot: GatewaySnapshot, method: string): boolean {
   return (
@@ -14,6 +15,20 @@ function isPanelAvailable(snapshot: GatewaySnapshot, method: string): boolean {
 
 export function isBrowserPanelAvailable(snapshot: GatewaySnapshot): boolean {
   return isPanelAvailable(snapshot, "browser.request");
+}
+
+/** The session owner checks target membership, tool policy, and sandbox requirements. */
+export function isBrowserDashboardAvailable(
+  snapshot: Pick<ApplicationContext["gateway"]["snapshot"], "client" | "phase" | "hello">,
+): boolean {
+  return (
+    isBrowserPanelAvailable(snapshot) ||
+    canCallGatewayMethod(snapshot, "browser.dashboard.request", "operator.sessions.write")
+  );
+}
+
+export function isBrowserPanelSurfaceAvailable(snapshot: GatewaySnapshot): boolean {
+  return hasNativeBrowserBridge() || isBrowserPanelAvailable(snapshot);
 }
 
 export function isDesktopPanelAvailable(snapshot: GatewaySnapshot): boolean {

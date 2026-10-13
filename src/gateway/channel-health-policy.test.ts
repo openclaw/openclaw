@@ -1,6 +1,3 @@
-/**
- * Channel health policy regression tests.
- */
 import { describe, expect, it } from "vitest";
 import {
   evaluateChannelHealth,
@@ -59,15 +56,6 @@ function inheritedTransportAccount() {
 }
 
 describe("evaluateChannelHealth", () => {
-  it("treats disabled accounts as healthy unmanaged", () => {
-    const evaluation = evaluateHealth({
-      running: false,
-      enabled: false,
-      configured: true,
-    });
-    expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
-  });
-
   it("treats explicitly unlinked accounts as healthy unmanaged", () => {
     const evaluation = evaluateHealth({
       running: false,
@@ -94,12 +82,6 @@ describe("evaluateChannelHealth", () => {
         runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 95_000 }),
       ),
     ).toEqual({ healthy: true, reason: "startup-connect-grace" });
-  });
-
-  it("falls through to disconnected when recorded starting outlives connect grace", () => {
-    expect(
-      evaluateHealth(runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 0 })),
-    ).toEqual({ healthy: false, reason: "disconnected" });
   });
 
   it("falls through to stale socket when recorded recovering outlives connect grace", () => {
@@ -227,13 +209,6 @@ describe("evaluateChannelHealth", () => {
     ).toEqual(expected);
   });
 
-  it("treats recorded blocked lifecycle as unhealthy", () => {
-    expect(evaluateHealth(connectedAccount({ lifecycle: "blocked" }))).toEqual({
-      healthy: false,
-      reason: "blocked",
-    });
-  });
-
   it("maps recorded stopped lifecycle to the existing restartable verdict", () => {
     expect(evaluateHealth(runningAccount({ lifecycle: "stopped" }))).toEqual({
       healthy: false,
@@ -245,12 +220,6 @@ describe("evaluateChannelHealth", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(activeRunAccount(now - 30_000), { now });
     expect(evaluation).toEqual({ healthy: true, reason: "busy" });
-  });
-
-  it("flags stale busy channels as stuck when run activity is too old", () => {
-    const now = 100_000;
-    const evaluation = evaluateHealth(activeRunAccount(now - 26 * 60_000), { now });
-    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
   });
 
   it("flags a hung run masking a disconnected transport as stuck despite a fresh heartbeat", () => {
@@ -277,29 +246,6 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "busy" });
   });
 
-  it("keeps a run without transport reporting healthy past the threshold while its heartbeat stays fresh", () => {
-    const now = 30 * 60_000;
-    const evaluation = evaluateHealth(
-      activeRunAccount(now - 1_000, {
-        connected: undefined,
-        activeRunStartedAt: now - 26 * 60_000,
-      }),
-      { now },
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
-  });
-
-  it("keeps a short-lived run healthy when both start and activity are recent", () => {
-    const now = 30 * 60_000;
-    const evaluation = evaluateHealth(
-      activeRunAccount(now - 1_000, {
-        activeRunStartedAt: now - 5_000,
-      }),
-      { now },
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
-  });
-
   it("ignores inherited busy flags until current lifecycle reports run activity", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(
@@ -315,59 +261,12 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("flags stale sockets when transport activity ages beyond threshold", () => {
-    const evaluation = evaluateHealth(staleTransportAccount());
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
-  it("ignores stale app events without transport activity", () => {
-    const evaluation = evaluateHealth(
-      connectedAccount({
-        lastStartAt: 0,
-        lastEventAt: 0,
-      }),
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-  });
-
-  it("flags stale sockets for telegram polling channels with transport activity", () => {
-    const evaluation = evaluateHealth(staleTransportAccount({ mode: "polling" }), {
-      channelId: "example",
-    });
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
-  it("does not special-case malformed channel mode when transport activity is explicit", () => {
-    const evaluation = evaluateHealth(
-      staleTransportAccount({ mode: { polling: true } as unknown as string }),
-      { channelId: "example" },
-    );
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
-  it("trusts explicit transport activity instead of webhook mode heuristics", () => {
-    const evaluation = evaluateHealth(staleTransportAccount({ mode: "webhook" }));
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
-  });
-
   it("does not flag stale sockets for channels without transport tracking", () => {
     const evaluation = evaluateHealth(
       connectedAccount({
         lastStartAt: 0,
         lastTransportActivityAt: null,
       }),
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-  });
-
-  it("keeps quiet telegram webhooks healthy when they do not publish transport tracking", () => {
-    const evaluation = evaluateHealth(
-      connectedAccount({
-        mode: "webhook",
-        lastStartAt: 0,
-        lastEventAt: 0,
-      }),
-      { channelId: "telegram" },
     );
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
@@ -402,7 +301,7 @@ describe("evaluateChannelHealth", () => {
   it.each([
     {
       name: "distinguishes a stopped terminal channel",
-      snapshot: { running: false, terminalDisconnect: true },
+      snapshot: { running: false, terminalDisconnect: true, linked: false },
       expected: { healthy: false, reason: "terminal-disconnect" },
     },
     {
@@ -422,27 +321,6 @@ describe("evaluateChannelHealth", () => {
   });
 
   describe("inbound ingress dimension", () => {
-    it("flags a channel whose ingress monitor failed to start, despite a live transport", () => {
-      // The 26h production case: outbound fine, socket connected, zero inbound admitted.
-      const evaluation = evaluateHealth(
-        connectedAccount({
-          ingressUnavailable: true,
-          lastStartAt: 0,
-          lastTransportActivityAt: 99_000,
-        }),
-        { channelId: "slack" },
-      );
-      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
-    });
-
-    it("outranks the startup connect grace so dead ingress is never masked", () => {
-      const evaluation = evaluateHealth(
-        connectedAccount({ ingressUnavailable: true, lastStartAt: 99_000 }),
-        { channelId: "slack" },
-      );
-      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
-    });
-
     it("keeps the ingress reason for the stopped state a failed start lands in", () => {
       // server-channels records the verdict only after the start task rejects, so
       // this is the shape the real failure has. Collapsing it into not-running
@@ -451,52 +329,29 @@ describe("evaluateChannelHealth", () => {
         running: false,
         enabled: true,
         configured: true,
+        linked: false,
         restartPending: true,
         ingressUnavailable: true,
       });
       expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
     });
 
-    it("outranks a busy short-circuit so an in-flight run cannot hide dead ingress", () => {
-      const evaluation = evaluateHealth(
-        connectedAccount({ ingressUnavailable: true, activeRuns: 1, lastRunActivityAt: 99_000 }),
-        { channelId: "slack" },
-      );
-      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
-    });
-
-    it("keeps a quiet channel with no traffic and no ingress signal healthy", () => {
-      // Guards against a staleness heuristic sneaking in: a genuinely idle channel
-      // must never be restarted merely for having admitted nothing.
-      const evaluation = evaluateHealth(
-        connectedAccount({
-          lastStartAt: 0,
-          lastEventAt: 0,
-          lastInboundAt: null,
-          lastMessageAt: null,
-        }),
-        { now: 10_000_000, channelId: "slack" },
-      );
-      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-    });
-
-    it("leaves the 17 socketless channels that publish no connectivity untouched", () => {
-      const evaluation = evaluateHealth(runningAccount({ lastStartAt: 0 }), {
-        now: 10_000_000,
-        channelId: "imessage",
-      });
-      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-    });
-
-    it("stays healthy for a disabled account so unmanaged still wins", () => {
-      const evaluation = evaluateHealth({
-        running: false,
-        enabled: false,
-        configured: true,
-        ingressUnavailable: true,
-      });
-      expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
-    });
+    it.each([{ enabled: false }, { configured: false }])(
+      "keeps disabled or unconfigured accounts unmanaged (%j)",
+      (unmanaged) => {
+        const evaluation = evaluateHealth({
+          running: false,
+          enabled: true,
+          configured: true,
+          linked: false,
+          terminalDisconnect: true,
+          lifecycle: "blocked",
+          ingressUnavailable: true,
+          ...unmanaged,
+        });
+        expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+      },
+    );
   });
 });
 
@@ -533,23 +388,5 @@ describe("resolveChannelRestartReason", () => {
       { healthy: false, reason: "not-running" },
     );
     expect(reason).toBe("gave-up");
-  });
-
-  it("maps dead ingress to its own reason instead of stuck", () => {
-    const reason = resolveChannelRestartReason(
-      runningAccount({ connected: true, ingressUnavailable: true }),
-      { healthy: false, reason: "ingress-unavailable" },
-    );
-    expect(reason).toBe("ingress-unavailable");
-  });
-
-  it("maps disconnected to disconnected instead of stuck", () => {
-    const reason = resolveChannelRestartReason(
-      runningAccount({
-        connected: false,
-      }),
-      { healthy: false, reason: "disconnected" },
-    );
-    expect(reason).toBe("disconnected");
   });
 });

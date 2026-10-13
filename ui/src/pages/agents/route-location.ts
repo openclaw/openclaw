@@ -4,42 +4,22 @@ import {
   INTERNAL_AGENT_PATH_PARAM,
   pathForAgentPanel,
   pathForRoute,
+  restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
-import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
+import { DEFAULT_AGENT_PANEL } from "../../lib/agents/panels.ts";
 
-export type AgentsRouteLocation = {
-  location: RouteLocation;
-  requestedAgentId: string | null;
-  panel: AgentsPanel;
-  canonicalLocation?: RouteLocation;
-};
+export type AgentsRouteLocation = ReturnType<typeof resolveAgentsRouteLocation>;
 
-function routeLocation(location: RouteLocation): RouteLocation {
-  const params = new URLSearchParams(location.search);
-  const pathname = params.get(INTERNAL_AGENT_PATH_PARAM) ?? location.pathname;
-  params.delete(INTERNAL_AGENT_PATH_PARAM);
-  const search = params.toString();
-  return {
-    pathname,
-    search: search ? `?${search}` : "",
-    hash: location.hash,
-  };
-}
-
-function legacyAgentId(params: URLSearchParams): string | null {
-  const agentId = params.get("agent")?.trim() ?? "";
-  return agentId && !agentId.includes("/") && agentId !== "." && agentId !== ".." ? agentId : null;
-}
-
-export function resolveAgentsRouteLocation(
-  sourceLocation: RouteLocation,
-  basePath = "",
-): AgentsRouteLocation {
-  const location = routeLocation(sourceLocation);
+export function resolveAgentsRouteLocation(sourceLocation: RouteLocation, basePath = "") {
+  const location = restoreBridgedRouteLocation(sourceLocation, INTERNAL_AGENT_PATH_PARAM);
   const pathRoute = agentRouteFromPath(location.pathname, basePath);
   const params = new URLSearchParams(location.search);
   const hadLegacyAgent = params.has("agent");
-  const legacyAgent = legacyAgentId(params);
+  const legacyAgentId = params.get("agent")?.trim() ?? "";
+  const legacyAgent =
+    legacyAgentId && !legacyAgentId.includes("/") && legacyAgentId !== "." && legacyAgentId !== ".."
+      ? legacyAgentId
+      : null;
   params.delete("agent");
   const search = params.toString();
   const requestedAgentId = pathRoute?.agentId ?? legacyAgent;

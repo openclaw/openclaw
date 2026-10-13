@@ -1,7 +1,7 @@
 package ai.openclaw.wear.shared
 
+import ai.openclaw.wear.shared.WearProtocolCodec.json
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -26,6 +26,9 @@ data class WearRealtimeTalkEntry(
   val role: WearRealtimeTalkRole,
   val text: String,
   val streaming: Boolean = false,
+  val textTruncated: Boolean = false,
+  val fullTextAvailable: Boolean = false,
+  val textRevision: Long = 0,
 )
 
 @Serializable
@@ -35,13 +38,6 @@ enum class WearRealtimeTalkRole { USER, ASSISTANT }
 enum class WearRealtimeTalkStatus { OFF, CONNECTING, LISTENING, THINKING, SPEAKING, ERROR }
 
 object WearRealtimeTalkCodec {
-  private val json =
-    Json {
-      encodeDefaults = true
-      explicitNulls = false
-      ignoreUnknownKeys = true
-    }
-
   fun encode(snapshot: WearRealtimeTalkSnapshot): JsonElement = json.encodeToJsonElement(WearRealtimeTalkSnapshot.serializer(), snapshot)
 
   fun decode(payload: JsonElement): WearRealtimeTalkSnapshot = json.decodeFromJsonElement(WearRealtimeTalkSnapshot.serializer(), payload)

@@ -1,7 +1,8 @@
 /** Repairs persisted provider replay state after provider-confirmed rejection. */
 import {
+  isCompactionReplayCheckpoint,
   stripCompactionReplayCheckpoint,
-  type OpenAIResponsesCompactionRejection,
+  type CompactionReplayRejection,
 } from "@openclaw/ai/transports";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -23,29 +24,34 @@ type ReplayRepairParams = {
 
 type ReplayRepairResult = { repaired: boolean; repairedCount: number; reason?: string };
 
-function rewriteRejectedReplayInSessionManager(
+async function rewriteRejectedReplayInSessionManager(
   params: ReplayRepairParams,
   repair: {
     replacements: Array<{ entryId: string; message: AgentMessage }>;
     emptyReason: string;
     logMessage: string;
   },
-): ReplayRepairResult {
+): Promise<ReplayRepairResult> {
   if (repair.replacements.length === 0) {
     return { repaired: false, repairedCount: 0, reason: repair.emptyReason };
   }
-  const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+  const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
     sessionManager: params.sessionManager,
     replacements: repair.replacements,
   });
   if (!rewriteResult.changed) {
     return { repaired: false, repairedCount: 0, reason: rewriteResult.reason };
   }
-  if (params.sessionFile) {
+  const target = params.sessionManager.getSessionTarget();
+  if (target || params.sessionFile) {
     emitSessionTranscriptUpdate({
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+      ...(target
+        ? { target }
+        : {
+            sessionKey: params.sessionKey,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          }),
     });
   }
   log.warn(
@@ -61,18 +67,14 @@ function rewriteRejectedReplayInSessionManager(
 
 export function repairRejectedThinkingReplayInSessionManager(
   params: ReplayRepairParams,
-): ReplayRepairResult {
-  const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
-  for (const entry of params.sessionManager.getBranch()) {
+): Promise<ReplayRepairResult> {
+  const replacements = params.sessionManager.getBranch().flatMap((entry) => {
     if (entry.type !== "message") {
-      continue;
+      return [];
     }
     const replacement = stripThinkingBlocksFromMessage(entry.message);
-    if (replacement === entry.message) {
-      continue;
-    }
-    replacements.push({ entryId: entry.id, message: replacement });
-  }
+    return replacement === entry.message ? [] : [{ entryId: entry.id, message: replacement }];
+  });
 
   return rewriteRejectedReplayInSessionManager(params, {
     replacements,
@@ -82,16 +84,15 @@ export function repairRejectedThinkingReplayInSessionManager(
 }
 
 export function repairRejectedCompactionReplayInSessionManager(
-  params: ReplayRepairParams & { checkpoint: OpenAIResponsesCompactionRejection },
-): ReplayRepairResult {
+  params: ReplayRepairParams & { checkpoint: CompactionReplayRejection },
+): Promise<ReplayRepairResult> {
   const owner = params.sessionManager
     .getBranch()
     .findLast(
       (entry) =>
         entry.type === "message" &&
         entry.message.role === "assistant" &&
-        (entry.message.providerReplay?.type === "openai-responses-compaction" ||
-          entry.message.providerReplay?.type === "openai-responses-retained-compaction") &&
+        isCompactionReplayCheckpoint(entry.message.providerReplay) &&
         entry.message.providerReplay.data === params.checkpoint.data &&
         (params.checkpoint.id === undefined ||
           entry.message.providerReplay.id === params.checkpoint.id),
@@ -107,7 +108,7 @@ export function repairRejectedCompactionReplayInSessionManager(
       : [];
   return rewriteRejectedReplayInSessionManager(params, {
     replacements,
-    emptyReason: "no OpenAI Responses compaction checkpoint on active branch",
+    emptyReason: "no matching compaction checkpoint on active branch",
     logMessage: "stripped compaction checkpoint after provider rejected replay",
   });
 }

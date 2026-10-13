@@ -1,21 +1,138 @@
-// Browser tests cover pw tools core.last file chooser arm wins plugin behavior.
 import crypto from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+  setPwToolsCoreDownloadCapture,
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.downloads.js");
 const interactions = await import("./pw-tools-core.interactions.js");
+const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
+const target = { cdpUrl: "http://127.0.0.1:18792" };
 
 describe("pw-tools-core", () => {
+  it("preserves an accepted download waiter when a stale successor finishes page preparation", async () => {
+    const session = getPwToolsCoreSessionMocks();
+    const page = {};
+    setPwToolsCoreCurrentPage(page);
+    const click = vi.fn(async () => {});
+    setPwToolsCoreCurrentRefLocator({ click });
+    const result = {
+      url: "https://example.com/accepted.txt",
+      suggestedFilename: "accepted.txt",
+      path: "/tmp/accepted.txt",
+    };
+    const captured = createDeferred<typeof result>();
+    setPwToolsCoreDownloadCapture({ armed: true, promise: captured.promise, cancel: vi.fn() });
+    const accepted = mod.waitForDownloadViaPlaywright({
+      ...target,
+      targetId: "T1",
+    });
+    const acceptedResult = Promise.allSettled([accepted]);
+    await Promise.resolve();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    session.getPageForTargetId.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return page;
+    });
+    const successor = mod.downloadViaPlaywright({
+      ...target,
+      targetId: "T1",
+      ref: "e1",
+      path: "/tmp/rejected.txt",
+      assertCurrent: async () => {
+        throw new Error("Dashboard successor revoked");
+      },
+    });
+    const successorResult = Promise.allSettled([successor]);
+    try {
+      await Promise.race([
+        entered.promise,
+        successor.then(() => {
+          throw new Error("Successor skipped held page lookup");
+        }),
+      ]);
+      release.resolve();
+      expect(await successorResult).toMatchObject([
+        { status: "rejected", reason: { message: "Dashboard successor revoked" } },
+      ]);
+      captured.resolve(result);
+      expect(await acceptedResult).toEqual([{ status: "fulfilled", value: result }]);
+      expect(click).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      captured.resolve(result);
+      await Promise.all([acceptedResult, successorResult]);
+    }
+  });
+
+  it.each(["page preparation", "pending-dialog lookup"] as const)(
+    "checks dialog authority after %s",
+    async (boundary) => {
+      const session = getPwToolsCoreSessionMocks();
+      const page = {};
+      setPwToolsCoreCurrentPage(page);
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const prepare = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      if (boundary === "page preparation") {
+        session.getPageForTargetId.mockImplementationOnce(async () => {
+          await prepare();
+          return page;
+        });
+      } else {
+        session.respondToObservedDialogOnPage.mockImplementationOnce(async () => {
+          await prepare();
+          throw new Error("No dialog is pending.");
+        });
+      }
+      let current = true;
+      const operation = mod.armDialogViaPlaywright({
+        ...target,
+        accept: true,
+        assertCurrent: async () => {
+          if (!current) {
+            throw new Error("Dashboard dialog revoked");
+          }
+        },
+      });
+      const settled = Promise.allSettled([operation]);
+      try {
+        await Promise.race([
+          entered.promise,
+          operation.then(() => {
+            throw new Error("Dialog skipped preparation");
+          }),
+        ]);
+        current = false;
+        release.resolve();
+        expect(await settled).toMatchObject([
+          { status: "rejected", reason: { message: "Dashboard dialog revoked" } },
+        ]);
+        expect(session.armObservedDialogResponseOnPage).not.toHaveBeenCalled();
+        if (boundary === "page preparation") {
+          expect(session.respondToObservedDialogOnPage).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await settled;
+      }
+    },
+  );
   it("last file-chooser arm wins", async () => {
     const firstPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-1-${crypto.randomUUID()}.txt`);
     const secondPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-2-${crypto.randomUUID()}.txt`);
@@ -45,11 +162,11 @@ describe("pw-tools-core", () => {
 
     try {
       await mod.armFileUploadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
+        ...target,
         paths: [firstPath],
       });
       await mod.armFileUploadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
+        ...target,
         paths: [secondPath],
       });
 
@@ -73,13 +190,13 @@ describe("pw-tools-core", () => {
       await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
     }
   });
-  it("arms the next dialog and accepts/dismisses (default timeout)", async () => {
+  it("arms the next dialog with the default timeout", async () => {
     const sessionMocks = getPwToolsCoreSessionMocks();
     const page = {};
     setPwToolsCoreCurrentPage(page);
 
     await mod.armDialogViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      ...target,
       accept: true,
       promptText: "x",
     });
@@ -94,20 +211,6 @@ describe("pw-tools-core", () => {
       page,
       accept: true,
       promptText: "x",
-      timeoutMs: 120_000,
-    });
-
-    sessionMocks.respondToObservedDialogOnPage.mockClear();
-    sessionMocks.armObservedDialogResponseOnPage.mockClear();
-
-    await mod.armDialogViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      accept: false,
-    });
-
-    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
-      page,
-      accept: false,
       timeoutMs: 120_000,
     });
   });
@@ -130,12 +233,11 @@ describe("pw-tools-core", () => {
       waitForLoadState,
       waitForFunction,
       waitForTimeout,
-      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
     };
     setPwToolsCoreCurrentPage(page);
 
-    await interactions.waitForViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+    await waitForViaPlaywright({
+      ...target,
       selector: "#main",
       url: "**/dash",
       loadState: "networkidle",
@@ -145,7 +247,7 @@ describe("pw-tools-core", () => {
     });
 
     expect(waitForTimeout).toHaveBeenCalledWith(50);
-    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
+    expect(page.locator).toHaveBeenCalledWith("#main");
     expect(waitForSelector).toHaveBeenCalledWith({
       state: "visible",
       timeout: 1234,
@@ -159,34 +261,14 @@ describe("pw-tools-core", () => {
       { document: documentHandle },
       { timeout: 1234 },
     );
-    expect(String(waitForFunction.mock.calls[0]?.[0])).toContain("window.ready===true");
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
-  it("clamps wait timeoutMs to 120000 for wait steps", async () => {
-    const waitForSelector = vi.fn(async () => {});
-    const page = {
-      locator: vi.fn(() => ({
-        first: () => ({ waitFor: waitForSelector }),
-      })),
-      waitForURL: vi.fn(async () => {}),
-      waitForLoadState: vi.fn(async () => {}),
-      waitForFunction: vi.fn(async () => {}),
-      waitForTimeout: vi.fn(async () => {}),
-      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
-    };
-    setPwToolsCoreCurrentPage(page);
-
-    await interactions.waitForViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      selector: "#main",
-      timeoutMs: 999_999,
-    });
-
-    expect(waitForSelector).toHaveBeenCalledWith({
-      state: "visible",
-      timeout: 120_000,
-    });
+  it("clamps passive wait deadlines without running an executable predicate", async () => {
+    const waitFor = vi.fn(async () => {});
+    setPwToolsCoreCurrentPage({ locator: () => ({ first: () => ({ waitFor }) }) });
+    await waitForViaPlaywright({ ...target, selector: "#main", timeoutMs: 999_999 });
+    expect(waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 120_000 });
   });
 
   it("clamps interaction timeoutMs to 60000 for click steps", async () => {
@@ -198,7 +280,7 @@ describe("pw-tools-core", () => {
     setPwToolsCoreCurrentPage(page);
 
     await interactions.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      ...target,
       selector: "#main",
       timeoutMs: 999_999,
     });

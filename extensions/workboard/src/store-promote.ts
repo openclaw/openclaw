@@ -1,30 +1,16 @@
-import { randomUUID } from "node:crypto";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { assertCanMutateClaimedCard } from "./store-card-helpers.js";
-import { MAX_CARD_COMMENTS } from "./store-constants.js";
+import { appendComment, assertCanMutateClaimedCard } from "./store-card-helpers.js";
 import { WorkboardEnrichmentStore } from "./store-enrichment.js";
 import type { WorkboardMutationScope, WorkboardPromoteInput } from "./store-inputs.js";
 import { clearDiagnostics, normalizeBoundedString } from "./store-normalizers.js";
 
 export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
-  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
-    return await this.enqueueMutation(async () => {
-      const promoted: WorkboardCard[] = [];
-      for (const card of await this.list()) {
-        const next = await this.promoteDependencyReady(card.id, now);
-        if (next.status !== card.status) {
-          promoted.push(next);
-        }
-      }
-      return { cards: promoted, count: promoted.length };
-    });
-  }
-
   async move(
     id: string,
     status: unknown,
     position: unknown,
     scope?: WorkboardMutationScope,
+    options: { expectedUpdatedAt?: number; assertOwnerCurrent?: () => void } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const result = await this.updateLatestCard(
@@ -38,10 +24,11 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         {
           allowMetadataDependencyLinks: false,
           enforceStatusHolds: true,
+          expectedUpdatedAt: options.expectedUpdatedAt,
         },
       );
       return result.card;
-    });
+    }, options.assertOwnerCurrent);
   }
 
   async promote(
@@ -50,20 +37,12 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
-      const comments = reason
-        ? [
-            ...(existing.metadata?.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: Date.now() },
-          ].slice(-MAX_CARD_COMMENTS)
-        : existing.metadata?.comments;
+      const comments = appendComment(existing.metadata?.comments, reason);
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status: "ready",
           metadata: {

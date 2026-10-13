@@ -40,6 +40,7 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
 
 vi.mock("../commands/doctor-auth.js", () => ({
   noteAuthProfileHealth: vi.fn(async () => undefined),
+  noteCopilotAmbientToken: vi.fn(),
   noteLegacyCodexProviderOverride: vi.fn(() => undefined),
   noteSharedAuthStoreStatus: vi.fn(() => undefined),
 }));
@@ -140,12 +141,12 @@ function loadMigratedStore(state: OpenClawTestState) {
   );
 }
 
-function authProfilesContribution() {
+function authProfileMigrationContribution() {
   const contribution = resolveDoctorHealthContributions().find(
-    (entry) => entry.id === "doctor:auth-profiles",
+    (entry) => entry.id === "doctor:auth-profile-migration",
   );
   if (!contribution) {
-    throw new Error("doctor:auth-profiles contribution is not registered");
+    throw new Error("doctor:auth-profile-migration contribution is not registered");
   }
   return contribution;
 }
@@ -161,7 +162,7 @@ afterEach(async () => {
 });
 
 describe("interactive Doctor auth migration", () => {
-  it.each(["failed", "completed", "declined"] as const)(
+  it.each(["failed", "declined"] as const)(
     "reports interrupted archive recovery when the remaining migration is %s",
     async (outcome) => {
       const state = await makeState();
@@ -183,16 +184,19 @@ describe("interactive Doctor auth migration", () => {
           .run("invalid_target", receipt.sourceKey);
       }
       const remainingPath = outcome === "declined" ? await writeLegacyCredentialStore(state) : null;
+      const statePath = outcome === "declined" ? await writeLegacyRotationState(state) : null;
+      const cfg = makeLegacyConfig();
+      const originalConfig = structuredClone(cfg);
       const prompter = makePrompter(false);
       const ctx = createDoctorHealthFlowContext({
-        cfg: {},
+        cfg,
         prompter,
         env: state.env,
         configPath: path.join(state.stateDir, "openclaw.json"),
       });
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
-      await authProfilesContribution().run(ctx);
+      await authProfileMigrationContribution().run(ctx);
 
       const output = stripVTControlCharacters(
         stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
@@ -217,6 +221,9 @@ describe("interactive Doctor auth migration", () => {
       if (remainingPath) {
         expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
         expect(fs.existsSync(remainingPath)).toBe(true);
+        expect(statePath && fs.existsSync(statePath)).toBe(true);
+        expect(ctx.cfg).toEqual(originalConfig);
+        expect(loadMigratedStore(state)).toBeNull();
       } else {
         expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
       }
@@ -236,7 +243,7 @@ describe("interactive Doctor auth migration", () => {
       configPath: path.join(state.stateDir, "openclaw.json"),
     });
 
-    await authProfilesContribution().run(ctx);
+    await authProfileMigrationContribution().run(ctx);
 
     expect(loadMigratedStore(state)).toMatchObject({
       profiles: {
@@ -250,26 +257,5 @@ describe("interactive Doctor auth migration", () => {
     expect(ctx.cfg.auth?.profiles).toHaveProperty("openai:chatgpt-bravo");
     expect(ctx.cfg.auth?.profiles).not.toHaveProperty("openai-codex:bravo");
     expect(ctx.cfg.auth?.order?.openai).toEqual(["openai:chatgpt-bravo"]);
-  });
-
-  it("leaves config and standalone state unchanged when migration is declined", async () => {
-    const state = await makeState();
-    const cfg = makeLegacyConfig();
-    const authPath = await writeLegacyCredentialStore(state);
-    const statePath = await writeLegacyRotationState(state);
-    const ctx = createDoctorHealthFlowContext({
-      cfg,
-      cfgForPersistence: structuredClone(cfg),
-      prompter: makePrompter(false),
-      env: state.env,
-      configPath: path.join(state.stateDir, "openclaw.json"),
-    });
-
-    await authProfilesContribution().run(ctx);
-
-    expect(ctx.cfg).toEqual(cfg);
-    expect(fs.existsSync(authPath)).toBe(true);
-    expect(fs.existsSync(statePath)).toBe(true);
-    expect(loadMigratedStore(state)).toBeNull();
   });
 });

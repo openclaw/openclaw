@@ -1,19 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { markGatewayRestartTrace, measureGatewayRestartTrace } from "./restart-trace.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
-
-/** Create a timeout promise plus cleanup hook for shutdown races. */
-export function createGatewayShutdownTimeout<T>(timeoutMs: number, onTimeout: () => T) {
-  const { promise, resolve } = createDeferredCore<T>();
-  const timer = setTimeout(() => resolve(onTimeout()), timeoutMs);
-  timer.unref?.();
-  return {
-    promise,
-    clear: () => clearTimeout(timer),
-  };
-}
 
 /** Record a shutdown warning once. */
 export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
@@ -40,7 +28,7 @@ type GatewayShutdownStep = {
 };
 
 /** Collect owner failures, but never release dependencies beyond a failed required join. */
-export async function runGatewayShutdownSteps(params: {
+async function runGatewayShutdownSteps(params: {
   steps: readonly GatewayShutdownStep[];
   onError: (message: string) => void;
 }): Promise<void> {
@@ -49,8 +37,7 @@ export async function runGatewayShutdownSteps(params: {
     try {
       // Trace consumers parse one phase token; keep the human label for errors.
       const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
-      markGatewayRestartTrace(`${phase}.begin`);
-      await measureGatewayRestartTrace(phase, () => step.run());
+      await measureGatewayCloseStep(phase, () => step.run());
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
       params.onError(message);
@@ -65,12 +52,54 @@ export async function runGatewayShutdownSteps(params: {
   }
 }
 
+/** Startup failure and public close share the same ordered dependency joins. */
+export function runGatewayCloseSteps(params: {
+  owner: {
+    connectionWork: { drain: () => Promise<void> };
+    stopConnectionDependentSidecars: GatewayShutdownStep["run"];
+    stopRegisteredGatewayLifetimeSidecars: GatewayShutdownStep["run"];
+    stopRegisteredPostReadySidecars: GatewayShutdownStep["run"];
+    runClosePrelude: GatewayShutdownStep["run"];
+    sealAndJoinRegisteredSidecarStops: GatewayShutdownStep["run"];
+  };
+  close: GatewayShutdownStep["run"];
+  disposeTerminalSessions?: GatewayShutdownStep["run"];
+  runStopHooks?: GatewayShutdownStep["run"];
+  onError: (message: string) => void;
+}): Promise<void> {
+  const { owner } = params;
+  return runGatewayShutdownSteps({
+    steps: [
+      {
+        name: "connection-dependent sidecars",
+        run: owner.stopConnectionDependentSidecars,
+        required: true,
+      },
+      { name: "received connection work", run: () => owner.connectionWork.drain(), required: true },
+      ...(params.disposeTerminalSessions
+        ? [{ name: "terminal sessions", run: params.disposeTerminalSessions }]
+        : []),
+      { name: "gateway lifetime sidecars", run: owner.stopRegisteredGatewayLifetimeSidecars },
+      { name: "post-ready sidecars", run: owner.stopRegisteredPostReadySidecars },
+      ...(params.runStopHooks
+        ? [{ name: "gateway_stop plugin hooks", run: params.runStopHooks }]
+        : []),
+      { name: "gateway close prelude", run: owner.runClosePrelude },
+      {
+        name: "late sidecar cleanup",
+        run: owner.sealAndJoinRegisteredSidecarStops,
+        required: true,
+      },
+      { name: "gateway close", run: params.close },
+    ],
+    onError: params.onError,
+  });
+}
+
 /** Failed acquisition retains its owner when native cleanup cannot finish. */
 export class GatewayStartupCleanupError extends AggregateError {
   constructor(startupError: unknown, cleanupError: unknown) {
-    super([startupError, cleanupError], "Gateway startup failed and cleanup did not complete", {
-      cause: startupError,
-    });
+    super([startupError, cleanupError], formatErrorMessage(startupError), { cause: startupError });
     this.name = "GatewayStartupCleanupError";
   }
 }

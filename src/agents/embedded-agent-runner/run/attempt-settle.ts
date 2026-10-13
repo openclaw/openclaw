@@ -1,8 +1,13 @@
-/**
- * Settles prompt dispatch, stream cleanup, and result projection.
- * It may assume stream runtime preparation and session state are ready.
- */
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readMessageIdempotencyKey } from "../../../config/sessions/transcript-message-identity.js";
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import {
+  assertOwnedTranscriptWriteCommit,
+  SessionTranscriptWriterClaimReboundError,
+  withSessionTranscriptWriteAssertion,
+} from "../../../config/sessions/transcript-write-context.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -11,11 +16,9 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { SessionManager } from "../../sessions/index.js";
-import {
-  markRequesterTurnYielded,
-  settleRequesterAfterSessionSpawns,
-} from "../../subagents/registry/subagent-registry.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
+import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
 import { log } from "../logger.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -31,12 +34,9 @@ import {
 } from "./attempt-result.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
-import { shouldContinueInteractiveAcceptedSessionSpawns } from "./attempt-terminal-evidence.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
 import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
-
-/** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 
 const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
@@ -111,7 +111,7 @@ export async function runEmbeddedAttemptSettledPhase(
     toolResultPromptProjectionState,
     transport: { effectivePromptCacheRetention },
   } = sessionRuntime;
-  const { nestedToolActivities } = toolBase;
+  const { nestedToolActivityState } = toolBase;
   const promptState: EmbeddedAttemptPromptState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
@@ -145,6 +145,13 @@ export async function runEmbeddedAttemptSettledPhase(
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
   };
+  const markTimedOutDuringCompaction = () => {
+    state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+      kind: "timeout",
+      phase: "compaction",
+      source: "observation",
+    });
+  };
 
   try {
     const { promptStartedAt, transcriptLeafId } = await runEmbeddedAttemptPromptPhase(
@@ -158,59 +165,55 @@ export async function runEmbeddedAttemptSettledPhase(
       return terminal.timedOutByRunBudget && !terminal.failed;
     };
     const runBudgetTimeoutTerminal = isFailureFreeRunBudgetTimeout();
-    const warnPendingEventsUnsettled = () => {
-      log.warn(
-        `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
-          `proceeding to stream settlement: runId=${attempt.runId}`,
-      );
-    };
-    const drainPendingEventsBounded = () =>
+    const drainPendingEventsBounded = (afterRunBudgetTimeout: boolean) =>
       joinWithRunLivenessDeadline({
         // Partial-reply callbacks cannot mutate the buffer and may be stalled
         // on transport; timeout salvage needs only the serialized event chain.
-        joinWork: () => waitForPendingEvents({ includePartialReplies: false }),
-        onTimeout: warnPendingEventsUnsettled,
+        joinWork: afterRunBudgetTimeout
+          ? () => waitForPendingEvents({ includePartialReplies: false })
+          : waitForPendingEvents,
+        ...(afterRunBudgetTimeout ? {} : { runAbortSignal: input.runAbortController.signal }),
+        onTimeout: () => {
+          log.warn(
+            `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+              `proceeding to stream settlement: runId=${attempt.runId}`,
+          );
+        },
       });
-    if (runBudgetTimeoutTerminal) {
-      // The timeout already aborted the signal; drain without racing it.
-      await drainPendingEventsBounded();
-    } else {
-      await joinWithRunLivenessDeadline({
-        joinWork: waitForPendingEvents,
-        runAbortSignal: input.runAbortController.signal,
-        onTimeout: warnPendingEventsUnsettled,
-      });
-      // A timeout can fire during the abort-aware join and resolve it before
-      // its queue drains. Re-read terminal ownership, then drain if eligible.
-      if (isFailureFreeRunBudgetTimeout()) {
-        await drainPendingEventsBounded();
-      }
+    if (!runBudgetTimeoutTerminal) {
+      await drainPendingEventsBounded(false);
+    }
+    // A timeout may already have aborted the signal, or fire during the first
+    // join. Re-read ownership before draining without racing that signal.
+    if (runBudgetTimeoutTerminal || isFailureFreeRunBudgetTimeout()) {
+      await drainPendingEventsBounded(true);
     }
     // Ownership can change during the drain; publish only after the final read.
-    const salvageTerminal = readTerminal();
-    if (salvageTerminal.timedOutByRunBudget && !salvageTerminal.failed) {
+    if (isFailureFreeRunBudgetTimeout()) {
       subscription.flushPartialAssistantText();
     }
     const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
     const beforeAgentFinalizeRevisionEntryId = getBeforeAgentFinalizeRevisionEntryId();
     let rewoundBeforeAgentFinalizeRevision = false;
     if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
-      await input.sessionLock.withOwnedTranscriptWrite(() => {
-        const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
-        if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
-          throw new Error(
-            `before_agent_finalize persisted assistant entry is missing or invalid ` +
-              `(entry=${beforeAgentFinalizeRevisionEntryId})`,
-          );
-        }
-        // Keep persistence append-only while excluding the rejected draft and
-        // every trailing descendant from the hidden retry's active branch.
-        sessionManager.appendLeafControl({
-          targetId: rejectedEntry.parentId,
-          appendParentId: rejectedEntry.parentId,
-        });
-        rewoundBeforeAgentFinalizeRevision = true;
-      });
+      await input.sessionLock.withOwnedTranscriptWrite(() =>
+        withSessionManagerAppend(sessionManager, async () => {
+          const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
+          if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
+            throw new Error(
+              `before_agent_finalize persisted assistant entry is missing or invalid ` +
+                `(entry=${beforeAgentFinalizeRevisionEntryId})`,
+            );
+          }
+          // Keep persistence append-only while excluding the rejected draft and
+          // every trailing descendant from the hidden retry's active branch.
+          await sessionManager.appendLeafControlAsync({
+            targetId: rejectedEntry.parentId,
+            appendParentId: rejectedEntry.parentId,
+          });
+          rewoundBeforeAgentFinalizeRevision = true;
+        }),
+      );
     }
     try {
       if (input.getRepairedRejectedProviderReplay() && !rewoundBeforeAgentFinalizeRevision) {
@@ -223,7 +226,6 @@ export async function runEmbeddedAttemptSettledPhase(
         promptError: settleTerminal.promptError,
         promptErrorSource: settleTerminal.promptErrorSource,
         yieldAborted: promptState.yieldAborted,
-        sessionIdUsed,
       };
       try {
         settledStream = await settleEmbeddedAttemptStream({
@@ -238,27 +240,14 @@ export async function runEmbeddedAttemptSettledPhase(
             input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
           ),
           subscription,
-          readLifecycleState: () => {
-            const terminal = readTerminal();
-            return {
-              aborted: terminal.aborted,
-              timedOut: terminal.timedOut,
-              timedOutDuringCompaction: terminal.timedOutDuringCompaction,
-            };
-          },
-          markTimedOutDuringCompaction: () => {
-            state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-              kind: "timeout",
-              phase: "compaction",
-              source: "observation",
-            });
-          },
+          readLifecycleState: readTerminal,
+          markTimedOutDuringCompaction,
           runAbortSignal: input.runAbortController.signal,
           isProbeSession,
           onBlockReplyFlush,
           abortable,
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-          nestedToolActivities,
+          nestedToolActivityState,
           cache: {
             getObservation: preparedStreamRuntime.cache.getObservation,
             retention: effectivePromptCacheRetention,
@@ -285,11 +274,7 @@ export async function runEmbeddedAttemptSettledPhase(
     // outer teardown still needs the completed stream snapshot and usage state.
     setFailure(settledStream.promptError, settledStream.promptErrorSource);
     if (settledStream.timedOutDuringCompaction) {
-      state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-        kind: "timeout",
-        phase: "compaction",
-        source: "observation",
-      });
+      markTimedOutDuringCompaction();
     }
     messagesSnapshot = settledStream.messagesSnapshot;
     sessionIdUsed = settledStream.sessionIdUsed;
@@ -302,14 +287,20 @@ export async function runEmbeddedAttemptSettledPhase(
       ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
     });
 
+    // Keep dedupe stable without exposing the run ID when note metadata is redacted.
+    const imageFailureNoteKey =
+      sessionRuntimeState.currentTurnImageFailureCount > 0
+        ? `${FAILED_PROMPT_MEDIA_NOTE_SOURCE}:${sha256Hex(attempt.runId)}`
+        : undefined;
     if (
-      sessionRuntimeState.currentTurnImageFailureCount > 0 &&
+      imageFailureNoteKey &&
       !activeSession.messages.some(
         (message) =>
-          message.role === "custom" &&
-          message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
-          asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
-          asOptionalRecord(message.details)?.runId === attempt.runId,
+          readMessageIdempotencyKey(message) === imageFailureNoteKey ||
+          (message.role === "custom" &&
+            message.customType === FAILED_PROMPT_MEDIA_NOTE_TYPE &&
+            asOptionalRecord(message.details)?.source === FAILED_PROMPT_MEDIA_NOTE_SOURCE &&
+            asOptionalRecord(message.details)?.runId === attempt.runId),
       )
     ) {
       const note = {
@@ -317,6 +308,7 @@ export async function runEmbeddedAttemptSettledPhase(
         customType: FAILED_PROMPT_MEDIA_NOTE_TYPE,
         content: buildPromptImageFailureNotice(sessionRuntimeState.currentTurnImageFailureCount),
         display: true,
+        idempotencyKey: imageFailureNoteKey,
         details: {
           source: FAILED_PROMPT_MEDIA_NOTE_SOURCE,
           runId: attempt.runId,
@@ -324,20 +316,62 @@ export async function runEmbeddedAttemptSettledPhase(
         },
         timestamp: Date.now(),
       };
-      await input.sessionLock.withOwnedTranscriptWrite(() => {
-        const target = sessionManager.getSessionTarget();
-        if (target) {
-          SessionManager.appendMessageToTranscript(
-            target,
-            note,
-            attempt.config ? { config: attempt.config } : undefined,
-          );
-        } else {
-          sessionManager.appendMessage(note);
+      const target = sessionManager.getSessionTarget();
+      const sessionId = sessionManager.getSessionId();
+      const assertBinding = () => {
+        if (
+          sessionManager.getSessionId() !== sessionId ||
+          !sameSessionTranscriptTargetBinding(target, sessionManager.getSessionTarget())
+        ) {
+          throw new SessionTranscriptWriterClaimReboundError();
         }
-        activeSession.agent.state.messages = [...activeSession.messages, note];
-      });
-      messagesSnapshot = [...messagesSnapshot, note];
+      };
+      let committedMessageId: string | undefined;
+      try {
+        await input.sessionLock.withOwnedTranscriptWrite(async () => {
+          assertBinding();
+          if (target) {
+            const appendAndPublish = async () => {
+              assertBinding();
+              const committed = await withSessionTranscriptWriteAssertion(
+                target,
+                assertBinding,
+                () =>
+                  appendSessionTranscriptNote(
+                    target,
+                    note,
+                    attempt.config ? { config: attempt.config } : undefined,
+                  ),
+              );
+              committedMessageId = committed.messageId;
+              assertBinding();
+              assertOwnedTranscriptWriteCommit(target);
+              if (committed.appended || committed.currentTail) {
+                activeSession.agent.state.messages = [...activeSession.messages, committed.message];
+                messagesSnapshot = [...messagesSnapshot, committed.message];
+              }
+            };
+            if (isIncognitoSessionKey(target.sessionKey)) {
+              await withSessionManagerAppend(sessionManager, appendAndPublish);
+            } else {
+              await appendAndPublish();
+            }
+          } else {
+            await withSessionManagerAppend(sessionManager, async () => {
+              assertBinding();
+              await sessionManager.appendMessageAsync(note);
+              assertBinding();
+              activeSession.agent.state.messages = [...activeSession.messages, note];
+              messagesSnapshot = [...messagesSnapshot, note];
+            });
+          }
+        });
+      } catch (error) {
+        if (committedMessageId && target) {
+          throw new SessionTranscriptMessageCommittedError(committedMessageId, error, target);
+        }
+        throw error;
+      }
     }
   } finally {
     cleanupError = cleanupEmbeddedAttemptStreamExecution({
@@ -364,32 +398,5 @@ export async function runEmbeddedAttemptSettledPhase(
     ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
   });
   state.trajectoryEndRecorded = true;
-  if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
-    const implicitContinuation = shouldContinueInteractiveAcceptedSessionSpawns({
-      attempt: result,
-      run: attempt,
-    });
-    if (implicitContinuation) {
-      const marked = markRequesterTurnYielded({
-        requesterSessionKey: attempt.sessionKey,
-        requesterAgentId: input.setup.sessionAgentId,
-        requesterTurnRunId: attempt.runId,
-      });
-      if (marked === 0) {
-        throw new Error("accepted continuation children were not durably registered");
-      }
-    } else {
-      const settled = settleRequesterAfterSessionSpawns({
-        requesterSessionKey: attempt.sessionKey,
-        requesterAgentId: input.setup.sessionAgentId,
-        requesterTurnRunId: attempt.runId,
-        requesterYielded: result.yieldDetected === true,
-        acceptedSessionSpawns: result.acceptedSessionSpawns,
-      });
-      if (result.yieldDetected === true && settled) {
-        result.requesterContinuationSettled = true;
-      }
-    }
-  }
   return result;
 }

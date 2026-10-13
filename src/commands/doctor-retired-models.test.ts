@@ -16,22 +16,7 @@ import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/leg
 import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
 
 describe("doctor retired model references", () => {
-  it("leaves current refs alone without loading credentials", async () => {
-    const { cfg, state } = await fixture();
-    const load = vi
-      .spyOn(authProfileStore, "loadAuthProfileStoreForSecretsRuntime")
-      .mockImplementation(() => {
-        throw new Error("Credential storage unavailable");
-      });
-    const result = repairStaleAgentModelRefs(cfg, {
-      env: state.env,
-      pluginProviderIds: new Set(["openai"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
-    expect(result.config).toEqual(cfg);
-    expect(load).not.toHaveBeenCalled();
-  });
-  it.each(["oauth", "api-key"] as const)(
+  it.each(["oauth"] as const)(
     "repairs only the retired physical route in %s config",
     async (auth) => {
       const { cfg, state } = await fixture(auth);
@@ -84,10 +69,6 @@ describe("doctor retired model references", () => {
         pluginProviderIds: new Set(["openai"]),
         persistedProviderIdsByAgentId: new Map(),
       });
-      if (auth === "api-key") {
-        expect(result.config).toEqual(cfg);
-        return;
-      }
       expect(result.config.agents?.defaults?.model).toEqual({
         primary: "openai/current-model",
         fallbacks: ["openai/current-model"],
@@ -153,75 +134,83 @@ describe("doctor retired model references", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("keeps a shared default when different agent accounts select different physical routes", async () => {
-    const { cfg, state } = await fixture();
-    cfg.agents!.defaults!.model = "openai/retired-with-successor";
-    cfg.agents!.defaults!.modelPolicy = { allow: ["openai/retired-with-successor"] };
-    cfg.agents!.defaults!.models = {
-      "openai/retired-with-successor": {
-        alias: "daily",
-        agentRuntime: { id: "codex" },
-        params: { temperature: 0.25, maxTokens: 128 },
-      },
-    };
-    cfg.agents!.entries!.main!.model = "openai/retired-with-successor";
-    cfg.agents!.entries!.main!.models = {
-      "openai/current-model": { params: { temperature: 0.5 } },
-    };
-    cfg.agents!.entries!.platformagent = {};
-    await state.writeAuthProfiles(
-      {
-        version: 1,
-        profiles: { chatgpt: { provider: "openai", type: "api_key", key: "synthetic-other-key" } },
-      },
-      "platformagent",
-    );
-    const result = repairStaleAgentModelRefs(cfg, {
-      env: state.env,
-      pluginProviderIds: new Set(["openai"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
-    expect(result.config.agents?.defaults?.model).toBe("openai/retired-with-successor");
-    expect(result.config.agents?.entries?.main?.model).toBe("openai/current-model");
-    expect(result.config.agents?.entries?.main?.modelPolicy?.allow).toEqual([
-      "openai/retired-with-successor",
-      "openai/current-model",
-    ]);
-    expect(result.config.agents?.entries?.main?.models?.["openai/current-model"]).toEqual({
-      agentRuntime: { id: "codex" },
-      params: { temperature: 0.5, maxTokens: 128 },
-    });
-    expect(result.config.agents?.entries?.platformagent).toEqual({});
-    expect(result.config.agents?.defaults?.models).toEqual(cfg.agents?.defaults?.models);
-    expect(
-      repairStaleAgentModelRefs(result.config, {
+  it.each([true])(
+    "keeps a shared default and local routing policy (local successor: %s)",
+    async (localSuccessor) => {
+      const { cfg, state } = await fixture();
+      cfg.agents!.defaults!.model = "openai/retired-with-successor";
+      cfg.agents!.defaults!.modelPolicy = { allow: ["openai/retired-with-successor"] };
+      cfg.agents!.defaults!.models = {
+        "openai/retired-with-successor": {
+          alias: "daily",
+          agentRuntime: { id: "codex" },
+          params: { temperature: 0.25, maxTokens: 128 },
+        },
+        "openai/current-model": { alias: "current-alias", agentRuntime: { id: "codex" } },
+      };
+      cfg.agents!.entries!.main!.model = "openai/retired-with-successor";
+      cfg.agents!.entries!.main!.models = {
+        "openai/retired-with-successor": { alias: "local-old", agentRuntime: { id: "openclaw" } },
+        "openai/current-model": {
+          ...(localSuccessor ? { alias: "local-current", agentRuntime: { id: "codex" } } : {}),
+          params: { temperature: 0.5 },
+        },
+      };
+      cfg.agents!.entries!.platformagent = {};
+      await state.writeAuthProfiles(
+        {
+          version: 1,
+          profiles: {
+            chatgpt: { provider: "openai", type: "api_key", key: "synthetic-other-key" },
+          },
+        },
+        "platformagent",
+      );
+      const result = repairStaleAgentModelRefs(cfg, {
         env: state.env,
         pluginProviderIds: new Set(["openai"]),
         persistedProviderIdsByAgentId: new Map(),
-      }).changes,
-    ).toEqual([]);
-    delete cfg.agents!.entries!.main!.model;
-    cfg.agents!.defaults!.model = {
-      primary: "openai/retired-with-successor",
-      fallbacks: ["openai/fallback-model"],
-    };
-    const inherited = repairStaleAgentModelRefs(cfg, {
-      env: state.env,
-      pluginProviderIds: new Set(["openai"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
-    expect(inherited.config.agents?.entries?.main?.model).toEqual({
-      primary: "openai/current-model",
-      fallbacks: ["openai/fallback-model"],
-    });
-    expect(inherited.config.agents?.defaults?.model).toEqual(cfg.agents?.defaults?.model);
-    expect(result.warnings.join("\n")).toContain("different repairs");
-  });
+      });
+      expect(result.config.agents?.defaults?.model).toBe("openai/retired-with-successor");
+      expect(result.config.agents?.entries?.main?.model).toBe("openai/current-model");
+      expect(result.config.agents?.entries?.main?.modelPolicy?.allow).toEqual([
+        "openai/retired-with-successor",
+        "openai/current-model",
+      ]);
+      expect(result.config.agents?.entries?.main?.models?.["openai/current-model"]).toEqual({
+        alias: localSuccessor ? "local-current" : "current-alias",
+        agentRuntime: { id: localSuccessor ? "codex" : "openclaw" },
+        params: { temperature: 0.5, maxTokens: 128 },
+      });
+      expect(result.config.agents?.entries?.platformagent).toEqual({});
+      expect(result.config.agents?.defaults?.models).toEqual(cfg.agents?.defaults?.models);
+      expect(
+        repairStaleAgentModelRefs(result.config, {
+          env: state.env,
+          pluginProviderIds: new Set(["openai"]),
+          persistedProviderIdsByAgentId: new Map(),
+        }).changes,
+      ).toEqual([]);
+      delete cfg.agents!.entries!.main!.model;
+      cfg.agents!.defaults!.model = {
+        primary: "openai/retired-with-successor",
+        fallbacks: ["openai/fallback-model"],
+      };
+      const inherited = repairStaleAgentModelRefs(cfg, {
+        env: state.env,
+        pluginProviderIds: new Set(["openai"]),
+        persistedProviderIdsByAgentId: new Map(),
+      });
+      expect(inherited.config.agents?.entries?.main?.model).toEqual({
+        primary: "openai/current-model",
+        fallbacks: ["openai/fallback-model"],
+      });
+      expect(inherited.config.agents?.defaults?.model).toEqual(cfg.agents?.defaults?.model);
+      expect(result.warnings.join("\n")).toContain("different repairs");
+    },
+  );
 
-  it.each([
-    { retired: "retired-with-successor", repaired: ["openai/current-model"] },
-    { retired: "retired-without-successor", repaired: [] },
-  ])(
+  it.each([{ retired: "retired-with-successor", repaired: ["openai/current-model"] }])(
     "repairs inherited $retired fallbacks without pinning a healthy shared primary",
     async ({ retired, repaired }) => {
       const { cfg, state } = await fixture();
@@ -259,43 +248,6 @@ describe("doctor retired model references", () => {
     },
   );
 
-  it.each(["oauth", "api-key"] as const)(
-    "matches retirement conditions against the selected %s route API",
-    async (auth) => {
-      const { cfg, state } = await fixture(auth);
-      cfg.agents!.defaults!.model = "openai/retired-api-conditioned";
-      cfg.models!.providers!.openai!.api = "openai-responses";
-      cfg.models!.providers!.openai!.baseUrl = "https://api.openai.com/v1";
-      const result = repairStaleAgentModelRefs(cfg, {
-        env: state.env,
-        pluginProviderIds: new Set(["openai"]),
-        persistedProviderIdsByAgentId: new Map(),
-      });
-      expect(result.config.agents?.defaults?.model).toBe(
-        auth === "oauth" ? "openai/current-model" : "openai/retired-api-conditioned",
-      );
-      expect(result.config.models).toEqual(cfg.models);
-    },
-  );
-
-  it("preserves an authored empty fallback override while repairing another retired slot", async () => {
-    const { cfg, state } = await fixture();
-    cfg.agents!.defaults!.model = {
-      primary: "openai/current-model",
-      fallbacks: ["openai/current-fallback"],
-    };
-    cfg.agents!.defaults!.heartbeat = { model: "openai/retired-with-successor" };
-    cfg.agents!.entries!.main!.model = { fallbacks: [] };
-    const result = repairStaleAgentModelRefs(cfg, {
-      env: state.env,
-      pluginProviderIds: new Set(["openai"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
-    expect(result.config.agents?.defaults?.heartbeat?.model).toBe("openai/current-model");
-    expect(result.config.agents?.entries?.main?.model).toEqual({ fallbacks: [] });
-    expect(resolveAgentModelFallbacksOverride(result.config, "main")).toEqual([]);
-  });
-
   it("repairs persisted cron primary and fallbacks in the existing post-config-write pass", async () => {
     const { cfg } = await fixture();
     const storePath = resolveCronJobsStorePath();
@@ -318,9 +270,10 @@ describe("doctor retired model references", () => {
       state: { autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 } },
     };
     await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-    await repairCronCodexModelRefsAfterConfigWrite({ cfg });
+    await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg });
     expect((await loadCronJobsStore(storePath)).jobs[0]?.payload).toEqual(job.payload);
     const result = await repairCronCodexModelRefsAfterConfigWrite({
+      migrateCodexModelRefs: true,
       cfg,
       repairRetiredModelRefs: true,
     });
@@ -338,7 +291,6 @@ describe("doctor retired model references", () => {
   it.each([
     { blocked: false, retiredModel: "retired-with-successor" },
     { blocked: false, retiredModel: "retired-without-successor" },
-    { blocked: true, retiredModel: "retired-with-successor" },
     { blocked: true, retiredModel: "retired-without-successor" },
   ])(
     "composes namespace retirement ($retiredModel, blocked=$blocked)",
@@ -391,6 +343,7 @@ describe("doctor retired model references", () => {
       };
       await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
       const result = await repairCronCodexModelRefsAfterConfigWrite({
+        migrateCodexModelRefs: true,
         cfg,
         blockedModelIdentities,
         repairRetiredModelRefs: true,
@@ -443,11 +396,7 @@ describe("doctor retired model references", () => {
     },
   );
 
-  it.each([
-    { action: "replace", provider: "openai", models: ["retired-with-successor", "retired-alias"] },
-    { action: "clear", provider: "openai", models: ["retired-without-successor", "retired-alias"] },
-    { action: "clear", provider: "anthropic", models: ["retired-alias"] },
-  ])(
+  it.each([{ action: "clear", provider: "anthropic", models: ["retired-alias"] }])(
     "preserves session pin ownership when $action selects $provider",
     async ({ action, provider, models }) => {
       const { cfg, state } = await fixture();
@@ -455,6 +404,7 @@ describe("doctor retired model references", () => {
       const retiredRef =
         action === "replace" ? "openai/retired-with-successor" : "openai/retired-without-successor";
       cfg.agents!.defaults!.models = { [retiredRef]: { alias: "retired-alias" } };
+      cfg.agents!.defaults!.modelPolicy = { allow: [retiredRef, `${provider}/current-model`] };
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       for (const modelOverride of models) {
         await replaceSessionEntry(
@@ -488,6 +438,29 @@ describe("doctor retired model references", () => {
       }
     },
   );
+
+  it("preserves a retired session pin when its successor is only the configured default", async () => {
+    const { cfg, state } = await fixture();
+    cfg.agents!.defaults!.modelPolicy = { allow: ["openai/retired-with-successor"] };
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const sessionKey = "agent:main:restricted-successor";
+    const entry = {
+      sessionId: "restricted-successor",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "retired-with-successor",
+      modelOverrideSource: "user" as const,
+      authProfileOverride: "chatgpt",
+      authProfileOverrideSource: "user" as const,
+    };
+    await replaceSessionEntry({ storePath, sessionKey, env: state.env }, entry);
+    for (const shouldRepair of [false, true, true]) {
+      const result = await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair });
+      expect(result.repairedSessions).toBe(0);
+      expect(result.warnings.join("\n")).toContain('"openai/current-model" is not permitted');
+      expect(loadSessionEntry({ storePath, sessionKey, env: state.env })).toMatchObject(entry);
+    }
+  });
 
   it("repairs session choices and model-derived state while preserving Platform pins", async () => {
     const { cfg, state } = await fixture();

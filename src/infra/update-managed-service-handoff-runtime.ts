@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { stageFreeBsdManagedHandoffNativeRuntime } from "./update-managed-service-handoff-native.js";
 import {
   MANAGED_HANDOFF_RUNTIME_ENTRY,
   managedHandoffRuntimeEntrypoint,
@@ -18,5 +19,5 @@ export function stageManagedHandoffRuntime(directory: string): string[] {
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   fs.writeFileSync(destination, fs.readFileSync(source), { mode: 0o600, flag: "wx" });
   // Survives update-to-triage exec, then shares the helper's sensitive-file cleanup.
-  return [destination];
+  return [destination, ...stageFreeBsdManagedHandoffNativeRuntime(directory)];
 }

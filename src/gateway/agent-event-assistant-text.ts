@@ -4,6 +4,7 @@ type AssistantTextInput = {
   text?: string;
   delta?: string;
   itemId?: string;
+  occurrenceId?: string;
   replace?: boolean;
   replaceable?: boolean;
   managedMediaUrls?: string[];
@@ -11,7 +12,17 @@ type AssistantTextInput = {
 
 export type AssistantTextSnapshot = {
   text: string;
-  scope?: { itemId: string; prefix: string };
+  scope?: {
+    itemId: string;
+    prefix: string;
+    boundaryNewlines: number;
+    separatorLength: number;
+  };
+};
+
+type AssistantTextMerge = AssistantTextSnapshot & {
+  /** Present only when this merge proves an append to its input snapshot. */
+  appendedText?: string;
 };
 
 /** A text-bearing empty result clears output; a missing text payload does not. */
@@ -26,34 +37,65 @@ export function resolveAssistantResultText(result: unknown): string | undefined 
   return texts.length > 0 ? texts.filter(Boolean).join("\n\n") : undefined;
 }
 
-/** Settled provisional output is run-wide; ordinary item streams keep their wire projection. */
-export function resolveAssistantTextCompletion(params: {
-  assistantText: AssistantTextSnapshot;
-  pending?: AssistantTextSnapshot;
-  resultText?: string;
-  streamedText: string;
-  fallbackText: string;
-}): string {
-  if (params.pending) {
-    return (
-      params.resultText ?? (params.pending.text || (params.streamedText ? "" : params.fallbackText))
-    );
-  }
-  return params.streamedText
-    ? params.assistantText.text
-    : (params.resultText ?? params.assistantText.text) || params.fallbackText;
-}
-
-/** Unkeyed held snapshots, including terminal echoes, describe the whole pending run. */
-export function mergePendingAssistantText(
-  previous: AssistantTextSnapshot,
-  input: AssistantTextInput,
-): AssistantTextSnapshot {
-  return mergeAssistantText(
-    previous,
-    !input.itemId && input.text !== undefined ? { ...input, replace: true } : input,
-    "append-only",
-  );
+/** Both HTTP transports share buffering; each owns its terminal error policy. */
+export function createAssistantTextStream(holdOutput: boolean) {
+  let current: AssistantTextSnapshot = { text: "" };
+  let streamed = current;
+  let pending: AssistantTextSnapshot | undefined;
+  return {
+    get streamedText() {
+      return streamed.text;
+    },
+    update(data: unknown): { delta?: string; replacement?: "representable" | "unrepresentable" } {
+      const input = resolveAssistantTextInput(data);
+      if (!input) {
+        return {};
+      }
+      // Hold provisional replacements and their terminal echoes until the run result settles.
+      if (input.replaceable || pending) {
+        pending = mergeAssistantText(
+          pending ?? current,
+          !input.itemId && input.text !== undefined ? { ...input, replace: true } : input,
+          "append-only",
+        );
+        return !input.replaceable &&
+          input.replace &&
+          input.text !== undefined &&
+          pending.text.startsWith(streamed.text)
+          ? { replacement: "representable" }
+          : {};
+      }
+      const previous = current;
+      const merged = mergeAssistantText(previous, input, "append-only");
+      current = merged;
+      // Tool-choice prose cannot reach the wire before the requested call is confirmed.
+      if (holdOutput) {
+        return {};
+      }
+      const delta =
+        previous === streamed && merged.appendedText !== undefined
+          ? merged.appendedText
+          : merged.text.startsWith(streamed.text)
+            ? merged.text.slice(streamed.text.length)
+            : undefined;
+      if (delta === undefined) {
+        return { replacement: "unrepresentable" };
+      }
+      streamed = current;
+      return {
+        delta,
+        ...(input.replace && input.text !== undefined
+          ? { replacement: "representable" as const }
+          : {}),
+      };
+    },
+    complete(resultText: string | undefined, fallbackText: string): string {
+      if (pending) {
+        return resultText ?? (pending.text || (streamed.text ? "" : fallbackText));
+      }
+      return streamed.text ? current.text : (resultText ?? current.text) || fallbackText;
+    },
+  };
 }
 
 /** Preserve snapshot presence: an absent snapshot is not an empty item. */
@@ -66,6 +108,10 @@ export function resolveAssistantTextInput(data: unknown): AssistantTextInput | u
     text: typeof record.text === "string" ? record.text : undefined,
     delta: typeof record.delta === "string" ? record.delta : undefined,
     itemId: typeof record.itemId === "string" && record.itemId ? record.itemId : undefined,
+    occurrenceId:
+      typeof record.occurrenceId === "string" && record.occurrenceId
+        ? record.occurrenceId
+        : undefined,
     replace: record.replace === true,
     replaceable: record.replaceable === true,
     ...(Array.isArray(record.managedMediaUrls)
@@ -83,28 +129,64 @@ export function mergeAssistantText(
   previous: AssistantTextSnapshot,
   input: AssistantTextInput,
   unkeyed: "live" | "append-only",
-): AssistantTextSnapshot {
-  const scope = !input.itemId
-    ? undefined
-    : previous.scope?.itemId === input.itemId
-      ? previous.scope
-      : {
-          itemId: input.itemId,
-          // Only provisional stream replacements discard earlier items.
-          prefix: input.replace && input.replaceable ? "" : previous.text,
-        };
+): AssistantTextMerge {
+  let scope = previous.scope;
+  if (!input.itemId) {
+    scope = undefined;
+  } else if (scope?.itemId !== input.itemId) {
+    // Only provisional stream replacements discard earlier items.
+    const prefix = input.replace && input.replaceable ? "" : previous.text;
+    scope = {
+      itemId: input.itemId,
+      prefix,
+      boundaryNewlines: !prefix || prefix.endsWith("\n\n") ? 0 : prefix.endsWith("\n") ? 1 : 2,
+      separatorLength: 0,
+    };
+  }
   let text: string;
-  if (scope && input.text !== undefined) {
-    text = scope.prefix + input.text;
+  if (scope) {
+    // After two provider characters, appends cannot change leading-newline
+    // padding. Avoid slicing and rebuilding the growing item on every delta.
+    if (
+      input.text === undefined &&
+      scope === previous.scope &&
+      previous.text.length - scope.prefix.length - scope.separatorLength >= 2
+    ) {
+      const appendedText = input.delta ?? "";
+      return { text: previous.text + appendedText, scope, appendedText };
+    }
+    // Inserted padding is not provider text. Keep it out of later item deltas
+    // so a matching cumulative snapshot cannot retract a streamed newline.
+    const itemText =
+      input.text ??
+      (scope === previous.scope
+        ? previous.text.slice(scope.prefix.length + scope.separatorLength)
+        : "") + (input.delta ?? "");
+    const leadingNewlines = itemText.startsWith("\n\n") ? 2 : itemText.startsWith("\n") ? 1 : 0;
+    if (!scope.prefix) {
+      // Once the display cap retires the prior item, only surviving padding
+      // and the current snapshot's own newlines can retain its boundary.
+      scope.boundaryNewlines = Math.min(
+        scope.boundaryNewlines,
+        scope.separatorLength + leadingNewlines,
+      );
+    }
+    scope.separatorLength = itemText ? Math.max(0, scope.boundaryNewlines - leadingNewlines) : 0;
+    text = scope.prefix + "\n".repeat(scope.separatorLength) + itemText;
   } else if (input.text === undefined) {
-    text = previous.text + (input.delta ?? "");
+    const appendedText = input.delta ?? "";
+    return { text: previous.text + appendedText, scope, appendedText };
   } else if (unkeyed === "append-only") {
     // Legacy HTTP snapshots recover held prefixes; non-prefix input remains
     // incremental unless its producer explicitly marks a replacement.
-    text =
-      input.replace || input.text.startsWith(previous.text)
-        ? input.text
-        : previous.text + (input.delta ?? input.text);
+    if (input.replace) {
+      return { text: input.text, scope };
+    }
+    if (input.text.startsWith(previous.text)) {
+      return { text: input.text, scope, appendedText: input.text.slice(previous.text.length) };
+    }
+    const appendedText = input.delta ?? input.text;
+    return { text: previous.text + appendedText, scope, appendedText };
   } else if (
     previous.text &&
     input.text.length > previous.text.length &&

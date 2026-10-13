@@ -24,16 +24,14 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
+vi.mock("../channels/config-presence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/config-presence.js")>()),
   listExplicitlyDisabledChannelIdsForConfig: (
     ...args: Parameters<typeof mocks.listExplicitlyDisabledChannelIdsForConfig>
   ) => mocks.listExplicitlyDisabledChannelIdsForConfig(...args),
   listPotentialConfiguredChannelIds: (
     ...args: Parameters<typeof mocks.listPotentialConfiguredChannelIds>
   ) => mocks.listPotentialConfiguredChannelIds(...args),
-  listPotentialConfiguredChannelPresenceSignals: () => [
-    { channelId: "credential-only", source: "persisted-auth" },
-  ],
 }));
 
 vi.mock("./channel-presence-policy.js", () => ({
@@ -101,20 +99,16 @@ describe("resolveEffectivePluginIds", () => {
     mocks.passesManifestOwnerBasePolicy.mockReturnValue(true);
   });
 
-  it("uses persisted auth for migration discovery but never activation", () => {
-    mocks.listExplicitlyDisabledChannelIdsForConfig.mockReturnValue(["credential-only"]);
+  it("does not activate channels from persisted auth", () => {
     mocks.listPotentialConfiguredChannelIds.mockImplementation((_config, _env, options) =>
-      options?.includePersistedAuthState ? ["credential-only"] : [],
+      options?.includePersistedAuthState === false ? [] : ["credential-only"],
     );
-    const collect = (includePersistedAuthState = false) =>
+    expect(
       collectConfiguredStartupChannelIds({
-        config: {},
-        activationSourceConfig: {},
+        configs: [{}, {}],
         env: {},
-        ...(includePersistedAuthState ? { includePersistedAuthState: true } : {}),
-      });
-    expect(collect()).toEqual([]);
-    expect(collect(true)).toEqual(["credential-only"]);
+      }),
+    ).toEqual([]);
   });
 
   it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {

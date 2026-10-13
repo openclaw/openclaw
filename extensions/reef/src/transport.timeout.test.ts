@@ -38,36 +38,16 @@ function client(relayUrl: string): ReefTransportClient {
 }
 
 describe("ReefTransportClient relay request timeout", () => {
-  it("times out when the relay stalls before returning headers", async () => {
-    const server = http.createServer();
-    server.on("connection", () => {});
-    const relayUrl = await listen(server);
-
-    try {
-      await expect(client(relayUrl).pull(0)).rejects.toMatchObject({ name: "TimeoutError" });
-    } finally {
-      await close(server);
-    }
-  });
-
-  it("times out when the relay stalls after returning headers", async () => {
+  it.each([
+    { phase: "before headers", status: undefined },
+    { phase: "after success headers", status: 200 },
+    { phase: "after error headers", status: 503 },
+  ])("preserves TimeoutError when the relay stalls $phase", async ({ status }) => {
     const server = http.createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.flushHeaders();
-    });
-    const relayUrl = await listen(server);
-
-    try {
-      await expect(client(relayUrl).pull(0)).rejects.toMatchObject({ name: "TimeoutError" });
-    } finally {
-      await close(server);
-    }
-  });
-
-  it("preserves the timeout error when an HTTP error body stalls", async () => {
-    const server = http.createServer((_request, response) => {
-      response.writeHead(503, { "content-type": "application/json" });
-      response.flushHeaders();
+      if (status !== undefined) {
+        response.writeHead(status, { "content-type": "application/json" });
+        response.flushHeaders();
+      }
     });
     const relayUrl = await listen(server);
 

@@ -33,7 +33,7 @@ export async function reconcileUnchangedUpdate(params: {
 
   let config = params.config;
   let changed = false;
-  if (params.syncOfficialInstall) {
+  if (params.syncOfficialInstall || params.hasSpecOverride) {
     const nextRecordSpec = params.recordSpec;
     if (nextRecordSpec !== params.record.spec) {
       const resolutionFields = buildNpmResolutionInstallFields(params.resolution);

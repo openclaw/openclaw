@@ -1,5 +1,6 @@
 // Feishu tests cover post plugin behavior.
 import { describe, expect, it } from "vitest";
+import { parseFeishuMarkdown } from "./markdown.js";
 import { parsePostContent } from "./post.js";
 
 describe("parsePostContent", () => {
@@ -8,15 +9,15 @@ describe("parsePostContent", () => {
       title: "Daily *Plan*",
       content: [
         [
-          { tag: "text", text: "Bold", style: { bold: true } },
+          { tag: "text", text: "Bold", style: ["bold"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Italic", style: { italic: true } },
+          { tag: "text", text: "Italic", style: ["italic"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Underline", style: { underline: true } },
+          { tag: "text", text: "Underline", style: ["underline"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Strike", style: { strikethrough: true } },
+          { tag: "text", text: "Strike", style: ["lineThrough"] },
           { tag: "text", text: " " },
-          { tag: "text", text: "Code", style: { code: true, bold: true } },
+          { tag: "code", text: "Code" },
         ],
       ],
     });
@@ -30,14 +31,46 @@ describe("parsePostContent", () => {
     expect(result.mentionedOpenIds).toStrictEqual([]);
   });
 
-  it("renders links and mentions", () => {
+  it("keeps boundary whitespace outside emphasis delimiters", () => {
+    const result = parsePostContent(
+      JSON.stringify({
+        content: [
+          [
+            { tag: "text", text: "Before" },
+            { tag: "text", text: " styled ", style: ["bold"] },
+            { tag: "text", text: "after" },
+          ],
+        ],
+      }),
+    );
+
+    expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "Before " },
+            { type: "strong", children: [{ type: "text", value: "styled" }] },
+            { type: "text", value: " after" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("renders styled links and mentions", () => {
     const content = JSON.stringify({
       title: "",
       content: [
         [
-          { tag: "a", text: "Docs [v2]", href: "https://example.com/guide(a)" },
+          {
+            tag: "a",
+            text: "Docs [v2]",
+            href: "https://example.com/guide(a)",
+            style: ["lineThrough", "bold", "italic"],
+          },
           { tag: "text", text: " " },
-          { tag: "at", user_name: "alice_bob" },
+          { tag: "at", user_name: "alice_bob", style: ["underline"] },
           { tag: "text", text: " " },
           { tag: "at", open_id: "ou_123" },
           { tag: "text", text: " " },
@@ -49,7 +82,7 @@ describe("parsePostContent", () => {
     const result = parsePostContent(content);
 
     expect(result.textContent).toBe(
-      "[Docs \\[v2\\]](https://example.com/guide(a)) @alice\\_bob @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+      "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
     );
     expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });
@@ -101,6 +134,109 @@ describe("parsePostContent", () => {
       { kind: "file", key: "file_last", fileName: "last.mov" },
       { kind: "image", key: "img_shared" },
     ]);
+  });
+
+  it("collects top-level files[] from captioned and multi-file posts", () => {
+    const captioned = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "这是账本" }]],
+      content_v2: [[{ tag: "text", text: "这是账本" }]],
+      files: [
+        {
+          file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+          file_name: "amount-2026-08-01_2026-08-31.csv",
+          is_folder: false,
+        },
+      ],
+    });
+
+    expect(parsePostContent(captioned)).toEqual({
+      textContent: "这是账本",
+      attachments: [
+        {
+          kind: "file",
+          key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+          fileName: "amount-2026-08-01_2026-08-31.csv",
+          origin: "top-level",
+        },
+      ],
+      mentionedOpenIds: [],
+    });
+
+    const multiFile = JSON.stringify({
+      title: "",
+      content: [[]],
+      content_v2: [[]],
+      files: [
+        {
+          file_key: "file_v3_zip_aug",
+          file_name: "usage_data_2026-08-01_2026-08-31.zip",
+          is_folder: false,
+        },
+        {
+          file_key: "file_v3_zip_sep",
+          file_name: "usage_data_2026-09-01_2026-09-18.zip",
+          is_folder: false,
+        },
+        {
+          file_key: "file_v3_folder",
+          file_name: "ignored-folder",
+          is_folder: true,
+        },
+        {
+          file_key: "invalid/key",
+          file_name: "bad.csv",
+          is_folder: false,
+        },
+      ],
+    });
+
+    expect(parsePostContent(multiFile).attachments).toEqual([
+      {
+        kind: "file",
+        key: "file_v3_zip_aug",
+        fileName: "usage_data_2026-08-01_2026-08-31.zip",
+        origin: "top-level",
+      },
+      {
+        kind: "file",
+        key: "file_v3_zip_sep",
+        fileName: "usage_data_2026-09-01_2026-09-18.zip",
+        origin: "top-level",
+      },
+    ]);
+
+    expect(
+      parsePostContent(
+        JSON.stringify({
+          post: {
+            zh_cn: {
+              title: "",
+              content: [[{ tag: "text", text: "附件" }]],
+              files: [
+                {
+                  file_key: "file_v3_locale",
+                  file_name: "locale.csv",
+                  is_folder: false,
+                },
+              ],
+            },
+          },
+        }),
+      ).attachments,
+    ).toEqual([
+      { kind: "file", key: "file_v3_locale", fileName: "locale.csv", origin: "top-level" },
+    ]);
+
+    expect(
+      parsePostContent(
+        JSON.stringify({
+          title: "",
+          content: [[]],
+          files: [{ file_key: "file_pdf" }],
+        }),
+      ).attachments,
+    ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);
   });
 
   it("supports locale wrappers", () => {

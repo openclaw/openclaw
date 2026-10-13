@@ -1,5 +1,6 @@
 // Durable local onboarding ownership; inference configuration alone does not prove setup finished.
 import path from "node:path";
+import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
@@ -13,6 +14,7 @@ export type LocalOnboardingState = {
   runId: string;
   configPath: string;
   workspace: string;
+  teamCoordinatorId?: string;
   securityAcknowledgedAt: string;
   startedAtMs: number;
   completedAtMs?: number;
@@ -41,7 +43,17 @@ function normalizeState(value: unknown, configPath: string): LocalOnboardingStat
   ) {
     return undefined;
   }
-  return value as LocalOnboardingState;
+  const coordinator =
+    typeof value.teamCoordinatorId === "string"
+      ? normalizeAgentIdStrict(value.teamCoordinatorId)
+      : undefined;
+  if (value.teamCoordinatorId !== undefined && !coordinator?.ok) {
+    return undefined;
+  }
+  return {
+    ...value,
+    ...(coordinator?.ok ? { teamCoordinatorId: coordinator.value } : {}),
+  } as LocalOnboardingState;
 }
 
 export function readLocalOnboardingState(
@@ -65,10 +77,11 @@ export function readLocalOnboardingStateForConfig(
   return state?.securityAcknowledgedAt === securityAcknowledgedAt ? state : undefined;
 }
 
-/** Begin exactly at inference's commit boundary so failed probes create no recovery state. */
+/** Claim approved setup before provisioning; failed provider probes do not claim a run. */
 export function beginLocalOnboarding(params: {
   configPath: string;
   workspace: string;
+  teamCoordinatorId?: string;
   securityAcknowledgedAt: string;
   replace?: boolean;
   expectedRunId?: string;
@@ -80,12 +93,20 @@ export function beginLocalOnboarding(params: {
   if (!securityAcknowledgedAt) {
     throw new Error("Local onboarding requires its persisted security acknowledgement.");
   }
+  const coordinator =
+    params.teamCoordinatorId === undefined
+      ? undefined
+      : normalizeAgentIdStrict(params.teamCoordinatorId);
+  if (coordinator && !coordinator.ok) {
+    throw new Error("Local onboarding requires a valid team coordinator id.");
+  }
   const pending: LocalOnboardingState = {
     version: 1,
     status: "pending",
     runId: params.runId,
     configPath: path.resolve(params.configPath),
     workspace: path.resolve(params.workspace),
+    ...(coordinator?.ok ? { teamCoordinatorId: coordinator.value } : {}),
     securityAcknowledgedAt,
     startedAtMs: params.nowMs ?? Date.now(),
   };

@@ -16,6 +16,74 @@ const VIEWPORTS = [
 ] as const;
 
 suite.define(() => {
+  it("keeps partial model thinking unknown and sends typed effort for server validation", async () => {
+    const key = "agent:main:main";
+    const session = { key, kind: "direct", updatedAt: 1, model: "model" };
+    const defaults = { model: "other", modelProvider: "openai", contextTokens: null };
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/other",
+        models: [
+          {
+            id: "model",
+            name: "Model",
+            provider: "openai",
+            thinkingLevels: [{ id: "high", label: "High" }],
+            thinkingDefault: "high",
+          },
+        ],
+        methodResponses: {
+          "sessions.list": { count: 1, ts: 1, path: "", defaults, sessions: [session] },
+        },
+      });
+      let displayedStatus: string | null = null;
+      let patch: unknown;
+      let highOptions: number | undefined;
+      let sliders: number | undefined;
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible" });
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await composer.fill("/think");
+        await composer.press("Tab");
+        await expect.poll(() => composer.inputValue()).toBe("/think ");
+        await composer.press("Enter");
+        await expect
+          .poll(async () => {
+            displayedStatus = await page.getByRole("log").textContent();
+            return displayedStatus;
+          })
+          .toContain("Current thinking level: Unknown.");
+        expect(displayedStatus).toContain("Options: Unknown.");
+        highOptions = await page.locator('[data-chat-thinking-option="high"]').count();
+        sliders = await page.locator('[data-chat-thinking-slider="true"]').count();
+        expect(highOptions).toBe(0);
+        expect(sliders).toBe(0);
+        await composer.fill("/think low");
+        await composer.press("Enter");
+        patch = (await gateway.waitForRequest("sessions.patch")).params;
+        expect(patch).toMatchObject({ key, thinkingLevel: "low" });
+      } finally {
+        console.log(
+          "thinking-ui-public-observation",
+          JSON.stringify({
+            fixture: "maintained synthetic Gateway; actual Control UI browser",
+            session,
+            defaults,
+            displayedStatus,
+            highOptions,
+            sliders,
+            patch,
+            requests: await gateway.getRequests(),
+          }),
+        );
+        await page.screenshot({ path: path.join(suite.artifactDir, "partial-thinking.png") });
+      }
+    });
+  });
+
   it("executes a typed inline /elevated argument separately from the draft", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -51,11 +119,10 @@ suite.define(() => {
 
       await composer.fill("Keep this /exec");
       await composer.press("Tab");
-      await composer.press("ArrowDown");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
-      expect((request.params as { message?: unknown }).message).toBe("/exec host=gateway");
+      expect((request.params as { message?: unknown }).message).toBe("/exec host=auto");
       await expect.poll(() => composer.inputValue()).toBe("Keep this ");
     });
   });

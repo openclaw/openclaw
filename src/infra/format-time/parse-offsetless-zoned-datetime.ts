@@ -4,12 +4,44 @@ import {
   isOffsetlessIsoDateTime,
   parseIsoCalendarTimeMs,
 } from "../../shared/iso-time.js";
+import { pruneMapToMaxSize } from "../map-size.js";
+
+const ZONED_PARSE_FORMATTER_CACHE_MAX = 64;
+// Locale and options are fixed for this cache; only the explicit zone varies.
+const zonedParseFormatters = new Map<string, Intl.DateTimeFormat>();
+
+type ZonedDateTimeParseResult =
+  | { ok: true; iso: string }
+  | { ok: false; reason: "invalid-timezone" | "invalid-datetime" };
 
 // Interpret local wall-clock ISO strings in an explicit IANA time zone.
-export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: string): string | null {
+export function parseOffsetlessIsoDateTimeInTimeZone(
+  raw: string,
+  timeZone: string,
+): ZonedDateTimeParseResult {
   const naiveMs = isOffsetlessIsoDateTime(raw) ? parseIsoCalendarTimeMs(raw) : undefined;
   if (naiveMs === undefined) {
-    return null;
+    return { ok: false, reason: "invalid-datetime" };
+  }
+  let formatter = zonedParseFormatters.get(timeZone);
+  if (!formatter) {
+    try {
+      formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        era: "short",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+    } catch {
+      return { ok: false, reason: "invalid-timezone" };
+    }
+    pruneMapToMaxSize(zonedParseFormatters, ZONED_PARSE_FORMATTER_CACHE_MAX - 1);
+    zonedParseFormatters.set(timeZone, formatter);
   }
   try {
     // Probe both sides of the local day so non-hour DST folds use their first
@@ -18,33 +50,23 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
     const matchingInstants = [-86_400_000, 0, 86_400_000]
       .map((shiftMs) => asDateTimestampMs(naiveMs + shiftMs))
       .filter((probeMs) => probeMs !== undefined)
-      .map((probeMs) => naiveMs - (getZonedWallTimeMs(probeMs, timeZone) - probeMs))
+      .map((probeMs) => naiveMs - (getZonedWallTimeMs(probeMs, formatter) - probeMs))
       .filter(
         (candidateMs) =>
           asDateTimestampMs(candidateMs) !== undefined &&
-          getZonedWallTimeMs(candidateMs, timeZone) === naiveMs,
+          getZonedWallTimeMs(candidateMs, formatter) === naiveMs,
       );
     return matchingInstants.length > 0
-      ? new Date(Math.min(...matchingInstants)).toISOString()
-      : null;
+      ? { ok: true, iso: new Date(Math.min(...matchingInstants)).toISOString() }
+      : { ok: false, reason: "invalid-datetime" };
   } catch {
-    return null;
+    return { ok: false, reason: "invalid-datetime" };
   }
 }
 
-function getZonedWallTimeMs(utcMs: number, timeZone: string): number {
+function getZonedWallTimeMs(utcMs: number, formatter: Intl.DateTimeFormat): number {
   const utcDate = new Date(utcMs);
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    era: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(utcDate);
+  const parts = formatter.formatToParts(utcDate);
   const getNumericPart = (type: string) => {
     const part = parts.find((candidate) => candidate.type === type);
     return Number.parseInt(part?.value ?? "0", 10);

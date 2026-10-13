@@ -1,0 +1,1572 @@
+{
+  "id": "workboard",
+  "version": 3,
+  "minimumPostgresVersion": 16,
+  "schema": "",
+  "tables": [
+    {
+      "name": "workboard_attachment_blobs",
+      "columns": [
+        {
+          "name": "attachment_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "content",
+          "type": "bytea",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "attachment_id"
+      ],
+      "unique": [],
+      "foreignKeys": [],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_boards",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "icon",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "color",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "sessions_spec",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "automation_job_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "default_workspace_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "orchestration_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "archived_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_artifacts",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "path",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "mime_type",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_attachments",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "file_name",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "byte_size",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "mime_type",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_attempts",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "started_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ended_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "engine",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "model",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_comments",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_diagnostics",
+      "columns": [
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "severity",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "detail",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "first_seen_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "last_seen_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "count",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "actions_json",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "card_id",
+        "ordinal"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_events",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "from_status",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "to_status",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_labels",
+      "columns": [
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "card_id",
+        "ordinal"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_links",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "target_card_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_notifications",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "sequence",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_card_proof",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "command",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_cards",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "board_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "priority",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "agent_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "task_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "source_url",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "position",
+          "type": "double precision",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "started_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "completed_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_kind",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_engine",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_mode",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_status",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_model",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_started_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "execution_updated_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "automation_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "claim_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "template_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "archived_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "stale_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "lifecycle_status_source_updated_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "failure_count",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [],
+      "indexes": 3,
+      "identities": []
+    },
+    {
+      "name": "workboard_notification_subscriptions",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "board_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "target",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "event_kinds_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "last_event_at",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "last_event_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "last_event_sequence",
+          "type": "bigint",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "delivered_event_ids_json",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_schema_migrations",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "applied_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_session_placements",
+      "columns": [
+        {
+          "name": "board_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "column_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "facts_hash",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "board_id",
+        "session_key"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "board_id"
+          ],
+          "target": "workboard_boards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 1,
+      "identities": []
+    },
+    {
+      "name": "workboard_worker_logs",
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "session_key",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 2,
+      "identities": []
+    },
+    {
+      "name": "workboard_worker_protocol",
+      "columns": [
+        {
+          "name": "card_id",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "type": "bigint",
+          "nullable": false,
+          "identity": false,
+          "default": null
+        },
+        {
+          "name": "detail",
+          "type": "text",
+          "nullable": true,
+          "identity": false,
+          "default": null
+        }
+      ],
+      "pk": [
+        "card_id"
+      ],
+      "unique": [],
+      "foreignKeys": [
+        {
+          "columns": [
+            "card_id"
+          ],
+          "target": "workboard_cards",
+          "targetColumns": [
+            "id"
+          ],
+          "onUpdate": "NO ACTION",
+          "onDelete": "CASCADE",
+          "deferrable": false,
+          "deferred": false
+        }
+      ],
+      "indexes": 1,
+      "identities": []
+    }
+  ],
+  "objects": [
+    {
+      "table": "workboard_session_placements",
+      "kind": "check",
+      "sql": "(\"source\" IN ('state', 'model', 'operator'))"
+    }
+  ],
+  "preData": [
+    0,
+    6963
+  ],
+  "postData": [
+    6963,
+    10540
+  ]
+}

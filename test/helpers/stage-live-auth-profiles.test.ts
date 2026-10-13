@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -11,8 +10,12 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../../src/agents/auth-profiles/sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../src/state/openclaw-state-db.js";
 import { stageLiveAuthProfiles } from "./stage-live-auth-profiles.js";
 
 const tempDirs = new Set<string>();
@@ -55,8 +58,9 @@ function createAuthSource(stateDir: string): string {
   return agentDir;
 }
 
-afterEach(() => {
+afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -67,15 +71,15 @@ afterEach(() => {
 describe("stage-live-auth-profiles", () => {
   it.each(["auth_profile_store", "auth_profile_state"] as const)(
     "fails closed when %s is the only missing auth table",
-    (missingTable) => {
+    async (missingTable) => {
       const sourceStateDir = createStateDir("openclaw-live-auth-partial-source-");
       const targetStateDir = createStateDir("openclaw-live-auth-partial-target-");
       const sourceAgentDir = createAuthSource(sourceStateDir);
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+      const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(sourceAgentDir));
       database.exec(`DROP TABLE ${missingTable};`);
       database.close();
 
-      expect(() => stageLiveAuthProfiles(sourceStateDir, targetStateDir)).toThrow(
+      await expect(stageLiveAuthProfiles(sourceStateDir, targetStateDir)).rejects.toThrow(
         "canonical auth schema is incomplete",
       );
       expect(
@@ -86,15 +90,15 @@ describe("stage-live-auth-profiles", () => {
     },
   );
 
-  it("fails closed when both auth tables are absent", () => {
+  it("fails closed when both auth tables are absent", async () => {
     const sourceStateDir = createStateDir("openclaw-live-auth-legacy-source-");
     const targetStateDir = createStateDir("openclaw-live-auth-legacy-target-");
     const sourceAgentDir = createAuthSource(sourceStateDir);
-    const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+    const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(sourceAgentDir));
     database.exec("DROP TABLE auth_profile_store; DROP TABLE auth_profile_state;");
     database.close();
 
-    expect(() => stageLiveAuthProfiles(sourceStateDir, targetStateDir)).toThrow(
+    await expect(stageLiveAuthProfiles(sourceStateDir, targetStateDir)).rejects.toThrow(
       "canonical auth schema is incomplete",
     );
     expect(
@@ -104,15 +108,15 @@ describe("stage-live-auth-profiles", () => {
     ).toBe(false);
   });
 
-  it("stages a readable store when the state row is absent", () => {
+  it("stages a readable store when the state row is absent", async () => {
     const sourceStateDir = createStateDir("openclaw-live-auth-row-source-");
     const targetStateDir = createStateDir("openclaw-live-auth-row-target-");
     const sourceAgentDir = createAuthSource(sourceStateDir);
-    const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+    const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(sourceAgentDir));
     database.exec("DELETE FROM auth_profile_state;");
     database.close();
 
-    expect(() => stageLiveAuthProfiles(sourceStateDir, targetStateDir)).not.toThrow();
+    await expect(stageLiveAuthProfiles(sourceStateDir, targetStateDir)).resolves.toBeUndefined();
     const targetAgentDir = path.join(targetStateDir, "agents", "main", "agent");
     expect(inspectPersistedAuthProfileStoreRaw(targetAgentDir).status).toBe("readable");
     expect(inspectPersistedAuthProfileStateRaw(targetAgentDir)).toEqual({

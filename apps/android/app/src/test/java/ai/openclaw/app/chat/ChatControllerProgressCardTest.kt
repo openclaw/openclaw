@@ -215,7 +215,7 @@ class ChatControllerProgressCardTest {
             cacheScope = { ChatCacheScope("gateway-test", 1) },
             currentDefaultAgentId = { "main" },
             sessionRouting = { routing },
-            gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" },
+            gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" || it == "session-scoped-model-catalog" },
             requestGateway = { method, params ->
               if (method == "progressCard.get") {
                 val key =
@@ -280,7 +280,7 @@ class ChatControllerProgressCardTest {
           cacheScope = { ChatCacheScope("gateway-test", 1) },
           currentDefaultAgentId = { "main" },
           sessionRouting = { GatewaySessionRouting("agent:main:workbench", "workbench") },
-          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" },
+          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" || it == "session-scoped-model-catalog" },
           requestGateway = { method, params ->
             if (method == "progressCard.get") {
               val request = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
@@ -321,7 +321,7 @@ class ChatControllerProgressCardTest {
           cacheScope = { ChatCacheScope("gateway-test", 1) },
           currentDefaultAgentId = { "main" },
           sessionRouting = { GatewaySessionRouting("agent:main:workbench", "workbench") },
-          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" },
+          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" || it == "session-scoped-model-catalog" },
           requestGateway = { method, params ->
             if (method == "progressCard.get") {
               val request = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
@@ -362,7 +362,7 @@ class ChatControllerProgressCardTest {
             cacheScope = { ChatCacheScope("gateway-test", 1) },
             currentDefaultAgentId = { "main" },
             sessionRouting = { GatewaySessionRouting("agent:main:workbench", "workbench") },
-            gatewayAdvertisesCapability = { ownerCapability },
+            gatewayAdvertisesCapability = { if (it == "progress-card-agent-scope-v1") ownerCapability else it == "session-scoped-model-catalog" },
             requestGateway = { method, params ->
               if (method == "progressCard.get") {
                 val request = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject

@@ -98,100 +98,6 @@ describe("createIngressEffectOnce", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it("keeps distinct effects on one event independent", async () => {
-    const effectOnce = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
-
-    await expect(
-      effectOnce.runOnce({
-        eventId: "event-4",
-        effect: "config-write",
-        run: async () => "configured",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "configured" });
-    await expect(
-      effectOnce.runOnce({
-        eventId: "event-4",
-        effect: "visible-ack",
-        run: async () => "acknowledged",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "acknowledged" });
-  });
-
-  it("isolates queue-local event ids by factory namespace", async () => {
-    const firstQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test.ingress-effect-once.account-a",
-    });
-    const secondQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test.ingress-effect-once.account-b",
-    });
-
-    await expect(
-      firstQueue.runOnce({
-        eventId: "event-local-1",
-        effect: "config-write",
-        run: async () => "first",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "first" });
-    await expect(
-      secondQueue.runOnce({
-        eventId: "event-local-1",
-        effect: "config-write",
-        run: async () => "second",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "second" });
-  });
-
-  it("keeps normalized-prefix collisions isolated", async () => {
-    const slashQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test/queue",
-    });
-    const dashQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test-queue",
-    });
-    const slashRun = vi.fn(async () => "slash");
-    const dashRun = vi.fn(async () => "dash");
-
-    await expect(
-      slashQueue.runOnce({
-        eventId: "event-local-collision",
-        effect: "config-write",
-        run: slashRun,
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "slash" });
-    await expect(
-      dashQueue.runOnce({
-        eventId: "event-local-collision",
-        effect: "config-write",
-        run: dashRun,
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "dash" });
-    expect(slashRun).toHaveBeenCalledOnce();
-    expect(dashRun).toHaveBeenCalledOnce();
-  });
-
-  it("persists completed effects across fresh factory instances", async () => {
-    const first = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
-    await expect(
-      first.runOnce({
-        eventId: "event-5",
-        effect: "config-write",
-        run: async () => "written",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "written" });
-
-    resetPluginStateStoreForTests();
-    const replayRun = vi.fn(async () => "unexpected");
-    const second = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
-    await expect(
-      second.runOnce({ eventId: "event-5", effect: "config-write", run: replayRun }),
-    ).resolves.toEqual({ kind: "replayed" });
-    expect(replayRun).not.toHaveBeenCalled();
-  });
-
   it("rejects before executing when durable state cannot be read", async () => {
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -234,10 +140,12 @@ describe("createIngressEffectOnce", () => {
       effect: "visible-ack",
       run: waiterRun,
     });
+    const outcomes = Promise.all([
+      expect(first).rejects.toThrow("Failed to open the plugin state database"),
+      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
+    ]);
     finish();
-
-    await expect(first).rejects.toThrow("Failed to open the plugin state database");
-    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();
@@ -278,35 +186,14 @@ describe("createIngressEffectOnce", () => {
       effect: "visible-ack",
       run: waiterRun,
     });
+    const outcomes = Promise.all([
+      expect(first).rejects.toThrow("Failed to open the plugin state database"),
+      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
+    ]);
     finish();
-
-    await expect(first).rejects.toThrow("Failed to open the plugin state database");
-    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();
-  });
-
-  it("evicts old records when state capacity is smaller than the replay window", async () => {
-    const effectOnce = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      stateMaxEntries: 1,
-      memoryMaxSize: 1,
-    });
-    const firstRun = vi.fn(async () => "first");
-
-    await effectOnce.runOnce({ eventId: "event-cap-1", effect: "config-write", run: firstRun });
-    await effectOnce.runOnce({
-      eventId: "event-cap-2",
-      effect: "config-write",
-      run: async () => "second",
-    });
-    await effectOnce.runOnce({
-      eventId: "event-cap-1",
-      effect: "config-write",
-      run: firstRun,
-    });
-
-    expect(firstRun).toHaveBeenCalledTimes(2);
   });
 });

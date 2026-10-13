@@ -26,9 +26,11 @@ import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class RoomChatCommandOutboxTest {
+  private val queryDriver = OutboxReadCountingDriver()
   private val database: ClientStateDatabase =
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ClientStateDatabase::class.java)
+      .setDriver(queryDriver)
       .build()
 
   private val store = RoomChatCommandOutbox(database = database)
@@ -247,7 +249,12 @@ class RoomChatCommandOutboxTest {
       val refused = store.enqueueResult(text = "overflow", nowMs = 999)
 
       assertEquals(ChatOutboxEnqueueResult.QueueFull, refused)
-      assertEquals(OUTBOX_MAX_QUEUED, store.load("gateway-a").size)
+      queryDriver.resetReads()
+      val loaded = store.load("gateway-a")
+      val loadReads = queryDriver.readCount()
+      assertEquals((0 until OUTBOX_MAX_QUEUED).map { "m$it" }, loaded.map { it.text })
+      println("outbox SELECTs: full load=$loadReads")
+      assertTrue("full outbox load SELECT budget: observed $loadReads", loadReads in 1..(2 + 2 * OUTBOX_MAX_QUEUED))
     }
 
   @Test
@@ -305,11 +312,15 @@ class RoomChatCommandOutboxTest {
     runTest {
       insertLegacyCommand("legacy-sending", ChatOutboxStatus.Sending, retryCount = 0, lastError = null)
 
+      queryDriver.resetReads()
       store.failSendingAfterRestart()
+      val recoveryReads = queryDriver.readCount()
 
       val recovered = store.load("gateway-a").single()
       assertEquals(ChatOutboxStatus.Failed, recovered.status)
       assertTrue(recovered.hadUnacknowledgedSend)
+      println("outbox SELECTs: legacy restart=$recoveryReads")
+      assertTrue("legacy restart SELECT budget: observed $recoveryReads", recoveryReads in 1..2)
     }
 
   @Test
@@ -821,13 +832,17 @@ class RoomChatCommandOutboxTest {
       assertTrue(store.confirmBranchChange("gateway-a", canonicalScope, "leaf-current", OUTBOX_BRANCH_CHANGED_ERROR))
       val queued = store.enqueueQueued("pre-hello", nowMs = 10, sessionKey = "main")
 
+      queryDriver.resetReads()
       store.pinSessionKey(queued.id, canonicalScope.sessionKey)
+      val pinReads = queryDriver.readCount()
 
       val pinned = store.load("gateway-a").single()
       assertEquals(canonicalScope.sessionKey, pinned.sessionKey)
       assertEquals(1, pinned.branchEpoch)
       assertEquals(1, pinned.scopeBranchEpoch)
       assertEquals(1, store.claimForSendingIfAttempt(pinned.id, pinned.attemptVersion, 0, null))
+      println("outbox SELECTs: canonical pin=$pinReads")
+      assertTrue("canonical session pin SELECT budget: observed $pinReads", pinReads in 1..4)
     }
 
   @Test
@@ -1164,6 +1179,9 @@ class RoomChatCommandOutboxTest {
   fun claimForSendingIsAtomicAcrossCompetingDispatchers() =
     runTest {
       val queued = store.enqueueQueued("claim me", nowMs = 10)
+      store.enqueueQueued("same gateway", nowMs = 20)
+      store.enqueueQueued("other gateway", nowMs = 20, gatewayId = "gateway-b")
+      queryDriver.resetReads()
       val ready = List(2) { CompletableDeferred<Unit>() }
       val start = CompletableDeferred<Unit>()
       val claims =
@@ -1179,7 +1197,12 @@ class RoomChatCommandOutboxTest {
 
       // Only the winning dispatcher may send, even when both observed the same attempt.
       assertEquals(listOf(0, 1), claims.awaitAll().sorted())
-      assertEquals(ChatOutboxStatus.Sending, store.load("gateway-a").single().status)
+      val commandRows = queryDriver.commandRowCount()
+      assertTrue("Two claims read $commandRows command rows", commandRows <= 2)
+      val sameGateway = store.load("gateway-a")
+      assertEquals(ChatOutboxStatus.Sending, sameGateway.single { it.id == queued.id }.status)
+      assertEquals(ChatOutboxStatus.Queued, sameGateway.single { it.id != queued.id }.status)
+      assertEquals(ChatOutboxStatus.Queued, store.load("gateway-b").single().status)
     }
 
   @Test

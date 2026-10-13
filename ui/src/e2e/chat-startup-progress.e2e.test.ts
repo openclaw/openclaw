@@ -23,10 +23,14 @@ suite.define(() => {
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { historyMessages: [] });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [],
+      deferredMethods: ["exec.approval.list"],
+    });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Inspect this synthetic workspace");
@@ -49,6 +53,12 @@ suite.define(() => {
           args: { command: "pwd" },
         },
       });
+      await gateway.emitGatewayEvent("exec.approval.requested", {
+        id: "synthetic-approval",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        request: { command: "pwd", agentId: "main", sessionKey, runId },
+      });
       await gateway.emitGatewayEvent("agent", {
         runId,
         sessionKey,
@@ -64,6 +74,9 @@ suite.define(() => {
       const tool = page.locator(".chat-tool-msg-summary", { hasText: "pwd" });
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => tool.count()).toBe(1);
+      await expect.poll(() => working.textContent()).toContain("Waiting for approval");
+      // The initial snapshot predates registration; it must retain the newer live approval.
+      await gateway.resolveDeferred("exec.approval.list", []);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
       if (capture) {
         await writeFile(

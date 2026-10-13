@@ -1,5 +1,11 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
+import { isImageWithMediaPayload } from "./media-payload.js";
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
-import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  resolveFailedAssistantReplay,
+} from "./replay-turn-classification.js";
+import { OPENAI_RESPONSES_APIS } from "./transports/openai-responses-contracts.js";
 import type {
   Api,
   AssistantMessage,
@@ -145,6 +151,9 @@ export function transformMessages<TApi extends Api>(
         )
       : messages;
   const supportsImages = model.input.includes("image");
+  const missingResultText = OPENAI_RESPONSES_APIS.has(model.api)
+    ? "aborted"
+    : DEFAULT_MISSING_TOOL_RESULT_TEXT;
   const result: Message[] = [];
   const pendingAsyncCalls = new Map<string, ToolCall>();
   let pendingToolCalls: ToolCall[] = [];
@@ -156,7 +165,8 @@ export function transformMessages<TApi extends Api>(
           role: "toolResult",
           toolCallId: call.id,
           toolName: call.name,
-          content: [{ type: "text", text: "No result provided" }],
+          content: [{ type: "text", text: missingResultText }],
+          details: { openclawSyntheticMissingToolResult: true },
           isError: true,
           timestamp: Date.now(),
         });
@@ -171,9 +181,17 @@ export function transformMessages<TApi extends Api>(
       message = { ...message, content: [] };
     }
     if (message.role === "assistant") {
+      const failedReplay = resolveFailedAssistantReplay(message, { pairingAware: false });
       message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
       flushToolCalls();
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
+      if (failedReplay === "drop") {
+        continue;
+      }
+      if (failedReplay === "marker") {
+        result.push({
+          ...message,
+          content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+        });
         continue;
       }
       pendingToolCalls = message.content.filter((block): block is ToolCall => {

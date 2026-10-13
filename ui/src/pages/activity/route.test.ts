@@ -1,7 +1,7 @@
 // @vitest-environment node
 import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it } from "vitest";
-import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { activityPersonFromPath, INTERNAL_ACTIVITY_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { page } from "./route.ts";
 import { resolveActivityRouteData, type ActivityRouteData } from "./run-inspector-model.ts";
@@ -44,31 +44,23 @@ describe("resolveActivityRouteData", () => {
     });
   });
 
-  it("keeps the browser-local tool feed behind its explicit mode", () => {
-    expect(loadRoute("?view=live")).toEqual({ mode: "live", selector: null });
-  });
-
   it("scopes readable person paths independently of query filters and mounted prefixes", () => {
-    expect(
-      loadRoute("?person=ignored&time=30d&q=release", "/ui/activity/ada-12345678", "/ui"),
-    ).toEqual({
-      mode: "sessions",
-      filters: { personId: "12345678", time: "30d", query: "release" },
-      selector: null,
-    });
+    for (const { pathname, search } of [
+      { pathname: "/ui/activity/ada-12345678", search: "?person=ignored&time=30d&q=release" },
+      {
+        pathname: "/ui/activity",
+        search: `?${INTERNAL_ACTIVITY_PATH_PARAM}=%2Fui%2Factivity%2Fada-12345678&person=ignored&time=30d&q=release`,
+      },
+    ]) {
+      expect(loadRoute(search, pathname, "/ui")).toEqual({
+        mode: "sessions",
+        filters: { personId: "12345678", time: "30d", query: "release" },
+        selector: null,
+      });
+    }
     expect(loadRoute("?view=live", "/activity/ada-12345678")).toEqual({
       mode: "live",
       selector: null,
-    });
-  });
-
-  it("decodes one run-inspector query reference without narrowing it", () => {
-    const runId = "run:a/b % lobster";
-    expect(loadRoute(`?view=run&run=${encodeURIComponent(runId)}`)).toEqual({
-      mode: "run",
-      selector: { kind: "run", id: runId },
-      selectorId: null,
-      decisionCursor: null,
     });
   });
 

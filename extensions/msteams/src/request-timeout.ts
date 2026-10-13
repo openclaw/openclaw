@@ -1,4 +1,3 @@
-// Msteams plugin module implements request deadline behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderOperationDeadline,

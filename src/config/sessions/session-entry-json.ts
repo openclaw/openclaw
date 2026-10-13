@@ -1,3 +1,7 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionEntry } from "./types.js";
+
 export function hasValidSessionEntryIdentity(entry: {
   sessionId?: unknown;
   updatedAt?: unknown;
@@ -15,11 +19,10 @@ export function parseSqliteSessionEntryRecord(row: {
   updated_at?: number;
 }): (Record<string, unknown> & { sessionId: string; updatedAt: number }) | null {
   try {
-    const parsed = JSON.parse(row.entry_json) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const record: unknown = JSON.parse(row.entry_json);
+    if (!isRecord(record)) {
       return null;
     }
-    const record = parsed as Record<string, unknown>;
     if (!hasValidSessionEntryIdentity(record)) {
       return null;
     }
@@ -33,4 +36,27 @@ export function parseSqliteSessionEntryRecord(row: {
   } catch {
     return null;
   }
+}
+
+export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
+  const hasLegacyDeliveryFields = [
+    "route",
+    "deliveryContext",
+    "origin",
+    "channel",
+    "lastChannel",
+    "lastTo",
+    "lastAccountId",
+    "lastThreadId",
+  ].some((key) => key in entry);
+  const delivery =
+    entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
+  if (asFiniteNumber(entry.updatedAt) !== undefined) {
+    if (entry.delivery === delivery) {
+      return entry;
+    }
+    return delivery ? { ...entry, delivery } : entry;
+  }
+  const updatedAt = asFiniteNumber(entry.sessionStartedAt) ?? Date.now();
+  return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
 }

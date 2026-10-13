@@ -124,7 +124,7 @@ struct IOSGatewayChatTransportTests {
 
     private func withSessionTransport(
         unreadAckAdvertisement: Bool? = true,
-        _ run: (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
+        _ run: @MainActor (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
@@ -138,7 +138,15 @@ struct IOSGatewayChatTransportTests {
                 let request = try await recorder.record(data)
                 let payload = switch request.method {
                 case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
+                case "agent.identity.get":
+                    try String(decoding: JSONEncoder().encode(AgentIdentityResult(
+                        agentid: #require(request.params["agentId"]?.value as? String),
+                        name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
                 case "sessions.create": #"{"key":"forked"}"#
+                case "users.self": #"{"profile":{"id":"profile-viewer"}}"#
+                case "session.reactions.list":
+                    #"{"sessionId":"transcript-1","reactions":{"saved-1":[{"emoji":"👍","count":1,"identities":[{"id":"profile-viewer","label":"Alex"}]}]}}"#
+                case "session.reactions.set": #"{"messageId":"saved-1","reactions":[]}"#
                 default: #"{"entry":{}}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -147,14 +155,28 @@ struct IOSGatewayChatTransportTests {
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 let hello = GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect",
-                    methods: ["agents.list", "sessions.patch", "sessions.delete", "sessions.create"],
-                    capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [])
-                guard unreadAckAdvertisement == nil else { return .data(hello) }
+                    methods: [
+                        "agents.list",
+                        "agent.identity.get",
+                        "sessions.patch",
+                        "sessions.delete",
+                        "sessions.create",
+                        "users.self",
+                        "session.reactions.list",
+                        "session.reactions.set",
+                    ],
+                    capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [],
+                    scopes: ["operator.write"])
                 var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
                 var payload = try #require(frame["payload"] as? [String: Any])
-                var features = try #require(payload["features"] as? [String: Any])
-                features.removeValue(forKey: "capabilities")
-                payload["features"] = features
+                var auth = try #require(payload["auth"] as? [String: Any])
+                auth["sessionCap"] = "view"
+                payload["auth"] = auth
+                if unreadAckAdvertisement == nil {
+                    var features = try #require(payload["features"] as? [String: Any])
+                    features.removeValue(forKey: "capabilities")
+                    payload["features"] = features
+                }
                 frame["payload"] = payload
                 return try .data(JSONSerialization.data(withJSONObject: frame))
             })
@@ -179,24 +201,93 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test func `reactions preserve hello access and encode requests on their captured route`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            let lease = try #require(await transport.acquireReactionsRouteLease())
+            #expect(lease.access.sessionCap == "view")
+            #expect(lease.access.role == "operator")
+            #expect(lease.access.scopes == ["operator.write"])
+            #expect(lease.access.userID == "profile-viewer")
+            #expect(lease.access.canList)
+            #expect(!lease.access.canReact(
+                sharingRole: "viewer", visibility: "shared", archived: false, catalog: false))
+            let reacquired = try #require(await transport.acquireReactionsRouteLease())
+            #expect(reacquired.routeID == lease.routeID)
+            #expect(reacquired.access.userID == "profile-viewer")
+
+            let listed = try await lease.list(sessionKey: "global", agentID: "research")
+            #expect(listed.sessionID == "transcript-1")
+            #expect(listed.reactions["saved-1"] == [OpenClawChatReactionSummary(
+                emoji: "👍", count: 1,
+                identities: [OpenClawChatReactionIdentity(id: "profile-viewer", label: "Alex")])])
+            let result = try await lease.set(
+                sessionKey: "global", agentID: "research", messageID: "saved-1", emoji: "👍", remove: true)
+            #expect(result == OpenClawChatReactionsSetResult(messageID: "saved-1", reactions: []))
+
+            let requests = await recorder.all()
+            #expect(requests.filter { $0.method == "users.self" }.count == 1)
+            let list = try #require(requests.first { $0.method == "session.reactions.list" })
+            #expect(list.params == ["sessionKey": AnyCodable("global"), "agentId": AnyCodable("research")])
+            let set = try #require(requests.first { $0.method == "session.reactions.set" })
+            #expect(set.params == [
+                "sessionKey": AnyCodable("global"), "agentId": AnyCodable("research"),
+                "messageId": AnyCodable("saved-1"), "emoji": AnyCodable("👍"), "remove": AnyCodable(true),
+            ])
+
+            await transport.gateway.disconnect()
+            #expect(await lease.isCurrent() == false)
+            #expect(await transport.acquireReactionsRouteLease() == nil)
+            await #expect(throws: CancellationError.self) {
+                try await lease.set(
+                    sessionKey: "global", agentID: "research", messageID: "saved-1", emoji: "👍", remove: false)
+            }
+            #expect(await recorder.all().count == requests.count)
+        }
+    }
+
+    @Test func `reaction events decode transcript identity and typed reactor summaries`() throws {
+        let frame = try JSONDecoder().decode(EventFrame.self, from: Data(#"""
+        {"type":"event","event":"session.reaction","payload":{
+          "sessionKey":"global","agentId":"research","sessionId":"transcript-1","messageId":"saved-1",
+          "emoji":"👍","action":"added","actor":{"type":"human","id":"profile-viewer"},
+          "reactions":[{"emoji":"👍","count":2,"identities":[
+            {"id":"profile-viewer","label":"Alex"},{"id":"profile-other"}]}]
+        }}
+        """#.utf8))
+        guard case let .sessionReaction(event) = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
+            Issue.record("Expected a native session reaction event")
+            return
+        }
+        #expect(event == OpenClawChatReactionEvent(
+            sessionKey: "global", agentID: "research", sessionID: "transcript-1", messageID: "saved-1",
+            reactions: [OpenClawChatReactionSummary(emoji: "👍", count: 2, identities: [
+                OpenClawChatReactionIdentity(id: "profile-viewer", label: "Alex"),
+                OpenClawChatReactionIdentity(id: "profile-other"),
+            ])]))
+    }
+
     @Test func `new session roster preserves selectable choices on its captured connection`() async throws {
         try await self.withSessionTransport { transport, recorder in
             let lease = try #require(await transport.acquireNewSessionRouteLease())
-            let roster = try await lease.listAgents()
+            var roster: OpenClawChatAgentsListResponse?
+            try await lease.loadAgents { roster = $0 }
             #expect(roster == OpenClawChatAgentsListResponse(
                 defaultId: "system",
                 agents: [
-                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
-                    OpenClawChatAgentChoice(id: "legacy"),
-                    OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
-                ]))
+                    OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", emoji: "A", workspaceGit: true),
+                    OpenClawChatAgentChoice(id: "legacy", name: "Assistant", emoji: "A"),
+                    OpenClawChatAgentChoice(id: "alpha", name: "Assistant", emoji: "A", workspaceGit: false),
+                ],
+                sessionRoutingContract: "per-sender|main|system"))
             await transport.gateway.disconnect()
             await #expect(throws: Error.self) {
-                _ = try await lease.listAgents()
+                try await lease.loadAgents { _ in Issue.record("Retired roster published") }
             }
             let requests = await recorder.all()
-            #expect(requests.map(\.method) == ["agents.list"])
+            #expect(requests.map(\.method) == ["agents.list"] + Array(repeating: "agent.identity.get", count: 3))
             #expect(requests.first?.params.isEmpty == true)
+            #expect(requests.dropFirst().compactMap { $0.params["agentId"]?.value as? String }.sorted() ==
+                ["alpha", "legacy", "zeta"])
         }
     }
 
@@ -475,6 +566,29 @@ struct IOSGatewayChatTransportTests {
             #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
             #expect(requests[0].params["archived"]?.value as? Bool == true)
             #expect(requests[1].params["archived"]?.value as? Bool == false)
+        }
+    }
+
+    @Test func `snooze and wake carry the observed session identity`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            try await transport.patchSession(
+                key: "global",
+                expectedSessionID: " session-a ",
+                snoozedUntil: .until(Date(timeIntervalSince1970: 2_000_000_000.125)))
+            let erasedTransport: any OpenClawChatTransport = transport
+            try await erasedTransport.patchSession(
+                key: "global",
+                expectedSessionID: "session-a",
+                snoozedUntil: .wake)
+
+            let requests = await recorder.all()
+            try #require(requests.count == 2)
+            #expect(requests.map(\.method) == ["sessions.patch", "sessions.patch"])
+            #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+            #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+            #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
+            #expect(requests[0].params["snoozedUntil"]?.value as? Int == 2_000_000_000_125)
+            #expect(requests[1].params["snoozedUntil"]?.value is NSNull)
         }
     }
 
@@ -846,13 +960,15 @@ struct LocalFixtureChatTransportTests {
         (LocalChatFixture.appleReviewDemo, ["main"]),
         (LocalChatFixture.appScreenshots, ["main", "research", "automation"]),
     ])
-    func `new session options expose fixture agents and create the selected session`(
+    @MainActor func `new session options expose fixture agents and create the selected session`(
         fixture: LocalChatFixture,
         expectedAgentIDs: [String]) async throws
     {
         let transport = LocalFixtureChatTransport(fixture: fixture)
         let route = try #require(await transport.acquireNewSessionRouteLease())
-        let catalog = try #require(try await route.listAgents())
+        var response: OpenClawChatAgentsListResponse?
+        try await route.loadAgents { response = $0 }
+        let catalog = try #require(response)
 
         #expect(catalog.defaultId == fixture.defaultAgentID)
         #expect(catalog.agents.map(\.id) == expectedAgentIDs)

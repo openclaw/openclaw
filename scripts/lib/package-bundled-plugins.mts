@@ -6,17 +6,21 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../src/infra/package-plugin-composition.ts";
+import type { PackageManifest } from "../../src/plugins/package-manifest.types.ts";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
 import {
   collectBundledPluginBuildEntries,
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";
+import {
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "./package-dist-inventory-contract.mts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
 
-type PackageJson = DistributionPackageManifest;
+type PackageJson = DistributionPackageManifest & Pick<PackageManifest, "openclaw">;
 
 export function resolvePackageBundledPlugins(sourceDir: string, pluginIds: string[]) {
   const ids = [...new Set(pluginIds)].toSorted();
@@ -40,7 +44,11 @@ export function resolvePackageBundledPlugins(sourceDir: string, pluginIds: strin
 }
 
 /** Called under the canonical packer's source lifecycle lock, before bundling workspace deps. */
-export async function preparePackageBundledPlugins(sourceDir: string, pluginIds: string[]) {
+export async function preparePackageBundledPlugins(
+  sourceDir: string,
+  pluginIds: string[],
+  onCleanupFailure: (error: Error) => void,
+) {
   const selected = resolvePackageBundledPlugins(sourceDir, pluginIds);
   if (selected.length === 0) {
     return async () => {};
@@ -49,6 +57,7 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
   const packagePath = path.join(sourceDir, "package.json");
   const original = await fs.readFile(packagePath, "utf8");
   const sourcePackageJson = JSON.parse(original) as PackageJson;
+  const pluginPackages = new Map<string, PackageJson>();
   for (const { id, sourceEntries } of selected) {
     const sourcePackage = JSON.parse(
       await fs.readFile(path.join(sourceDir, "extensions", id, "package.json"), "utf8"),
@@ -80,6 +89,7 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
     for (const entry of sourceEntries) {
       await fs.access(path.join(pluginRoot, entry.replace(/\.[^.]+$/u, ".js")));
     }
+    pluginPackages.set(`dist/extensions/${id}/package.json`, builtPackage);
   }
   const packageJson = composePackagePlugins(
     sourcePackageJson,
@@ -92,7 +102,9 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
     [
       "package.json",
       PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+      PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
       PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+      ...pluginPackages.keys(),
     ].map(async (relativePath) => {
       const target = path.join(sourceDir, relativePath);
       const bytes = await fs.readFile(target).catch((error: unknown) => {
@@ -112,7 +124,7 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
     );
     const failures = results.filter((result) => result.status === "rejected");
     if (failures.length) {
-      throw new AggregateError(
+      const error = new AggregateError(
         [
           ...(preparationFailure ? [preparationFailure.cause] : []),
           ...failures.map((result) => result.reason),
@@ -120,10 +132,24 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
         "Selected plugin package cleanup failed",
         preparationFailure,
       );
+      onCleanupFailure(error);
+      throw error;
     }
   };
   try {
     await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    // Explicit composition transfers ownership to this distribution. Without
+    // this fact, Doctor retains an older managed npm copy with the same version.
+    for (const [relativePath, pluginPackage] of pluginPackages) {
+      pluginPackage.openclaw = {
+        ...pluginPackage.openclaw,
+        build: { ...pluginPackage.openclaw?.build, bundledDist: true },
+      };
+      await fs.writeFile(
+        path.join(sourceDir, relativePath),
+        `${JSON.stringify(pluginPackage, null, 2)}\n`,
+      );
+    }
     // Inventory must see the custom manifest before pack, or postinstall would prune the plugin.
     const { writePackageDistInventoryForPublish } = await import("./package-dist-inventory.ts");
     await writePackageDistInventoryForPublish(sourceDir);

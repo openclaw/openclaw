@@ -10,12 +10,21 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  findReleaseChangelog,
+  loadChangelogCollection,
+  loadReleaseChangelog,
+  writeReleaseChangelog,
+} from "../../../../scripts/lib/release-changelog.mjs";
+import { parseReleaseVersion } from "../../../../scripts/lib/release-version.mjs";
 import {
   extractChangelogReleaseSections,
   formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
+  loadReleaseNotesForTag,
   parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
@@ -80,12 +89,13 @@ function fail(message) {
 function printUsage() {
   console.log(`Usage:
   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
-    --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
+    [--base <tag-or-sha|npm-beta>] --target <tag-or-sha> --version <version> [options]
 
 Required:
-  --base <ref>          Release range start.
+  --base <ref>          Release range start; beta versions default to npm-beta.
+                       Capture npm beta before publication; reuse the resolved tag on retries.
   --target <ref>        Release range end.
-  --version <version>   CHANGELOG.md version heading to verify.
+  --version <version>   Release changelog version heading to verify.
 
 Options:
   --manifest <path>     Read or write the complete contribution record ledger.
@@ -99,7 +109,7 @@ Options:
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
                         Supply an exact provenance marker; repeatable.
-  --write-ledger        Write the verified ledger back into CHANGELOG.md.
+  --write-ledger        Write the verified split release entry and contribution record.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
   --json                Emit machine-readable verification output.
@@ -122,65 +132,44 @@ export function parseArgs(argv) {
     shippedRefs: [],
     writeLedger: false,
   };
+  const booleanOptions = new Map([
+    ["--help", "help"],
+    ["--check-github", "checkGithub"],
+    ["--json", "json"],
+    ["--no-github-snapshot", "noGithubSnapshot"],
+    ["--refresh-github-snapshot", "refreshGithubSnapshot"],
+    ["--write-ledger", "writeLedger"],
+  ]);
+  const valueOptions = new Map([
+    ["--base", "base"],
+    ["--target", "target"],
+    ["--version", "version"],
+    ["--release-tag", "releaseTags"],
+    ["--release-provenance", "releaseProvenance"],
+    ["--shipped-ref", "shippedRefs"],
+    ["--github-snapshot", "githubSnapshotPath"],
+    ["--main-ref", "mainRef"],
+    ["--manifest", "manifestPath"],
+    ["--seed-ref", "seedRef"],
+  ]);
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help") {
-      options.help = true;
+    const booleanKey = booleanOptions.get(arg);
+    if (booleanKey) {
+      options[booleanKey] = true;
       continue;
     }
-    if (
-      arg === "--check-github" ||
-      arg === "--json" ||
-      arg === "--no-github-snapshot" ||
-      arg === "--refresh-github-snapshot" ||
-      arg === "--write-ledger"
-    ) {
-      options[
-        arg === "--check-github"
-          ? "checkGithub"
-          : arg === "--write-ledger"
-            ? "writeLedger"
-            : arg === "--no-github-snapshot"
-              ? "noGithubSnapshot"
-              : arg === "--refresh-github-snapshot"
-                ? "refreshGithubSnapshot"
-                : "json"
-      ] = true;
-      continue;
-    }
-    if (
-      arg === "--base" ||
-      arg === "--target" ||
-      arg === "--version" ||
-      arg === "--release-tag" ||
-      arg === "--release-provenance" ||
-      arg === "--shipped-ref" ||
-      arg === "--github-snapshot" ||
-      arg === "--main-ref" ||
-      arg === "--manifest" ||
-      arg === "--seed-ref"
-    ) {
+    const valueKey = valueOptions.get(arg);
+    if (valueKey) {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
         fail(`missing value for ${arg}`);
       }
-      if (arg === "--release-tag") {
-        options.releaseTags.push(value);
-      } else if (arg === "--release-provenance") {
-        options.releaseProvenance.push(value);
-      } else if (arg === "--shipped-ref") {
-        options.shippedRefs.push(value);
-      } else if (arg === "--manifest") {
-        options.manifestPath = value;
-      } else if (arg === "--github-snapshot") {
-        options.githubSnapshotPath = value;
-      } else if (arg === "--main-ref") {
-        options.mainRef = value;
-      } else if (arg === "--seed-ref") {
-        options.seedRef = value;
+      if (Array.isArray(options[valueKey])) {
+        options[valueKey].push(value);
       } else {
-        options[arg.slice(2)] = value;
+        options[valueKey] = value;
       }
       index += 1;
       continue;
@@ -189,6 +178,9 @@ export function parseArgs(argv) {
   }
 
   if (!options.help) {
+    if (!options.base && parseReleaseVersion(options.version ?? "")?.channel === "beta") {
+      options.base = "npm-beta";
+    }
     for (const name of ["base", "target", "version"]) {
       if (!options[name]) {
         fail(`--${name} is required`);
@@ -582,6 +574,100 @@ export function standardRevertedHash(message) {
   return undefined;
 }
 
+function verifiedMultiRevertedHashes(hash, subject, body) {
+  if (!/^(?:[a-z][a-z0-9-]*(?:\([^)]+\))?!?:\s*)?revert\b/i.test(subject)) {
+    return [];
+  }
+  const declarations = body
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .map((paragraph) =>
+      paragraph.match(
+        /^Reverts ([0-9a-f]{40}(?:, [0-9a-f]{40})*(?:,? and [0-9a-f]{40}))(?:\.| to restore the previous behavior\.)$/i,
+      ),
+    )
+    .filter(Boolean);
+  if (declarations.length !== 1) {
+    return [];
+  }
+  const targets = declarations[0][1].toLowerCase().match(/[0-9a-f]{40}/g);
+  if (new Set(targets).size !== targets.length) {
+    return [];
+  }
+
+  let temporaryDirectory;
+  try {
+    const parents = git(["rev-list", "--parents", "-n", "1", hash]).split(/\s+/);
+    if (parents.length !== 2) {
+      throw new Error("the revert must have exactly one parent");
+    }
+    const parent = parents[1];
+    for (const target of targets) {
+      if (gitCommit(target) !== target || !gitIsAncestor(target, parent)) {
+        throw new Error(`target ${target} must be an existing ancestor of the revert parent`);
+      }
+      if (git(["rev-list", "--parents", "-n", "1", target]).split(/\s+/).length !== 2) {
+        throw new Error(`target ${target} must have exactly one parent`);
+      }
+    }
+    const orderedTargets = git(["rev-list", "--topo-order", parent])
+      .split("\n")
+      .filter((candidate) => targets.includes(candidate));
+    const originalObjects = git(["rev-parse", "--path-format=absolute", "--git-path", "objects"]);
+    temporaryDirectory = mkdtempSync(path.join(tmpdir(), "openclaw-release-revert-"));
+    const objects = path.join(temporaryDirectory, "objects");
+    mkdirSync(objects);
+    const env = {
+      ...process.env,
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
+      GIT_OBJECT_DIRECTORY: objects,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+        JSON.stringify(originalObjects),
+        process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+      ]
+        .filter(Boolean)
+        .join(path.delimiter),
+    };
+    const privateGit = (args, input) =>
+      execFileSync(
+        "git",
+        ["-c", `core.hooksPath=${path.join(temporaryDirectory, "hooks")}`, ...args],
+        { env, input, maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    privateGit(["read-tree", parent]);
+    for (const target of orderedTargets) {
+      // Keep patch bytes intact; text decoding corrupts binary/non-UTF-8 reversals.
+      const patch = privateGit([
+        "diff-tree",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "-p",
+        `${target}^`,
+        target,
+      ]);
+      privateGit(["apply", "--cached", "--reverse", "--whitespace=nowarn", "-"], patch);
+    }
+    const reversedTree = privateGit(["write-tree"]).toString("utf8").trim();
+    if (reversedTree !== git(["rev-parse", `${hash}^{tree}`])) {
+      throw new Error("declared inverse patches do not reproduce the complete revert tree");
+    }
+    return targets;
+  } catch (error) {
+    throw new Error(`could not verify explicit multi-commit revert ${hash}: ${error.message}`, {
+      cause: error,
+    });
+  } finally {
+    if (temporaryDirectory) {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
 function handlesIn(text) {
   const thanksStart = text.lastIndexOf(" Thanks ");
   if (thanksStart < 0) {
@@ -729,8 +815,13 @@ function shippedBaselineFor(ref) {
   const version = releaseNotesVersionForTag(ref);
   const tagRef = `refs/tags/${ref}`;
   git(["rev-parse", `${tagRef}^{commit}`]);
-  const changelog = git(["show", `${tagRef}:CHANGELOG.md`]);
-  completeContributionRecord(sectionFor(changelog, version), `shipped baseline ${ref}`);
+  const rootDir = process.cwd();
+  const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
+  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
+  completeContributionRecord(
+    sectionFor(source.record ?? source.section, source.version),
+    `shipped baseline ${ref}`,
+  );
   return {
     ref,
     pullRequests: cumulativeShippedPullRequests(changelog, `shipped baseline ${ref}`),
@@ -788,12 +879,8 @@ export function withoutExcludedContributionRecords(record, excludedReferences) {
   return filtered;
 }
 
-function contributionRecordReferences(record) {
-  return [...record.pullRequests.keys()];
-}
-
 function contributionRecordMetadataReferences(record) {
-  const references = contributionRecordReferences(record);
+  const references = [...record.pullRequests.keys()];
   for (const entry of record.pullRequests.values()) {
     appendReferences(references, entry.references);
   }
@@ -817,17 +904,26 @@ export function contaminatingPullRequestReferences({
   nodes,
 }) {
   const allowed = new Set([...sourcePullRequests, ...seededPullRequests]);
+  const allowedEditorial = new Set(allowed);
   for (const number of sourceReferences) {
     if (nodes.get(number)?.__typename === "PullRequest") {
-      allowed.add(number);
+      allowedEditorial.add(number);
     }
   }
   const effectiveRecordedReferences = recordedReferences.filter(
     (number) => !excludedRecordedReferences.has(number),
   );
-  return [...new Set([...noteReferences, ...effectiveRecordedReferences])].filter(
-    (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
-  );
+  return [
+    ...new Set([
+      ...noteReferences.filter(
+        (number) =>
+          nodes.get(number)?.__typename === "PullRequest" && !allowedEditorial.has(number),
+      ),
+      ...effectiveRecordedReferences.filter(
+        (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
+      ),
+    ]),
+  ];
 }
 
 function appendReferences(references, additions) {
@@ -1037,6 +1133,9 @@ function canonicalMainCommits(base, mainRef) {
 
 function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
+  const targetHistory = new Set(git(["rev-list", targetCommit]).split("\n"));
+  const mainCommit = mainRef ? gitCommit(mainRef, true) : undefined;
+  const mainHistory = mainCommit ? new Set(git(["rev-list", mainCommit]).split("\n")) : new Set();
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
   }
@@ -1053,6 +1152,17 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
     `${mergeBase}..${targetCommit}`,
   ]);
+  const revertedTargetsByCommit = new Map();
+  const revertedHashesFor = (hash, subject, body) => {
+    if (!revertedTargetsByCommit.has(hash)) {
+      const standard = standardRevertedHash(body);
+      revertedTargetsByCommit.set(
+        hash,
+        standard ? [standard] : verifiedMultiRevertedHashes(hash, subject, body),
+      );
+    }
+    return revertedTargetsByCommit.get(hash);
+  };
   const commits = new Map();
   const revertsByTarget = new Map();
   for (const record of output.split("\x1e")) {
@@ -1063,8 +1173,8 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       record.split("\x1f");
     const hash = rawHash.trim();
     const body = bodyParts.join("\x1f");
-    const revertedHash = standardRevertedHash(body);
-    const isRevert = Boolean(revertedHash) || subject.startsWith('Revert "');
+    const revertedHashes = revertedHashesFor(hash, subject, body);
+    const isRevert = revertedHashes.length > 0 || subject.startsWith('Revert "');
     commits.set(hash, {
       authorEmail,
       authorName,
@@ -1072,21 +1182,20 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       committedAt,
       hash,
       isRevert,
-      revertedHash,
+      revertedHashes,
       subject,
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.revertedHash) {
-      continue;
-    }
-    const targetHash = [...commits.keys()].find((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetHash) {
-      const reverts = revertsByTarget.get(targetHash) ?? [];
-      reverts.push(commit.hash);
-      revertsByTarget.set(targetHash, reverts);
+    for (const revertedHash of commit.revertedHashes) {
+      const targetHash = [...commits.keys()].find((candidate) =>
+        candidate.startsWith(revertedHash),
+      );
+      if (targetHash) {
+        const reverts = revertsByTarget.get(targetHash) ?? [];
+        reverts.push(commit.hash);
+        revertsByTarget.set(targetHash, reverts);
+      }
     }
   }
   const active = new Map();
@@ -1100,7 +1209,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     return value;
   }
   const revertedCommitStates = new Map();
-  function revertedCommitState(ref, seen = new Set()) {
+  function revertedCommitStatesFor(ref, seen = new Set()) {
     let hash;
     try {
       hash = git(["rev-parse", `${ref}^{commit}`]);
@@ -1119,13 +1228,16 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     const [subject, ...bodyParts] = commitOutput.split("\x1f");
     const body = bodyParts.join("\x1f");
     const message = `${subject}\n${body}`;
-    const revertedHash = standardRevertedHash(body);
-    const targetState = revertedHash ? revertedCommitState(revertedHash, seen) : undefined;
-    const state = targetState
-      ? { ...targetState, depth: targetState.depth + 1 }
-      : { depth: 0, hash, references: referencesIn(message) };
-    revertedCommitStates.set(hash, state);
-    return state;
+    const targets = revertedHashesFor(hash, subject, body);
+    const targetStates = targets.flatMap(
+      (revertedTarget) => revertedCommitStatesFor(revertedTarget, new Set(seen)) ?? [],
+    );
+    const states =
+      targetStates.length > 0
+        ? targetStates.map((state) => Object.assign({}, state, { depth: state.depth + 1 }))
+        : [{ depth: 0, hash, references: referencesIn(message) }];
+    revertedCommitStates.set(hash, states);
+    return states;
   }
 
   const references = [];
@@ -1134,35 +1246,15 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const coauthorsByReference = new Map();
   const activeCommits = [];
   for (const commit of commits.values()) {
-    if (commit.isRevert && isActive(commit.hash)) {
-      const coauthorEmails = [...commit.body.matchAll(/^Co-authored-by:\s*.+?<([^>\s]+)>$/gim)].map(
-        (match) => match[1],
-      );
-      activeCommits.push({
-        authorEmail: commit.authorEmail,
-        authorHandle: githubHandleFromNoreply(commit.authorEmail),
-        authorName: commit.authorName,
-        body: commit.body,
-        closingReferences: [],
-        committedAt: commit.committedAt,
-        coauthors: coauthorEmails.map(githubHandleFromNoreply).filter(isEligibleHandle),
-        coauthorEmails,
-        hash: commit.hash,
-        isRevert: true,
-        pullRequests: [],
-        references: [],
-        subject: commit.subject,
-      });
-      continue;
-    }
-    if (commit.isRevert) {
-      continue;
-    }
-    const uniqueReferences = [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
+    const uniqueReferences = commit.isRevert
+      ? []
+      : [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
     if (!isActive(commit.hash)) {
-      revertedCommitHashes.add(commit.hash);
-      for (const number of uniqueReferences) {
-        revertedReferences.add(number);
+      if (!commit.isRevert) {
+        revertedCommitHashes.add(commit.hash);
+        for (const number of uniqueReferences) {
+          revertedReferences.add(number);
+        }
       }
       continue;
     }
@@ -1175,46 +1267,45 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       authorHandle: githubHandleFromNoreply(commit.authorEmail),
       authorName: commit.authorName,
       body: commit.body,
-      closingReferences: closingReferencesIn(`${commit.subject}\n${commit.body}`),
+      closingReferences: commit.isRevert
+        ? []
+        : closingReferencesIn(`${commit.subject}\n${commit.body}`),
       committedAt: commit.committedAt,
       coauthors,
       coauthorEmails,
       hash: commit.hash,
-      isRevert: false,
+      isRevert: commit.isRevert,
       pullRequests: [],
       references: uniqueReferences,
       subject: commit.subject,
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.isRevert || !commit.revertedHash || !isActive(commit.hash)) {
+    if (!commit.isRevert || !isActive(commit.hash)) {
       continue;
     }
-    const targetInRange = [...commits.keys()].some((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetInRange) {
-      continue;
-    }
-    const revertedState = revertedCommitState(commit.revertedHash);
-    if (!revertedState) {
-      continue;
-    }
-    if (revertedState.depth % 2 !== 0) {
-      continue;
-    }
-    revertedCommitHashes.add(revertedState.hash);
-    for (const number of revertedState.references) {
-      revertedReferences.add(number);
+    for (const revertedHash of commit.revertedHashes) {
+      if ([...commits.keys()].some((candidate) => candidate.startsWith(revertedHash))) {
+        continue;
+      }
+      for (const state of revertedCommitStatesFor(revertedHash) ?? []) {
+        if (state.depth % 2 !== 0) {
+          continue;
+        }
+        revertedCommitHashes.add(state.hash);
+        for (const number of state.references) {
+          revertedReferences.add(number);
+        }
+      }
     }
   }
   const activePullRequests = resolveAssociatedPullRequests(
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
+    targetHistory,
   );
   const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits, releaseProvenance);
-  const mainCommits = canonicalMainCommits(base, mainRef);
-  const mainCommit = provenanceOverrides.size > 0 ? gitCommit(mainRef, true) : undefined;
+  const mainCommits = canonicalMainCommits(base, mainCommit);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
   for (const commit of mainCommits) {
@@ -1278,6 +1369,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const candidateMainPullRequests = resolveAssociatedPullRequests(
     [...mainAssociationCandidateHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
     const matches = canonicalMainCommitMatches(
@@ -1305,6 +1397,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const canonicalMainPullRequests = resolveAssociatedPullRequests(
     [...canonicalMainHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
@@ -1361,6 +1454,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   for (const revertedPullRequestNumbers of resolveAssociatedPullRequests(
     [...revertedCommitHashes],
     targetTimestamp,
+    new Set([...targetHistory, ...mainHistory]),
   ).values()) {
     for (const number of revertedPullRequestNumbers) {
       revertedPullRequests.add(number);
@@ -1399,6 +1493,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     revertedReferences,
     target: targetCommit,
     targetTimestamp,
+    targetHistory,
   };
 }
 
@@ -1408,7 +1503,7 @@ function graphql(query) {
     try {
       const response = githubApi(["graphql", "-f", `query=${query}`]);
       if (response?.data && typeof response.data === "object") {
-        return response.data;
+        return response;
       }
       const errors = Array.isArray(response?.errors)
         ? response.errors.map((error) => error?.message).filter(Boolean)
@@ -1424,19 +1519,21 @@ function graphql(query) {
       const message = [error?.message, error?.stdout, error?.stderr].filter(Boolean).join("\n");
       // Historical ranges batch hundreds of objects; only retry transient transport failures.
       if (
-        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
+        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|unexpected EOF|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
           message,
         )
       ) {
         throw error;
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * 2 ** attempt);
+      if (attempt < 4) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * 2 ** attempt);
+      }
     }
   }
   throw lastError;
 }
 
-function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
+function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
   const pullRequestsByCommit = new Map();
   const pending = [];
   function appendPullRequests(commitHash, connection) {
@@ -1448,6 +1545,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
       const isExactMergeCommit = pullRequest.mergeCommit?.oid === commitHash;
       if (
         pullRequest.mergedAt &&
+        history.has(pullRequest.mergeCommit?.oid) &&
         (isExactMergeCommit || mergedByTarget(pullRequest.mergedAt, targetTimestamp)) &&
         !seen.has(pullRequest.number)
       ) {
@@ -1481,7 +1579,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       appendPullRequests(chunk[offset], data[`c${index + offset}`]?.object?.associatedPullRequests);
     }
@@ -1507,7 +1605,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       appendPullRequests(
         chunk[offset].commitHash,
@@ -1554,7 +1652,7 @@ function resolveIssueRelationshipPages(nodes) {
         }`;
       })
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const item = chunk[offset];
       const node = nodes.get(item.number);
@@ -1579,10 +1677,112 @@ function resolveIssueRelationshipPages(nodes) {
   return nodes;
 }
 
+function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
+  const candidates = new Set();
+  const required = new Set([...requiredReferences, ...source.pullRequests]);
+  for (const commit of source.activeCommits) {
+    if (commit.isRevert) {
+      continue;
+    }
+    const message = `${commit.subject}\n${commit.body}`;
+    // Mask only explicitly labelled, unqualified occurrences. The same number
+    // anywhere else remains an issue/PR requirement, even in a different commit.
+    const remaining = message.replace(
+      /(?<![A-Za-z0-9_])(?:CI(?:[ \t]+run)?|Actions[ \t]+run|workflow[ \t]+run)[ \t]+#([1-9]\d*)(?![A-Za-z0-9_])/gi,
+      (_match, number) => {
+        candidates.add(Number(number));
+        return " ";
+      },
+    );
+    for (const number of referencesIn(remaining)) {
+      required.add(number);
+    }
+  }
+  const runs = [];
+  for (const number of candidates) {
+    if (!source.references.includes(number) || nodes.has(number) || required.has(number)) {
+      continue;
+    }
+    const workflowRun = githubApi([`repos/${repo}/actions/runs/${number}`]);
+    if (workflowRun?.id === number && workflowRun.repository?.full_name === repo) {
+      runs.push({ id: number, repository: repo });
+    }
+  }
+  const runIds = new Set(runs.map((workflowRun) => workflowRun.id));
+  source.references = source.references.filter((number) => !runIds.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !runIds.has(number));
+  }
+  for (const number of runIds) {
+    source.coauthorsByReference.delete(number);
+  }
+  return runs;
+}
+
+export function githubNotFoundReferences(response, numbers) {
+  const errors = Array.isArray(response.errors) ? response.errors : [];
+  return numbers.filter((number) =>
+    errors.some(
+      (error) =>
+        error?.type === "NOT_FOUND" &&
+        Array.isArray(error.path) &&
+        error.path.length === 2 &&
+        error.path[0] === `n${number}` &&
+        error.path[1] === "issueOrPullRequest",
+    ),
+  );
+}
+
+export function classifyUnavailableContextualReferences({
+  unresolved,
+  notFound,
+  activeCommits,
+  protectedReferences,
+  highestResolved,
+}) {
+  const required = new Set(protectedReferences);
+  const bodyCommits = new Map();
+  for (const commit of activeCommits) {
+    for (const number of [
+      ...referencesIn(commit.subject),
+      ...closingReferencesIn(`${commit.subject}\n${commit.body}`),
+    ]) {
+      required.add(number);
+    }
+    for (const number of referencesIn(commit.body)) {
+      const commits = bodyCommits.get(number) ?? new Set();
+      commits.add(commit.hash.slice(0, 12));
+      bodyCommits.set(number, commits);
+    }
+  }
+  const unavailable = [];
+  const stillUnresolved = [];
+  for (const number of unresolved) {
+    if (
+      notFound.has(number) &&
+      !required.has(number) &&
+      number < highestResolved &&
+      bodyCommits.has(number)
+    ) {
+      unavailable.push({
+        number,
+        commits: [...bodyCommits.get(number)].toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1)),
+      });
+    } else {
+      stillUnresolved.push(number);
+    }
+  }
+  unavailable.sort((a, b) => a.number - b.number);
+  return { unavailable, stillUnresolved };
+}
+
 function resolveReferences(numbers) {
   const nodes = new Map();
-  for (let index = 0; index < numbers.length; index += 40) {
-    const chunk = numbers.slice(index, index + 40);
+  const notFound = new Set();
+  // GitHub's issue-number argument is GraphQL Int; Actions run IDs can exceed it.
+  const issueNumbers = numbers.filter((number) => number <= 2147483647);
+  for (let index = 0; index < issueNumbers.length; index += 40) {
+    const chunk = issueNumbers.slice(index, index + 40);
     const fields = chunk
       .map(
         (number) => `n${number}: repository(owner: "openclaw", name: "openclaw") {
@@ -1613,19 +1813,22 @@ function resolveReferences(numbers) {
         }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const response = graphql(`query { ${fields} }`);
+    for (const number of githubNotFoundReferences(response, chunk)) {
+      notFound.add(number);
+    }
     for (const number of chunk) {
-      const node = data[`n${number}`]?.issueOrPullRequest;
+      const node = response.data[`n${number}`]?.issueOrPullRequest;
       if (node) {
         nodes.set(number, node);
       }
     }
   }
-  return resolveIssueRelationshipPages(nodes);
+  return { nodes: resolveIssueRelationshipPages(nodes), notFound };
 }
 
 // A vanished GitHub PR is recoverable only when a prior exact-SHA ledger
-// covered its exact merge-title commit; every other unresolved ref stays fatal.
+// covered its exact merge-title commit.
 export function recoverUnavailablePullRequests({
   numbers,
   nodes,
@@ -1725,7 +1928,7 @@ function resolveGitHubHandles(handles) {
           `u${index + offset}: user(login: ${JSON.stringify(handle)}) { __typename login }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const user = data[`u${index + offset}`];
       if (user?.__typename === "User" && isEligibleHandle(user.login)) {
@@ -1757,7 +1960,7 @@ function resolveDirectCommitAuthors(commits) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const author = data[`c${index + offset}`]?.object?.author?.user;
       if (author?.login && isEligibleHandle(author.login)) {
@@ -1790,7 +1993,7 @@ function resolveCommitCoauthors(commits) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const coauthorEmails = new Set(
         chunk[offset].coauthorEmails.map((email) => email.toLowerCase()),
@@ -1830,32 +2033,17 @@ function thanksFor(node, coauthorHandles) {
   if (node.author?.__typename === "User" && isEligibleHandle(node.author.login)) {
     handles.push(node.author.login);
   }
-  for (const handle of coauthorHandles) {
-    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
-      handles.push(handle);
-    }
-  }
+  appendUnique(handles, coauthorHandles);
   return handles;
 }
 
 function addHandles(handles, additions) {
-  for (const handle of additions) {
-    if (!isEligibleHandle(handle)) {
-      continue;
-    }
-    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
-      handles.push(handle);
-    }
-  }
+  appendUnique(handles, [...additions].filter(isEligibleHandle));
   return handles;
 }
 
 function titleReferences(entries) {
   return [...new Set(entries.flatMap((entry) => referencesIn(entry.title)))];
-}
-
-function releaseTitle(title) {
-  return title;
 }
 
 function withSentenceEnding(value) {
@@ -2043,11 +2231,11 @@ export function ledgerFor(
   priorRecord,
   sourcePullRequests,
   sourceReferences,
-  noteReferences,
   legacyIssuePullRequests,
   revertedReferences,
   shippedBaselines,
   targetTimestamp,
+  targetHistory,
 ) {
   const entries = references.map((number) => {
     const node = nodes.get(number);
@@ -2057,7 +2245,7 @@ export function ledgerFor(
       .filter(Boolean);
     return {
       number,
-      title: releaseTitle(node.title.replace(/\s+/g, " ").trim()),
+      title: node.title.replace(/\s+/g, " ").trim(),
       type: node.__typename,
       mergedAt: node.mergedAt,
       closingIssuesReferences: node.closingIssuesReferences,
@@ -2065,10 +2253,20 @@ export function ledgerFor(
     };
   });
 
-  const recordedPullRequests = new Set([
+  // A resolved reference supplies context; only shipped graph evidence supplies membership.
+  const inRangePullRequestNumbers = new Set([
     ...sourcePullRequests,
-    ...sourceReferences,
-    ...noteReferences,
+    ...[...sourceReferences].filter((number) => {
+      const node = nodes.get(number);
+      return (
+        node?.__typename === "PullRequest" &&
+        targetHistory.has(node.mergeCommit?.oid) &&
+        mergedByTarget(node.mergedAt, targetTimestamp)
+      );
+    }),
+  ]);
+  const recordedPullRequests = new Set([
+    ...inRangePullRequestNumbers,
     ...legacyIssuePullRequests,
     ...priorRecord.pullRequests.keys(),
   ]);
@@ -2081,10 +2279,6 @@ export function ledgerFor(
       !revertedReferences.has(entry.number),
   );
   const issues = entries.filter((entry) => entry.type === "Issue");
-  const inRangePullRequestNumbers = new Set([
-    ...sourcePullRequests,
-    ...[...sourceReferences].filter((number) => nodes.get(number)?.__typename === "PullRequest"),
-  ]);
   const legacyIssues = legacyIssuesByPullRequest(priorRecord, nodes);
   const records = pullRequests.map((entry) => {
     const priorEntry = priorRecord.pullRequests.get(entry.number);
@@ -2171,9 +2365,10 @@ export function countTopLevelSectionBullets(sectionSource, heading) {
 
 export function highlightCountError(sectionSource) {
   const count = countTopLevelSectionBullets(sectionSource, "Highlights");
-  return count >= 5 && count <= 8
+  const minimum = /^## [^\n]+-beta\.[1-9][0-9]*\r?(?:\n|$)/u.test(sectionSource) ? 0 : 5;
+  return count >= minimum && count <= 8
     ? undefined
-    : `### Highlights must contain 5-8 top-level bullets; found ${count}`;
+    : `### Highlights must contain ${minimum}-8 top-level bullets; found ${count}`;
 }
 
 export function ledgerChecks(section, pullRequests, nodes, directCommits, shippedBaselines = []) {
@@ -2354,6 +2549,8 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     mergeBase: source.mergeBase,
     version: options.version,
     shippedBaselines: source.shippedBaselines,
+    workflowRuns: source.workflowRuns,
+    unavailableReferences: source.unavailableReferences,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2380,7 +2577,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   };
 }
 
-function releaseChecks(changelog, version, releaseTags) {
+function releaseChecks(changelog, version, releaseTags, contributionRecordPath) {
   const checks = [];
   for (const tag of releaseTags) {
     const release = githubApi([`repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
@@ -2390,6 +2587,7 @@ function releaseChecks(changelog, version, releaseTags) {
       version,
       tag,
       repository: repo,
+      contributionRecordPath,
     });
     checks.push({
       tag,
@@ -2422,8 +2620,64 @@ function main() {
     printUsage();
     return;
   }
+  if (options.base === "npm-beta") {
+    const candidate = parseReleaseVersion(options.version);
+    if (candidate?.channel !== "beta") {
+      fail("--base npm-beta requires an exact beta changelog version");
+    }
+    const previous = JSON.parse(
+      run("npm", [
+        "view",
+        "openclaw@beta",
+        "version",
+        "--json",
+        "--registry=https://registry.npmjs.org",
+      ]),
+    );
+    const baseline = typeof previous === "string" ? parseReleaseVersion(previous) : null;
+    if (!baseline || baseline.channel === "alpha" || baseline.patch >= 33) {
+      fail("npm beta did not resolve to a supported regular release version");
+    }
+    const compareBase =
+      candidate.year - baseline.year ||
+      candidate.month - baseline.month ||
+      candidate.patch - baseline.patch;
+    if (
+      compareBase < 0 ||
+      (compareBase === 0 &&
+        (baseline.channel !== "beta" || baseline.betaNumber >= candidate.betaNumber))
+    ) {
+      fail(
+        "npm beta already points to this candidate or a newer version; reuse the previously captured --base tag for verification or recovery",
+      );
+    }
+    // Resolve once before discovery. The manifest and contribution provenance
+    // retain this tag; publication/verification never consult a moving selector.
+    options.base = `v${baseline.version}`;
+  }
+  if (
+    parseReleaseVersion(options.version)?.channel === "beta" &&
+    /^v[0-9]/u.test(options.base) &&
+    !gitIsAncestor(options.base, options.target)
+  ) {
+    // Stable closeout may forward-port a release without retaining tag ancestry.
+    // Keep the reachable range strict and subtract the shipped record through
+    // its existing owner rather than documenting already-shipped PRs again.
+    if (!options.shippedRefs.includes(options.base)) {
+      options.shippedRefs.push(options.base);
+    }
+    options.base = git(["merge-base", options.base, options.target]);
+  }
+  const rootDir = process.cwd();
+  const releaseSource = loadReleaseChangelog({ rootDir, version: options.version });
+  if (releaseSource.format !== "initial") {
+    fail("docs-mirrored release notes must be verified by the docs-publication workflow");
+  }
+  if (options.writeLedger && releaseSource.layout !== "split") {
+    fail("split the changelog before writing a release contribution record");
+  }
   githubSnapshotState = initializeGithubSnapshot(options);
-  const changelog = readFileSync("CHANGELOG.md", "utf8");
+  const changelog = releaseSource.section;
   const section = sectionFor(changelog, options.version);
   const source = sourceCommits(
     options.base,
@@ -2431,10 +2685,14 @@ function main() {
     options.mainRef ?? "origin/main",
     options.releaseProvenance,
   );
-  const committedSection = optionalSectionFor(
-    git(["show", `${source.target}:CHANGELOG.md`]),
-    options.version,
-  );
+  const committedSource = findReleaseChangelog({
+    rootDir,
+    ref: source.target,
+    version: options.version,
+  });
+  const committedSection = committedSource
+    ? sectionFor(committedSource.record ?? committedSource.section, options.version)
+    : undefined;
   const committedRecord = committedSection
     ? contributionRecordFor(committedSection)
     : { legacyIssues: new Map(), pullRequests: new Map() };
@@ -2481,10 +2739,15 @@ function main() {
   );
   let priorRecord = { legacyIssues: new Map(), pullRequests: new Map() };
   if (options.seedRef) {
-    const seedChangelog = git(["show", `${options.seedRef}:CHANGELOG.md`]);
-    const seedSection = sectionFor(seedChangelog, options.version);
+    const seedSource = loadReleaseChangelog({
+      rootDir,
+      ref: options.seedRef,
+      version: options.version,
+    });
+    const seedSection = sectionFor(seedSource.record ?? seedSource.section, options.version);
     priorRecord = contributionRecordFor(seedSection);
   }
+  const priorRecordReferences = contributionRecordMetadataReferences(priorRecord);
   priorRecord = withoutExcludedContributionRecords(priorRecord, excludedRecordedReferences);
   const recordedReferences = contributionRecordMetadataReferences(priorRecord);
   const revertedRecordedReferences = recordedReferences.filter((number) =>
@@ -2497,32 +2760,19 @@ function main() {
         .join(", ")}`,
     );
   }
-  const references = [...source.references];
+  let references = [...source.references];
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
-  let nodes = resolveReferences(references);
-  const contamination = contaminatingPullRequestReferences({
-    noteReferences,
-    recordedReferences: effectiveRenderedRecordReferences,
-    excludedRecordedReferences,
-    sourcePullRequests: source.pullRequests,
-    sourceReferences: source.references,
-    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
-    nodes,
-  });
-  if (contamination.length > 0) {
-    fail(
-      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
-        .map((number) => `#${number}`)
-        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
-    );
-  }
+  let { nodes } = resolveReferences(references);
+  let highestResolved = Math.max(0, ...nodes.keys());
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
   appendReferences(references, legacyIssuePullRequests);
-  nodes = resolveReferences(references);
+  const resolution = resolveReferences(references);
+  nodes = resolution.nodes;
+  highestResolved = Math.max(highestResolved, ...nodes.keys());
   const recoveredPullRequests = recoverUnavailablePullRequests({
     numbers: references,
     nodes,
@@ -2530,6 +2780,45 @@ function main() {
     recordTarget: committedRecordTarget,
     source,
   });
+  const workflowRuns = resolveSourceWorkflowRuns(source, nodes, [
+    ...noteReferences,
+    ...effectiveRenderedRecordReferences,
+    ...recordedReferences,
+    ...legacyIssuePullRequests,
+  ]);
+  source.workflowRuns = workflowRuns;
+  const workflowRunIds = new Set(workflowRuns.map((workflowRun) => workflowRun.id));
+  references = references.filter((number) => !workflowRunIds.has(number));
+  const { unavailable } = classifyUnavailableContextualReferences({
+    unresolved: references.filter((number) => !nodes.has(number)),
+    notFound: resolution.notFound,
+    activeCommits: source.activeCommits,
+    protectedReferences: new Set([
+      ...noteReferences,
+      ...renderedRecordReferences,
+      ...priorRecordReferences,
+      ...contributionRecordMetadataReferences(committedRecord),
+      ...legacyIssuePullRequests,
+      ...source.pullRequests,
+      ...[...source.provenanceOverrides.values()].flat(),
+    ]),
+    highestResolved,
+  });
+  source.unavailableReferences = unavailable;
+  const unavailableNumbers = new Set(unavailable.map((reference) => reference.number));
+  references = references.filter((number) => !unavailableNumbers.has(number));
+  source.references = source.references.filter((number) => !unavailableNumbers.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !unavailableNumbers.has(number));
+  }
+  for (const number of unavailableNumbers) {
+    source.coauthorsByReference.delete(number);
+  }
+  if (unavailable.length > 0) {
+    process.stderr.write(
+      `unavailable contextual references (GitHub NOT_FOUND): ${unavailable.map(({ number }) => `#${number}`).join(", ")}\n`,
+    );
+  }
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
     fail(
@@ -2549,7 +2838,7 @@ function main() {
   const resolvedReferences = [...references];
   appendReferences(resolvedReferences, titleReferenceNumbers);
   appendReferences(resolvedReferences, closingIssueNumbers);
-  nodes = resolveReferences(resolvedReferences);
+  ({ nodes } = resolveReferences(resolvedReferences));
   for (const [number, node] of recoveredPullRequests) {
     if (!nodes.has(number)) {
       nodes.set(number, node);
@@ -2600,12 +2889,28 @@ function main() {
     priorRecord,
     source.pullRequests,
     source.references,
-    noteReferences,
     legacyIssuePullRequests,
     source.revertedReferences,
     source.shippedBaselines,
     source.targetTimestamp,
+    source.targetHistory,
   );
+  const contamination = contaminatingPullRequestReferences({
+    noteReferences,
+    recordedReferences: options.writeLedger ? [] : [...renderedRecord.pullRequests.keys()],
+    excludedRecordedReferences,
+    sourcePullRequests: new Set(ledger.pullRequests.map((entry) => entry.number)),
+    sourceReferences: source.references,
+    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
+    nodes,
+  });
+  if (contamination.length > 0) {
+    fail(
+      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
+        .map((number) => `#${number}`)
+        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
+    );
+  }
   const manifest = manifestFor(
     { ...options, target: source.target },
     source,
@@ -2637,7 +2942,12 @@ function main() {
     source.shippedBaselines,
   );
   const github = options.checkGithub
-    ? releaseChecks(candidateChangelog, options.version, options.releaseTags)
+    ? releaseChecks(
+        candidateChangelog,
+        options.version,
+        options.releaseTags,
+        releaseSource.recordPath ?? undefined,
+      )
     : [];
   for (const check of github) {
     if (!check.matches) {
@@ -2646,13 +2956,12 @@ function main() {
       );
     }
   }
-  if (errors.length === 0) {
-    if (options.writeLedger) {
-      writeFileAtomic("CHANGELOG.md", candidateChangelog);
-    }
+  if (errors.length === 0 && options.writeLedger) {
+    writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
   }
 
   const result = {
+    workflowRuns,
     base: options.base,
     target: source.target,
     mergeBase: source.mergeBase,

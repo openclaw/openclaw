@@ -1,4 +1,3 @@
-// Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   parseInlineDirectives,
@@ -22,17 +21,18 @@ type ConsumeOptions = {
 // live drafts still carry inline markers mid-run. Delete alongside the marker
 // parser when the visibleReplies default flips to "message_tool".
 // Hold incomplete tails until the inline parser can read complete reply/audio tags.
-export const splitTrailingDirective = (text: string): { text: string; tail: string } => {
+export const splitTrailingDirective = (
+  text: string,
+  options?: { preserveTrailingWhitespace?: boolean },
+): { text: string; tail: string } => {
   let bufferStart = text.length;
   let trimTextBeforeTail = false;
 
-  // 1. Unclosed `[[…` reply/audio directive tail.
+  // Unclosed `[[…` reply/audio directive tail.
   const openIndex = text.lastIndexOf("[[");
   if (openIndex >= 0 && !text.includes("]]", openIndex + 2)) {
-    if (openIndex < bufferStart) {
-      bufferStart = openIndex;
-      trimTextBeforeTail = true;
-    }
+    bufferStart = openIndex;
+    trimTextBeforeTail = true;
   }
   if (text.endsWith("[") && text.length - 1 < bufferStart) {
     bufferStart = text.length - 1;
@@ -41,29 +41,19 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 
   // Keep a possible final-reply MEDIA directive out of partial streaming
   // payloads. The final message parser still owns legacy MEDIA delivery.
-  const lastNewline = text.lastIndexOf("\n");
-  const lastLine = lastNewline < 0 ? text : text.slice(lastNewline + 1);
-  if (/^\s*MEDIA:/i.test(lastLine)) {
-    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
-    if (mediaLineStart < bufferStart) {
-      bufferStart = mediaLineStart;
-    }
-  }
-
-  const prefixMatch = lastLine.match(/^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i);
-  if (prefixMatch) {
-    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
-    if (mediaLineStart < bufferStart) {
-      bufferStart = mediaLineStart;
-    }
+  const mediaLineStart = text.lastIndexOf("\n") + 1;
+  const lastLine = text.slice(mediaLineStart);
+  if (/^\s*MEDIA:/i.test(lastLine) || /^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i.test(lastLine)) {
+    bufferStart = Math.min(bufferStart, mediaLineStart);
   }
 
   if (bufferStart >= text.length) {
     return { text, tail: "" };
   }
 
+  const head = text.slice(0, bufferStart);
   return {
-    text: trimTextBeforeTail ? text.slice(0, bufferStart).trimEnd() : text.slice(0, bufferStart),
+    text: trimTextBeforeTail && !options?.preserveTrailingWhitespace ? head.trimEnd() : head,
     tail: text.slice(bufferStart),
   };
 };

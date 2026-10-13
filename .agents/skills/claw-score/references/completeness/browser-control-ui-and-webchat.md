@@ -1,4 +1,4 @@
-# Gateway Web App Completeness
+# Control UI Completeness
 
 Use this rubric when assigning category Completeness scores for the
 `browser-control-ui-and-webchat` surface.

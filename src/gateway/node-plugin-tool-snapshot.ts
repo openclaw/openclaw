@@ -38,16 +38,8 @@ const NODE_PLUGIN_TOOL_MAX_DESCRIPTORS = 128;
 const log = createSubsystemLogger("gateway/node-plugin-tools");
 let snapshotVersion = 0;
 
-function bumpSnapshotVersion(): void {
-  snapshotVersion += 1;
-}
-
 function defaultParameters(): Record<string, unknown> {
   return { type: "object", properties: {}, additionalProperties: true };
-}
-
-function isProviderSafeToolName(value: string): boolean {
-  return NODE_PLUGIN_TOOL_NAME_RE.test(value);
 }
 
 export function createRegisteredNodePluginToolDescriptorMap(
@@ -59,7 +51,7 @@ export function createRegisteredNodePluginToolDescriptorMap(
     const name = normalizeOptionalString(agentTool?.name) ?? "";
     const description = normalizeOptionalString(agentTool?.description) ?? "";
     const command = normalizeOptionalString(entry.command.command) ?? "";
-    if (!isProviderSafeToolName(name) || !description || !command) {
+    if (!NODE_PLUGIN_TOOL_NAME_RE.test(name) || !description || !command) {
       continue;
     }
     const mcpServer = normalizeOptionalString(agentTool?.mcp?.server) ?? "";
@@ -110,7 +102,7 @@ export function normalizeNodePluginToolDescriptors(params: {
     const command = normalizeOptionalString(tool.command) ?? "";
     if (
       !pluginId ||
-      !isProviderSafeToolName(name) ||
+      !NODE_PLUGIN_TOOL_NAME_RE.test(name) ||
       !description ||
       !command ||
       !allowedCommands.has(command)
@@ -180,10 +172,7 @@ export function replaceConnectedNodePluginTools(params: {
   tools: readonly NormalizedNodePluginTool[];
 }): void {
   if (params.tools.length === 0) {
-    const removed = toolsByNodeId.delete(params.nodeId);
-    if (removed) {
-      bumpSnapshotVersion();
-    }
+    removeConnectedNodePluginTools(params.nodeId);
     return;
   }
   toolsByNodeId.set(
@@ -197,13 +186,13 @@ export function replaceConnectedNodePluginTools(params: {
       registered: entry.registered,
     })),
   );
-  bumpSnapshotVersion();
+  snapshotVersion += 1;
 }
 
 export function removeConnectedNodePluginTools(nodeId: string): void {
   const removed = toolsByNodeId.delete(nodeId);
   if (removed) {
-    bumpSnapshotVersion();
+    snapshotVersion += 1;
   }
 }
 

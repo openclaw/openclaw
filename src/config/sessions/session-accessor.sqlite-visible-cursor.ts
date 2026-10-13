@@ -1,3 +1,5 @@
+import type { SessionTranscriptVisibleMessageDeltaLimits } from "./session-accessor.sqlite-contract.js";
+
 const VISIBLE_MESSAGE_CURSOR_VERSION = 1;
 export const DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES = 1_000;
 export const DEFAULT_VISIBLE_MESSAGE_MAX_BYTES = 1_000_000;
@@ -26,6 +28,23 @@ export function normalizeVisibleMessageLimit(
   return resolved;
 }
 
+export function normalizeVisibleDeltaLimits(limits: SessionTranscriptVisibleMessageDeltaLimits) {
+  return {
+    maxMessages: normalizeVisibleMessageLimit(
+      limits.maxMessages,
+      DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+      MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+      "maxMessages",
+    ),
+    maxBytes: normalizeVisibleMessageLimit(
+      limits.maxBytes,
+      DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+      MAX_VISIBLE_MESSAGE_MAX_BYTES,
+      "maxBytes",
+    ),
+  };
+}
+
 export function encodeVisibleMessageCursor(cursor: VisibleMessageCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
@@ -36,7 +55,9 @@ export function createVisibleMessageCursor(params: {
   sessionId: string;
 }): VisibleMessageCursor {
   return {
-    ...params,
+    agentId: params.agentId,
+    generation: params.generation,
+    sessionId: params.sessionId,
     lastEventSeq: -1,
     lastMessagePosition: -1,
     version: VISIBLE_MESSAGE_CURSOR_VERSION,

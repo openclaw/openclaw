@@ -76,8 +76,13 @@ describe("shared/usage-aggregates", () => {
       toolUsage: { totalCalls: 2, uniqueTools: 1, tools: [{ name: "read", count: 2 }] },
     });
     const original = structuredClone([first, second]);
-    accumulator.add({ usage: first, agentId: "first", channel: "discord" });
-    accumulator.add({ usage: second, agentId: "second", channel: "telegram" });
+    accumulator.add({ usage: first, agentId: "first", channel: "discord", creatorKey: "person" });
+    accumulator.add({
+      usage: second,
+      agentId: "second",
+      channel: "telegram",
+      creatorKey: "person",
+    });
     accumulator.add({ usage: usage({ totalTokens: 30 }) });
     accumulator.add({ usage: null, agentId: "cold" });
 
@@ -119,6 +124,10 @@ describe("shared/usage-aggregates", () => {
       ["first", 13],
     ]);
     expect(aggregates.byChannel.map(({ channel }) => channel)).toEqual(["telegram", "discord"]);
+    expect(aggregates.byCreator).toMatchObject([
+      { key: "person", sessionCount: 2, totals: { totalTokens: 20, totalCost: 6 } },
+      { key: '["unknown"]', sessionCount: 0, totals: { totalTokens: 30, totalCost: 0 } },
+    ]);
     expect([first, second]).toEqual(original);
   });
 
@@ -176,7 +185,12 @@ describe("shared/usage-aggregates", () => {
         latency: quick,
         dailyLatency: [{ date: later, ...quick }],
         dailyBreakdown: [
-          { ...usage({ totalTokens: 3, totalCost: 4 }), date: later, tokens: 3, cost: 4 },
+          {
+            ...usage({ input: 3, totalTokens: 3, totalCost: 4, inputCost: 4 }),
+            date: later,
+            tokens: 3,
+            cost: 4,
+          },
           { ...usage({ totalTokens: 5, totalCost: 6 }), date: earlier, tokens: 5, cost: 6 },
         ],
         dailyModelUsage: [
@@ -192,7 +206,12 @@ describe("shared/usage-aggregates", () => {
           { date: earlier, ...slow },
         ],
         dailyBreakdown: [
-          { ...usage({ totalTokens: 7, totalCost: 8 }), date: later, tokens: 7, cost: 8 },
+          {
+            ...usage({ cacheRead: 7, totalTokens: 7, totalCost: 8, cacheReadCost: 8 }),
+            date: later,
+            tokens: 7,
+            cost: 8,
+          },
         ],
         dailyMessageCounts: [
           { date: later, total: 9, user: 5, assistant: 4, toolCalls: 2, toolResults: 2, errors: 1 },
@@ -219,6 +238,20 @@ describe("shared/usage-aggregates", () => {
       { date: earlier, tokens: 5, cost: 6, messages: 0, toolCalls: 0, errors: 0 },
       { date: later, tokens: 10, cost: 12, messages: 9, toolCalls: 2, errors: 1 },
     ]);
+    expect(aggregates.costDaily).toEqual([
+      { date: earlier, ...usage({ totalTokens: 5, totalCost: 6 }) },
+      {
+        date: later,
+        ...usage({
+          input: 3,
+          cacheRead: 7,
+          totalTokens: 10,
+          totalCost: 12,
+          inputCost: 4,
+          cacheReadCost: 8,
+        }),
+      },
+    ]);
     expect(aggregates.modelDaily?.map(({ date, model }) => [date, model])).toEqual([
       [earlier, "one"],
       [later, "two"],
@@ -237,6 +270,8 @@ describe("shared/usage-aggregates", () => {
       byProvider: [],
       byAgent: [],
       byChannel: [],
+      byCreator: [],
+      costDaily: [],
       latency: undefined,
       dailyLatency: [],
       modelDaily: [],
@@ -262,5 +297,63 @@ describe("shared/usage-aggregates", () => {
     expect(aggregates.dailyLatency).toEqual([
       { date: "2026-03-12", count: 0, avgMs: 0, minMs: 0, maxMs: 0, p95Ms: 0 },
     ]);
+  });
+
+  it("retains creator daily amounts and counts each multi-day session once", () => {
+    const dates = ["2026-03-11", "2026-03-12", "2026-03-13"] as const;
+    const summary = usage({
+      firstActivity: 0,
+      totalTokens: 30,
+      totalCost: 3,
+      activityDates: [dates[1], dates[0], dates[1]],
+      dailyBreakdown: dates
+        .slice(0, 2)
+        .map((date, index) =>
+          Object.assign(
+            usage({ input: (index + 1) * 10, totalTokens: (index + 1) * 10, totalCost: index + 1 }),
+            { date, tokens: (index + 1) * 10, cost: index + 1 },
+          ),
+        ),
+      dailyMessageCounts: [
+        {
+          date: dates[2],
+          total: 1,
+          user: 1,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        },
+      ],
+    });
+    const original = structuredClone(summary);
+    const accumulator = createUsageAggregateAccumulator();
+    accumulator.add({ creatorKey: "person", usage: summary });
+    accumulator.add({
+      creatorKey: "person",
+      usage: { ...summary, activityDates: dates.toReversed() },
+    });
+    accumulator.add({ creatorKey: "person", usage: usage({ firstActivity: 0, totalTokens: 5 }) });
+    accumulator.add({ creatorKey: "person", usage: usage({ activityDates: [dates[0]] }) });
+    const group = accumulator.finish().byCreator?.[0];
+    expect(group).toMatchObject({
+      sessionCount: 3,
+      totals: { totalTokens: 65, totalCost: 6 },
+      daily: [
+        { date: dates[0], input: 20, totalTokens: 20, totalCost: 2 },
+        { date: dates[1], input: 40, totalTokens: 40, totalCost: 4 },
+      ],
+      sessionActivity: [
+        { dates: [], sessionCount: 1 },
+        { dates, sessionCount: 2 },
+      ],
+    });
+    const selectedDays = new Set<string>(dates.slice(0, 2));
+    expect(
+      group?.sessionActivity
+        .filter((entry) => entry.dates.some((date) => selectedDays.has(date)))
+        .reduce((sum, entry) => sum + entry.sessionCount, 0),
+    ).toBe(2);
+    expect(summary).toEqual(original);
   });
 });

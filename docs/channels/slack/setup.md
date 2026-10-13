@@ -223,11 +223,13 @@ openclaw config patch --file ./slack.socket.patch.json5 --dry-run
 openclaw config patch --file ./slack.socket.patch.json5
 ```
 
-        Default-account credential fallback after `channels.slack` is configured:
+        Default-account credential fallback after `channels.slack` is configured. Set these
+        in the gateway process environment (export them in the shell that starts the gateway,
+        or add them to your service manager's environment):
 
 ```bash
-SLACK_APP_TOKEN=slack-app-token-example
-SLACK_BOT_TOKEN=slack-bot-token-example
+export SLACK_APP_TOKEN=slack-app-token-example
+export SLACK_BOT_TOKEN=slack-bot-token-example
 ```
 
       </Step>
@@ -440,7 +442,7 @@ openclaw gateway
 
 ```bash
 export SLACK_BOT_TOKEN=slack-bot-token-example
-export SLACK_SIGNING_SECRET=...
+export SLACK_SIGNING_SECRET=slack-signing-secret-example
 cat > slack.http.patch.json5 <<'JSON5'
 {
   channels: {

@@ -3,9 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
   applyPreparedChannelAccountConfiguration,
-  applyPreparedChannelAccountRemoval,
   prepareChannelAccountConfiguration,
-  prepareChannelAccountRemoval,
 } from "./account-config-mutation.js";
 import { defineChannelSetupContract } from "./setup-contract.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -170,51 +168,6 @@ describe("channel account config mutations", () => {
     expect(prepared.ok).toBe(true);
   });
 
-  it("normalizes plugin-resolved account IDs only at the config mutation boundary", async () => {
-    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
-    const onAccountConfigChanged = vi.fn();
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "test-chat" }),
-      setup: {
-        resolveAccountId: () => "Work",
-        applyAccountConfig,
-      },
-      lifecycle: { onAccountConfigChanged },
-    } as ChannelPlugin;
-
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      requestedAccountId: "ignored",
-      resolveInput: () => ({ token: "token-1" }),
-      runtime,
-    });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) {
-      return;
-    }
-
-    const applied = await applyPreparedChannelAccountConfiguration({
-      cfg: {},
-      channel: "test-chat",
-      prepared: prepared.value,
-      runtime,
-    });
-
-    expect(applyAccountConfig).toHaveBeenCalledWith({
-      cfg: {},
-      accountId: "work",
-      input: { token: "token-1" },
-    });
-    expect(onAccountConfigChanged).toHaveBeenCalledWith({
-      prevCfg: {},
-      nextCfg: {},
-      accountId: "Work",
-      runtime,
-    });
-    expect(applied.accountId).toBe("Work");
-  });
-
   it("does not resolve input when the channel has no account setup capability", async () => {
     const resolveInput = vi.fn(() => {
       throw new Error("input should stay lazy");
@@ -233,95 +186,5 @@ describe("channel account config mutations", () => {
       error: { kind: "unsupported" },
     });
     expect(resolveInput).not.toHaveBeenCalled();
-  });
-
-  it("deletes an account and runs its owner lifecycle hook", async () => {
-    const onAccountRemoved = vi.fn();
-    const cfg = {
-      channels: {
-        "test-chat": {
-          accounts: {
-            default: { token: "default-token" },
-            work: { token: "work-token" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const plugin = {
-      ...createChannelTestPluginBase({
-        id: "test-chat",
-        config: {
-          deleteAccount: ({ cfg: inputCfg, accountId }) => {
-            const channel = inputCfg.channels?.["test-chat"] as {
-              accounts?: Record<string, Record<string, unknown>>;
-            };
-            const accounts = { ...channel.accounts };
-            delete accounts[accountId];
-            return {
-              ...inputCfg,
-              channels: {
-                ...inputCfg.channels,
-                "test-chat": { ...channel, accounts },
-              },
-            };
-          },
-        },
-      }),
-      gateway: { startAccount: vi.fn() },
-      lifecycle: { onAccountRemoved },
-    } as ChannelPlugin;
-    const prepared = prepareChannelAccountRemoval({
-      plugin,
-      accountId: "Work",
-      action: "delete",
-    });
-
-    expect(prepared).toMatchObject({
-      accountId: "work",
-      accountKey: "work",
-      shouldStopRuntime: true,
-    });
-    const result = await applyPreparedChannelAccountRemoval({
-      cfg,
-      prepared,
-      runtime,
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.nextConfig.channels?.["test-chat"]).toMatchObject({
-        accounts: { default: { token: "default-token" } },
-      });
-    }
-    expect(onAccountRemoved).toHaveBeenCalledWith({
-      prevCfg: cfg,
-      accountId: "work",
-      runtime,
-    });
-  });
-
-  it("reports unsupported removal actions without running lifecycle hooks", async () => {
-    const onAccountConfigChanged = vi.fn();
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "test-chat" }),
-      lifecycle: { onAccountConfigChanged },
-    } as ChannelPlugin;
-    const prepared = prepareChannelAccountRemoval({
-      plugin,
-      accountId: "default",
-      action: "disable",
-    });
-
-    const result = await applyPreparedChannelAccountRemoval({
-      cfg: {},
-      prepared,
-      runtime,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "unsupported-action", action: "disable" },
-    });
-    expect(onAccountConfigChanged).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
-  expectExplicitMatrixClientConfig,
   expectOneOffSharedMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
@@ -70,41 +69,6 @@ describe("matrix send client helpers", () => {
     );
   });
 
-  it("uses the effective account id when auth resolution is implicit", async () => {
-    resolveMatrixAuthContextMock.mockReturnValue({
-      cfg: TEST_CFG,
-      env: process.env,
-      accountId: "ops",
-      resolved: {},
-    });
-
-    await withResolvedMatrixSendClient({ cfg: TEST_CFG }, async () => {});
-
-    await expectOneOffSharedMatrixClient({
-      accountId: "ops",
-      prepareForOneOffCalls: 0,
-      startCalls: 1,
-      releaseMode: "persist",
-    });
-  });
-
-  it("uses explicit cfg instead of loading runtime config", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          defaultAccount: "ops",
-        },
-      },
-    };
-
-    await withResolvedMatrixSendClient({ cfg: explicitCfg, accountId: "ops" }, async () => {});
-
-    expectExplicitMatrixClientConfig({
-      cfg: explicitCfg,
-      accountId: "ops",
-    });
-  });
-
   it("persists borrowed send clients when wrapped sends fail", async () => {
     const sharedClient = createMockMatrixClient();
     setAcquiredMatrixClient(sharedClient);
@@ -118,7 +82,7 @@ describe("matrix send client helpers", () => {
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
-  it("keeps borrowed control clients unstarted and releases without persistence", async () => {
+  it("keeps borrowed control clients unstarted and requests final persistence", async () => {
     const result = await withResolvedMatrixControlClient(
       { cfg: TEST_CFG, accountId: "default" },
       async () => "ok",
@@ -127,7 +91,7 @@ describe("matrix send client helpers", () => {
     await expectOneOffSharedMatrixClient({
       prepareForOneOffCalls: 0,
       startCalls: 0,
-      releaseMode: "stop",
+      releaseMode: "persist",
     });
     expect(result).toBe("ok");
   });

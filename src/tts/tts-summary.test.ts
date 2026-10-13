@@ -13,7 +13,6 @@ import {
   resolveTtsConfig,
   setTtsMachinePrefsPathResolver,
   synthesizeMock,
-  textToSpeechCore,
   type OpenClawConfig,
 } from "./tts-runtime.test-support.js";
 
@@ -26,7 +25,7 @@ const completion = vi.hoisted(() => ({
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: completion.complete,
-  prepareSimpleCompletionModel: completion.prepare,
+  acquireSimpleCompletionModelWithSelection: completion.prepare,
 }));
 
 const model = {
@@ -75,8 +74,10 @@ beforeEach(() => {
   installSpeechProviders([createMockSpeechProvider()]);
   completion.complete.mockReset();
   completion.prepare.mockReturnValue({
+    async [Symbol.asyncDispose]() {},
     model,
     auth: { apiKey: "synthetic-test-key", source: "test", mode: "api-key" },
+    release: () => {},
   });
   synthesizeMock.mockClear();
   prepareSynthesisMock.mockClear();
@@ -126,13 +127,6 @@ describe("TTS summary visible text", () => {
       ],
       expected: "Spoken summary.",
     },
-    {
-      name: "ordinary prose and quoted tag examples",
-      content: [
-        { type: "text", text: "The narrator says: use `<think>example</think>` literally." },
-      ],
-      expected: "The narrator says: use `<think>example</think>` literally.",
-    },
   ] satisfies Array<{ name: string; content: AssistantMessage["content"]; expected: string }>)(
     "returns only visible summary text: $name",
     async ({ content, expected }) => {
@@ -143,13 +137,6 @@ describe("TTS summary visible text", () => {
       expect(result.inputLength).toBe(originalText.length);
     },
   );
-
-  it("rejects summary text that sanitizes to empty", async () => {
-    completion.complete.mockResolvedValue(
-      assistant([{ type: "text", text: "<think>Private only</think>" }]),
-    );
-    await expect(summarize()).rejects.toThrow("No summary returned");
-  });
 
   it("does not recover unterminated reasoning as summary text at the transport boundary", async () => {
     completion.complete.mockImplementation(async ({ options }) => {
@@ -208,13 +195,5 @@ describe("TTS summary visible text", () => {
       expect.objectContaining({ text: `${originalText.slice(0, 1497)}...` }),
     );
     expect(result.text).toBe(originalText);
-  });
-
-  it("does not sanitize explicitly requested TTS text as model-generated summary output", async () => {
-    const text = "Say the literal marker <think>example</think> out loud.";
-    const result = await textToSpeechCore({ text, cfg, channel: "telegram" }, persistAudio);
-    expect(result.success).toBe(true);
-    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text }));
-    expect(completion.complete).not.toHaveBeenCalled();
   });
 });

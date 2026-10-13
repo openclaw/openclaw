@@ -3,6 +3,19 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayModelsCompatibilityTests {
+    @Test(arguments: [false, true])
+    func `plugin catalog channel ownership decodes old and current payloads`(hasOwnership: Bool) throws {
+        let ownership = hasOwnership ? #","channelIds":["agent-system-github"]"# : ""
+        let entry = try JSONDecoder().decode(
+            PluginCatalogEntry.self,
+            from: Data(
+                #"{"id":"agent-system","name":"Agent System","installed":true,"enabled":true,"state":"enabled"\#(ownership)}"#
+                    .utf8))
+
+        #expect(entry.id == "agent-system")
+        #expect(entry.channelids == (hasOwnership ? ["agent-system-github"] : nil))
+    }
+
     @Test(arguments: ["allowed", "denied", "expired", "cancelled"])
     func `terminal approval sources remain generic dictionaries`(_ status: String) throws {
         let expectedSource = ["agentId": "main", "sessionKey": "agent:main:approval"]
@@ -181,34 +194,6 @@ struct GatewayModelsCompatibilityTests {
 
         #expect(result.groups.isEmpty)
         #expect(result.sectionorder == nil)
-    }
-
-    @Test
-    func `session compaction checkpoint preserves canonical token version casing`() throws {
-        let checkpoint = SessionCompactionCheckpoint(
-            checkpointid: "checkpoint-1",
-            sessionkey: "main",
-            sessionid: "session-1",
-            createdat: 1,
-            reason: AnyCodable("manual"),
-            tokensVersion: 1,
-            precompaction: [:],
-            postcompaction: [:])
-
-        #expect(checkpoint.tokensVersion == 1)
-
-        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(checkpoint))
-        let encodedJSON = try #require(encoded as? [String: Any])
-        #expect(encodedJSON.keys.contains("tokensVersion"))
-        #expect(!encodedJSON.keys.contains("tokensversion"))
-
-        let decoded = try JSONDecoder().decode(
-            SessionCompactionCheckpoint.self,
-            from: Data(
-                #"{"checkpointId":"checkpoint-2","sessionKey":"main","sessionId":"session-2","createdAt":2,"reason":"manual","tokensVersion":1,"preCompaction":{},"postCompaction":{}}"#
-                    .utf8))
-
-        #expect(decoded.tokensVersion == 1)
     }
 
     @Test

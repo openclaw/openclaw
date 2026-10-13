@@ -1,31 +1,17 @@
 // Format Generated Module tests cover format generated module script behavior.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   formatGeneratedModule,
   GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
   GENERATED_MODULE_FORMAT_TIMEOUT_MS,
 } from "../../scripts/lib/format-generated-module.mts";
 
-const tempDirs: string[] = [];
-
-function makeRepoRoot() {
-  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-format-generated-module-"));
-  tempDirs.push(repoRoot);
-  return repoRoot;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
+const repoRoot = path.resolve("formatter-fixture");
 
 describe("formatGeneratedModule", () => {
   it("runs generated module formatting with bounded child execution", () => {
-    const repoRoot = makeRepoRoot();
     const calls: unknown[] = [];
 
     const formatted = formatGeneratedModule(
@@ -64,7 +50,6 @@ describe("formatGeneratedModule", () => {
   });
 
   it("reports formatter timeouts with bounded output tails", () => {
-    const repoRoot = makeRepoRoot();
     const timeoutError = Object.assign(new Error("spawnSync oxfmt ETIMEDOUT"), {
       code: "ETIMEDOUT",
     });
@@ -99,7 +84,6 @@ describe("formatGeneratedModule", () => {
   });
 
   it("keeps truncated formatter diagnostics UTF-8 safe", () => {
-    const repoRoot = makeRepoRoot();
     const splitBoundaryOutput = `你好${"x".repeat(16_380)}`;
     let message = "";
 

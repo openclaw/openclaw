@@ -1,5 +1,3 @@
-// Output extractors for media-understanding provider CLI responses.
-
 /** Parse the last JSON object in a noisy provider output string. */
 function extractLastJsonObject(raw: string): unknown {
   const trimmed = raw.trim();

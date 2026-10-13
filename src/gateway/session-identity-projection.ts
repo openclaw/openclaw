@@ -9,22 +9,104 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import type { SessionEntry } from "../config/sessions.js";
 import {
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionProfileInvolvement } from "../config/sessions/session-involvement.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionProfileInvolvement,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
+import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  resolveCurrentUserProfileDisplay,
+  type CurrentUserProfileDisplay,
+} from "./current-user-profile-display.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import type { SessionActorProfileIdentity } from "./session-utils-contracts.js";
+
+export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
+export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
+
+/** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
+export function createSessionIdentityProjection() {
+  let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner>>();
+  let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
+  let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();
+  let involvement = new WeakMap<SessionEntry, Map<string, SessionProfileInvolvement>>();
+  return {
+    invalidate() {
+      owners = new WeakMap();
+      participants = new WeakMap();
+      people = new WeakMap();
+      involvement = new WeakMap();
+    },
+    involvement(
+      this: void,
+      entry: SessionEntry,
+      profileId: string,
+      profiles: Parameters<typeof projectSessionProfileInvolvement>[2],
+    ) {
+      let projected = involvement.get(entry);
+      if (!projected) {
+        projected = new Map();
+        for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
+          const canonical = projectSessionParticipant({ type: "profile", id }, profiles).identity
+            .id;
+          const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
+          if (merged) {
+            projected.set(canonical, merged);
+          }
+        }
+        involvement.set(entry, projected);
+      }
+      return projected.get(profileId);
+    },
+    owner(this: void, ...args: Parameters<typeof projectSessionOwner>) {
+      const [entry] = args;
+      if (!entry) {
+        return projectSessionOwner(...args);
+      }
+      if (!owners.has(entry)) {
+        owners.set(entry, projectSessionOwner(...args));
+      }
+      return owners.get(entry);
+    },
+    participants(
+      this: void,
+      ...args: Parameters<typeof projectSessionParticipants>
+    ): ReadonlyMap<string, SessionParticipant> {
+      const [entry] = args;
+      if (!entry) {
+        return projectSessionParticipants(...args);
+      }
+      let projected = participants.get(entry);
+      if (!projected) {
+        projected = projectSessionParticipants(...args);
+        participants.set(entry, projected);
+      }
+      return projected;
+    },
+    people(this: void, ...args: Parameters<typeof projectSessionPeople>): readonly SessionPerson[] {
+      const [entry] = args;
+      let projected = people.get(entry);
+      if (!projected) {
+        projected = projectSessionPeople(...args);
+        people.set(entry, projected);
+      }
+      return projected;
+    },
+  };
+}
 
 export function projectSessionParticipant(
   identity: SessionParticipantIdentity,
@@ -62,6 +144,21 @@ export function projectSessionParticipant(
     ...(profile?.label ? { label: profile.label } : {}),
     ...(profile?.hasUploadedAvatar ? { avatarUrl: profile.avatarUrl } : {}),
   };
+}
+
+/** Resolve merged profiles without rewriting personal choices in other agent stores. */
+export function projectSessionProfileInvolvement(
+  entry: SessionEntry,
+  profileId: string,
+  profiles: Map<string, SessionActorProfileIdentity | undefined>,
+): SessionProfileInvolvement | undefined {
+  return mergeSessionProfileInvolvement(
+    Object.entries(entry.profileInvolvement?.profiles ?? {}).flatMap(([id, state]) =>
+      projectSessionParticipant({ type: "profile", id }, profiles).identity.id === profileId
+        ? [state]
+        : [],
+    ),
+  );
 }
 
 export function projectSessionActor(
@@ -160,21 +257,10 @@ export function projectSessionParticipants(
 export function projectSessionPeople(
   entry: SessionEntry,
   identities: Map<string, SessionActorProfileIdentity | undefined>,
-  cfg: OpenClawConfig,
   owner?: SessionOwnerFacetIdentity,
 ): SessionPerson[] {
-  const participants = projectSessionParticipants(entry, identities, cfg);
-  const actors = [
-    owner,
-    projectSessionActor(
-      entry.createdActor,
-      identities,
-      cfg,
-      Boolean(sessionCreatorProfileId(entry.createdActor)),
-    ),
-  ];
   const people = new Map<string, SessionPerson>();
-  for (const participant of [...participants.values(), ...actors]) {
+  const addPerson = (participant: SessionParticipant | SessionOwnerFacetIdentity | undefined) => {
     const identity = participant?.identity;
     if (identity?.type === "profile") {
       people.set(identity.id, {
@@ -184,17 +270,28 @@ export function projectSessionPeople(
         sessionCount: 1,
       });
     }
+  };
+  for (const { identity } of entry.participants ?? []) {
+    if (identity.type === "profile") {
+      addPerson(projectSessionParticipant(identity, identities));
+    }
+  }
+  addPerson(owner);
+  const creatorId = normalizeOptionalString(sessionCreatorProfileId(entry.createdActor));
+  if (creatorId) {
+    addPerson(projectSessionParticipant({ type: "profile", id: creatorId }, identities));
   }
   return [...people.values()];
 }
 
 /** Resolve navigation references within the caller-prepared visibility scope. */
-export function resolveSessionListProfileReference(
+export function* resolveSessionListProfileReference(
   reference: string,
   entries: readonly SessionEntryPair[],
   identities: Map<string, SessionActorProfileIdentity | undefined>,
   allowedProfileIds: ReadonlySet<string> | undefined,
-): Result<string | undefined, "ambiguous"> {
+  shouldYield?: () => boolean,
+): SynchronousWork<Result<string | undefined, "ambiguous">> {
   const exact = projectSessionParticipant({ type: "profile", id: reference }, identities);
   if (
     identities.get(reference) &&
@@ -207,6 +304,9 @@ export function resolveSessionListProfileReference(
   // Qualified associations outlive profile rows. Resolve over caller-visible identities
   // before time/search filters so hidden associations cannot affect the result.
   for (const [, entry] of entries) {
+    if (shouldYield?.()) {
+      yield;
+    }
     const ids = [
       sessionCreatorProfileId(entry.createdActor),
       ...(entry.participants ?? []).flatMap(({ identity }) =>
@@ -236,23 +336,20 @@ export function resolveSessionListProfileReference(
 }
 
 export function projectSessionPeopleFacet(
-  people: Iterable<SessionPerson>,
+  people: ReadonlyMap<string, SessionPerson>,
   selectedProfileId?: string,
 ) {
-  const sortedPeople = [...people].toSorted(
-    (a, b) =>
-      b.sessionCount - a.sessionCount ||
-      (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
-      a.identity.id.localeCompare(b.identity.id),
-  );
-  const visiblePeople = sortedPeople.slice(0, SESSIONS_LIST_OWNER_LIMIT);
-  const selected = selectedProfileId
-    ? sortedPeople.find((person) => person.identity.id === selectedProfileId)
-    : undefined;
+  const entries = [...people.values()];
+  const compare = (a: SessionPerson, b: SessionPerson) =>
+    b.sessionCount - a.sessionCount ||
+    (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
+    a.identity.id.localeCompare(b.identity.id);
+  const visiblePeople = sortAndLimitBy(entries, SESSIONS_LIST_OWNER_LIMIT, compare);
+  const selected = selectedProfileId ? people.get(selectedProfileId) : undefined;
   if (selected && !visiblePeople.includes(selected)) {
     visiblePeople.splice(-1, 1, selected);
   }
-  return { people: visiblePeople, selected, overflow: sortedPeople.length > visiblePeople.length };
+  return { people: visiblePeople, selected, overflow: entries.length > visiblePeople.length };
 }
 
 export function addSessionOwnerFacetIdentity(

@@ -34,6 +34,8 @@ function remoteExecPlacement() {
 
 function attachedEnvironment() {
   return {
+    preparation: null,
+    lastActivatedAtMs: null,
     environmentId,
     providerId: "fake",
     profileId: "development",

@@ -1,37 +1,15 @@
-/** Applies platform render policy for managed daemon service environment values. */
-import type { MutableServiceEnvPlan } from "./service-env-plan.js";
+import { addServiceEnvPlanEntries, type MutableServiceEnvPlan } from "./service-env-plan.js";
 import {
-  normalizeServiceEnvKey,
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
-import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
-
-function addManagedServiceEnvEntries(params: {
-  plan: MutableServiceEnvPlan;
-  entries: Record<string, string | undefined>;
-  managedKeys: ReadonlySet<string>;
-  valueSource: GatewayServiceEnvironmentValueSource;
-}): void {
-  for (const [rawKey, value] of Object.entries(params.entries)) {
-    if (typeof value !== "string" || !value.trim()) {
-      continue;
-    }
-    const key = normalizeServiceEnvKey(rawKey);
-    if (!key || !params.managedKeys.has(key)) {
-      continue;
-    }
-    params.plan.environment[rawKey] = value;
-    params.plan.environmentValueSources[rawKey] = params.valueSource;
-  }
-}
 
 export function applyManagedServiceEnvRenderPolicy(params: {
   plan: MutableServiceEnvPlan;
   managedServiceEnvKeys: string | undefined;
   serviceEnvironment: Record<string, string | undefined>;
   platform: NodeJS.Platform;
-  existingEnvironmentFileEnvironment: Record<string, string | undefined>;
+  existingSecretRefEnvironment: Record<string, string | undefined>;
   stateDirDotEnvEnvironment: Record<string, string | undefined>;
   configSecretRefEnvironment: Record<string, string | undefined>;
 }): void {
@@ -48,28 +26,22 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   if (managedKeys.size === 0) {
     return;
   }
-  // The caller limits these entries to file-backed SecretRefs active in the current config.
-  // Carry them through both file-backed supervisors or systemd can drop their env file.
+  // Preserve installed values for active SecretRefs, migrating legacy inline values
+  // into the supervisor's owner-only env file before the service is rewritten.
   if (launchAgent || params.platform === "linux") {
-    addManagedServiceEnvEntries({
-      plan: params.plan,
-      entries: params.existingEnvironmentFileEnvironment,
-      managedKeys,
+    addServiceEnvPlanEntries(params.plan, params.existingSecretRefEnvironment, {
+      includeKeys: managedKeys,
       valueSource: "file",
     });
   }
   if (launchAgent) {
-    addManagedServiceEnvEntries({
-      plan: params.plan,
-      entries: params.stateDirDotEnvEnvironment,
-      managedKeys,
+    addServiceEnvPlanEntries(params.plan, params.stateDirDotEnvEnvironment, {
+      includeKeys: managedKeys,
       valueSource: "inline",
     });
   }
-  addManagedServiceEnvEntries({
-    plan: params.plan,
-    entries: params.configSecretRefEnvironment,
-    managedKeys,
+  addServiceEnvPlanEntries(params.plan, params.configSecretRefEnvironment, {
+    includeKeys: managedKeys,
     valueSource: params.platform === "linux" ? "file" : "inline",
   });
 }

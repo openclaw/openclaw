@@ -1,8 +1,8 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
-import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 
 const DOCTOR_CONTRACT_SURFACES = [
@@ -18,6 +18,25 @@ const sourceManifestEnv: NodeJS.ProcessEnv = {
   OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
 };
 
+describe("provider rename descriptors", () => {
+  it("accepts descriptor-only config repairs and default exports", () => {
+    const providerRenames = [{ from: "old", to: "new", baseUrl: "https://models.example/api" }];
+    for (const mod of [{ providerRenames }, { default: { providerRenames } }]) {
+      const result = coercePluginDoctorContractModule({ providerRenames: undefined, ...mod });
+      expect(result.providerRenames).toEqual(providerRenames);
+      expect(result.summary.configRepair).toBe(true);
+    }
+  });
+
+  it.each([
+    { from: "old/model", to: "new", baseUrl: "https://models.example" },
+    { from: "old", to: "old", baseUrl: "https://models.example" },
+    { from: "old", to: "new", baseUrl: "not a URL" },
+  ])("rejects malformed or ambiguous descriptors: %j", (descriptor) => {
+    expect(() => coercePluginDoctorContractModule({ providerRenames: [descriptor] })).toThrow();
+  });
+});
+
 describe("bundled plugin doctor contract declarations", () => {
   it("matches every resolvable artifact's coerced doctor surfaces", async () => {
     const mismatches = (
@@ -25,7 +44,10 @@ describe("bundled plugin doctor contract declarations", () => {
         loadBundledPluginManifestRegistry({ env: sourceManifestEnv }).plugins.map(
           async (record) => {
             const pluginMismatches: string[] = [];
-            const artifactPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
+            const artifactPath = resolvePluginDoctorContractArtifact({
+              ...record,
+              sourcePreferred: true,
+            })?.modulePath;
             if (!artifactPath) {
               return pluginMismatches;
             }
@@ -80,7 +102,10 @@ describe("bundled plugin doctor contract declarations", () => {
             if (!Array.isArray(declaration)) {
               return [];
             }
-            const artifactPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
+            const artifactPath = resolvePluginDoctorContractArtifact({
+              ...record,
+              sourcePreferred: true,
+            })?.modulePath;
             if (!artifactPath) {
               return [`${record.id}: missing Doctor contract artifact`];
             }

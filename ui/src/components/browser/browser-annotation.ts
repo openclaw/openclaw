@@ -1,10 +1,10 @@
-// Annotation model for the browser panel: freehand strokes drawn over a page
-// screenshot, plus the prepackaged prompt handed to the chat composer so the
-// agent knows what was marked up.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
+
+registerBrowserEnglish();
 
 /** Point in normalized [0..1] coordinates of the captured screenshot. */
 type AnnotationPoint = { x: number; y: number };
@@ -92,36 +92,29 @@ const ANNOTATION_DISPLAY_URL_MAX_LENGTH = 160;
 
 function sanitizePageUrl(value: string): string {
   const normalized = sanitizePageText(value, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
-  try {
-    const parsed = new URL(normalized);
-    if (!parsed.username && !parsed.password) {
-      return normalized;
-    }
-    parsed.username = "";
-    parsed.password = "";
-    return truncateUtf16Safe(parsed.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
-  } catch {
-    const withoutUserInfo = normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
-    return truncateUtf16Safe(withoutUserInfo, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+  const parsed = URL.parse(normalized);
+  if (!parsed) {
+    return normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
   }
+  if (!parsed.username && !parsed.password) {
+    return normalized;
+  }
+  parsed.username = "";
+  parsed.password = "";
+  return truncateUtf16Safe(parsed.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
 }
 
 function annotationDisplayUrl(url: string): string {
-  try {
-    const hostname = new URL(url).hostname;
-    if (hostname) {
-      return sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
-    }
-  } catch {
-    // The bounded credential-free URL remains useful for opaque or malformed schemes.
-  }
-  return truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
+  const hostname = URL.parse(url)?.hostname;
+  return hostname
+    ? sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH)
+    : truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
 }
 
 /** Selector fragments (tag/id/class) are page-controlled too: keep only
  * word characters and dashes so they cannot carry quotes or directives. */
-function sanitizeSelectorToken(value: string, maxLength = 40): string {
-  return value.replace(/[^\w-]/g, "").slice(0, maxLength);
+function sanitizeSelectorToken(value: string): string {
+  return value.replace(/[^\w-]/g, "").slice(0, 40);
 }
 
 /** Compact human/agent-readable element descriptor, e.g. `button#save.btn "Save"`. */
@@ -197,15 +190,7 @@ export function buildBrowserAnnotationContent(params: {
     );
   }
   if (element) {
-    lines.push(
-      t("browser.annotatePrompt.elementDetail", {
-        descriptor: element.descriptor,
-        width: element.width,
-        height: element.height,
-        x: element.x,
-        y: element.y,
-      }),
-    );
+    lines.push(t("browser.annotatePrompt.elementDetail", element));
   }
   lines.push(t("browser.annotatePrompt.outro"));
   return {
@@ -220,10 +205,6 @@ export function buildBrowserAnnotationContent(params: {
 }
 
 const ANNOTATION_STROKE_COLOR = "#e0442d";
-
-function annotationStrokeWidth(imageWidth: number): number {
-  return Math.max(4, Math.round(imageWidth * 0.005));
-}
 
 /**
  * Draws the strokes (and optional element highlight, both in normalized
@@ -243,7 +224,7 @@ export function paintAnnotations(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = ANNOTATION_STROKE_COLOR;
-  ctx.lineWidth = annotationStrokeWidth(params.width);
+  ctx.lineWidth = Math.max(4, Math.round(params.width * 0.005));
   for (const stroke of params.strokes) {
     if (stroke.points.length === 0) {
       continue;
@@ -279,13 +260,9 @@ export function paintAnnotations(
 }
 
 /** Composites the screenshot and markup into a PNG data URL for the chat attachment. */
-export function composeAnnotatedImage(params: {
-  image: CanvasImageSource;
-  width: number;
-  height: number;
-  strokes: AnnotationStroke[];
-  highlight?: AnnotationRegion | null;
-}): string {
+export function composeAnnotatedImage(
+  params: Parameters<typeof paintAnnotations>[1] & { image: CanvasImageSource },
+): string {
   const canvas = document.createElement("canvas");
   canvas.width = params.width;
   canvas.height = params.height;

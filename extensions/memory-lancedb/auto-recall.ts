@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { OpenClawPluginApi } from "./api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MemoryConfig } from "./config.js";
 import {
   type Embeddings,
@@ -10,7 +11,6 @@ import type { MemoryDB } from "./lancedb-store.js";
 import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
 import {
   cleanMemorySearchResults,
-  extractLatestUserText,
   formatRelevantMemoriesContext,
   normalizeRecallQuery,
 } from "./memory-policy.js";
@@ -27,6 +27,7 @@ type AutoRecallToolAuthority = {
 
 type AutoRecallHookContext = {
   agentId?: string;
+  sessionKey?: string;
   toolAuthority?: AutoRecallToolAuthority;
 };
 
@@ -45,6 +46,9 @@ export function createAutoRecallHook(params: {
   recordCooldown: (agentId: string, error: string) => void;
 }) {
   return async (event: AutoRecallHookEvent, ctx: AutoRecallHookContext) => {
+    if (isIncognitoSessionKey(ctx.sessionKey)) {
+      return undefined;
+    }
     const currentCfg = params.resolveCurrentConfig();
     const recallMaxChars = currentCfg.recallMaxChars;
     if (!currentCfg.autoRecall) {
@@ -77,10 +81,8 @@ export function createAutoRecallHook(params: {
     }
 
     try {
-      const recallQuery = normalizeRecallQuery(
-        dropMediaNoteLines(extractLatestUserText(event.messages) ?? event.prompt),
-        recallMaxChars,
-      );
+      // Prompt hooks receive prior history separately from the current request.
+      const recallQuery = normalizeRecallQuery(dropMediaNoteLines(event.prompt), recallMaxChars);
       if (!recallQuery) {
         return undefined;
       }

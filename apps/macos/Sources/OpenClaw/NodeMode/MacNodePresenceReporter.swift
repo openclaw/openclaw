@@ -17,16 +17,24 @@ final class MacNodePresenceReporter {
     private struct Payload: Codable {
         let idleSeconds: Int
         let saturated: Bool?
+        let source: String?
     }
 
     private struct IdleSample {
         let seconds: Int
         let saturated: Bool
+        let source: ActivitySource
+    }
+
+    private enum ActivitySource {
+        case app
+        case system
     }
 
     private struct DeliveryState {
         let sentAtMs: Int64
         let lastActiveAtMs: Int64
+        let source: ActivitySource
     }
 
     private static let eventName = "node.presence.activity"
@@ -40,7 +48,9 @@ final class MacNodePresenceReporter {
     private var clearer: Clearer?
     private var unsupportedClearHandler: UnsupportedClearHandler?
     private var delivery: DeliveryState?
+    // The stored preference gates only system-wide sampling. App-local input is always eligible.
     private var reportingEnabled: Bool
+    private var lastAppInputAt: ContinuousClock.Instant?
     private var clearPending = false
     private var hasDeliveredActivity = false
     private var unsupportedClearHandled = false
@@ -68,21 +78,27 @@ final class MacNodePresenceReporter {
         self.sender = sender
         self.clearer = clearer
         self.unsupportedClearHandler = onUnsupportedClear
-        // Registration creates a fresh server-side node session. Starting disabled
-        // therefore needs no clear and cannot turn a legacy reconnect into a loop.
+        // Registration creates a fresh server-side node session. Restore only activity
+        // actually observed by this process, never treat connection as app interaction.
+        self.updateSamplingTask(reportImmediately: true)
+    }
+
+    func recordAppActivity() {
+        self.lastAppInputAt = .now
         self.updateSamplingTask(reportImmediately: true)
     }
 
     private func updateSamplingTask(reportImmediately: Bool = false) {
-        guard self.sender != nil, self.reportingEnabled || self.clearPending else {
+        guard self.sender != nil, self.reportingEnabled || self.lastAppInputAt != nil || self.clearPending else {
             SimpleTaskSupport.stop(task: &self.task)
             return
         }
         guard self.task == nil else { return }
-        self.task = Task {
-            if reportImmediately { await self.reportCurrentState() }
+        self.task = Task { [weak self] in
+            if reportImmediately { await self?.reportCurrentState() }
             while await SimpleTaskSupport.waitForNextOperation(interval: Self.sampleInterval) {
-                await self.reportCurrentState()
+                guard self != nil else { return }
+                await self?.reportCurrentState()
             }
         }
     }
@@ -119,16 +135,33 @@ final class MacNodePresenceReporter {
         } else {
             self.clearPending = self.hasDeliveredActivity
             await self.sendPendingClear()
+            await self.reportCurrentState()
         }
     }
 
+    private func currentSample() -> IdleSample? {
+        let appSample = self.lastAppInputAt.map {
+            Self.idleSample(seconds: Int($0.duration(to: .now).components.seconds), source: .app)
+        }
+        if self.reportingEnabled, let seconds = self.idleSecondsProvider() {
+            let systemSample = Self.idleSample(seconds: seconds, source: .system)
+            if let appSample, appSample.seconds < systemSample.seconds { return appSample }
+            return systemSample
+        }
+        return appSample
+    }
+
     private func reportCurrentState() async {
-        guard self.reportingEnabled else {
+        guard !self.clearPending else {
             await self.sendPendingClear()
             return
         }
-        guard let seconds = self.idleSecondsProvider() else { return }
-        let sample = Self.idleSample(seconds: seconds)
+        guard let sample = self.currentSample() else {
+            self.clearPending = self.hasDeliveredActivity
+            await self.sendPendingClear()
+            return
+        }
+        if self.delivery?.source != sample.source { self.delivery = nil }
         guard Self.shouldSend(
             idleSeconds: sample.seconds,
             saturated: sample.saturated,
@@ -140,7 +173,8 @@ final class MacNodePresenceReporter {
         let lastActiveAtMs = max(0, nowMs - Int64(sample.seconds) * 1000)
         let payload = Payload(
             idleSeconds: sample.seconds,
-            saturated: sample.saturated ? true : nil)
+            saturated: sample.saturated ? true : nil,
+            source: sample.source == .app ? "app" : nil)
         guard let sender = self.sender,
               let data = try? JSONEncoder().encode(payload),
               let payloadJSON = String(data: data, encoding: .utf8)
@@ -162,16 +196,17 @@ final class MacNodePresenceReporter {
             }
             return
         }
-        guard self.reportingEnabled else {
+        // Permission can change while a send is suspended, without a preference change.
+        guard self.currentSample()?.source == sample.source else {
             self.clearPending = self.hasDeliveredActivity
             await self.sendPendingClear()
             return
         }
-        self.delivery = DeliveryState(sentAtMs: nowMs, lastActiveAtMs: lastActiveAtMs)
+        self.delivery = DeliveryState(sentAtMs: nowMs, lastActiveAtMs: lastActiveAtMs, source: sample.source)
     }
 
     private func sendPendingClear() async {
-        // An in-flight sample may finish after opt-out; keep only its failed clear retry alive.
+        // Clear the previous scope before publishing the app-only fallback.
         defer { self.updateSamplingTask() }
         guard self.clearPending,
               let clearer = self.clearer
@@ -191,16 +226,12 @@ final class MacNodePresenceReporter {
             }
             return
         }
-        guard !self.reportingEnabled else {
-            self.clearPending = false
-            self.delivery = nil
-            await self.reportCurrentState()
-            return
-        }
         switch result {
         case .cleared:
             self.clearPending = false
             self.hasDeliveredActivity = false
+            self.delivery = nil
+            if self.currentSample() != nil { await self.reportCurrentState() }
         case .retry:
             break
         case .unsupported:
@@ -212,9 +243,9 @@ final class MacNodePresenceReporter {
         }
     }
 
-    private static func idleSample(seconds: Int) -> IdleSample {
+    private static func idleSample(seconds: Int, source: ActivitySource) -> IdleSample {
         let bounded = min(max(0, seconds), self.maximumIdleSeconds)
-        return IdleSample(seconds: bounded, saturated: seconds > self.maximumIdleSeconds)
+        return IdleSample(seconds: bounded, saturated: seconds > self.maximumIdleSeconds, source: source)
     }
 
     private static func shouldSend(
@@ -250,7 +281,7 @@ extension MacNodePresenceReporter {
         saturated: Bool = false) -> Bool
     {
         let delivery: DeliveryState? = if let lastSentAtMs, let lastSentActiveAtMs {
-            DeliveryState(sentAtMs: lastSentAtMs, lastActiveAtMs: lastSentActiveAtMs)
+            DeliveryState(sentAtMs: lastSentAtMs, lastActiveAtMs: lastSentActiveAtMs, source: .system)
         } else {
             nil
         }

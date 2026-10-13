@@ -17,14 +17,14 @@ vi.mock("../config/config.js", async () => {
 });
 
 describe("agents_list", () => {
-  type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
+  type AgentEntries = NonNullable<NonNullable<typeof configOverride.agents>["entries"]>;
 
-  function setConfigWithAgentList(agentList: AgentConfig[]) {
-    // Each test gets a fresh per-sender session config plus its agent list.
+  function setConfigWithAgentEntries(entries: AgentEntries) {
+    // Each test gets a fresh per-sender session config plus its agent roster.
     configOverride = {
       session: createPerSenderSessionConfig(),
       agents: {
-        list: agentList,
+        entries,
       },
     };
   }
@@ -41,85 +41,32 @@ describe("agents_list", () => {
       .details?.agents;
   }
 
-  it("defaults to the requester agent only", async () => {
-    configOverride = {
-      session: createPerSenderSessionConfig(),
-    };
-    const tool = createTool();
-    const result = await tool.execute("call1", {});
-    const details = result.details as { requester?: string; allowAny?: boolean };
-    expect(details.requester).toBe("main");
-    expect(details.allowAny).toBe(false);
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
+  it("defaults to the requester when no agents are configured", async () => {
+    configOverride = { session: createPerSenderSessionConfig() };
+    const result = await createTool().execute("default", {});
+    expect(result.details).toMatchObject({ requester: "main", allowAny: false });
+    expect(readAgentList(result)?.map((agent) => agent.id)).toEqual(["main"]);
   });
 
-  it("includes configured allowlisted targets", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
-        name: "Main",
-        subagents: {
-          allowAgents: ["research"],
-        },
-      },
-      {
-        id: "research",
-        name: "Research",
-      },
-    ]);
-
-    const tool = createTool();
-    const result = await tool.execute("call2", {});
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
-  });
-
-  it("falls back to default allowlist when the requester agent omits allowAgents", async () => {
-    configOverride = {
-      session: createPerSenderSessionConfig(),
-      agents: {
-        defaults: {
-          subagents: {
-            allowAgents: ["research"],
-          },
-        },
-        list: [
-          {
-            id: "main",
-            name: "Main",
-          },
-          {
-            id: "research",
-            name: "Research",
-          },
-        ],
-      },
-    };
-
-    const tool = createTool();
-    const result = await tool.execute("call2b", {});
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
+  it("omits allowlisted targets that are not configured", async () => {
+    setConfigWithAgentEntries({ main: { subagents: { allowAgents: ["research"] } } });
+    expect(readAgentList(await createTool().execute("stale", {}))).toEqual([]);
   });
 
   it("returns configured agents when allowlist is *", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
+    setConfigWithAgentEntries({
+      main: {
         subagents: {
           allowAgents: ["*"],
         },
       },
-      {
-        id: "research",
+      research: {
         name: "Research",
       },
-      {
-        id: "coder",
+      coder: {
         name: "Coder",
       },
-    ]);
+    });
 
     const tool = createTool();
     const result = await tool.execute("call3", {});
@@ -127,21 +74,5 @@ describe("agents_list", () => {
     expect(details.allowAny).toBe(true);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
-  });
-
-  it("omits allowlisted-but-unconfigured agents", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
-        subagents: {
-          allowAgents: ["research"],
-        },
-      },
-    ]);
-
-    const tool = createTool();
-    const result = await tool.execute("call4", {});
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual([]);
   });
 });

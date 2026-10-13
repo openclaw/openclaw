@@ -12,6 +12,14 @@ export function isMcpRequestTimeoutError(error: unknown): boolean {
   return isRecord(error) && error.code === ErrorCode.RequestTimeout;
 }
 
+export function isMcpMethodNotFoundError(error: unknown): boolean {
+  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
+    return true;
+  }
+  const message = String(error);
+  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
+}
+
 /** Redacts MCP diagnostics, including response bodies the SDK includes in thrown errors. */
 export function redactMcpDiagnosticError(error: unknown): string {
   let message = formatErrorMessage(error);

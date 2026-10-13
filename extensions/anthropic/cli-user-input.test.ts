@@ -84,28 +84,8 @@ describe("Claude CLI user input adapter", () => {
       toolCallId: "claude-question-1",
       abortSignal: signal,
       questions: [
-        {
-          id: "question_1",
-          header: "Test stack",
-          question: "Which test runner should we use?",
-          multiSelect: false,
-          isOther: true,
-          options: [
-            { label: "Vitest", description: "Use the existing test stack." },
-            { label: "Node test", description: "Use the built-in runner." },
-          ],
-        },
-        {
-          id: "question_2",
-          header: "Proof",
-          question: "Which proof should we collect?",
-          multiSelect: true,
-          isOther: true,
-          options: [
-            { label: "Unit tests", description: "Exercise the adapter." },
-            { label: "UI proof", description: "Capture the Control UI." },
-          ],
-        },
+        { ...input.questions[0], id: "question_1", isOther: true },
+        { ...input.questions[1], id: "question_2", isOther: true },
       ],
     });
   });

@@ -1,7 +1,9 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.node.NodeHostStatsReporter
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -13,6 +15,7 @@ import kotlinx.coroutines.ThreadContextElement
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -43,6 +46,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -60,12 +64,14 @@ private const val CONNECT_CHALLENGE_FRAME =
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   private val tokens = mutableMapOf<String, DeviceAuthEntry>()
+  private val lock = Any()
+  var saveResult: (String, String) -> Boolean = { _, _ -> true }
 
   override fun loadEntry(
     gatewayId: String,
     deviceId: String,
     role: String,
-  ): DeviceAuthEntry? = tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"]
+  ): DeviceAuthEntry? = synchronized(lock) { tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] }
 
   override fun saveToken(
     gatewayId: String,
@@ -73,22 +79,33 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
     role: String,
     token: String,
     scopes: List<String>,
-  ) {
-    tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] =
-      DeviceAuthEntry(
-        token = token.trim(),
-        role = role.trim(),
-        scopes = scopes,
-        updatedAtMs = System.currentTimeMillis(),
-      )
-  }
+    replacesStoredToken: String?,
+  ): Boolean =
+    synchronized(lock) {
+      if (replacesStoredToken != null && loadEntry(gatewayId, deviceId, role)?.token != replacesStoredToken.trim()) {
+        return@synchronized false
+      }
+      if (!saveResult(role, token)) return@synchronized false
+      tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] =
+        DeviceAuthEntry(
+          token = token.trim(),
+          role = role.trim(),
+          scopes = scopes,
+          updatedAtMs = System.currentTimeMillis(),
+        )
+      true
+    }
 
   override fun clearToken(
     gatewayId: String,
     deviceId: String,
     role: String,
+    onlyIfToken: String?,
   ) {
-    tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
+    synchronized(lock) {
+      if (onlyIfToken != null && loadEntry(gatewayId, deviceId, role)?.token != onlyIfToken.trim()) return
+      tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
+    }
   }
 }
 
@@ -133,11 +150,11 @@ private class RpcCallbackEntryGate :
 private data class NodeHarness(
   val session: GatewaySession,
   val sessionJob: Job,
-  val deviceAuthStore: InMemoryDeviceAuthStore,
+  val deviceAuthStore: DeviceAuthTokenStore,
 )
 
 private data class InvokeScenarioResult(
-  val request: GatewaySession.InvokeRequest,
+  val request: GatewayNodeInvokeRequest,
   val resultParams: JsonObject,
 )
 
@@ -367,7 +384,7 @@ class GatewaySessionInvokeTest {
         contextPath = contextPath,
       )
       awaitConnectedOrThrow(connected, lastDisconnect, server)
-      val oldUrl = requireNotNull(harness.session.currentCanvasHostUrl())
+      val oldUrl = requireNotNull(harness.session.currentCanvasHostRoute()?.url)
       val beforeRefresh = loadDocument(oldUrl)
       val refreshed = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
       val lagging = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
@@ -380,7 +397,7 @@ class GatewaySessionInvokeTest {
       assertEquals(404, expiredDocument.first)
       assertTrue(oldUrl.endsWith("/old-token"))
       assertTrue(refreshed.endsWith("/new-token"))
-      assertEquals(refreshed, harness.session.currentCanvasHostUrl())
+      assertEquals(refreshed, harness.session.currentCanvasHostRoute()?.url)
       assertEquals(refreshed, lagging)
       assertEquals(1, refreshRequests.get())
     } finally {
@@ -411,7 +428,7 @@ class GatewaySessionInvokeTest {
       try {
         connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"), contextPath = contextPath)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
-        assertEquals(advertised.get(), harness.session.currentCanvasHostUrl())
+        assertEquals(advertised.get(), harness.session.currentCanvasHostRoute()?.url)
         val origin = "http://127.0.0.1:${server.port}"
         val explicitRoutes =
           listOf(
@@ -428,7 +445,7 @@ class GatewaySessionInvokeTest {
           )
         for (route in explicitRoutes) {
           advertised.set(route)
-          assertEquals(route, harness.session.refreshCanvasHostUrl())
+          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostRoute()?.url))
         }
       } finally {
         shutdownHarness(harness, server)
@@ -589,7 +606,8 @@ class GatewaySessionInvokeTest {
           entryGate.select.set { candidate ->
             candidate !in previousChildren && connectionOwner.children.any { it === candidate }
           }
-          harness.session.sendRequestFrame(
+          harness.session.sendRequestFrameForEndpoint(
+            expectedEndpointStableId = harness.session.currentEndpointStableId(),
             method = "fire.and.forget",
             paramsJson = null,
             timeoutMs = 30_000,
@@ -773,7 +791,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun connect_prefersStoredDeviceTokenOverBootstrapToken() =
+  fun connect_prefersFreshBootstrapTokenOverStoredDeviceToken() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -811,8 +829,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
-        assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
-        assertNull(auth?.get("bootstrapToken"))
+        assertEquals("bootstrap-token", auth?.get("bootstrapToken")?.jsonPrimitive?.content)
+        assertNull(auth?.get("token"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -944,67 +962,96 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun connect_retriesWithStoredDeviceTokenAfterSharedTokenMismatch() =
+  fun connect_requiresExplicitDeviceTokenRetryPermission() =
     runBlocking {
-      val json = testJson()
-      val connected = CompletableDeferred<Unit>()
-      val firstConnectAuth = CompletableDeferred<JsonObject?>()
-      val secondConnectAuth = CompletableDeferred<JsonObject?>()
-      val connectAttempts = AtomicInteger(0)
-      val lastDisconnect = AtomicReference("")
-      val server =
-        startGatewayServer(json) { webSocket, id, method, frame ->
-          when (method) {
-            "connect" -> {
-              val auth = frame["params"]?.jsonObject?.get("auth")?.jsonObject
-              when (connectAttempts.incrementAndGet()) {
-                1 -> {
-                  if (!firstConnectAuth.isCompleted) {
-                    firstConnectAuth.complete(auth)
+      val cases =
+        listOf(
+          Triple(
+            "explicit denial survives manual reconnect",
+            """{"code":"AUTH_TOKEN_MISMATCH","authReason":"token_mismatch","canRetryWithDeviceToken":false,"recommendedNextStep":"update_auth_credentials"}""",
+            false,
+          ),
+          Triple(
+            "explicit denial overrides retry advice",
+            """{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":false,"recommendedNextStep":"retry_with_device_token"}""",
+            false,
+          ),
+          Triple(
+            "July 2026 Gateway permits trusted retry",
+            // v2026.7.1-beta.1 rejectUnauthorized emits this token-mismatch detail shape.
+            """{"code":"AUTH_TOKEN_MISMATCH","authReason":"token_mismatch","canRetryWithDeviceToken":true,"recommendedNextStep":"retry_with_device_token"}""",
+            true,
+          ),
+          Triple("pre-March code-only response", """{"code":"AUTH_TOKEN_MISMATCH"}""", false),
+          Triple("retry advice without permission", """{"recommendedNextStep":"retry_with_device_token"}""", false),
+        )
+      for ((caseName, errorDetails, retryAllowed) in cases) {
+        val json = testJson()
+        val connected = CompletableDeferred<Unit>()
+        val authFailure = CompletableDeferred<Boolean>()
+        val firstConnectAuth = CompletableDeferred<JsonObject?>()
+        val secondConnectAuth = CompletableDeferred<JsonObject?>()
+        val connectAttempts = AtomicInteger(0)
+        val lastDisconnect = AtomicReference("")
+        val server =
+          startGatewayServer(json) { webSocket, id, method, frame ->
+            when (method) {
+              "connect" -> {
+                val auth = frame["params"]?.jsonObject?.get("auth")?.jsonObject
+                when (connectAttempts.incrementAndGet()) {
+                  1 -> {
+                    if (!firstConnectAuth.isCompleted) {
+                      firstConnectAuth.complete(auth)
+                    }
+                    webSocket.send(
+                      """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"unauthorized","details":$errorDetails}}""",
+                    )
+                    webSocket.close(1000, "retry")
                   }
-                  webSocket.send(
-                    """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"unauthorized","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true,"recommendedNextStep":"retry_with_device_token"}}}""",
-                  )
-                  webSocket.close(1000, "retry")
-                }
 
-                else -> {
-                  if (!secondConnectAuth.isCompleted) {
-                    secondConnectAuth.complete(auth)
+                  else -> {
+                    if (!secondConnectAuth.isCompleted) {
+                      secondConnectAuth.complete(auth)
+                    }
+                    webSocket.send(connectResponseFrame(id))
                   }
-                  webSocket.send(connectResponseFrame(id))
                 }
               }
             }
           }
+
+        val harness =
+          createNodeHarness(
+            connected = connected,
+            lastDisconnect = lastDisconnect,
+            onConnectFailure = { _, pauseReconnect -> authFailure.complete(pauseReconnect) },
+          ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+        try {
+          val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+          harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
+
+          connectNodeSession(
+            session = harness.session,
+            port = server.port,
+            token = "shared-auth-token",
+            bootstrapToken = null,
+          )
+          assertEquals(caseName, !retryAllowed, withTimeout(TEST_TIMEOUT_MS) { authFailure.await() })
+          if (!retryAllowed) harness.session.reconnect()
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+          val firstAuth = withTimeout(TEST_TIMEOUT_MS) { firstConnectAuth.await() }
+          val secondAuth = withTimeout(TEST_TIMEOUT_MS) { secondConnectAuth.await() }
+          assertEquals(caseName, "shared-auth-token", firstAuth?.get("token")?.jsonPrimitive?.content)
+          assertNull(caseName, firstAuth?.get("deviceToken"))
+          assertEquals(caseName, "shared-auth-token", secondAuth?.get("token")?.jsonPrimitive?.content)
+          assertEquals(caseName, if (retryAllowed) "stored-device-token" else null, secondAuth?.get("deviceToken")?.jsonPrimitive?.content)
+          assertEquals(caseName, 2, connectAttempts.get())
+          assertEquals(caseName, "stored-device-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        } finally {
+          shutdownHarness(harness, server)
         }
-
-      val harness =
-        createNodeHarness(
-          connected = connected,
-          lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
-
-      try {
-        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
-
-        connectNodeSession(
-          session = harness.session,
-          port = server.port,
-          token = "shared-auth-token",
-          bootstrapToken = null,
-        )
-        awaitConnectedOrThrow(connected, lastDisconnect, server)
-
-        val firstAuth = withTimeout(TEST_TIMEOUT_MS) { firstConnectAuth.await() }
-        val secondAuth = withTimeout(TEST_TIMEOUT_MS) { secondConnectAuth.await() }
-        assertEquals("shared-auth-token", firstAuth?.get("token")?.jsonPrimitive?.content)
-        assertNull(firstAuth?.get("deviceToken"))
-        assertEquals("shared-auth-token", secondAuth?.get("token")?.jsonPrimitive?.content)
-        assertEquals("stored-device-token", secondAuth?.get("deviceToken")?.jsonPrimitive?.content)
-      } finally {
-        shutdownHarness(harness, server)
       }
     }
 
@@ -1129,6 +1176,380 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun bootstrapHandoff_staleStoredOperatorHelloCannotOverwriteFreshOperatorToken() =
+    runBlocking {
+      for (operatorHelloToken in listOf("old-operator", "rotated-operator")) {
+        val prefs = testPrefs(RuntimeEnvironment.getApplication())
+        val store = DeviceAuthStore(prefs)
+        val operatorConnect = CompletableDeferred<JsonObject>()
+        val releaseOperatorHello = CountDownLatch(1)
+        val operatorConnected = CompletableDeferred<Unit>()
+        val operatorDisconnected = AtomicReference("")
+        val nodeConnected = CompletableDeferred<Unit>()
+        val nodeDisconnected = AtomicReference("")
+        val server =
+          startGatewayServer(testJson()) { socket, id, method, frame ->
+            if (method == "connect") {
+              val params = frame["params"]!!.jsonObject
+              if (params["role"]?.jsonPrimitive?.content == "operator") {
+                operatorConnect.complete(params)
+                releaseOperatorHello.await()
+                socket.send(
+                  connectResponseFrame(
+                    id,
+                    authJson = """{"deviceToken":"$operatorHelloToken","role":"operator","scopes":["operator.read"]}""",
+                  ),
+                )
+              } else {
+                socket.send(
+                  connectResponseFrame(
+                    id,
+                    authJson =
+                      """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"new-operator","role":"operator","scopes":["operator.read"]}]}""",
+                  ),
+                )
+              }
+            }
+          }
+        val gatewayId = gatewayIdForPort(server.port)
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        assertTrue(operatorHelloToken, store.saveToken(gatewayId, deviceId, "operator", "old-operator", listOf("operator.read")))
+        prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+        val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
+        val operator = createNodeHarness(operatorConnected, operatorDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        try {
+          connectNodeSession(operator.session, server.port, token = null, role = "operator", scopes = listOf("operator.read"))
+          val params = withTimeout(TEST_TIMEOUT_MS) { operatorConnect.await() }
+          assertEquals(operatorHelloToken, "old-operator", params["auth"]!!.jsonObject["token"]?.jsonPrimitive?.content)
+
+          connectNodeSession(node.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
+          awaitConnectedOrThrow(nodeConnected, nodeDisconnected, server)
+          assertEquals(operatorHelloToken, "new-operator", store.loadEntry(gatewayId, deviceId, "operator")?.token)
+          assertEquals(operatorHelloToken, "new-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+          assertTrue(operatorHelloToken, handoff.completed)
+          assertNull(operatorHelloToken, prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+
+          releaseOperatorHello.countDown()
+          awaitConnectedOrThrow(operatorConnected, operatorDisconnected, server)
+          assertEquals(operatorHelloToken, "new-operator", store.loadEntry(gatewayId, deviceId, "operator")?.token)
+          assertEquals(operatorHelloToken, "new-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+          assertTrue(operatorHelloToken, operator.session.isReady())
+        } finally {
+          releaseOperatorHello.countDown()
+          operator.session.disconnectAndJoin()
+          operator.sessionJob.cancelAndJoin()
+          node.session.disconnectAndJoin()
+          node.sessionJob.cancelAndJoin()
+          server.shutdown()
+        }
+      }
+    }
+
+  @Test
+  fun bootstrapHandoff_staleOperatorRetryMismatchCannotClearFreshOperatorToken() =
+    runBlocking {
+      val prefs = testPrefs(RuntimeEnvironment.getApplication())
+      val store = DeviceAuthStore(prefs)
+      val operatorAuthFrames = Channel<JsonObject>(Channel.UNLIMITED)
+      val releaseMismatch = CountDownLatch(1)
+      val retryRejected = CompletableDeferred<Unit>()
+      val nodeConnected = CompletableDeferred<Unit>()
+      val nodeDisconnected = AtomicReference("")
+      val server =
+        startGatewayServer(testJson()) { socket, id, method, frame ->
+          if (method == "connect") {
+            val params = frame["params"]!!.jsonObject
+            if (params["role"]?.jsonPrimitive?.content == "operator") {
+              val auth = params["auth"]!!.jsonObject
+              operatorAuthFrames.trySend(auth)
+              if (auth["deviceToken"] == null) {
+                socket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"shared token mismatch","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true}}}""",
+                )
+              } else {
+                releaseMismatch.await()
+                socket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"device token mismatch","details":{"code":"AUTH_DEVICE_TOKEN_MISMATCH"}}}""",
+                )
+              }
+            } else {
+              socket.send(
+                connectResponseFrame(
+                  id,
+                  authJson =
+                    """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"new-operator","role":"operator","scopes":["operator.read"]}]}""",
+                ),
+              )
+            }
+          }
+        }
+      val gatewayId = gatewayIdForPort(server.port)
+      val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+      assertTrue(store.saveToken(gatewayId, deviceId, "operator", "old-operator", listOf("operator.read")))
+      prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+      val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
+      val operator =
+        createNodeHarness(
+          CompletableDeferred(),
+          AtomicReference(""),
+          deviceAuthStore = store,
+          onConnectFailure = { error, _ ->
+            if (error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH") retryRejected.complete(Unit)
+          },
+        ) { GatewaySession.InvokeResult.ok(null) }
+      val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+      try {
+        connectNodeSession(operator.session, server.port, token = "shared-token", role = "operator", scopes = listOf("operator.read"))
+        val firstAuth = withTimeout(TEST_TIMEOUT_MS) { operatorAuthFrames.receive() }
+        assertEquals("shared-token", firstAuth["token"]?.jsonPrimitive?.content)
+        assertNull(firstAuth["deviceToken"])
+        val retryAuth = withTimeout(TEST_TIMEOUT_MS) { operatorAuthFrames.receive() }
+        assertEquals("shared-token", retryAuth["token"]?.jsonPrimitive?.content)
+        assertEquals("old-operator", retryAuth["deviceToken"]?.jsonPrimitive?.content)
+
+        connectNodeSession(node.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
+        awaitConnectedOrThrow(nodeConnected, nodeDisconnected, server)
+        val freshOperatorEntry = store.loadEntry(gatewayId, deviceId, "operator")
+        assertEquals("new-operator", freshOperatorEntry?.token)
+        assertTrue(handoff.completed)
+        assertNull(prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+
+        releaseMismatch.countDown()
+        withTimeout(TEST_TIMEOUT_MS) { retryRejected.await() }
+        assertEquals(freshOperatorEntry, store.loadEntry(gatewayId, deviceId, "operator"))
+        assertEquals("new-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+      } finally {
+        releaseMismatch.countDown()
+        operator.session.disconnectAndJoin()
+        operator.sessionJob.cancelAndJoin()
+        node.session.disconnectAndJoin()
+        node.sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+
+  @Test
+  fun bootstrapHandoff_reconnectsAndRelaunchesOnlyAfterDurableRoles() =
+    runBlocking {
+      val prefs = testPrefs(RuntimeEnvironment.getApplication())
+      val store = DeviceAuthStore(prefs)
+      val authFrames = Channel<JsonObject>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(testJson()) { socket, id, method, frame ->
+          if (method == "connect") {
+            authFrames.trySend(frame["params"]!!.jsonObject["auth"]!!.jsonObject)
+            socket.send(
+              connectResponseFrame(
+                id,
+                authJson =
+                  """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"new-operator","role":"operator","scopes":["operator.read"]}]}""",
+              ),
+            )
+          }
+        }
+      val gatewayId = gatewayIdForPort(server.port)
+      prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+      var harness: NodeHarness? = null
+      try {
+        repeat(2) { launch ->
+          val connected = CompletableDeferred<Unit>()
+          val disconnected = AtomicReference("")
+          val current = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+          harness = current
+          val bootstrap = prefs.loadGatewayCredentials(gatewayId).bootstrapToken
+          connectNodeSession(
+            current.session,
+            server.port,
+            token = null,
+            bootstrapToken = bootstrap,
+            bootstrapHandoff = bootstrap?.let { prefs.prepareGatewayBootstrapHandoff(gatewayId, it, false) },
+          )
+          val auth = withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+          assertEquals(if (launch == 0) "setup" else "new-node", auth[if (launch == 0) "bootstrapToken" else "token"]?.jsonPrimitive?.content)
+          awaitConnectedOrThrow(connected, disconnected, server)
+          assertNull(prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+          current.session.reconnect()
+          val reconnectAuth = withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+          assertEquals("new-node", reconnectAuth["token"]?.jsonPrimitive?.content)
+          assertNull(reconnectAuth["bootstrapToken"])
+          current.session.disconnectAndJoin()
+          current.sessionJob.cancelAndJoin()
+          harness = null
+        }
+      } finally {
+        harness?.let {
+          it.session.disconnectAndJoin()
+          it.sessionJob.cancelAndJoin()
+        }
+        server.shutdown()
+      }
+    }
+
+  @Test
+  fun bootstrapHandoff_retainsBootstrapForMissingOrFailedFinalRoleWrites() =
+    runBlocking {
+      for (failure in listOf("node", "operator", "missing-operator", "duplicate-operator")) {
+        val prefs = testPrefs(RuntimeEnvironment.getApplication())
+        val store = InMemoryDeviceAuthStore()
+        val connected = CompletableDeferred<Unit>()
+        val disconnected = AtomicReference("")
+        val authFrames = Channel<JsonObject>(Channel.UNLIMITED)
+        val operatorTokens =
+          when (failure) {
+            "missing-operator" -> "[]"
+            "duplicate-operator" -> """[{"deviceToken":"new-operator","role":"operator","scopes":[]},{"deviceToken":"failed-operator","role":"operator","scopes":[]}]"""
+            else -> """[{"deviceToken":"new-operator","role":"operator","scopes":[]}]"""
+          }
+        val server =
+          startGatewayServer(testJson()) { socket, id, method, frame ->
+            if (method == "connect") {
+              authFrames.trySend(frame["params"]!!.jsonObject["auth"]!!.jsonObject)
+              socket.send(
+                connectResponseFrame(
+                  id,
+                  authJson =
+                    """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":$operatorTokens}""",
+                ),
+              )
+            }
+          }
+        val gatewayId = gatewayIdForPort(server.port)
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        for (role in listOf("node", "operator")) store.saveToken(gatewayId, deviceId, role, "old-$role")
+        store.saveResult = { role, token -> role != failure && token != "failed-operator" }
+        prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+        val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
+        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        try {
+          connectNodeSession(harness.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
+          withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+          awaitConnectedOrThrow(connected, disconnected, server)
+          assertFalse(failure, handoff.completed)
+          assertEquals(failure, "setup", prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+          harness.session.reconnect()
+          val retry = withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+          assertEquals(failure, "setup", retry["bootstrapToken"]?.jsonPrimitive?.content)
+          assertNull(retry["token"])
+        } finally {
+          shutdownHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
+  fun bootstrapHandoff_cannotRetireAfterNewSetupOrDisconnectDuringRoleWrite() =
+    runBlocking {
+      for (replacement in listOf(true, false)) {
+        val prefs = testPrefs(RuntimeEnvironment.getApplication())
+        val store = InMemoryDeviceAuthStore()
+        val connected = CompletableDeferred<Unit>()
+        val disconnected = AtomicReference("")
+        val authFrames = Channel<JsonObject>(Channel.UNLIMITED)
+        val retired = CompletableDeferred<Unit>()
+        val attempts = AtomicInteger()
+        val server =
+          startGatewayServer(testJson()) { socket, id, method, frame ->
+            if (method == "connect") {
+              authFrames.trySend(frame["params"]!!.jsonObject["auth"]!!.jsonObject)
+              val auth =
+                if (attempts.incrementAndGet() == 1) {
+                  """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"new-operator","role":"operator","scopes":[]}]}"""
+                } else {
+                  null
+                }
+              socket.send(connectResponseFrame(id, authJson = auth))
+            }
+          }
+        val gatewayId = gatewayIdForPort(server.port)
+        prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+        val oldHandoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
+        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        store.saveResult = { role, _ ->
+          if (role == "operator") {
+            if (replacement) {
+              prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "new-setup")
+              connectNodeSession(
+                harness.session,
+                server.port,
+                token = null,
+                bootstrapToken = "new-setup",
+                bootstrapHandoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "new-setup", false),
+              )
+            } else {
+              harness.session.disconnect()
+            }
+            retired.complete(Unit)
+          }
+          true
+        }
+        try {
+          connectNodeSession(harness.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = oldHandoff)
+          withTimeout(TEST_TIMEOUT_MS) {
+            authFrames.receive()
+            retired.await()
+          }
+          if (replacement) {
+            val next = withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+            assertEquals("new-setup", next["bootstrapToken"]?.jsonPrimitive?.content)
+            awaitConnectedOrThrow(connected, disconnected, server)
+          }
+          harness.session.disconnectAndJoin()
+          assertFalse(oldHandoff.completed)
+          assertEquals(if (replacement) "new-setup" else "setup", prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+        } finally {
+          shutdownHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
+  fun savedBootstrapRecovery_neverOverridesExplicitSetupOrMissingRole() =
+    runBlocking {
+      for ((explicit, hasOperator) in listOf(false to true, true to true, false to false)) {
+        val prefs = testPrefs(RuntimeEnvironment.getApplication())
+        val store = InMemoryDeviceAuthStore()
+        val connected = CompletableDeferred<Unit>()
+        val disconnected = AtomicReference("")
+        val authFrames = Channel<JsonObject>(Channel.UNLIMITED)
+        val attempts = AtomicInteger()
+        val server =
+          startGatewayServer(testJson()) { socket, id, method, frame ->
+            if (method == "connect") {
+              authFrames.trySend(frame["params"]!!.jsonObject["auth"]!!.jsonObject)
+              if (attempts.incrementAndGet() == 1) {
+                socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"bootstrap token invalid or expired","details":{"code":"AUTH_BOOTSTRAP_TOKEN_INVALID"}}}""")
+              } else {
+                socket.send(connectResponseFrame(id, authJson = """{"deviceToken":"old-node","role":"node","scopes":[]}"""))
+              }
+            }
+          }
+        val gatewayId = gatewayIdForPort(server.port)
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        store.saveToken(gatewayId, deviceId, "node", "old-node")
+        if (hasOperator) store.saveToken(gatewayId, deviceId, "operator", "old-operator")
+        prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+        val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", !explicit)
+        val harness = createNodeHarness(connected, disconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        try {
+          connectNodeSession(harness.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
+          assertEquals("setup", withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }["bootstrapToken"]?.jsonPrimitive?.content)
+          withTimeout(TEST_TIMEOUT_MS) { while (!disconnected.get().contains("bootstrap token invalid")) yield() }
+          harness.session.reconnect()
+          val retry = withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+          val recovered = !explicit && hasOperator
+          assertEquals(if (recovered) "old-node" else null, retry["token"]?.jsonPrimitive?.content)
+          assertEquals(if (recovered) null else "setup", retry["bootstrapToken"]?.jsonPrimitive?.content)
+          awaitConnectedOrThrow(connected, disconnected, server)
+          assertEquals(recovered, handoff.completed)
+          assertEquals(if (recovered) null else "setup", prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+        } finally {
+          shutdownHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
   fun nonBootstrapConnect_ignoresAdditionalBootstrapDeviceTokens() =
     runBlocking {
       val json = testJson()
@@ -1182,7 +1603,7 @@ class GatewaySessionInvokeTest {
       val result =
         runInvokeScenario(
           invokeEventFrame =
-            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-1","nodeId":"node-1","command":"debug.ping","params":{"ping":"pong"},"timeoutMs":5000}}""",
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-1","nodeId":"node-1","command":"debug.ping","paramsJSON":"{\"ping\":\"pong\"}","timeoutMs":5000}}""",
           onHandshake = { request -> handshakeOrigin.compareAndSet(null, request.getHeader("Origin")) },
         ) {
           GatewaySession.InvokeResult.ok("""{"handled":true}""")
@@ -1245,7 +1666,7 @@ class GatewaySessionInvokeTest {
       val result =
         runInvokeScenario(
           invokeEventFrame =
-            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-3","nodeId":"node-3","command":"camera.snap","params":{"facing":"front"},"timeoutMs":5000}}""",
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-3","nodeId":"node-3","command":"camera.snap","paramsJSON":"{\"facing\":\"front\"}","timeoutMs":5000}}""",
         ) {
           throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
         }
@@ -1432,7 +1853,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun sendNodeEventDetailed_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =
+  fun sendNodeEventDetailedForEndpoint_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -1470,7 +1891,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val result =
-          harness.session.sendNodeEventDetailed(
+          harness.session.sendNodeEventDetailedForEndpoint(
+            expectedEndpointStableId = harness.session.currentEndpointStableId(),
             event = "node.presence.alive",
             payloadJson = """{"trigger":"connect","sentAtMs":123}""",
             timeoutMs = TEST_TIMEOUT_MS,
@@ -1647,7 +2069,8 @@ class GatewaySessionInvokeTest {
 
         val sent =
           async {
-            harness.session.sendNodeEvent(
+            harness.session.sendNodeEventForEndpoint(
+              expectedEndpointStableId = null,
               event = "agent.request",
               payloadJson = """{"message":"restore"}""",
             )
@@ -1719,7 +2142,8 @@ class GatewaySessionInvokeTest {
         withTimeout(TEST_TIMEOUT_MS) { connectRequestSeen.await() }
 
         assertFalse(
-          harness.session.sendNodeEvent(
+          harness.session.sendNodeEventForEndpoint(
+            expectedEndpointStableId = null,
             event = "notifications.changed",
             payloadJson = """{"change":"posted","key":"before"}""",
           ),
@@ -1729,7 +2153,8 @@ class GatewaySessionInvokeTest {
         releaseConnectResponse.complete(Unit)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
         assertTrue(
-          harness.session.sendNodeEvent(
+          harness.session.sendNodeEventForEndpoint(
+            expectedEndpointStableId = null,
             event = "notifications.changed",
             payloadJson = """{"change":"posted","key":"after"}""",
           ),
@@ -1744,6 +2169,8 @@ class GatewaySessionInvokeTest {
 
   private fun testJson(): Json = Json { ignoreUnknownKeys = true }
 
+  private fun testPrefs(context: Context): SecurePrefs = SecurePrefs(context, context.getSharedPreferences("handoff-test-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+
   private fun JsonObject.scopes(): List<String> =
     (this["scopes"] as? JsonArray)
       ?.map { it.jsonPrimitive.content }
@@ -1754,11 +2181,12 @@ class GatewaySessionInvokeTest {
     lastDisconnect: AtomicReference<String>,
     onEvent: (event: String, payloadJson: String?) -> Unit = { _, _ -> },
     extraContext: CoroutineContext = EmptyCoroutineContext,
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    deviceAuthStore: DeviceAuthTokenStore = InMemoryDeviceAuthStore(),
+    onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
-    val deviceAuthStore = InMemoryDeviceAuthStore()
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default + extraContext),
@@ -1770,6 +2198,7 @@ class GatewaySessionInvokeTest {
         onDisconnected = { message ->
           lastDisconnect.set(message)
         },
+        onConnectFailure = onConnectFailure,
         onEvent = onEvent,
         onInvoke = onInvoke,
       )
@@ -1777,7 +2206,7 @@ class GatewaySessionInvokeTest {
     return NodeHarness(session = session, sessionJob = sessionJob, deviceAuthStore = deviceAuthStore)
   }
 
-  private suspend fun connectNodeSession(
+  private fun connectNodeSession(
     session: GatewaySession,
     port: Int,
     token: String? = "test-token",
@@ -1785,6 +2214,7 @@ class GatewaySessionInvokeTest {
     role: String = "node",
     scopes: List<String> = listOf("node:invoke"),
     contextPath: String = "",
+    bootstrapHandoff: GatewayBootstrapHandoff? = null,
   ) {
     session.connect(
       endpoint =
@@ -1819,6 +2249,7 @@ class GatewaySessionInvokeTest {
             ),
         ),
       tls = null,
+      bootstrapHandoff = bootstrapHandoff,
     )
   }
 
@@ -1852,11 +2283,11 @@ class GatewaySessionInvokeTest {
     invokeEventFrame: String,
     onHandshake: ((RecordedRequest) -> Unit)? = null,
     afterResult: suspend (InvokeScenarioResult) -> Unit = {},
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
   ): InvokeScenarioResult {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
-    val invokeRequest = CompletableDeferred<GatewaySession.InvokeRequest>()
+    val invokeRequest = CompletableDeferred<GatewayNodeInvokeRequest>()
     val invokeResultParams = CompletableDeferred<String>()
     val lastDisconnect = AtomicReference("")
     val server =

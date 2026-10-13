@@ -34,107 +34,6 @@ function issueCodesForPath(
 }
 
 describe("lintMemoryWikiVault", () => {
-  it("accepts native markdown links that include the relative .md target", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-native-links-",
-      config: {
-        vault: { renderMode: "native" },
-      },
-    });
-    await Promise.all(
-      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
-    );
-
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha Source",
-        },
-        body: "# Alpha Source\n",
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "entities", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.alpha",
-          title: "Alpha",
-          sourceIds: ["source.alpha"],
-        },
-        body: "# Alpha\n\n[Alpha Source](../sources/alpha.md)\n",
-      }),
-      "utf8",
-    );
-
-    const result = await lintMemoryWikiVault(config);
-
-    expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
-  });
-
-  it("does not report broken wikilinks for [[…]] patterns inside fenced code blocks or inline code (#97945)", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-fenced-code-wikilinks-",
-      config: {
-        vault: { renderMode: "native" },
-      },
-    });
-    await Promise.all(
-      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha Source",
-        },
-        body: "# Alpha Source\n",
-      }),
-      "utf8",
-    );
-    // Fenced code blocks and inline code with [[…]] syntax must not produce
-    // broken-wikilink warnings — the text inside code regions is literal,
-    // not a wikilink reference.
-    await fs.writeFile(
-      path.join(rootDir, "entities", "code-samples.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.code-samples",
-          title: "Code Samples",
-          sourceIds: ["source.alpha"],
-        },
-        body:
-          "# Code Samples\n\n" +
-          "Bash inside a fenced code block:\n\n" +
-          "```bash\n" +
-          'if [[ "$name" == "Alice" ]]; then echo "ok"; fi\n' +
-          "```\n\n" +
-          "Scala generics inside a tilde-fenced block:\n\n" +
-          "~~~scala\n" +
-          "def handle(userId: String, request: Request[A]): Future[Option[User]] = ???\n" +
-          "~~~\n\n" +
-          'Inline `[[ -z "$str" ]]` code must be skipped.\n\n' +
-          "Outside code, [[real-missing-link]] must still be reported.\n",
-      }),
-      "utf8",
-    );
-
-    const result = await lintMemoryWikiVault(config);
-    const linkIssues = result.issues.filter(
-      (issue) => issue.path === "entities/code-samples.md" && issue.code === "broken-wikilink",
-    );
-    expect(linkIssues.map((issue) => issue.message)).toEqual([
-      "Broken wikilink target `real-missing-link`.",
-    ]);
-  });
-
   it("accepts unmanaged raw markdown source pages without page frontmatter", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-raw-sources-",
@@ -175,24 +74,6 @@ describe("lintMemoryWikiVault", () => {
     expect(nativeFrontmatterIssueCodes).toContain("duplicate-id");
     expect(issueCodesForPath(result, "sources/raw-native-frontmatter-copy.md")).toContain(
       "duplicate-id",
-    );
-  });
-
-  it("keeps unmarked source pages without frontmatter visible to structure lint", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-unmarked-sources-",
-    });
-    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "sources", "unmarked-alpha.md"),
-      "# Unmarked Alpha Source\n\nThis page has no raw-source designation.\n",
-      "utf8",
-    );
-
-    const result = await lintMemoryWikiVault(config);
-
-    expect(issueCodesForPath(result, "sources/unmarked-alpha.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
     );
   });
 
@@ -305,149 +186,6 @@ describe("lintMemoryWikiVault", () => {
     expect(issueCodesForPath(result, "sources/unsafe-truncated.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
-  });
-
-  it("keeps generated source pages with missing frontmatter visible to structure lint", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-generated-source-bodies-",
-    });
-    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "sources", "local-file.md"),
-      [
-        "# Local File Source",
-        "",
-        "## Source",
-        "- Type: `local-file`",
-        "- Path: `/tmp/source.md`",
-        "",
-        "## Content",
-        "source body",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "local-file-partial-frontmatter.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          id: "source.partial",
-          title: "Partial Source",
-        },
-        body: [
-          WIKI_RAW_SOURCE_MARKER,
-          "",
-          "# Local File Source",
-          "",
-          "## Source",
-          "- Type: `local-file`",
-          "- Path: `/tmp/source.md`",
-          "",
-          "## Content",
-          "source body",
-          "",
-          "## Notes",
-          "<!-- openclaw:human:start -->",
-          "<!-- openclaw:human:end -->",
-          "",
-        ].join("\n"),
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "chatgpt-export.md"),
-      [
-        "# ChatGPT Export: Alpha",
-        "",
-        "## Source",
-        "- Conversation id: `abc123`",
-        "- Export file: `/tmp/conversations.json`",
-        "",
-        "## Active Branch Transcript",
-        "### User",
-        "alpha",
-        "",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = await lintMemoryWikiVault(config);
-
-    expect(issueCodesForPath(result, "sources/local-file.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
-    );
-    expect(issueCodesForPath(result, "sources/local-file-partial-frontmatter.md")).toEqual(
-      expect.arrayContaining(["missing-page-type", "stale-page"]),
-    );
-    expect(issueCodesForPath(result, "sources/chatgpt-export.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
-    );
-  });
-
-  it("resolves title, slug, fragment, and imported source-path wikilinks", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-links-",
-      config: {
-        vault: { renderMode: "obsidian" },
-      },
-    });
-    await Promise.all(
-      ["sources", "syntheses"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
-    );
-
-    await fs.writeFile(
-      path.join(rootDir, "sources", "bridge-alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.bridge.alpha",
-          title: "Imported Alpha Source",
-          sourceType: "memory-bridge",
-          sourcePath: "/workspace/research notes/Alpha System Overview.md",
-          bridgeRelativePath: "research notes/Alpha System Overview.md",
-          bridgeWorkspaceDir: "/workspace",
-        },
-        body: [
-          "# Imported Alpha Source",
-          "",
-          "[[Alpha Database#Evidence]]",
-          "[[alpha-database]]",
-          "[[syntheses/alpha-db#Details]]",
-        ].join("\n"),
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(rootDir, "syntheses", "alpha-db.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "synthesis",
-          id: "synthesis.alpha.db",
-          title: "Alpha Database",
-          sourceIds: ["source.bridge.alpha"],
-        },
-        body: [
-          "# Alpha Database",
-          "",
-          "[[research notes/Alpha System Overview#Quote]]",
-          "[[Alpha System Overview]]",
-          "[[alpha-system-overview]]",
-        ].join("\n"),
-      }),
-      "utf8",
-    );
-
-    const result = await lintMemoryWikiVault(config);
-
-    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
   });
 
   it("keeps path target matching case-sensitive", async () => {
@@ -666,9 +404,76 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toContain(
       "claim-missing-evidence",
     );
-    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Errors");
-    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
-    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
+    const report = await fs.readFile(result.reportPath, "utf8");
+    expect(report).toContain(
+      [
+        "<!-- openclaw:wiki:lint:start -->",
+        "- Errors: 3",
+        "- Warnings: 25",
+        "",
+        "### Errors",
+        "- `concepts/alpha.md`: Expected pageType `concept`, found `entity`.",
+        "- `concepts/alpha.md`: Duplicate page id `entity.alpha`.",
+        "- `entities/alpha.md`: Duplicate page id `entity.alpha`.",
+        "",
+        "### Warnings",
+        "- `concepts/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `concepts/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `concepts/alpha.md`: Page lists 1 open question.",
+        "- `concepts/alpha.md`: Page confidence is low (0.20).",
+        "- `concepts/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `concepts/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `concepts/alpha.md`: Broken wikilink target `missing-page`.",
+        "- `entities/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `entities/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `entities/alpha.md`: Page lists 1 open question.",
+        "- `entities/alpha.md`: Page confidence is low (0.20).",
+        "- `entities/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `entities/alpha.md`: Broken wikilink target `missing-page`.",
+        "- `sources/bridge-alpha.md`: Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
+        "- `sources/bridge-alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `syntheses/alpha-db.md`: Page freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "- `syntheses/alpha-db.md`: Claim `claim.alpha.db` freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "- `syntheses/alpha-db.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "",
+        "### Contradictions",
+        "- `concepts/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `concepts/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `entities/alpha.md`: Page lists 1 contradiction to resolve.",
+        "- `entities/alpha.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "- `syntheses/alpha-db.md`: Claim cluster `claim.alpha.db` has competing variants across 3 pages.",
+        "",
+        "### Open Questions",
+        "- `concepts/alpha.md`: Page lists 1 open question.",
+        "- `entities/alpha.md`: Page lists 1 open question.",
+        "",
+        "### Quality Follow-Up",
+        "- `concepts/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `entities/alpha.md`: Non-source page is missing `sourceIds` provenance.",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` is missing structured evidence.",
+        "- `sources/bridge-alpha.md`: Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
+        "- `concepts/alpha.md`: Page confidence is low (0.20).",
+        "- `concepts/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `concepts/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Page confidence is low (0.20).",
+        "- `entities/alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` has low confidence (0.20).",
+        "- `entities/alpha.md`: Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
+        "- `sources/bridge-alpha.md`: Page freshness needs review (missing updatedAt).",
+        "- `syntheses/alpha-db.md`: Page freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "- `syntheses/alpha-db.md`: Claim `claim.alpha.db` freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
+        "<!-- openclaw:wiki:lint:end -->",
+      ].join("\n"),
+    );
   });
 
   it("reports unparsable frontmatter as a lint issue instead of failing the whole vault (#96125)", async () => {

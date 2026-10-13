@@ -16,7 +16,7 @@ import {
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { createOpencodeGoAttributionWrapper, createOpencodeGoWrapper } from "./stream.js";
+import { createOpencodeGoWireWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
 
@@ -115,9 +115,22 @@ export default defineSingleProviderPluginEntry({
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
-    wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
-    wrapSimpleCompletionStreamFn: (ctx) =>
-      createOpencodeGoAttributionWrapper(ctx.streamFn, ctx.sourceApi),
+    resolveTransportTurnState: (ctx) => {
+      if (!normalizeOpencodeGoBaseUrl({ api: ctx.model?.api, baseUrl: ctx.model?.baseUrl })) {
+        return undefined;
+      }
+      if (
+        Object.keys(ctx.model?.headers ?? {}).some(
+          (name) => name.toLowerCase() === "x-opencode-session",
+        )
+      ) {
+        return undefined;
+      }
+      const sessionId = ctx.sessionId?.trim() || ctx.turnId.trim();
+      return sessionId ? { headers: { "x-opencode-session": sessionId } } : undefined;
+    },
+    wrapStreamFn: createOpencodeGoWrapper,
+    wrapSimpleCompletionStreamFn: createOpencodeGoWireWrapper,
     isModernModelRef: () => true,
   },
   register(api) {

@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
@@ -15,21 +16,29 @@ function isStateDirectoryTarget(target: string): boolean {
   return /(?:^|[\\/])state$/u.test(target);
 }
 
-function windowsOwnerQueryResult(command: string): { stdout: string; stderr: string } | undefined {
-  if (!command.toLowerCase().endsWith("powershell.exe")) {
-    return undefined;
-  }
+function windowsAclQueryResult(
+  command: string,
+  args: string[],
+  stateGrant?: { sid: string; mask: number },
+): { stdout: string; stderr: string } {
+  expect(path.basename(command)).toBe("windows-security-helper.exe");
+  expect(args[0]).toBe("owner");
+  const target = expectDefined(args[1], "permission target");
   const currentUserSid = "S-1-5-21-1-2-3-1001";
+  const grants = [
+    { sid: "S-1-5-18", mask: 0x001f_01ff },
+    { sid: currentUserSid, mask: 0x001f_01ff },
+  ];
+  if (stateGrant && isStateDirectoryTarget(target)) {
+    grants.push(stateGrant);
+  }
   return {
     stdout: JSON.stringify({
       ownerSid: currentUserSid,
       currentUserSid,
-      principalSids: [
-        { name: "NT AUTHORITY\\SYSTEM", sid: "S-1-5-18" },
-        { name: "BUILTIN\\Users", sid: "S-1-5-32-545" },
-        { name: "DESKTOP-TEST\\Tester", sid: currentUserSid },
-      ],
-      principalTranslationFailed: false,
+      daclPresent: true,
+      aces: grants.map(({ sid, mask }) => ({ sid, mask, deny: false, inheritOnly: false })),
+      complete: true,
       remote: false,
     }),
     stderr: "",
@@ -38,6 +47,14 @@ function windowsOwnerQueryResult(command: string): { stdout: string; stderr: str
 
 describe("security audit filesystem Windows findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-win-");
+
+  let nativeModeEnv: ReturnType<typeof captureEnv>;
+  beforeEach(() => {
+    nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
+    // The injected Windows helper fixture exercises the supported command fallback.
+    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+  });
+  afterEach(() => nativeModeEnv.restore());
 
   beforeAll(async () => {
     await tempCases.setup();
@@ -56,7 +73,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          { agents: { list: [{ id: "main", default: true }] } },
+          { agents: { entries: { main: {} } } },
           {
             stateDir,
             configPath,
@@ -64,11 +81,7 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) =>
-              windowsOwnerQueryResult(cmd) ?? {
-                stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-                stderr: "",
-              },
+            execIcacls: async (cmd: string, args: string[]) => windowsAclQueryResult(cmd, args),
           },
         );
         const forbidden = new Set([
@@ -93,7 +106,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          { agents: { list: [{ id: "main", default: true }] } },
+          { agents: { entries: { main: {} } } },
           {
             stateDir,
             configPath,
@@ -101,23 +114,8 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) => {
-              const ownerResult = windowsOwnerQueryResult(cmd);
-              if (ownerResult) {
-                return ownerResult;
-              }
-              const target = expectDefined(args[0], "args[0] test invariant");
-              if (isStateDirectoryTarget(target)) {
-                return {
-                  stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
-                  stderr: "",
-                };
-              }
-              return {
-                stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-                stderr: "",
-              };
-            },
+            execIcacls: async (cmd: string, args: string[]) =>
+              windowsAclQueryResult(cmd, args, { sid: "S-1-5-32-545", mask: 0x0012_00a9 }),
           },
         );
         expect(
@@ -134,7 +132,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          { agents: { list: [{ id: "main", default: true }] } },
+          { agents: { entries: { main: {} } } },
           {
             stateDir,
             configPath,
@@ -142,23 +140,8 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) => {
-              const ownerResult = windowsOwnerQueryResult(cmd);
-              if (ownerResult) {
-                return ownerResult;
-              }
-              const target = expectDefined(args[0], "args[0] test invariant");
-              if (isStateDirectoryTarget(target)) {
-                return {
-                  stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
-                  stderr: "",
-                };
-              }
-              return {
-                stdout: `${target} *S-1-5-18:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-                stderr: "",
-              };
-            },
+            execIcacls: async (cmd: string, args: string[]) =>
+              windowsAclQueryResult(cmd, args, { sid: "S-1-5-7", mask: 0x001f_01ff }),
           },
         );
         expect(

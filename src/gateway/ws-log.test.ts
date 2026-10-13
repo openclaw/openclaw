@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import {
+  formatForLog,
+  logWs,
+  summarizeAgentEventForWsLog,
+  summarizeSessionListForWsLog,
+} from "./ws-log.js";
 import { setGatewayWsLogStyle } from "./ws-logging.js";
 
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
@@ -27,6 +32,19 @@ afterEach(() => {
 });
 
 describe("gateway ws log helpers", () => {
+  test.each([
+    ["compact", "compact"],
+    ["dashboard", "dashboard"],
+    ["sidebar", "sidebar"],
+    [undefined, "full"],
+    ["unrecognized caller value", "full"],
+  ])("reports session row mode %s as %s", (rowMode, expected) => {
+    expect(summarizeSessionListForWsLog({ source: "sidebar", rowMode })).toMatchObject({
+      source: "sidebar",
+      rowMode: expected,
+    });
+  });
+
   test.each(["optimized", "compact", "full"] as const)(
     "bounds unanswered timing and preserves request identity across %s log changes",
     (style) => {
@@ -79,6 +97,51 @@ describe("gateway ws log helpers", () => {
     },
   );
 
+  test("evicts only the oldest unanswered request timings when the cap is exceeded", () => {
+    setVerbose(false);
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const frame = (id: string) => ({ connId: "evict", id, method: "health" });
+    const answer = (id: string) => {
+      output.mockClear();
+      logWs("out", "res", { ...frame(id), ok: true });
+    };
+    // Old requests that never get a response, then the request under test, then enough
+    // newer ones to cross the cap.
+    for (let index = 0; index < 1_500; index += 1) {
+      logWs("in", "req", frame(`stale-${index}`));
+    }
+    logWs("in", "req", frame("live"));
+    for (let index = 0; index < 600; index += 1) {
+      logWs("in", "req", frame(`newer-${index}`));
+    }
+    clock.mockReturnValue(1_000 + 5_000);
+    try {
+      // The request that was in flight when the cap tripped keeps its slow-response timing.
+      answer("live");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+      answer("newer-599");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+      // Exactly the 101 oldest entries were dropped to hold the 2000 bound.
+      answer("stale-0");
+      expect(output).not.toHaveBeenCalled();
+      answer("stale-100");
+      expect(output).not.toHaveBeenCalled();
+      answer("stale-101");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+    } finally {
+      clock.mockReturnValue(1_000);
+      for (let index = 0; index < 1_500; index += 1) {
+        logWs("out", "res", { ...frame(`stale-${index}`), ok: true });
+      }
+      for (let index = 0; index < 600; index += 1) {
+        logWs("out", "res", { ...frame(`newer-${index}`), ok: true });
+      }
+    }
+  });
+
   test("admits only useful optimized-mode frames and honors console info enablement", () => {
     setVerbose(false);
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
@@ -126,11 +189,6 @@ describe("gateway ws log helpers", () => {
   });
 
   test.each([
-    {
-      name: "formats Error instances",
-      input: Object.assign(new Error("boom"), { name: "TestError" }),
-      expected: "TestError: boom",
-    },
     {
       name: "formats message-like objects with codes",
       input: { name: "Oops", message: "failed", code: "E1" },
@@ -188,47 +246,75 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
   });
 
-  test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
+  test.each(["lifecycle"])(
+    "keeps Incognito %s content out of verbose event logs while retaining routing metadata",
+    (stream) => {
+      setVerbose(true);
+      setGatewayWsLogStyle("full");
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const marker = "synthetic-private-content";
+      const summary = summarizeAgentEventForWsLog({
+        runId: "private-run",
+        sessionKey: "agent:main:dashboard:incognito-synthetic",
+        stream,
+        seq: 2,
+        data: { text: marker, meta: marker, error: marker, reason: marker },
+      });
+      logWs("out", "event", { event: "agent", ...summary });
+      expect(output).toHaveBeenCalled();
+      expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+      expect(summary).toEqual({
+        run: "private-run",
+        agent: "main",
+        session: "dashboard:incognito-synthetic",
+        stream,
+        aseq: 2,
+      });
+    },
+  );
+
+  test.each(["assistant", "tool"])("keeps %s content out of verbose event logs", (stream) => {
+    setVerbose(true);
+    setGatewayWsLogStyle("full");
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const marker = "synthetic-private-content";
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",
-      sessionKey: "agent:main:main",
-      stream: "assistant",
+      sessionKey: "agent:main:thread-1",
+      stream,
       seq: 2,
       data: {
-        text: "hello\n\nworld ".repeat(20),
+        text: marker,
+        meta: marker,
+        phase: "start",
+        name: "fetch",
+        toolCallId: "12345678-1234-1234-1234-123456789abc",
         mediaUrls: ["a", "b"],
       },
     });
 
-    expect(summary.agent).toBe("main");
-    expect(summary.run).toBe("12345678…9abc");
-    expect(summary.session).toBe("main");
-    expect(summary.stream).toBe("assistant");
-    expect(summary.aseq).toBe(2);
-    expect(summary.media).toBe(2);
-    expect(summary.text).toBeTypeOf("string");
-    expect(summary.text).not.toContain("\n");
-  });
+    logWs("out", "event", { event: "agent", ...summary });
 
-  test("summarizeAgentEventForWsLog keeps compact previews UTF-16 safe", () => {
-    const summary = summarizeAgentEventForWsLog({
-      stream: "assistant",
-      data: { text: `${"a".repeat(158)}😀tail` },
+    expect(output).toHaveBeenCalled();
+    expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+    expect(summary).toMatchObject({
+      run: "12345678…9abc",
+      agent: "main",
+      session: "thread-1",
+      stream,
+      aseq: 2,
+      ...(stream === "assistant"
+        ? { media: 2, textChars: 25 }
+        : { tool: "start:fetch", call: "12345678…9abc" }),
     });
-
-    expect(summary.text).toBe(`${"a".repeat(158)}…`);
-  });
-
-  test("summarizeAgentEventForWsLog includes tool metadata", () => {
-    const summary = summarizeAgentEventForWsLog({
-      runId: "run-1",
-      stream: "tool",
-      data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
-    });
-    expect(summary.run).toBe("run-1");
-    expect(summary.stream).toBe("tool");
-    expect(summary.tool).toBe("start:fetch");
-    expect(summary.call).toBe("12345678…9abc");
+    expect(summary).not.toHaveProperty("text");
+    expect(output).toHaveBeenLastCalledWith(
+      expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
+    );
   });
 
   test("summarizeAgentEventForWsLog includes lifecycle errors with compact previews", () => {

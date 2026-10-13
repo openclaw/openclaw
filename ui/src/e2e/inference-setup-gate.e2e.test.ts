@@ -38,7 +38,7 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("blocks empty chat home until a model is connected", async () => {
+  it("keeps help available on empty chat home while messages require a model", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -46,20 +46,64 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, { agentModel: null });
+    const gateway = await installMockGateway(page, { agentModel: null });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
-      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
-      await expect.poll(() => page.locator("textarea").count()).toBe(0);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Connect an AI provider" }).count())
-        .toBe(1);
+      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(1);
+      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      const welcome = page.locator(".agent-chat__welcome--setup");
+      const setupAction = page.getByRole("button", { name: "Connect an AI provider", exact: true });
+      await expect.poll(() => setupAction.count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
-      await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await setupAction.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
+      await page.goBack();
+      const sendButton = page.getByRole("button", { name: "Send message", exact: true });
+      await textarea.fill("/help");
+      await expect.poll(() => sendButton.isDisabled()).toBe(false);
+      await sendButton.click();
+      await page.getByText("Available Commands", { exact: true }).waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await expect.poll(() => welcome.count()).toBe(0);
+      await expect.poll(() => setupAction.count()).toBe(1);
+      await expect
+        .poll(() =>
+          page.locator(".agent-chat__composer-shell").evaluate((shell) => {
+            const banner = shell.querySelector(".agent-chat__disabled-banner");
+            const input = shell.querySelector(".agent-chat__input");
+            if (!banner || !input) {
+              throw new Error("expected setup notice above the composer");
+            }
+            const bannerStyle = getComputedStyle(banner);
+            const inputStyle = getComputedStyle(input);
+            const bannerBox = banner.getBoundingClientRect();
+            const inputBox = input.getBoundingClientRect();
+            return {
+              radiusMatches: bannerStyle.borderRadius === inputStyle.borderRadius,
+              shapeMatches:
+                bannerStyle.getPropertyValue("corner-shape") ===
+                inputStyle.getPropertyValue("corner-shape"),
+              edgesMatch:
+                Math.abs(bannerBox.left - inputBox.left) <= 1 &&
+                Math.abs(bannerBox.right - inputBox.right) <= 1,
+            };
+          }),
+        )
+        .toEqual({ radiusMatches: true, shapeMatches: true, edgesMatch: true });
+      await captureProof(page, "chat-help-desktop.png");
+      await setupAction.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
+      await page.goBack();
+      await textarea.fill("Start a conversation.");
+      await expect.poll(() => sendButton.isDisabled()).toBe(true);
+      expect(await textarea.inputValue()).toBe("Start a conversation.");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -83,7 +127,8 @@ suite.define(() => {
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await captureProof(page, "new-session-desktop.png");
       await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
     } finally {
       await context.close();
     }
@@ -130,7 +175,8 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 900, width: 1660 });
       await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
       const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
       await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
       await captureProof(page, "custodian-model-setup-selected.png");
@@ -140,7 +186,7 @@ suite.define(() => {
   });
 
   it.each(["page", "panel"])(
-    "keeps %s history and the runtime error visible until retry succeeds",
+    "preserves %s history and the unsent draft while runtime inference recovers",
     async (surface) => {
       const viewport = { height: 900, width: 1660 };
       const context = await suite.browser.newContext({
@@ -207,27 +253,38 @@ suite.define(() => {
         await chat.getByText("Your earlier conversation is still here.").waitFor();
         expect(await chat.getByRole("button", { name: "Review connection" }).count()).toBe(0);
         expect(await chat.locator(".agent-chat__composer-shell").count()).toBe(1);
-        expect(await chat.getByRole("textbox").isDisabled()).toBe(true);
+        const composer = chat.getByRole("textbox");
+        const send = chat.getByRole("button", { name: "Send", exact: true });
+        expect(await composer.isEnabled()).toBe(true);
+        await composer.fill("Check my setup");
+        expect(await send.isDisabled()).toBe(true);
+        await composer.press("Enter");
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
+        expect(await composer.inputValue()).toBe("Check my setup");
 
         // Each deferral is consumed by one request, including the failed startup check.
         await gateway.deferNext("openclaw.chat");
         await chat.getByRole("button", { name: "Retry", exact: true }).click();
         const retry = await gateway.waitForRequest("openclaw.chat", { after: 1 });
         expect(retry.params).not.toHaveProperty("message");
-        expect(await chat.getByRole("textbox").isDisabled()).toBe(true);
+        expect(await composer.isEnabled()).toBe(true);
+        expect(await send.isDisabled()).toBe(true);
+        await composer.press("Enter");
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(2);
+        expect(await composer.inputValue()).toBe("Check my setup");
         await gateway.resolveDeferred("openclaw.chat", {
           sessionId: "runtime-recovered",
           reply: "Ready to help again.",
           action: "none",
         });
         await chat.getByText("Ready to help again.").waitFor();
-        await expect.poll(() => chat.getByRole("textbox").isEnabled()).toBe(true);
+        await expect.poll(() => send.isEnabled()).toBe(true);
+        expect(await composer.inputValue()).toBe("Check my setup");
         expect(await chat.locator(".custodian__error").count()).toBe(0);
         await captureProof(page, "02-runtime-recovered.png");
 
         await gateway.deferNext("openclaw.chat", { message: "Check my setup" });
-        await chat.getByRole("textbox").fill("Check my setup");
-        await chat.getByRole("button", { name: "Send", exact: true }).click();
+        await send.click();
         const turn = await gateway.waitForRequest("openclaw.chat", { after: 2 });
         expect(turn.params).toMatchObject({ message: "Check my setup" });
         await gateway.resolveDeferred("openclaw.chat", {

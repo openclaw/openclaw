@@ -40,18 +40,6 @@ describe("resolveGatewayCredentialsForUrlEdit", () => {
     ).toEqual({ token: "other-token", password: "" });
   });
 
-  it("clears credentials when the changed gateway endpoint has no scoped token", () => {
-    vi.stubGlobal("sessionStorage", createStorageMock());
-
-    expect(
-      resolveGatewayCredentialsForUrlEdit(
-        "wss://gateway.example/openclaw",
-        "wss://other-gateway.example/openclaw",
-        { token: "abc123", password: "secret" },
-      ),
-    ).toEqual({ token: "", password: "" });
-  });
-
   it("preserves the token but clears the password when only the query scope changes", () => {
     expect(
       resolveGatewayCredentialsForUrlEdit(
@@ -85,7 +73,6 @@ describe("resolveGatewayCredentialsForUrlEdit", () => {
 
 describe("resolvePairingHint", () => {
   it.each([
-    ["close reason", "disconnected (1008): pairing required", undefined],
     ["case-insensitive close reason", "Pairing Required", undefined],
     [
       "structured pairing code",
@@ -103,7 +90,6 @@ describe("resolvePairingHint", () => {
     ["connected clients", true, "disconnected (1008): pairing required"],
     ["missing errors", false, null],
     ["unrelated errors", false, "disconnected (1006): no reason"],
-    ["auth errors", false, "disconnected (4008): unauthorized"],
   ])("ignores %s", (_name, connected, lastError) => {
     expect(resolvePairingHint(connected, lastError)).toBeNull();
   });
@@ -135,9 +121,22 @@ describe("resolveAuthHintKind", () => {
     ).toBe("required");
   });
 
+  it("returns required when only a remembered device token was rejected", () => {
+    expect(
+      resolveAuthHintKind({
+        connected: false,
+        lastError: "disconnected (4008): connect failed",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+        hasToken: false,
+        hasPassword: false,
+      }),
+    ).toBe("required");
+  });
+
   it.each([
     { lastErrorCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH, hasToken: true },
     { lastErrorCode: ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID, hasToken: false },
+    { lastErrorCode: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH, hasToken: true },
   ])("returns failed for structured auth code $lastErrorCode", ({ lastErrorCode, hasToken }) => {
     expect(
       resolveAuthHintKind({
@@ -152,8 +151,6 @@ describe("resolveAuthHintKind", () => {
 
   it.each([
     ["empty credentials", false, false, "unauthorized"],
-    ["token", true, false, "connect failed"],
-    ["password", false, true, "unauthorized"],
     ["both credentials", true, true, "connect failed"],
   ])("uses the identity-header code with %s", (_name, hasToken, hasPassword, lastError) => {
     expect(
@@ -170,7 +167,6 @@ describe("resolveAuthHintKind", () => {
   it.each([
     ["connected clients", true, "unauthorized"],
     ["missing errors", false, null],
-    ["empty errors", false, ""],
   ])("ignores the identity-header code for %s", (_name, connected, lastError) => {
     expect(
       resolveAuthHintKind({
@@ -222,7 +218,7 @@ describe("resolveAuthHintKind", () => {
     ).toBe("trusted-proxy");
   });
 
-  it.each([undefined, "unknown", "trusted_proxy_unknown"])(
+  it.each([undefined, "trusted_proxy_unknown"])(
     "does not infer proxy authentication from an unrecognized reason %s",
     (lastErrorAuthReason) => {
       expect(

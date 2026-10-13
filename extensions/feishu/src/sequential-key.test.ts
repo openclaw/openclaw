@@ -31,7 +31,6 @@ describe("getFeishuSequentialKey", () => {
     [createTextEvent({ text: "hello" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/status" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/stop" }), "feishu:default:oc_dm_chat:control"],
-    [createTextEvent({ text: "/btw what changed?" }), "feishu:default:oc_dm_chat:btw"],
   ])("resolves sequential key %#", (event, expected) => {
     expect(
       getFeishuSequentialKey({

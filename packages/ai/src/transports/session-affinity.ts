@@ -1,12 +1,8 @@
 import type { Model, StreamOptions } from "../types.js";
 
 function isOpencodeEndpoint(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    return url.protocol === "https:" && url.hostname.replace(/\.$/, "") === "opencode.ai";
-  } catch {
-    return false;
-  }
+  const url = URL.parse(baseUrl);
+  return url?.protocol === "https:" && url.hostname.replace(/\.$/, "") === "opencode.ai";
 }
 
 /** Required conversation identity is independent of optional prompt caching. */
@@ -17,12 +13,17 @@ export function resolveOpencodeSessionHeaders(
   if (!options?.sessionId || !isOpencodeEndpoint(model.baseUrl)) {
     return options?.headers;
   }
-  if (
-    [model.headers, options.headers].some((headers) =>
-      Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-opencode-session"),
-    )
-  ) {
+  if (hasOpencodeSessionHeader(model, options)) {
     return options.headers;
   }
   return { ...options.headers, "x-opencode-session": options.sessionId };
+}
+
+export function hasOpencodeSessionHeader(
+  model: Pick<Model, "headers">,
+  options?: Pick<StreamOptions, "headers">,
+): boolean {
+  return [model.headers, options?.headers].some((headers) =>
+    Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-opencode-session"),
+  );
 }

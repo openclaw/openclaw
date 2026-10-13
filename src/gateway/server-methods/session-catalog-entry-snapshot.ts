@@ -6,18 +6,20 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  listSessionEntriesReadOnly,
-  type SessionEntrySummary,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { prepareSessionRowSelection } from "../session-utils-list.js";
 
 export type SessionCatalogInstances = Map<
   string,
@@ -32,22 +34,67 @@ type SessionCatalogRequestEntrySnapshot = {
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
+    audience?: SessionCatalogProvider["audience"],
   ) => SessionCatalogHost;
 };
+
+type PlanningEntries = {
+  revision: object;
+  entriesByAgentId: Map<string, readonly SessionEntrySummary[]>;
+  entryIndexByAgentId: Map<string, ReadonlyMap<string, SessionEntry>>;
+  catalogEntries: ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>;
+};
+
+// Selection revisions retire metadata on row, generation, and topology changes.
+// Delivery keeps its own actor/profile cache and rechecks current adoption identities.
+const planningEntriesByRevision = new WeakMap<
+  object,
+  WeakMap<OpenClawConfig, Map<string, PlanningEntries>>
+>();
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
+  projection: SessionRowProjection;
+  /** Bound one delivery's lookups; provider planning retains the full snapshot. */
+  sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
-  const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
-  const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
+  if (params.projection.needsSelectionPreparation()) {
+    throw new Error("Prepare current session metadata before capturing catalog entries");
+  }
+  const cachedPlanning =
+    params.sessionKeys === undefined
+      ? planningEntriesByRevision
+          .get(params.projection.state.revision)
+          ?.get(params.cfg)
+          ?.get(params.fallbackAgentId)
+      : undefined;
+  const entriesByAgentId =
+    cachedPlanning?.entriesByAgentId ?? new Map<string, readonly SessionEntrySummary[]>();
+  const entryIndexByAgentId =
+    cachedPlanning?.entryIndexByAgentId ?? new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
   let frozen = false;
   // Hosts share human identities within this request; a new snapshot must see profile edits.
   const userProfileIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
-    | undefined;
+    | undefined = cachedPlanning?.catalogEntries;
+  const entryAgentId = (sessionKey: string) =>
+    resolveAgentIdFromSessionKey(
+      sessionKey,
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
+    );
+  const selectedKeysByAgentId = params.sessionKeys ? new Map<string, Set<string>>() : undefined;
+  if (selectedKeysByAgentId) {
+    for (const sessionKey of new Set(params.sessionKeys)) {
+      const agentId = entryAgentId(sessionKey);
+      const keys = selectedKeysByAgentId.get(agentId) ?? new Set<string>();
+      keys.add(sessionKey);
+      keys.add(resolveStoredSessionKeyForAgentStore({ cfg: params.cfg, agentId, sessionKey }));
+      selectedKeysByAgentId.set(agentId, keys);
+    }
+  }
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
@@ -55,9 +102,22 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       if (frozen) {
         return [];
       }
+      const entries = selectedKeysByAgentId
+        ? [...(selectedKeysByAgentId.get(agentId) ?? [])].flatMap((key) =>
+            // An empty canonical alias must not become an unscoped projection query.
+            key
+              ? prepareSessionRowSelection(
+                  params.projection,
+                  { agentId },
+                  { key, metadataPrepared: true },
+                ).entries
+              : [],
+          )
+        : prepareSessionRowSelection(params.projection, { agentId }, { metadataPrepared: true })
+            .entries;
       entriesByAgentId.set(
         agentId,
-        listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
+        entries.map(([sessionKey, entry]) => ({ sessionKey, entry })),
       );
     }
     return entriesByAgentId.get(agentId) ?? [];
@@ -91,25 +151,18 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   };
 
   const entryForSession = (sessionKey: string): SessionEntry | undefined => {
-    const agentId = resolveAgentIdFromSessionKey(
-      sessionKey,
-      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
-    );
+    const agentId = entryAgentId(sessionKey);
     const index = entryIndexForAgent(agentId);
     const canonicalKey = resolveStoredSessionKeyForAgentStore({
       cfg: params.cfg,
       agentId,
       sessionKey,
     });
-    const candidates = new Set([sessionKey, canonicalKey]);
-    let freshest: SessionEntry | undefined;
-    for (const key of candidates) {
-      const entry = index.get(key);
-      if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0))) {
-        freshest = entry;
-      }
-    }
-    return freshest;
+    const requested = index.get(sessionKey);
+    const canonical = index.get(canonicalKey);
+    return canonical && (!requested || (canonical.updatedAt ?? 0) > (requested.updatedAt ?? 0))
+      ? canonical
+      : requested;
   };
 
   const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
@@ -127,12 +180,35 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     return actor;
   };
 
+  const sessionEntries: SessionCatalogEntrySnapshot = { entriesForAgent, entriesForCatalog };
   return {
-    sessionEntries: { entriesForAgent, entriesForCatalog },
+    sessionEntries,
     freeze: () => {
       // Capture before provider admission/IO, even when a provider first reads after awaiting.
       // A key first resolved after deletion/recreation cannot prove the original adoption.
-      entriesForCatalog();
+      const entries = entriesForCatalog();
+      if (params.sessionKeys === undefined) {
+        // Selection retains current metadata independently of display materialization.
+        const revision = params.projection.state.revision;
+        let configs = planningEntriesByRevision.get(revision);
+        if (!configs) {
+          configs = new WeakMap();
+          planningEntriesByRevision.set(revision, configs);
+        }
+        let agents = configs.get(params.cfg);
+        if (!agents) {
+          agents = new Map();
+          configs.set(params.cfg, agents);
+        }
+        const planning = cachedPlanning ?? {
+          revision: {},
+          entriesByAgentId,
+          entryIndexByAgentId,
+          catalogEntries: entries,
+        };
+        agents.set(params.fallbackAgentId, planning);
+        sessionEntries.revision = planning.revision;
+      }
       frozen = true;
     },
     captureHostInstances: (host, instances) => {
@@ -148,13 +224,22 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
-    projectHostSessions: (host, instances) => ({
+    projectHostSessions: (host, instances, audience) => ({
       ...host,
       sessions: host.sessions.map(
-        ({ createdActor: _providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
+        ({ createdActor: providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
           // Provider-supplied colors are display metadata independent of adoption identity.
           const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
           const colorProjection = color ? { color } : {};
+          if (audience === "session-viewers") {
+            // Publication attribution belongs to the provider. A source's session key is never
+            // a local adoption claim, even when it happens to match a Gateway session.
+            return {
+              ...session,
+              ...colorProjection,
+              ...(providerCreatedActor ? { createdActor: providerCreatedActor } : {}),
+            };
+          }
           const original = sessionKey ? instances.get(sessionKey) : undefined;
           const current = sessionKey ? entryForSession(sessionKey) : undefined;
           // Native rows remain native if their adoption was replaced or detached. Never project

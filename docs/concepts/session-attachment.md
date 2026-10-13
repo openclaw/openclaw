@@ -69,13 +69,15 @@ The Gateway method `sessions.resolve` owns resolution for exact keys, raw
 session IDs, labels, and short IDs. Discovery selectors are filtered by the
 calling client's session visibility. Short-ID ambiguity results contain at most
 ten recent candidates, so clients can ask you for a longer prefix without
-guessing. See [Control UI URLs](/web/urls) for the complete literal encoding and
-stability contract.
+guessing. Key, full session ID, and label resolution read only matching session
+metadata without waiting for unrelated sessions to refresh. See [Control UI URLs](/web/urls) for the complete
+literal encoding and stability contract.
 
 ### Gateway version requirement
 
 The Gateway resolves short references at the session store owner, and the
-Control UI and CLI use the returned canonical key. Short links require a current
+Control UI and CLI use the returned canonical key and owning agent, including
+global sessions reached through a stale URL. Short links require a current
 Gateway. If an older or custom Gateway rejects the `shortId` selector, upgrade
 it or use a full session key.
 
@@ -193,7 +195,7 @@ session was deleted after the command was copied, return to the Control UI and
 copy a command from an available session.
 
 Revoke or remove the device from the same Gateway's **Devices** page when that
-client should no longer connect. Tokens do not cross origins. Read-only probes
+client should no longer connect. Tokens do not cross origins. Read-only checks
 through an SSH tunnel also suppress stored device auth because the loopback
 transport does not identify the remote origin; explicit credentials still work.
 

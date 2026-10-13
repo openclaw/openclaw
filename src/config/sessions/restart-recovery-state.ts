@@ -1,17 +1,64 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import type {
+  HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
   RestartRecoveryTerminalDeliveryEvidenceResult,
+  SessionRestartRecoveryState,
 } from "./restart-recovery-types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, RestartRecoveryRun, SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
+
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
+    (left, right) => left.runId.localeCompare(right.runId),
+  );
+}
+
+export function recordLifecycleFence(
+  entry: Pick<InternalSessionEntry, "restartRecoveryRuns">,
+  run: RestartRecoveryRun,
+): void {
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
+}
+
+export function isMainRestartRecoveryCandidate(
+  entry: { spawnDepth?: unknown; subagentRole?: unknown },
+  sessionKey: string,
+): boolean {
+  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
+    return false;
+  }
+  if (entry.subagentRole != null) {
+    return false;
+  }
+  return (
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey)
+  );
+}
 
 type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
@@ -24,8 +71,8 @@ export function resolveRestartRecoveryChannelAuthority(
 ): RestartRecoveryChannelAuthority | undefined {
   const sourceTurnId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
   const deliveryContext = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
-  const channel = normalizeRunId(deliveryContext?.channel);
-  const to = normalizeRunId(deliveryContext?.to);
+  const channel = deliveryContext?.channel;
+  const to = deliveryContext?.to;
   if (
     entry.restartRecoverySourceIngress !== "channel" ||
     !sourceTurnId ||
@@ -49,42 +96,66 @@ function normalizeThreadId(value: unknown): string | undefined {
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = Array.from(
-    new Set(
-      value.flatMap((item) => {
-        const normalized = normalizeRunId(item);
-        return normalized ? [normalized] : [];
-      }),
-    ),
-  );
+  const values = normalizeUniqueTrimmedStringList(value);
   return values.length > 0 ? values : undefined;
 }
 
 function normalizePresentStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
+  return Array.isArray(value) ? normalizeUniqueTrimmedStringList(value) : undefined;
+}
+
+function normalizeHarnessCompletionRecovery(value: unknown): HarnessCompletionRecovery | undefined {
+  if (!isRecord(value)) {
     return undefined;
   }
-  return normalizeStringArray(value) ?? [];
+  const taskId = normalizeRunId(value.taskId);
+  const taskStatus =
+    value.taskStatus === "succeeded" || value.taskStatus === "failed"
+      ? value.taskStatus
+      : undefined;
+  const taskRunId = normalizeRunId(value.taskRunId);
+  const sourceRunId = normalizeRunId(value.sourceRunId);
+  const requesterSessionKey = normalizeRunId(value.requesterSessionKey);
+  const requesterAgentId = normalizeRunId(value.requesterAgentId);
+  const sessionId = normalizeRunId(value.sessionId);
+  const lifecycleRevision = normalizeRunId(value.lifecycleRevision);
+  if (
+    !taskId ||
+    !taskStatus ||
+    !taskRunId ||
+    !sourceRunId ||
+    !requesterSessionKey ||
+    !requesterAgentId ||
+    !sessionId ||
+    (value.lifecycleRevision !== undefined && !lifecycleRevision)
+  ) {
+    return undefined;
+  }
+  return {
+    taskId,
+    taskStatus,
+    taskRunId,
+    sourceRunId,
+    requesterSessionKey,
+    requesterAgentId,
+    sessionId,
+    ...(lifecycleRevision ? { lifecycleRevision } : {}),
+  };
 }
 
 function normalizeTerminalDeliveryEvidenceResult(
-  value: unknown,
+  record: unknown,
 ): RestartRecoveryTerminalDeliveryEvidenceResult | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(record)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
   const captured = record.captured === true ? (true as const) : undefined;
   const rawPayloads = Array.isArray(record.payloads) ? record.payloads : undefined;
   const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
-    ? rawPayloads.slice(0, 64).map((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
+    ? rawPayloads.slice(0, 64).map((payload) => {
+        if (!isRecord(payload)) {
           return {};
         }
-        const payload = item as Record<string, unknown>;
         const mediaUrls = normalizeStringArray(payload.mediaUrls);
         const visible = typeof payload.visible === "boolean" ? payload.visible : undefined;
         const evidence: { mediaUrls?: string[]; visible?: boolean } = {};
@@ -101,10 +172,7 @@ function normalizeTerminalDeliveryEvidenceResult(
     record.payloadsTruncated === true || (rawPayloads?.length ?? 0) > 64
       ? (true as const)
       : undefined;
-  const rawStatus =
-    record.deliveryStatus && typeof record.deliveryStatus === "object"
-      ? (record.deliveryStatus as Record<string, unknown>)
-      : undefined;
+  const rawStatus = asOptionalObjectRecord(record.deliveryStatus);
   const status =
     rawStatus?.status === "failed" ||
     rawStatus?.status === "partial_failed" ||
@@ -115,11 +183,10 @@ function normalizeTerminalDeliveryEvidenceResult(
   const payloadOutcomes: NonNullable<
     RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
   >["payloadOutcomes"] = Array.isArray(rawStatus?.payloadOutcomes)
-    ? rawStatus.payloadOutcomes.slice(0, 64).flatMap((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
+    ? rawStatus.payloadOutcomes.slice(0, 64).flatMap((outcome) => {
+        if (!isRecord(outcome)) {
           return [];
         }
-        const outcome = item as Record<string, unknown>;
         const outcomeStatus =
           outcome.status === "failed" ||
           outcome.status === "sent" ||
@@ -149,6 +216,11 @@ function normalizeTerminalDeliveryEvidenceResult(
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
+        ...(typeof rawStatus?.resultCount === "number" &&
+        Number.isSafeInteger(rawStatus.resultCount) &&
+        rawStatus.resultCount >= 0
+          ? { resultCount: rawStatus.resultCount }
+          : {}),
         ...(errorMessage ? { errorMessage } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
@@ -158,11 +230,10 @@ function normalizeTerminalDeliveryEvidenceResult(
     : undefined;
   const messagingToolSentTargets: RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"] =
     rawMessagingToolSentTargets
-      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((item) => {
-          if (!item || typeof item !== "object" || Array.isArray(item)) {
+      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((target) => {
+          if (!isRecord(target)) {
             return [];
           }
-          const target = item as Record<string, unknown>;
           const provider = normalizeRunId(target.provider);
           const accountId = normalizeRunId(target.accountId);
           const to = normalizeRunId(target.to);
@@ -182,6 +253,9 @@ function normalizeTerminalDeliveryEvidenceResult(
               ...(target.threadSuppressed === true ? { threadSuppressed: true as const } : {}),
               ...(mediaUrls ? { mediaUrls } : {}),
               ...(visible !== undefined ? { visible } : {}),
+              ...(typeof target.sourceReplyFinal === "boolean"
+                ? { sourceReplyFinal: target.sourceReplyFinal }
+                : {}),
             },
           ];
         })
@@ -229,10 +303,10 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
   }
   const evidence: RestartRecoveryTerminalDeliveryEvidence[] = [];
   for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
+    if (!isRecord(item)) {
       continue;
     }
-    const runId = normalizeRunId((item as Record<string, unknown>).runId);
+    const runId = normalizeRunId(item.runId);
     const result = normalizeTerminalDeliveryEvidenceResult(item);
     if (!runId || !result) {
       continue;
@@ -241,50 +315,60 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
     if (previousIndex >= 0) {
       evidence.splice(previousIndex, 1);
     }
-    evidence.push({ runId, ...result });
+    const transcriptRunId = normalizeRunId(item.transcriptRunId);
+    const harnessCompletion = normalizeHarnessCompletionRecovery(item.harnessCompletion);
+    const rawContext = isRecord(item.deliveryContext) ? item.deliveryContext : undefined;
+    const deliveryContext = normalizeDeliveryContext({
+      channel: normalizeRunId(rawContext?.channel),
+      to: normalizeRunId(rawContext?.to),
+      accountId: normalizeRunId(rawContext?.accountId),
+      threadId:
+        typeof rawContext?.threadId === "number"
+          ? rawContext.threadId
+          : normalizeRunId(rawContext?.threadId),
+    });
+    const rawFinalReceipt = isRecord(item.durableFinalReceipt)
+      ? item.durableFinalReceipt
+      : undefined;
+    const intentId = normalizeRunId(rawFinalReceipt?.intentId);
+    const deliveryId = normalizeRunId(rawFinalReceipt?.deliveryId);
+    const platformMessageId = normalizeRunId(rawFinalReceipt?.platformMessageId);
+    evidence.push({
+      runId,
+      ...result,
+      ...(transcriptRunId ? { transcriptRunId } : {}),
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
+      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+        ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
+        : {}),
+    });
   }
   const bounded = evidence.slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
 }
 
 /** Keeps a bounded durable set of client runs that must never execute again. */
-function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
+export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const runIds: string[] = [];
+  const runIds = new Set<string>();
   for (const item of value) {
     const runId = normalizeRunId(item);
     if (!runId) {
       continue;
     }
-    const previousIndex = runIds.indexOf(runId);
-    if (previousIndex >= 0) {
-      runIds.splice(previousIndex, 1);
-    }
-    runIds.push(runId);
+    runIds.delete(runId);
+    runIds.add(runId);
   }
-  const bounded = runIds.slice(-MAX_TERMINAL_RUN_IDS);
+  const bounded = [...runIds].slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
 }
 
-type RestartRecoveryNormalizedField =
-  | "restartRecoveryBeforeAgentReplyState"
-  | "restartRecoveryDeliveryReceiptState"
-  | "restartRecoveryDeliveryToolCallId"
-  | "restartRecoveryDeliveryMediaUrls"
-  | "restartRecoveryDisableMessageTool"
-  | "restartRecoverySuppressTextDelivery"
-  | "restartRecoveryDeliveryRequestFingerprint"
-  | "restartRecoveryDeliveryRunId"
-  | "restartRecoveryDeliverySourceRunId"
-  | "restartRecoveryRequesterAccountId"
-  | "restartRecoveryRequesterSenderId"
-  | "restartRecoverySameChannelThreadRequired"
-  | "restartRecoverySourceIngress"
-  | "restartRecoverySourceReplyDeliveryMode"
-  | "restartRecoveryTerminalDeliveryEvidence"
-  | "restartRecoveryTerminalRunIds";
+type RestartRecoveryNormalizedField = Exclude<
+  keyof SessionRestartRecoveryState,
+  "restartRecoveryDeliveryContext"
+>;
 
 function sameOptionalStringArray(left: unknown, right: string[] | undefined): boolean {
   if (!Array.isArray(left) || !right) {
@@ -306,6 +390,15 @@ export function normalizeRestartRecoveryEntryFields(
     value: SessionEntry[K] | undefined,
   ) => void,
 ): void {
+  const harnessCompletion = normalizeHarnessCompletionRecovery(
+    entry.restartRecoveryHarnessCompletion,
+  );
+  assign(
+    "restartRecoveryHarnessCompletion",
+    isDeepStrictEqual(harnessCompletion, entry.restartRecoveryHarnessCompletion)
+      ? entry.restartRecoveryHarnessCompletion
+      : harnessCompletion,
+  );
   const deliveryMediaUrls = normalizePresentStringArray(entry.restartRecoveryDeliveryMediaUrls);
   assign(
     "restartRecoveryDeliveryMediaUrls",
@@ -313,14 +406,12 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoveryDeliveryMediaUrls
       : deliveryMediaUrls,
   );
-  assign(
+  for (const key of [
     "restartRecoveryDisableMessageTool",
-    entry.restartRecoveryDisableMessageTool === true ? true : undefined,
-  );
-  assign(
     "restartRecoverySuppressTextDelivery",
-    entry.restartRecoverySuppressTextDelivery === true ? true : undefined,
-  );
+  ] as const) {
+    assign(key, entry[key] === true ? true : undefined);
+  }
   assign(
     "restartRecoveryBeforeAgentReplyState",
     entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
@@ -339,27 +430,16 @@ export function normalizeRestartRecoveryEntryFields(
       ? entry.restartRecoveryDeliveryReceiptState
       : undefined,
   );
-  assign(
+  for (const key of [
     "restartRecoveryDeliveryToolCallId",
-    normalizeRunId(entry.restartRecoveryDeliveryToolCallId),
-  );
-  assign(
     "restartRecoveryDeliveryRequestFingerprint",
-    normalizeRunId(entry.restartRecoveryDeliveryRequestFingerprint),
-  );
-  assign("restartRecoveryDeliveryRunId", normalizeRunId(entry.restartRecoveryDeliveryRunId));
-  assign(
+    "restartRecoveryDeliveryRunId",
     "restartRecoveryDeliverySourceRunId",
-    normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
-  );
-  assign(
     "restartRecoveryRequesterAccountId",
-    normalizeRunId(entry.restartRecoveryRequesterAccountId),
-  );
-  assign(
     "restartRecoveryRequesterSenderId",
-    normalizeRunId(entry.restartRecoveryRequesterSenderId),
-  );
+  ] as const) {
+    assign(key, normalizeRunId(entry[key]));
+  }
   assign(
     "restartRecoverySameChannelThreadRequired",
     entry.restartRecoverySameChannelThreadRequired === true ? true : undefined,
@@ -399,7 +479,7 @@ export function normalizeRestartRecoveryEntryFields(
   );
 }
 
-function mergeRestartRecoveryTerminalDeliveryEvidence(
+export function mergeRestartRecoveryTerminalDeliveryEvidence(
   current: unknown,
   appended: unknown,
 ): RestartRecoveryTerminalDeliveryEvidence[] | undefined {
@@ -428,7 +508,8 @@ export function mergeRestartRecoveryTerminalRunIds(
   const appendedRunIds = (normalizeRestartRecoveryTerminalRunIds(appended) ?? []).filter(
     (runId) => !currentSet.has(runId),
   );
-  return normalizeRestartRecoveryTerminalRunIds([...currentRunIds, ...appendedRunIds]);
+  const bounded = [...currentRunIds, ...appendedRunIds].slice(-MAX_TERMINAL_RUN_IDS);
+  return bounded.length > 0 ? bounded : undefined;
 }
 
 export function hasRestartRecoveryTerminalRun(
@@ -439,6 +520,36 @@ export function hasRestartRecoveryTerminalRun(
     normalizeRestartRecoveryTerminalRunIds(entry?.restartRecoveryTerminalRunIds)?.includes(
       runId,
     ) === true
+  );
+}
+
+/** An unadopted input retains same-ID retry custody until execution claims it. */
+export function isRetryableUnadoptedChatClaim(
+  entry: InternalSessionEntry | undefined,
+  clientRunId = entry?.restartRecoveryDeliveryRunId,
+): entry is InternalSessionEntry & { restartRecoveryDeliveryRequestFingerprint: string } {
+  return Boolean(
+    entry &&
+    clientRunId !== undefined &&
+    entry.abortedLastRun !== true &&
+    (entry.status === "failed" || entry.status === "killed") &&
+    entry.restartRecoveryDeliveryContext === undefined &&
+    entry.restartRecoveryDeliveryRunId === clientRunId &&
+    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+    entry.restartRecoveryDeliveryRequestFingerprint &&
+    !entry.mainRestartRecovery &&
+    !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)),
+  );
+}
+
+/** Recovery custody survives process loss independently of the last run's outcome. */
+export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefined): boolean {
+  return Boolean(
+    entry?.mainRestartRecovery ||
+    entry?.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)) ||
+    entry?.restartRecoveryDeliveryRunId ||
+    entry?.pendingFinalDelivery,
   );
 }
 
@@ -455,13 +566,6 @@ export function hasRestartRecoverySourceClaim(
   );
 }
 
-export function hasActiveRestartRecoverySourceClaim(
-  entry: SessionEntry | null | undefined,
-  sourceTurnId: string,
-): entry is SessionEntry {
-  return entry?.status === "running" && hasRestartRecoverySourceClaim(entry, sourceTurnId);
-}
-
 /** Clears exact active ownership and optionally records its client source as terminal. */
 export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
@@ -469,7 +573,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
   terminalRunId?: string;
   terminalSourceRunId?: string;
-}): Partial<SessionEntry> {
+}): Partial<InternalSessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
@@ -484,7 +588,21 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     params.recordTerminalSource && sourceRunId && params.terminalDeliveryEvidence
       ? mergeRestartRecoveryTerminalDeliveryEvidence(
           params.entry.restartRecoveryTerminalDeliveryEvidence,
-          [{ runId: sourceRunId, ...params.terminalDeliveryEvidence }],
+          [
+            {
+              runId: sourceRunId,
+              ...params.terminalDeliveryEvidence,
+              ...(params.entry.restartRecoveryHarnessCompletion?.sourceRunId === sourceRunId
+                ? {
+                    harnessCompletion: params.entry.restartRecoveryHarnessCompletion,
+                    deliveryContext: params.entry.restartRecoveryDeliveryContext,
+                  }
+                : {}),
+              transcriptRunId:
+                normalizeRunId(params.terminalRunId) ??
+                normalizeRunId(params.entry.restartRecoveryDeliveryRunId),
+            },
+          ],
         )
       : undefined;
   return {
@@ -498,6 +616,8 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
+    restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,

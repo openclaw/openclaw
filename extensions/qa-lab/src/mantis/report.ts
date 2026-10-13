@@ -25,6 +25,9 @@ export type MantisCrabboxReportSummary = {
   status: "pass" | "fail";
 };
 
+export type MantisCrabboxRunResult = MantisCrabboxReportSummary["artifacts"] &
+  Pick<MantisCrabboxReportSummary, "outputDir" | "status">;
+
 export function renderMantisCrabboxReport(params: {
   afterArtifacts?: MantisReportLine[];
   artifactRows: MantisReportLine[];

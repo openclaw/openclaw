@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isCanonicalTerminalUploadBase64,
@@ -19,9 +20,12 @@ import {
   TERMINAL_UPLOAD_RETENTION_MS,
   terminalUploadDecodedSize,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type { TerminalUploadResult as ProtocolTerminalUploadResult } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { logWarn } from "../logger.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
@@ -32,9 +36,8 @@ const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 const MAX_RETAINED_DIRECTORIES = 64;
 const MAX_STAGED_NAME_BYTES = 180;
-const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const uploadLocks = createFileLockManager("openclaw.terminal-upload");
+const pendingUploadLockReleases = new Map<string, () => Promise<void>>();
 const uploadQueue = new BoundedSerialQueue({
   maxPendingCount: MAX_RETAINED_DIRECTORIES,
   maxPendingWeight: Math.ceil(MAX_RETAINED_BYTES / 3) * 4,
@@ -67,36 +70,17 @@ function resolveTerminalUploadRoot(options?: TerminalUploadRootOptions): string 
 export type TerminalUploadFile = {
   name: string;
   contentBase64: string;
+  /** Host-only client policy, carried unchanged through the terminal staging adapter. */
+  assertCommitAllowed?: () => void;
 };
 
-export type TerminalUploadResult = {
-  path: string;
-  size: number;
-};
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const character of value) {
-    const nextBytes = Buffer.byteLength(character, "utf8");
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += character;
-    bytes += nextBytes;
-  }
-  return result;
-}
+export type TerminalUploadResult = ProtocolTerminalUploadResult;
 
 function sanitizeTerminalUploadName(name: string): string {
-  const basename = path.posix.basename(name.replaceAll("\\", "/"));
-  const cleaned = basename
-    .replace(PORTABLE_NAME_FORBIDDEN, "_")
-    .trim()
-    .replace(/[. ]+$/u, "");
-  const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
-  const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  return truncateUtf8(safe, MAX_STAGED_NAME_BYTES) || "upload";
+  const safe = sanitizeUntrustedFileName(name, "upload").replace(/[!%]/gu, "_");
+  const truncated = truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES).replace(/[. ]+$/u, "");
+  // Truncation can expose a device name hidden by trailing padding.
+  return sanitizeUntrustedFileName(truncated, "upload");
 }
 
 function validateTerminalUpload(contentBase64: string): number {
@@ -110,13 +94,6 @@ function validateTerminalUpload(contentBase64: string): number {
     throw new Error("invalid terminal upload encoding");
   }
   return terminalUploadDecodedSize(contentBase64);
-}
-
-function stagingLimitError(): Error {
-  return new Error(
-    "terminal upload staging limit reached (256 MiB or 64 files). " +
-      "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
-  );
 }
 
 function cleanupState(root: string, retentionMs?: number): CleanupState {
@@ -138,13 +115,15 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
     clearTimeout(state.timer);
   }
   state.nextAt = at;
-  state.timer = setTimeout(
-    () => {
-      state.timer = undefined;
-      state.nextAt = undefined;
-      void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
-    },
-    Math.max(0, at - Date.now()),
+  state.timer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        state.timer = undefined;
+        state.nextAt = undefined;
+        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+      },
+      Math.max(0, at - Date.now()),
+    ),
   );
   state.timer.unref?.();
 }
@@ -160,6 +139,7 @@ async function withUploadLock<T>(
   });
   const lockDirectory = path.join(privateRoot, "terminal-upload-lock");
   await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+  await pendingUploadLockReleases.get(root)?.();
   const staleOwner = ({ payload }: { payload: unknown }) =>
     isLockOwnerDefinitelyStale({ payload: asNullableRecord(payload) });
   const lock = await uploadLocks
@@ -176,10 +156,16 @@ async function withUploadLock<T>(
     })
     .catch((error: unknown) => {
       if (hasErrnoCode(error, "file_lock_timeout") || hasErrnoCode(error, "file_lock_stale")) {
+        const relativeLockDirectory = path.relative(root, lockDirectory);
+        const recoveryLocation =
+          process.platform === "win32"
+            ? `${path.join(".openclaw", "tmp", relativeLockDirectory)} under the home directory of the account running this terminal's Gateway or node host`
+            : `${relativeLockDirectory} under the system temporary directory used by this terminal's Gateway or node-host process`;
         throw new Error(
           "terminal upload staging is busy; retry after other uploads finish. " +
-            "If it stays blocked after a crash, stop all Gateway and node-host processes using " +
-            `this staging directory, remove the lock directory ${lockDirectory}, then restart them.`,
+            `If it stays blocked after a crash, locate ${recoveryLocation}. ` +
+            "Stop all Gateway and node-host processes using that staging root, " +
+            "remove only this lock directory, then restart them.",
           { cause: error },
         );
       }
@@ -192,7 +178,16 @@ async function withUploadLock<T>(
       }
     });
   } finally {
-    await lock.release();
+    // A failed release retains fs-safe's held entry. Only finished callbacks
+    // publish a retry, so recovery can never release an active upload or scan.
+    const release = async () => {
+      await lock.release();
+      if (pendingUploadLockReleases.get(root) === release) {
+        pendingUploadLockReleases.delete(root);
+      }
+    };
+    pendingUploadLockReleases.set(root, release);
+    await release();
   }
 }
 
@@ -311,15 +306,13 @@ async function scanUploads(
             await assertHeld();
             try {
               await rmdir(directory);
-              state.deadlines.delete(directory);
-              continue;
             } catch (error) {
-              if (hasErrnoCode(error, "ENOENT")) {
-                state.deadlines.delete(directory);
-                continue;
+              if (!hasErrnoCode(error, "ENOENT")) {
+                throw error;
               }
-              throw error;
             }
+            state.deadlines.delete(directory);
+            continue;
           }
           bytes += usage.bytes;
         }
@@ -351,11 +344,9 @@ async function scanUploads(
   return { bytes, directories };
 }
 
-async function runTerminalUploadCleanupRecovery(options?: {
-  tempRoot?: string;
-  retentionMs?: number;
-  nowMs?: number;
-}): Promise<void> {
+async function runTerminalUploadCleanupRecovery(
+  options: Parameters<typeof ensureTerminalUploadCleanup>[0],
+): Promise<void> {
   const requestedRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
   let root = path.resolve(requestedRoot);
   try {
@@ -399,10 +390,11 @@ export async function stageTerminalUpload(
   file: TerminalUploadFile,
   options?: TerminalUploadRootOptions & { tempRoot?: string; cleanupAfterMs?: number },
 ): Promise<TerminalUploadResult> {
-  const { name, contentBase64 } = file;
+  const { name, contentBase64, assertCommitAllowed } = file;
   const size = validateTerminalUpload(contentBase64);
   const admitted = uploadQueue.enqueue(
     async () => {
+      assertCommitAllowed?.();
       const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
       if ((options?.platform ?? process.platform) === "win32" && !options?.tempRoot) {
         // The user profile supplies the restrictive DACL, including for the root lock.
@@ -416,9 +408,13 @@ export async function stageTerminalUpload(
           retained.directories >= MAX_RETAINED_DIRECTORIES ||
           retained.bytes + size > MAX_RETAINED_BYTES
         ) {
-          throw stagingLimitError();
+          throw new Error(
+            "terminal upload staging limit reached (256 MiB or 64 files). " +
+              "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
+          );
         }
         await assertHeld();
+        assertCommitAllowed?.();
         const directory = await mkdtemp(path.join(root, TERMINAL_UPLOAD_PREFIX));
         const targetPath = path.join(directory, sanitizeTerminalUploadName(name));
         let identity: { dev: bigint; ino: bigint } | undefined;
@@ -426,6 +422,7 @@ export async function stageTerminalUpload(
           const { dev, ino } = await lstat(directory, { bigint: true });
           identity = { dev, ino };
           await assertHeld();
+          assertCommitAllowed?.();
           await writeFile(targetPath, Buffer.from(contentBase64, "base64"), {
             flag: "wx",
             mode: 0o600,

@@ -1,0 +1,4 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenClaw-Tauri"
+}
