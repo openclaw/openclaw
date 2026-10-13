@@ -902,6 +902,7 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
+      customInlineButtonHint: params.runtimeInfo?.customInlineButtonHint,
       runtimeChannel,
       runtimeChatType,
       messageChannelOptions,

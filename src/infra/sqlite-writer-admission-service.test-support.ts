@@ -1,12 +1,59 @@
-import { MessageChannel } from "node:worker_threads";
+import { MessageChannel, type MessagePort } from "node:worker_threads";
+import type { ProfileAuthorityDescriptor } from "../state/user-profile-authority.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import type {
-  SqliteProfileAdmissionRequest,
-  SqliteWriterAdmissionConnection,
-  SqliteWriterAdmissionRequest,
-  SqliteWriterAdmissionResult,
-} from "./sqlite-writer-admission-contract.js";
+import { SqliteWorkerAdmissionTimeoutError, SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  readSqliteWorkerRequestCustody,
+  type SqliteWorkerRequestCustodyDescriptor,
+} from "./sqlite-worker-request-custody.js";
+import type { SqliteWriterAdmissionResult } from "./sqlite-writer-admission-contract.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
+
+/** Profile checks alone do not grant a native write or replace the final host COMMIT guard. */
+type SqliteProfileAdmissionRequest = {
+  kind: "assert-bound-revision" | "read-current-settled-facts";
+  authority: ProfileAuthorityDescriptor;
+};
+
+type SqliteWriterAdmissionConnection = {
+  port: MessagePort;
+  lifetime: Int32Array<SharedArrayBuffer>;
+};
+
+type SqliteWriterAdmissionRequest =
+  | SqliteProfileAdmissionRequest
+  | { kind: "connect"; port: MessagePort };
+
+/** This checks broker custody only; other authority owners and final COMMIT remain required. */
+export function assertSqliteWriterBrokerAdmission(
+  connection: SqliteWriterAdmissionConnection,
+  custody: SqliteWorkerRequestCustodyDescriptor,
+): void {
+  const current = () =>
+    Atomics.load(connection.lifetime, 0) === 1 && readSqliteWorkerRequestCustody(custody);
+  if (!current()) {
+    throw new SqliteWorkerError("SQLite broker admission is revoked", "closed");
+  }
+  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const deadline = process.hrtime.bigint() + 30_000_000_000n;
+  connection.port.postMessage({ custody, decision }, []);
+  while (Atomics.load(decision, 0) === 0) {
+    const remainingMs = Number(deadline - process.hrtime.bigint()) / 1e6;
+    if (remainingMs <= 0) {
+      // A late service reply cannot turn an expired request into a grant.
+      Atomics.compareExchange(decision, 0, 0, 3);
+    } else {
+      Atomics.wait(decision, 0, 0, remainingMs);
+    }
+  }
+  const result = Atomics.load(decision, 0);
+  if (result === 3) {
+    throw new SqliteWorkerAdmissionTimeoutError();
+  }
+  if (result !== 1 || !current()) {
+    throw new SqliteWorkerError("SQLite broker admission is revoked", "closed");
+  }
+}
 
 /** Read-only prerequisite service; mixed authority and native settlement remain host-owned. */
 export function createSqliteWriterAdmissionService() {
