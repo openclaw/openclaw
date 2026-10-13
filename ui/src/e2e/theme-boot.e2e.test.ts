@@ -331,7 +331,7 @@ suite.define(() => {
             await page.locator(".agent-chat__composer-combobox textarea").waitFor();
             await assertThemeFrames(page, expectedAppearance);
             const newThread = page.locator(
-              "openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session",
+              "openclaw-app-sidebar .sidebar-rail .sidebar-new-session",
             );
             await page
               .locator(

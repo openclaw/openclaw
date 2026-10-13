@@ -350,12 +350,12 @@ suite.define(() => {
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await expectFocused(workspace);
 
-        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         const newMenu = sidebar.locator(".sidebar-new-session-menu");
         await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
         await page.keyboard.press("Escape");
         expect(await newMenu.locator("wa-dropdown-item").count()).toBe(4);
-        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         expect(
           await newMenu
             .locator("wa-dropdown-item a")

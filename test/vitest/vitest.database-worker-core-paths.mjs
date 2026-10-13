@@ -143,14 +143,18 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/auth-plan.auth-pin.test.ts",
   "src/auto-reply/reply/agent-runner-execution-cli-auth.test.ts",
   "src/commands/models/shared.auth-store.test.ts",
+  "src/commands/doctor/shared/xai-auto-retirement.test.ts",
   "src/flows/doctor-health-contributions.auth-import-order.test.ts",
   "src/secrets/apply.test.ts",
   "src/secrets/runtime-state.test.ts",
   "src/secrets/runtime.auth-migration-isolation.test.ts",
   "src/secrets/runtime.fast-path.test.ts",
   "src/sessions/auth-profile-preservation.test.ts",
+  "src/system-agent/approval-intent.resources.test.ts",
+  "src/test-utils/openclaw-test-state.auth.test.ts",
   "src/test-utils/openclaw-test-state.test.ts",
   "test/test-env.test.ts",
+  "test/e2e/qa-lab/runtime/quota-reset-provider.test.ts",
   "src/agents/model-auth-label.personal-profile.test.ts",
   "src/agents/model-auth.workspace-plugin.test.ts",
   "src/agents/model-fallback.personal-profile.test.ts",
@@ -1273,6 +1277,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/commands/doctor/shared/xai-auto-retirement.test.ts", "unitFast"],
   ["src/agents/auth-profiles/session-override.model-endpoint.test.ts", "unitFast"],
   ["src/agents/harness/execution-environment.worker.test.ts", "unitFastIsolated"],
   ["src/acp/event-ledger.prepared.test.ts", "unitFastIsolated"],

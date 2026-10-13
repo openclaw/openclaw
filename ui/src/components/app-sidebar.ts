@@ -633,7 +633,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           }
         }}
       >
-        ${renderSidebarRail(this)}
+        ${renderSidebarRail(this, this.sidebarAgentsMode === "roster" ? renderSidebarNewSessionMenu(this) : undefined)}
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           <div class="sidebar-shell__content">
             <div
@@ -646,7 +646,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   : this.navigationView === "online"
                     ? renderAppSidebarOnline(this)
                     : html`
-                        ${renderSessionListToolbar(this, this.sidebarAgentsMode === "roster" ? renderSidebarNewSessionMenu(this) : undefined)}
+                        ${renderSessionListToolbar(this)}
                         <div
                           class="sidebar-session-content"
                           ?hidden=${Boolean(this.contextualSidebar)}

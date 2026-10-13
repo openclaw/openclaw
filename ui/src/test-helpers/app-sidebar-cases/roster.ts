@@ -321,6 +321,17 @@ describe("AppSidebar agent roster", () => {
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     const menus = sidebar.querySelectorAll(".sidebar-new-session-menu");
     expect(menus).toHaveLength(1);
+    const trigger = menus[0]!.querySelector(".sidebar-new-session");
+    for (const view of ["pages", "online", "sessions"] as const) {
+      for (const collapsed of [false, true]) {
+        sidebar.navigationView = view;
+        sidebar.navigationCollapsed = collapsed;
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector(".sidebar-rail .sidebar-new-session")).toBe(trigger);
+        expect(sidebar.querySelectorAll(".sidebar-new-session-menu")).toHaveLength(1);
+        expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
+      }
+    }
     for (const menu of menus) {
       expect(menu.querySelectorAll("wa-dropdown-item")).toHaveLength(0);
       menu.dispatchEvent(new Event("wa-show"));

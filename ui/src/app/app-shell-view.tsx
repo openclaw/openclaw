@@ -3,7 +3,10 @@ import { createEffect, createMemo, Show } from "solid-js";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
-import { renderNewSessionLink } from "../components/new-session-link.ts";
+import {
+  renderContextNewSessionAction,
+  renderNewSessionLink,
+} from "../components/new-session-link.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -135,6 +138,20 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
+            prop:newSessionAction={
+              view().mobileNavLayout &&
+              !view().mergedChatChrome &&
+              !view().navDrawerOpen &&
+              !view().onboarding &&
+              !view().nativeWebChrome &&
+              !document.documentElement.classList.contains("openclaw-native-nav")
+                ? renderContextNewSessionAction(
+                    view().context,
+                    "header-new-session",
+                    view().selectedAgentId,
+                  )
+                : undefined
+            }
             prop:onOpenPalette={props.host.openPalette}
             prop:onToggleDrawer={props.host.toggleNavigationSurface}
           />
@@ -158,19 +175,21 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
                 ref={createLitContentRef(() => icons.panelLeftOpen)}
               />
             </openclaw-tooltip>
-            <LitRouteHost
-              renderValue={() =>
-                renderNewSessionLink({
-                  basePath: view().context.basePath,
-                  agentId: view().selectedAgentId,
-                  className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
-                  label: t("chat.runControls.newSession"),
-                  showShortcut: true,
-                  disabledReason: view().newSessionDisabledReason,
-                  onOpen: props.host.viewCallbacks.requestOpenNewSession,
-                })
-              }
-            />
+            <Show when={!view().railAvailable}>
+              <LitRouteHost
+                renderValue={() =>
+                  renderNewSessionLink({
+                    basePath: view().context.basePath,
+                    agentId: view().selectedAgentId,
+                    className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                    label: t("chat.runControls.newSession"),
+                    showShortcut: true,
+                    disabledReason: view().newSessionDisabledReason,
+                    onOpen: props.host.viewCallbacks.requestOpenNewSession,
+                  })
+                }
+              />
+            </Show>
             <openclaw-tooltip
               prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
             >

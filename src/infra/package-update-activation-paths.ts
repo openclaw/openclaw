@@ -6,6 +6,7 @@ import { resolveExecutablePath } from "./executable-path.js";
 import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
@@ -97,7 +98,8 @@ export function privatePackageActivationIdentity(
       .replace(/[^A-Za-z0-9_.-]/gu, "_")
       .slice(0, 64);
     const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
-    throw new Error(
+    throw packageUpdateRefusal(
+      "package-recovery-permissions-unsafe",
       `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.${!directory && stat.nlink !== 1 ? " Run openclaw doctor --fix." : ""}`,
     );
   }

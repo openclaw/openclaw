@@ -590,12 +590,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI-only jobs use the 16-class when every group has
-  one or two explicit files and the existing two-worker fallback, without build,
-  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
-  inventories, runtime selection, timing identities, and process boundaries.
-  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
-  choice for retained Blacksmith CLI jobs.
+- Precisely selected serial CLI and Gateway client jobs use the 16-class when
+  every group belongs to either family, has one or two explicit files, and keeps
+  its two-worker fallback, without build, dist, memory, or large-runner anchors.
+  Gateway client groups must pair `agentic-gateway-core-2` with
+  `vitest.gateway-client.config.ts`; other Gateway owners retain planned capacity.
+  Apply capacity after packing; preserve inventories, runtime selection, timing
+  identities, and process boundaries. Full families retain their planned capacity.
+  RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
