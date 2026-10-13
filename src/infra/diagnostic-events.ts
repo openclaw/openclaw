@@ -802,6 +802,17 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | (DiagnosticBaseEvent & {
+      type: "secret.egress";
+      outcome: "forwarded" | "refused";
+      substituted: boolean;
+    })
+  | (DiagnosticBaseEvent & {
+      type: "tool.catalog";
+      source: "builtin" | "client";
+      mode: "code-mode" | "tool-search";
+      toolCount: number;
+    })
   | DiagnosticContextAssembledEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
