@@ -26,7 +26,7 @@ export function runGatesBash(
   } = {},
 ) {
   return spawnSync(
-    "bash",
+    process.platform === "darwin" ? "/bin/bash" : "bash",
     [
       "-c",
       [

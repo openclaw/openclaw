@@ -91,24 +91,22 @@ async function installProgressGateway(page: Page, sessionKey: string, canonicalK
 }
 
 suite.define(() => {
-  it("keeps Details choices through transcript input, reconnect, navigation, and scope reset", async () => {
-    const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:main";
-    const gateway = await installProgressGateway(page, sessionKey);
-    const card = page.locator('[data-progress-card-placement="details"]');
-    const panel = page.locator(".chat-details:popover-open");
-    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-    const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
-    const sidebar = page.locator("openclaw-app-sidebar");
-    const openSettings = async () => {
-      await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-identity-menu")
-        .getByRole("menuitem", { exact: true, name: "Settings" })
-        .click();
-    };
-    try {
+  it("keeps Details choices through transcript input, reconnect, navigation, and scope reset", () =>
+    suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:main";
+      const gateway = await installProgressGateway(page, sessionKey);
+      const card = page.locator('[data-progress-card-placement="details"]');
+      const panel = page.locator(".chat-details:popover-open");
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const openSettings = async () => {
+        await sidebar.locator(".sidebar-identity-card").click();
+        await sidebar
+          .locator("wa-dropdown.sidebar-identity-menu")
+          .getByRole("menuitem", { exact: true, name: "Settings" })
+          .click();
+      };
       await page.goto(suite.server.baseUrl + "chat");
       await card.waitFor({ state: "attached" });
       expect(await panel.count()).toBe(0);
@@ -193,10 +191,7 @@ suite.define(() => {
       expect(await open()).toBe(true);
       await retainedCard!.dispose();
       await retainedPane!.dispose();
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
   it.each(["open", "closed"] as const)(
     "keeps a manually %s Details card after resolving a stored short-name pane through reconnect",

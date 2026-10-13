@@ -8,10 +8,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
-import type { AppTopbar } from "../components/app-topbar.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import {
   admitStoredChatComposerQueueItem,
   persistChatComposerState,
@@ -293,8 +293,7 @@ describe("application shell pairing access", () => {
         };
       }
       const sidebar = await renderSidebar();
-      const topbar =
-        container.querySelector<InstanceType<typeof AppTopbar.Element>>("openclaw-app-topbar")!;
+      const topbar = container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
       document.body.append(sidebar, topbar);
       await settleLitElements([sidebar, topbar]);
       await vi.dynamicImportSettled();

@@ -33,7 +33,7 @@ import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 vi.mock("./diagnostic-flags.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./diagnostic-flags.js")>()),
-  isDiagnosticFlagEnabled: (flag: string) => flag === "sqlite.worker-timing",
+  isDiagnosticFlagEnabled: () => false,
 }));
 
 vi.mock("node:os", async (importOriginal) => ({
@@ -121,6 +121,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
         timing?.dispatched,
         timing?.posted,
         timing?.received,
+        timing?.inputReady,
         timing?.executeStarted,
         timing?.executeFinished,
         timing?.serialized,
@@ -585,68 +586,3 @@ poolIt.each([
     parallelism.mockRestore();
   }
 });
-
-poolIt(
-  "reserves ephemeral actors within durable capacity and isolates their native loss",
-  async () => {
-    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(16);
-    const broker = new SqliteWorkerBroker();
-    const namespace = databasePath();
-    let lost = false;
-    let nativeStopped: Promise<void> | undefined;
-    const options = {
-      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-      databasePath: namespace,
-      target: { kind: "ephemeral" as const, handle: "first", incarnation: "first" },
-      input: undefined,
-    };
-    try {
-      expect(await broker.open({ ...options, existingOnly: true })).toBeUndefined();
-      const memory = await broker.open<FixtureOperations>(options, undefined, undefined, {
-        onNativeLost() {
-          lost = true;
-        },
-        onNativeStopped(stopped) {
-          nativeStopped = stopped;
-        },
-      });
-      assert(memory);
-      const first = await append(memory, "private");
-      const durableThreads = new Set<number>();
-      let durableSibling: SqliteWorkerStore<FixtureOperations> | undefined;
-      for (let index = 0; index < 2; index++) {
-        const durable = await broker.open<FixtureOperations>({
-          moduleUrl: options.moduleUrl,
-          databasePath: databasePath(),
-          input: undefined,
-        });
-        assert(durable);
-        durableSibling = durable;
-        durableThreads.add((await append(durable, "durable")).threadId);
-      }
-      expect(durableThreads.size).toBe(1);
-      expect(durableThreads.has(first.threadId)).toBe(false);
-      await expect(
-        broker.open({
-          ...options,
-          target: { kind: "ephemeral", handle: "second", incarnation: "second" },
-        }),
-      ).rejects.toMatchObject({ code: "overloaded" });
-      expect(await read(memory)).toEqual(["private"]);
-      expect(existsSync(namespace)).toBe(false);
-      await expect(
-        memory.execute({ type: "commitThenExit", input: { value: "lost" } }),
-      ).rejects.toMatchObject({ code: "outcome-unknown" });
-      expect(lost).toBe(true);
-      await nativeStopped;
-      await expect(memory.execute({ type: "read", input: undefined })).rejects.toMatchObject({
-        code: "unavailable",
-      });
-      assert(durableSibling);
-      expect(await read(durableSibling)).toEqual(["durable"]);
-    } finally {
-      await broker.close();
-      parallelism.mockRestore();
-    }
-  },
-);

@@ -24,8 +24,10 @@ sits directly below the avatar, separated from navigation by a divider. It stays
 the same place in Pages, Sessions, and Online, even when the list is collapsed.
 It opens New session for the selected agent; in team mode, choose an agent from
 its menu first. Command-palette search sits below the three view buttons.
-Click the selected view again to collapse or expand its list, or press ⌘B on
-Mac or Ctrl+B on Windows/Linux. Selecting a different view opens its list.
+Click the selected view again to collapse its list, or press ⌘B on
+Mac or Ctrl+B on Windows/Linux. While the list is hidden, none of the three view
+buttons is selected; click any view to open its list. Selecting a different view
+while the list is open switches directly to that view.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 On desktop, opening Home or a pinned session, page, plugin, or person collapses
@@ -56,12 +58,15 @@ is set. Only a running ring and unread dot decorate these shortcuts.
 Each view has one header row. In Sessions, the title is the owner-filter chip:
 **My sessions**, **Involving me**, **All owners**, or the selected person's name.
 Open the chip to choose whose sessions appear. **Involving me** also includes
-participation and mentions. The separate filter button controls the remaining
-session filters. New conversation stays in the rail rather than moving into this
-header. On mobile, an equivalent **+** stays in the chat header or page topbar
-while the drawer is closed. Opening the drawer moves the action back to the rail,
-without a second header button. In team mode, the header action opens the same
-agent picker as the rail. Native apps keep their native creation controls.
+participation and mentions. External catalog entries appear in **Involving me**
+only when their adopted OpenClaw conversation is in the Gateway-filtered list.
+Shared or imported catalog access alone does not establish involvement; use
+**All owners** to browse those sources. The separate filter button controls the
+remaining session filters. New conversation stays in the rail rather than moving
+into this header. On mobile, an equivalent **+** stays in the chat header or page
+topbar while the drawer is closed. Opening the drawer moves the action back to the
+rail, without a second header button. In team mode, the header action opens the
+same agent picker as the rail. Native apps keep their native creation controls.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -694,7 +699,9 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
-`projects.list` returns recorded projects without checking Git. Recent projects
+`projects.list` reads committed registry rows through a read-only worker without
+checking Git or joining unrelated state writes. Registration initializes the
+registry when needed; listing an empty registry does not create it. Recent projects
 and folders do not wait for session display details to refresh. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
 checkouts from visible sessions and managed worktrees. Listings return the last

@@ -411,6 +411,8 @@ it.each([false, true])(
       expect(recordsFor(location)).toHaveLength(1);
       expect(await command("close")).toBe("close");
       expect(recordsFor(location)).toHaveLength(1);
+      expect(await command("open")).toEqual({ value: 42, admissionId });
+      expect(await command("close")).toBe("close");
       const siblingReply = once(siblingWorker, "message");
       siblingWorker.postMessage("read", []);
       expect((await siblingReply)[0]).toEqual({ value: 42, admissionId });
@@ -427,9 +429,19 @@ it.each([false, true])(
         value: 42,
         admissionId: getAdmittedSqliteSchemaFacts(database)?.admissionId,
       });
-      database.close();
-      expect(recordsFor(location)).toHaveLength(1);
+      const retiredOwner = worker.threadId;
+      const stale = structuredClone(recordsFor(location));
+      expect(stale[0]!.references.has(retiredOwner)).toBe(true);
       await worker.terminate();
+      const inherited = readSqliteDatabaseAdmissions(
+        getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+      )?.find((record) => record.location === location);
+      expect(inherited).toBeDefined();
+      expect(inherited!.references.has(retiredOwner)).toBe(false);
+      installSqliteDatabaseAdmissions(stale);
+      expect(recordsFor(location)[0]!.references.has(retiredOwner)).toBe(false);
+      expect(getAdmittedSqliteSchemaFacts(database)?.tables.has("proof")).toBe(true);
+      database.close();
       expect(recordsFor(location)).toEqual([]);
     } finally {
       await sibling?.worker.terminate();

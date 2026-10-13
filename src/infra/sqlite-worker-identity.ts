@@ -11,15 +11,15 @@ export type DatabaseFileIdentity = Readonly<{
 export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPath: string }>;
 
 // The physical host policy stays fixed across every admission in this process.
-const useDatabaseBirthtime = process.platform !== "linux";
+const useDatabaseBirthtime = process.platform !== "linux" && process.platform !== "android";
 
 export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">): string {
   return `${file.dev}:${file.ino}`;
 }
 
 export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
-  // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
-  // Keep the unknown creation-time value stable across ordinary database writes.
+  // Node does not expose STATX_BTIME availability on Linux or Android (Termux) and can
+  // substitute ctime. Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
 }
 

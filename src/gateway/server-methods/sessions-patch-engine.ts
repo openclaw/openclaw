@@ -184,7 +184,7 @@ export async function executeSessionPatchMutations(params: {
       fullPatch,
       index,
       ...(initialEntry ? { initialEntry } : {}),
-      initialStoreKeys: [...candidateKeys],
+      initialTarget: resolved,
       key,
       lifecycleIdentities: [key, canonicalKey, ...candidateKeys, initialEntry?.sessionId],
       ...(requestedAgentId ? { requestedAgentId } : {}),
@@ -233,8 +233,11 @@ export async function executeSessionPatchMutations(params: {
   );
 
   if (activePrepared.length > 0) {
-    const releaseArchiveDrains = async () =>
-      activePrepared.forEach((target) => releaseSessionPatchArchive(target.archivePreparation));
+    const releaseArchiveDrains = async () => {
+      await Promise.all(
+        activePrepared.map((target) => releaseSessionPatchArchive(target.archivePreparation)),
+      );
+    };
     try {
       // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
       timing?.mark("archive");
@@ -298,7 +301,7 @@ export async function executeSessionPatchMutations(params: {
                 const selectedSessionKeys = group.flatMap((target) => [
                   target.key,
                   target.canonicalKey,
-                  ...target.initialStoreKeys,
+                  ...target.initialTarget.storeKeys,
                 ]);
                 const archiveTransitions = new Map<number, ArchiveTransition>();
                 const createdSessions: Parameters<

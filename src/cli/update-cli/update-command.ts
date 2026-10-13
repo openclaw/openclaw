@@ -2,7 +2,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -317,18 +316,11 @@ async function updateCommandInternal(
       stop: presentation.stop,
       refuseUpdate,
     };
-    const pluginCount = Object.keys(configSnapshot.config.plugins?.entries ?? {}).length;
     const activateCurrentCore = async () => {
       run.executorFence = await executor.enter(root, {
         preflight: true,
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs: (run.activationTimeoutMs ??=
-          timeoutMs === undefined
-            ? undefined
-            : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-                env: run.env,
-                pluginCount,
-              })),
+        activationTimeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
       });
       run.executorFence.assertCurrent();
       assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
@@ -422,7 +414,7 @@ async function updateCommandInternal(
       }
       const fence = await executor.enter(root, {
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs,
+        activationTimeoutMs: run.deadline?.remainingMs() ?? activationTimeoutMs,
       });
       admitExecutor(fence);
       run.activationTimeoutMs ??= activationTimeoutMs;

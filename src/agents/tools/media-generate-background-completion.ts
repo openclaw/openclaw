@@ -36,6 +36,46 @@ export type MediaGenerationTaskHandle = {
   taskLabel: string;
 };
 
+function isMediaGenerationSourceCurrent(handle: MediaGenerationTaskHandle): boolean {
+  const target = handle.requesterTranscript;
+  return Boolean(
+    target &&
+    isMediaGenerationOperationCurrent(handle.runId) &&
+    sameSessionTranscriptStorageEnvironment(
+      target.env,
+      captureSessionTranscriptStorageEnvironment(process.env),
+    ),
+  );
+}
+
+/** Delivery and sandbox writes must belong to the same admitted conversation. */
+export async function readCurrentMediaGenerationRequester(handle: MediaGenerationTaskHandle) {
+  const target = handle.requesterTranscript;
+  if (!target || !isMediaGenerationSourceCurrent(handle)) {
+    return undefined;
+  }
+  const entry = await withSessionEntryReadOnlyInWorker(
+    { ...target, hydrateSkillPromptRefs: false },
+    () => {
+      if (!isMediaGenerationSourceCurrent(handle)) {
+        throw new Error("Media completion source is no longer current");
+      }
+    },
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return sessionMatchesExpectedTranscriptTurn(read.value ? { entry: read.value } : undefined, {
+        expectedSessionId: target.sessionId,
+        expectedLifecycleRevision: target.lifecycleRevision,
+      })
+        ? read.value
+        : undefined;
+    },
+  );
+  return isMediaGenerationSourceCurrent(handle) ? entry : undefined;
+}
+
 /** Preserve an undelivered result in its original conversation without resending it. */
 export async function retainBlockedMediaCompletion(params: {
   handle: MediaGenerationTaskHandle | null;
@@ -49,13 +89,7 @@ export async function retainBlockedMediaCompletion(params: {
     return;
   }
   const assertCurrent = () => {
-    if (
-      !isMediaGenerationOperationCurrent(handle.runId) ||
-      !sameSessionTranscriptStorageEnvironment(
-        target.env,
-        captureSessionTranscriptStorageEnvironment(process.env),
-      )
-    ) {
+    if (!isMediaGenerationSourceCurrent(handle)) {
       throw new Error("Media generation owner is no longer current");
     }
   };
@@ -127,42 +161,10 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     return { status: "delivered" };
   }
   const target = handle.requesterTranscript;
-  const isSourceCurrent = () =>
-    Boolean(
-      target &&
-      isMediaGenerationOperationCurrent(handle.runId) &&
-      sameSessionTranscriptStorageEnvironment(
-        target.env,
-        captureSessionTranscriptStorageEnvironment(process.env),
-      ),
-    );
-  if (!target || !isSourceCurrent()) {
-    return { status: "permanent_failure" };
-  }
+  const isSourceCurrent = () => isMediaGenerationSourceCurrent(handle);
   let requesterEntry;
   try {
-    requesterEntry = await withSessionEntryReadOnlyInWorker(
-      { ...target, hydrateSkillPromptRefs: false },
-      () => {
-        if (!isSourceCurrent()) {
-          throw new Error("Media completion source is no longer current");
-        }
-      },
-      async (read) => {
-        if (!read.ok) {
-          throw read.error;
-        }
-        return sessionMatchesExpectedTranscriptTurn(
-          read.value ? { entry: read.value } : undefined,
-          {
-            expectedSessionId: target.sessionId,
-            expectedLifecycleRevision: target.lifecycleRevision,
-          },
-        )
-          ? read.value
-          : undefined;
-      },
-    );
+    requesterEntry = await readCurrentMediaGenerationRequester(handle);
   } catch (error) {
     if (!isSourceCurrent()) {
       return { status: "permanent_failure" };
@@ -170,7 +172,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     log.warn("Media completion requester could not be read", { runId: handle.runId, error });
     return { status: "pending" };
   }
-  if (!requesterEntry || !isSourceCurrent()) {
+  if (!target || !requesterEntry || !isSourceCurrent()) {
     return { status: "permanent_failure" };
   }
   const requesterBinding: SessionDeliveryRequesterBinding = {

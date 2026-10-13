@@ -132,7 +132,7 @@ describe("project registry", () => {
     expect(parseProjectGitUrl(input)).toBeNull();
   });
 
-  it("lazily ensures the additive table exactly once per database", async () => {
+  it("leaves an absent registry empty until registration installs its table", async () => {
     const root = tempDirs.make("openclaw-project-schema-");
     const options = { path: path.join(root, "state.sqlite") };
     openOpenClawStateDatabase(options);
@@ -156,6 +156,15 @@ describe("project registry", () => {
       expect.objectContaining({ id: "workspace:main", source: "workspace" }),
     ]);
     expect(await listProjectRegistry({} as OpenClawConfig, options)).toHaveLength(1);
+
+    expect(
+      state.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'projects'")
+        .get(),
+    ).toBeUndefined();
+    const repo = await initializeRepository(root, "registered");
+    const registered = await registerProjectRegistry({ path: repo }, options);
+    expect(await listProjectRegistry({}, options)).toContainEqual(registered);
 
     const rows = state.db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'projects'")

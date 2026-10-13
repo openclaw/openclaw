@@ -14,7 +14,8 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRootSync: () => fixture.root,
 }));
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
   VERSION: "2026.9.4",
   resolveRuntimeServiceBuildId: () => fixture.buildId,
 }));

@@ -86,6 +86,51 @@ describe("finalized tool descriptor snapshots", () => {
     expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
+  it("retains a prepared output schema when another descriptor changes", async () => {
+    const parameters = schema();
+    const outputSchema = schema();
+    const tools = () => [tool(parameters, { outputSchema }), tool(schema(), { name: "changing" })];
+    await attempt(tools()).settle();
+    const warm = attempt(tools());
+    const descriptor = warm.tool();
+    expect(getPublishedRuntimeToolInputSchema(descriptor.outputSchema)).toBeDefined();
+    await warm.settle();
+
+    const next = attempt(tools());
+    expect(next.tool().parameters).toBe(descriptor.parameters);
+    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
+    await next.settle();
+    expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
+  });
+
+  it("isolates nested published schemas from source and consumer mutations", async () => {
+    const nestedSchema = () => ({
+      type: "object",
+      properties: { query: { type: "string", enum: ["first", "second"] } },
+    });
+    const parameters = nestedSchema();
+    const outputSchema = nestedSchema();
+    await attempt([tool(parameters, { outputSchema })]).settle();
+    const descriptor = attempt([tool(parameters, { outputSchema })]).tool();
+
+    parameters.properties.query.type = "number";
+    outputSchema.properties.query.enum.push("source mutation");
+    for (const published of [descriptor.parameters, descriptor.outputSchema]) {
+      assert.ok(published && "properties" in published);
+      const properties = published.properties;
+      assert.ok(properties && typeof properties === "object" && "query" in properties);
+      const query = properties.query;
+      assert.ok(query && typeof query === "object" && "enum" in query);
+      expect(Reflect.set(query, "type", "boolean")).toBe(false);
+      assert.ok(Array.isArray(query.enum));
+      expect(Reflect.set(query.enum, 0, "consumer mutation")).toBe(false);
+    }
+
+    const next = attempt([tool(parameters, { outputSchema })]).tool();
+    expect(next.parameters).toEqual(nestedSchema());
+    expect(next.outputSchema).toEqual(nestedSchema());
+  });
+
   it.each([
     ["provider", { modelProvider: "google" }],
     ["model", { modelId: "other-model" }],
@@ -187,8 +232,8 @@ describe("finalized tool descriptor snapshots", () => {
     const [previousSearch, previousRead] = first;
     const [currentSearch, currentRead] = current;
     assert.ok(previousSearch && previousRead && currentSearch && currentRead);
-    currentSearch.parameters = previousSearch.parameters;
-    currentRead.parameters = previousRead.parameters;
+    expect(currentSearch.parameters).toBe(previousSearch.parameters);
+    expect(currentRead.parameters).toBe(previousRead.parameters);
     const allowed = attempt(current);
     expect((await allowed.tool().execute("allowed", { query: "canary" })).details).toMatchObject({
       skills: [{ name: "guide" }],

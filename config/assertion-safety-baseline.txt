@@ -508,7 +508,7 @@ extensions/mattermost/src/mattermost/slash-commands.ts	1
 extensions/mattermost/src/mattermost/slash-state.ts	1
 extensions/mattermost/src/session-route.ts	1
 extensions/mattermost/src/setup-core.ts	2
-extensions/memory-core/index.ts	4
+extensions/memory-core/index.ts	3
 extensions/memory-core/src/cli-index-search.runtime.ts	1
 extensions/memory-core/src/cli-rem.runtime.ts	1
 extensions/memory-core/src/cli-runtime-common.ts	2
@@ -1708,7 +1708,6 @@ src/commands/configure.wizard.ts	1
 src/commands/daemon-install-helpers.ts	3
 src/commands/docs.ts	2
 src/commands/doctor-agent-memory-schema.ts	1
-src/commands/doctor-auth-flat-profiles.ts	1
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
@@ -1844,7 +1843,7 @@ src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
-src/config/sessions/transcript.ts	9
+src/config/sessions/transcript.ts	8
 src/config/sessions/types.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
@@ -2146,7 +2145,6 @@ src/infra/provider-usage.fetch.minimax.ts	1
 src/infra/push-apns-http2.ts	1
 src/infra/push-apns.relay.ts	1
 src/infra/push-apns.ts	3
-src/infra/push-web.ts	2
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
 src/infra/restart-coordinator.ts	1
@@ -2487,7 +2485,6 @@ src/sessions/session-key-utils.ts	1
 src/sessions/session-lifecycle-admission.ts	1
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
-src/sessions/user-turn-transcript.ts	1
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2
@@ -2624,7 +2621,6 @@ ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1
-ui/src/components/agent-select.ts	2
 ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-render.ts	3
 ui/src/components/app-sidebar-session-catalog-render.ts	4
@@ -2638,12 +2634,10 @@ ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/confirm-dialog.ts	1
 ui/src/components/connect-command.ts	2
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
-ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
@@ -2651,7 +2645,6 @@ ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	1
-ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
 ui/src/components/session-organizer-controller.ts	5

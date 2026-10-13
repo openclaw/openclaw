@@ -200,7 +200,7 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
-  it("rebuilds SQLite usage from committed batch generation facts without a separate watermark read", async () => {
+  it("reuses receipt-covered usage inputs and refreshes after append, rewrite, and rollup replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const probe = await observeUsageWorkerReads(state.stateDir, []);
       await probe.run(async () => {
@@ -258,6 +258,13 @@ describe("session cost usage worker I/O", () => {
           });
         await refresh();
         expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
+        await probe.clear();
+        await refresh();
+        expect(
+          (await probe.read()).filter(
+            (entry) => entry.kind === "transcript-stats" || entry.kind === "cache",
+          ),
+        ).toEqual([]);
         const generation = runOpenClawAgentWriteTransaction(
           (owner) => {
             const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
@@ -291,6 +298,33 @@ describe("session cost usage worker I/O", () => {
         const reads = await probe.read();
         expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);
         expect(reads.filter((entry) => entry.kind === "hot-watermark")).toEqual([]);
+        runOpenClawAgentWriteTransaction(
+          (owner) =>
+            appendTranscriptEventsInTransaction(owner, scope, [message("fourth", "third", 5)], {
+              scheduleProjectionReconcile: false,
+            }),
+          { agentId: scope.agentId, path: database.path },
+        );
+        await probe.clear();
+        await refresh();
+        const appendReads = await probe.read();
+        expect(appendReads.filter((entry) => entry.kind === "cache")).toEqual([]);
+        expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
+
+        // Another in-process writer replaces the derived row. Its receipt must
+        // invalidate the retained rollup, while unchanged transcript stats survive.
+        runOpenClawAgentWriteTransaction(
+          (owner) =>
+            writeSessionCostUsageRollupInDatabase(owner.db, {
+              rollupId: sessionFile,
+              valueJson: new TextEncoder().encode("{}"),
+              blob: null,
+              updatedAt: Date.now(),
+            }),
+          { agentId: scope.agentId, path: database.path },
+        );
+        await refresh();
+        expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
       });
     });
   });

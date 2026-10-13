@@ -77,9 +77,7 @@ export async function dispatchSqliteWorkerJob(
     job.signal?.throwIfAborted();
     assertCurrentJob();
     prepareSqliteWorkerActorContext(actor, job);
-    const databasePath = actor?.target
-      ? undefined
-      : (job.request.stateDatabasePath ?? actor?.databasePath);
+    const databasePath = job.request.stateDatabasePath ?? actor?.databasePath;
     // Retirement must drain even after ordinary database access is revoked.
     if (databasePath && job.request.type !== "close") {
       const assertAccessAllowed = () => {

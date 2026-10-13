@@ -9,6 +9,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
+import * as schemaContracts from "../infra/sqlite-schema-contract.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import {
@@ -33,7 +34,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("reuses a clean closed-WAL receipt without copying the agent database", async () => {
+it("reuses a clean closed-WAL receipt without snapshots or comparison templates", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-clean-startup-") };
   const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env });
   closeOpenClawAgentDatabaseByPath(agentPath);
@@ -42,6 +43,7 @@ it("reuses a clean closed-WAL receipt without copying the agent database", async
   expect(fs.existsSync(`${agentPath}-wal`)).toBe(false);
   expect(fs.existsSync(`${agentPath}-shm`)).toBe(false);
   const before = fs.readFileSync(agentPath);
+  const templates = vi.spyOn(schemaContracts, "getCanonicalSqliteTableNames");
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
     if (pathname === agentPath) {
@@ -59,8 +61,9 @@ it("reuses a clean closed-WAL receipt without copying the agent database", async
     }),
   ).resolves.toBeUndefined();
   expect(onAgentInspection).toHaveBeenLastCalledWith(
-    expect.objectContaining({ schemaSnapshotCount: 0 }),
+    expect.objectContaining({ schemaSnapshotCount: 0, schemaProcessCount: 0 }),
   );
+  expect(templates).not.toHaveBeenCalled();
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
 });

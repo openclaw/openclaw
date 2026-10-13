@@ -17,6 +17,7 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -28,7 +29,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -77,6 +77,58 @@ afterEach(() => {
 });
 
 describe("resident sessions.list", () => {
+  it("omits unchanged sidebar rows without reusing membership or revoked access", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { agentId: "main", rowMode: "sidebar", limit: 50 } as const;
+      // Cold admission can publish enriched facts after the first selected page.
+      await listSessions({ client, context, request });
+      const initial = await listSessions({ client, context, request });
+      expect(initial.sessions.length).toBeGreaterThan(0);
+      expect(initial.rowsRevision).toEqual(expect.any(String));
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_000);
+      const conditional = { ...request, ifRowsRevision: initial.rowsRevision };
+      const unchanged = await listSessions({ client, context, request: conditional });
+      expect(unchanged).toMatchObject({
+        sessions: [],
+        rowsUnchanged: true,
+        rowsRevision: initial.rowsRevision,
+        count: initial.count,
+        totalCount: initial.totalCount,
+        ts: initial.ts + 1_000,
+      });
+      expect(unchanged.sharedFacts).toBeUndefined();
+      const filtered = await listSessions({
+        client,
+        context,
+        request: { ...conditional, search: "no matching session" },
+      });
+      expect(filtered.rowsUnchanged).toBeUndefined();
+      expect(filtered.totalCount).toBe(0);
+      const scope = { agentId: "main", sessionKey: "agent:main:active" };
+      await replaceSessionEntry(scope, {
+        ...loadSessionEntry(scope)!,
+        label: "Renamed sidebar row",
+      });
+      const changed = await listSessions({ client, context, request: conditional });
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.rowsRevision).not.toBe(initial.rowsRevision);
+      expect(changed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
+        "Renamed sidebar row",
+      );
+      await replaceSessionEntry(scope, { ...loadSessionEntry(scope)!, visibility: "draft" });
+      const revoked = await listSessions({
+        client: identifiedClient("other@example.com"),
+        context,
+        request: { ...request, ifRowsRevision: changed.rowsRevision },
+      });
+      expect(revoked.rowsUnchanged).toBeUndefined();
+      expect(revoked.sessions.some((row) => row.key === scope.sessionKey)).toBe(false);
+    });
+  });
+
   it.each([{ search: "live" }])(
     "refreshes reply activity including previously rejected candidates (%j)",
     async (filter: SessionsListParams) => {
@@ -286,7 +338,7 @@ describe("resident sessions.list", () => {
     });
   });
 
-  it("excludes incognito stores across their open and closed generations", async () => {
+  it("excludes incognito sessions before and after their memory owner closes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config = await seedSessions();
       const context = requestContext(config);
@@ -302,36 +354,21 @@ describe("resident sessions.list", () => {
         agentId: "guest",
         env: state.env,
       });
-      const database = openOpenClawAgentDatabase({
-        agentId: "guest",
-        env: state.env,
-        path: incognitoPath,
-      });
-      const entry = {
-        sessionId: "incognito-residency",
-        updatedAt: 600,
-        incognito: true,
-        parentSessionKey: "agent:main:active",
-      };
-      database.db
-        .prepare(
-          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run(
-          childKey,
-          entry.sessionId,
-          JSON.stringify(entry),
-          entry.updatedAt,
-          entry.parentSessionKey,
+      try {
+        await upsertSessionEntryCore(
+          { agentId: "guest", sessionKey: childKey, storePath: incognitoPath, env: state.env },
+          {
+            sessionId: "incognito-residency",
+            updatedAt: 600,
+            incognito: true,
+            parentSessionKey: "agent:main:active",
+          },
         );
-      database.db
-        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-        .run(childKey);
-
-      const opened = await listSessions({ client, context, request });
-      expect(opened.sessions.map((session) => session.key)).not.toContain(childKey);
-
-      expect(await closeOpenClawAgentDatabaseByPathAsync(incognitoPath)).toBe(true);
+        const opened = await listSessions({ client, context, request });
+        expect(opened.sessions.map((session) => session.key)).not.toContain(childKey);
+      } finally {
+        memorySessionActorOwners.closeDatabase({ agentId: "guest", path: incognitoPath });
+      }
       const closed = await listSessions({ client, context, request });
       expect(closed.sessions.map((session) => session.key)).not.toContain(childKey);
     });
@@ -384,7 +421,7 @@ describe("resident sessions.list", () => {
       await initialBackfill;
       clock.mockReturnValue(60_401);
 
-      const refreshedBackfill = observeSessionRowBackfill(
+      const committedBackfill = observeSessionRowBackfill(
         ["agent:main:active"],
         getSessionRowProjection(context),
       );
@@ -395,10 +432,7 @@ describe("resident sessions.list", () => {
           touchSessionEntry: false,
         },
       );
-      emitSessionTranscriptUpdate({
-        target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
-      });
-      await refreshedBackfill;
+      await committedBackfill;
       expect(
         getSessionRowProjection(context)?.snapshot(
           { agentId: "main", key: "agent:main:active" },

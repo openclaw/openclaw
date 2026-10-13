@@ -86,6 +86,7 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
           },
         }),
       {
+        existingOnly: true,
         assertCurrent: assertAdmission,
         createAdmission: withGitHubPublicationDeletionReceipt(
           createSqliteWorkerWriteAdmission(

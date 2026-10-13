@@ -35,6 +35,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-brid
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
+import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import {
@@ -43,7 +44,6 @@ import {
 } from "./board-widget-capabilities.solid.tsx";
 import {
   BOARD_SIZE_PRESETS,
-  closeBoardWidgetMenu,
   type BoardWidgetCellHandle,
   type BoardWidgetCellMethods,
   type BoardWidgetCellProps,
@@ -51,12 +51,11 @@ import {
 import {
   BoardDisabledPlugin,
   BoardCoreWidget,
-  BoardWidgetMenu,
   BoardWidgetRejected,
 } from "./board-widget-cell-render.solid.tsx";
 import { BoardWidgetError } from "./board-widget-error.tsx";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
-import "../web-awesome.ts";
+import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
@@ -79,6 +78,7 @@ function BoardWidgetCellContent(
   };
   let actionError = "";
   let actionPending = false;
+  let menu: MenuHandle | undefined;
   let bodyErrored = false;
   let resetBodyError: (() => void) | undefined;
   let connected = true;
@@ -154,7 +154,7 @@ function BoardWidgetCellContent(
     actionPending = true;
     actionError = "";
     requestUpdate();
-    closeBoardWidgetMenu(host);
+    menu?.close();
     try {
       await action();
     } catch (error) {
@@ -602,7 +602,10 @@ function BoardWidgetCellContent(
                 widget={props.widget!}
                 tabs={props.tabs ?? []}
                 disabled={props.busy || state().pending}
-                onSelect={(event) => selectMenuItem(event.detail.item.value)}
+                onSelect={selectMenuItem}
+                ref={(handle) => {
+                  menu = handle;
+                }}
               />
             </Show>
           </header>

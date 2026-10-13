@@ -2683,9 +2683,15 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
     expect(container.querySelectorAll(".chat-image-action")).toHaveLength(1);
+    container.querySelector<HTMLButtonElement>(".chat-image-action")!.click();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".chat-image-actions .oc-menu")!.matches(":popover-open"),
+      ).toBe(true),
+    );
     container
-      .querySelector("wa-dropdown")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "download" } } }));
+      .querySelector<HTMLButtonElement>('.chat-image-actions [data-value="download"]')!
+      .click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(clickedDownloads[0]).toBe("Ticketed image.png");
 

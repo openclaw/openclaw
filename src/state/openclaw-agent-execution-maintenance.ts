@@ -119,7 +119,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
             previous.set(sessionKey, before);
             current.set(sessionKey, after);
           },
-          beforeCommit(database) {
+          beforeCommit(database, maintenancePlan) {
             publication = preparePublication(
               {
                 pendingArchiveRecovery: false,
@@ -130,6 +130,9 @@ export function createAgentDatabaseMaintenanceOwner(context: {
               },
               database,
             );
+            if (maintenancePlan) {
+              publication.maintenancePlans = [maintenancePlan];
+            }
             deferSqliteWorkerCommitReceipt(database.db, publication);
             context.admit("commit", publication);
           },

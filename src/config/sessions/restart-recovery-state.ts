@@ -150,6 +150,18 @@ function normalizeTerminalDeliveryEvidenceResult(
     return undefined;
   }
   const captured = record.captured === true ? (true as const) : undefined;
+  const rawMeta = asOptionalObjectRecord(record.meta);
+  const meta: RestartRecoveryTerminalDeliveryEvidenceResult["meta"] = {
+    ...(asOptionalObjectRecord(rawMeta?.terminalReply)?.disposition === "silent"
+      ? { terminalReply: { disposition: "silent" as const } }
+      : {}),
+    ...(rawMeta?.yielded === true ? { yielded: true as const } : {}),
+    ...(rawMeta?.continuationPending === true ? { continuationPending: true as const } : {}),
+    ...(rawMeta?.aborted === true ? { aborted: true as const } : {}),
+    ...(rawMeta?.error === true ? { error: true as const } : {}),
+  };
+  const requesterContinuationSettled =
+    record.requesterContinuationSettled === true ? (true as const) : undefined;
   const rawPayloads = Array.isArray(record.payloads) ? record.payloads : undefined;
   const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
     ? rawPayloads.slice(0, 64).map((payload) => {
@@ -201,10 +213,12 @@ function normalizeTerminalDeliveryEvidenceResult(
         ) {
           return [];
         }
+        const reason = normalizeRunId(outcome.reason)?.slice(0, 256);
         return [
           {
             index: outcome.index,
             status: outcomeStatus,
+            ...(reason ? { reason } : {}),
             ...(typeof outcome.sentBeforeError === "boolean"
               ? { sentBeforeError: outcome.sentBeforeError }
               : {}),
@@ -213,6 +227,7 @@ function normalizeTerminalDeliveryEvidenceResult(
       })
     : undefined;
   const errorMessage = normalizeRunId(rawStatus?.errorMessage);
+  const reason = normalizeRunId(rawStatus?.reason)?.slice(0, 256);
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
@@ -222,6 +237,7 @@ function normalizeTerminalDeliveryEvidenceResult(
           ? { resultCount: rawStatus.resultCount }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(reason ? { reason } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
     : undefined;
@@ -271,6 +287,8 @@ function normalizeTerminalDeliveryEvidenceResult(
     record.restartUnsafeSideEffectsDetected === true ? (true as const) : undefined;
   if (
     !captured &&
+    Object.keys(meta).length === 0 &&
+    !requesterContinuationSettled &&
     !payloads?.length &&
     !payloadsTruncated &&
     !deliveryStatus &&
@@ -283,6 +301,8 @@ function normalizeTerminalDeliveryEvidenceResult(
   }
   return {
     ...(captured ? { captured } : {}),
+    ...(Object.keys(meta).length ? { meta } : {}),
+    ...(requesterContinuationSettled ? { requesterContinuationSettled } : {}),
     ...(payloads?.length ? { payloads } : {}),
     ...(payloadsTruncated ? { payloadsTruncated } : {}),
     ...(deliveryStatus ? { deliveryStatus } : {}),

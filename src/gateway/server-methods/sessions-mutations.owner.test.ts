@@ -14,6 +14,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -869,7 +870,15 @@ describe("sessions.assignOwner", () => {
         expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
           "owner",
         );
-        expect(resolveSessionSharingRole({ client: client("research"), target })).toBe("viewer");
+        expect(
+          resolveSessionSharingRole({
+            client: client("research"),
+            target,
+            isMember: (
+              await readSessionMembersInWorker({ agentId: "main", env: state.env, sessionKey })
+            ).members.some((member) => member.identityId === "research"),
+          }),
+        ).toBe("viewer");
       });
     },
   );

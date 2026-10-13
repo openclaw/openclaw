@@ -44,16 +44,33 @@ const admissionKey: SqliteDatabaseAdmissionKey<EngineAdmission> = {
   },
 };
 
-function refusePostgresAnchor(db: DatabaseSync): void {
+export function readEngineAnchor(
+  db: DatabaseSync,
+  projection: "schema" | "identity" = "identity",
+  requireTable = false,
+) {
   try {
-    const anchor = db.prepare("SELECT schema FROM openclaw_engine_anchor LIMIT 1").get();
-    throw new Error(
-      `This store lives in PostgreSQL schema ${String(anchor?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
-    );
+    return projection === "schema"
+      ? [db.prepare("SELECT schema FROM openclaw_engine_anchor LIMIT 1").get()]
+      : db.prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor").all();
   } catch (error) {
-    if (!(error instanceof Error) || error.message !== "no such table: openclaw_engine_anchor") {
+    if (
+      requireTable ||
+      !(error instanceof Error) ||
+      error.message !== "no such table: openclaw_engine_anchor"
+    ) {
       throw error;
     }
+    return undefined;
+  }
+}
+
+function refusePostgresAnchor(db: DatabaseSync): void {
+  const rows = readEngineAnchor(db, "schema");
+  if (rows) {
+    throw new Error(
+      `This store lives in PostgreSQL schema ${String(rows[0]?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
+    );
   }
 }
 
@@ -105,9 +122,7 @@ export function openEngineStore(ref: {
               "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
             );
           }
-          const rows = anchor
-            .prepare("SELECT store_id, engine, schema FROM openclaw_engine_anchor")
-            .all();
+          const rows = readEngineAnchor(anchor, "identity", true) ?? [];
           if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
             throw new Error(
               "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
