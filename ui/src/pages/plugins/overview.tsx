@@ -227,7 +227,7 @@ export function renderPluginCapabilitySection(
   );
 }
 
-export function renderPluginMcpServers(
+function renderPluginMcpServers(
   names: readonly string[],
   details: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"] = [],
 ): JSX.Element {
@@ -293,7 +293,7 @@ const overviewContractFamilies = [
   "migrationProviders",
 ] as const;
 
-export function renderPluginDeclaredCapabilities(
+function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
   uiCapabilities?: readonly PluginUiCapability[],
 ): JSX.Element {
