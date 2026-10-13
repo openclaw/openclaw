@@ -233,8 +233,8 @@ aggregate packing budget. The 32-class is the measured allocation that meets
 the existing eight-CPU/24-GiB admission threshold. Packing, check names, timing
 identities, budgets and worker limits remain unchanged; actual capacity still
 gates overlap. This moves existing jobs between classes without adding runner
-registrations or hosted rows. Real-Gateway E2E also retains its 32-class request;
-other main CI placements retain the 16-class sizing.
+registrations or hosted rows. Current-target real-Gateway E2E uses the 16-class;
+frozen or unclassified targets retain the 32-class, as described below.
 Native CI must establish the resulting execution and queue times.
 
 Compact groups with a memory-gated worker allowance also request the 32-class,
