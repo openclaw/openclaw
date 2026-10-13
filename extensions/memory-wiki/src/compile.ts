@@ -30,6 +30,8 @@ import {
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
 import {
+  countMemoryWikiPages,
+  invalidateMemoryWikiVaultCounts,
   readMemoryWikiDashboardState,
   resolveMemoryWikiCompiledCacheGeneration,
   setMemoryWikiDashboardState,
@@ -1170,6 +1172,7 @@ async function compileMemoryWikiVaultUnlocked(
       options?.signal?.throwIfAborted();
     },
     () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+    countMemoryWikiPages(pages),
   );
   await appendMemoryWikiLog(rootDir, {
     type: "compile",
@@ -1236,6 +1239,9 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
+  if (importChanged) {
+    invalidateMemoryWikiVaultCounts(params.config);
+  }
   const dashboardState = await readMemoryWikiDashboardState(params.config);
   params.signal?.throwIfAborted();
   let dashboardNeedsCompile = dashboardState.state !== "ready";

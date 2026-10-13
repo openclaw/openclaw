@@ -7,8 +7,13 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { OpenClawConfig } from "../api.js";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
+import {
+  countMemoryWikiPages,
+  loadMemoryWikiVaultCounts,
+  type MemoryWikiCompiledCacheSnapshot,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { parseWikiMarkdown, WIKI_PAGE_GROUPS, type WikiPageKind } from "./markdown.js";
+import { parseWikiMarkdown, WIKI_PAGE_GROUPS } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
 const STATUS_WARNING_FIXES = {
@@ -43,65 +48,47 @@ type ResolveMemoryWikiStatusDeps = {
   resolveCommand?: (command: string) => Promise<string | null>;
 };
 
-function createEmptyVaultCounts() {
-  const pageCounts: Record<WikiPageKind, number> = {
-    entity: 0,
-    concept: 0,
-    source: 0,
-    synthesis: 0,
-    report: 0,
-  };
-  const sourceCounts = {
-    native: 0,
-    bridge: 0,
-    bridgeEvents: 0,
-    unsafeLocal: 0,
-    other: 0,
-  };
-  return { pageCounts, sourceCounts };
-}
-
-async function collectVaultCounts(vaultPath: string) {
-  const { pageCounts, sourceCounts } = createEmptyVaultCounts();
-  for (const { dir, kind } of WIKI_PAGE_GROUPS) {
-    await runTasksWithConcurrency({
-      tasks: (await listMemoryWikiPagePaths(vaultPath, dir)).map((relativePath) => async () => {
-        const raw = await fs.readFile(path.join(vaultPath, relativePath), "utf8").catch(() => null);
-        if (raw === null) {
-          return;
-        }
-        let frontmatter: Record<string, unknown>;
-        try {
-          frontmatter = parseWikiMarkdown(raw).frontmatter;
-        } catch {
-          return;
-        }
-        pageCounts[kind] += 1;
-        if (kind !== "source") {
-          return;
-        }
-        const sourceType = normalizeOptionalString(frontmatter.sourceType);
-        if (sourceType === "memory-bridge-events") {
-          sourceCounts.bridgeEvents += 1;
-        } else if (sourceType === "memory-bridge") {
-          sourceCounts.bridge += 1;
-        } else if (
-          normalizeOptionalString(frontmatter.provenanceMode) === "unsafe-local" ||
-          sourceType === "memory-unsafe-local"
-        ) {
-          sourceCounts.unsafeLocal += 1;
-        } else if (!sourceType) {
-          sourceCounts.native += 1;
-        } else {
-          sourceCounts.other += 1;
-        }
-      }),
-      limit: 16,
-      errorMode: "stop",
-      throwOnError: true,
-    });
-  }
-  return { pageCounts, sourceCounts };
+async function collectVaultCounts(
+  vaultPath: string,
+  snapshot: MemoryWikiCompiledCacheSnapshot | null,
+) {
+  const files = snapshot
+    ? snapshot.digest.pages
+        .filter((page) => page.kind === "source")
+        .map((page) => ({ kind: page.kind, relativePath: page.path }))
+    : (
+        await Promise.all(
+          WIKI_PAGE_GROUPS.map(async ({ dir, kind }) =>
+            (await listMemoryWikiPagePaths(vaultPath, dir)).map((relativePath) => ({
+              kind,
+              relativePath,
+            })),
+          ),
+        )
+      ).flat();
+  const { results } = await runTasksWithConcurrency({
+    tasks: files.map(({ kind, relativePath }) => async () => {
+      const raw = await fs.readFile(path.join(vaultPath, relativePath), "utf8").catch(() => null);
+      if (raw === null) {
+        return null;
+      }
+      try {
+        const { frontmatter } = parseWikiMarkdown(raw);
+        return {
+          kind,
+          sourceType: normalizeOptionalString(frontmatter.sourceType),
+          provenanceMode: normalizeOptionalString(frontmatter.provenanceMode),
+        };
+      } catch {
+        return null;
+      }
+    }),
+    limit: 16,
+    errorMode: "stop",
+    throwOnError: true,
+  });
+  const counts = countMemoryWikiPages(results.filter((page) => page !== null));
+  return snapshot ? { ...counts, pageCounts: snapshot.dashboards.overview.pageCounts } : counts;
 }
 
 function buildWarnings(params: {
@@ -174,8 +161,10 @@ export async function resolveMemoryWikiStatus(
       : null;
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
   const counts = vaultExists
-    ? await collectVaultCounts(config.vault.path)
-    : createEmptyVaultCounts();
+    ? await loadMemoryWikiVaultCounts(config, (snapshot) =>
+        collectVaultCounts(config.vault.path, snapshot),
+      )
+    : countMemoryWikiPages();
 
   return {
     vaultScope: config.vault.scope,

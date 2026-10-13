@@ -83,6 +83,15 @@ Show vault mode and scope, resolved agent, health, and Obsidian CLI availability
 
 When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
 
+Status reuses page counts from the compiled vault's in-memory cache. After a
+restart, source provenance is read once and cached until the next compile or
+lifecycle refresh. Without a compiled index, status scans page metadata once.
+Run `openclaw wiki compile` after editing vault files to refresh derived counts.
+
+Gateway requests default to two minutes. For a slow first import, pass
+`openclaw wiki status --timeout 600000` (milliseconds). `wiki doctor` and
+`wiki bridge import` accept the same option; local/offline calls do not use it.
+
 ### `wiki doctor`
 
 Run wiki health checks and report actionable fixes. Exits non-zero when unhealthy.

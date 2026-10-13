@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 function writePage(targetPath: string, markdown: Parameters<typeof renderWikiMarkdown>[0]) {
@@ -81,11 +82,13 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     const snapshotBefore = await loadMemoryWikiCompiledCache(config);
     const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
+    expect((await resolveMemoryWikiStatus(config)).pageCounts.source).toBe(1);
 
     await fs.writeFile(sourcePath, renderSource("after"), "utf8");
+    await fs.writeFile(path.join(rootDir, "sources", "new.md"), "# New source\n", "utf8");
     const refresh = await refreshMemoryWikiIndexesAfterImport({
       config,
-      syncResult: { importedCount: 0, updatedCount: 1, removedCount: 0 },
+      syncResult: { importedCount: 1, updatedCount: 1, removedCount: 0 },
     });
     const snapshotAfter = await loadMemoryWikiCompiledCache(config);
 
@@ -97,6 +100,7 @@ describe("compileMemoryWikiVault", () => {
       state: "compile-required",
     });
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
+    expect((await resolveMemoryWikiStatus(config)).pageCounts.source).toBe(2);
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {

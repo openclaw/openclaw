@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import {
@@ -13,6 +14,7 @@ import {
   resolveMemoryWikiStatus,
 } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { activateExistingMemoryWikiVault } from "./vault.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
@@ -241,6 +243,19 @@ describe("resolveMemoryWikiStatus", () => {
 
     expect(status.pageCounts.source).toBe(1);
     expect(status.sourceCounts.native).toBe(1);
+
+    const read = vi.spyOn(fs, "readFile");
+    try {
+      expect(
+        await resolveMemoryWikiStatus(config, { resolveCommand: async () => null }),
+      ).toMatchObject({
+        pageCounts: status.pageCounts,
+        sourceCounts: status.sourceCounts,
+      });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("counts source provenance from the vault", async () => {
@@ -310,6 +325,27 @@ describe("resolveMemoryWikiStatus", () => {
       unsafeLocal: 1,
       other: 0,
     });
+
+    const compiled = await compileMemoryWikiVault(config);
+    const read = vi.spyOn(fs, "readFile");
+    try {
+      const indexed = await resolveMemoryWikiStatus(config, { resolveCommand: async () => null });
+      expect(indexed.pageCounts).toEqual(compiled.pageCounts);
+      expect(indexed.sourceCounts).toEqual(status.sourceCounts);
+      expect(read).not.toHaveBeenCalled();
+
+      await activateExistingMemoryWikiVault(config);
+      read.mockClear();
+      const cold = await resolveMemoryWikiStatus(config, { resolveCommand: async () => null });
+      expect(cold.pageCounts).toEqual(indexed.pageCounts);
+      expect(cold.sourceCounts).toEqual(indexed.sourceCounts);
+      expect(read).toHaveBeenCalledTimes(4);
+      read.mockClear();
+      await resolveMemoryWikiStatus(config, { resolveCommand: async () => null });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
   });
 });
 

@@ -9,6 +9,48 @@ import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
 
+export type MemoryWikiVaultCounts = ReturnType<typeof countMemoryWikiPages>;
+
+export function countMemoryWikiPages(
+  pages: readonly Pick<WikiPageSummary, "kind" | "sourceType" | "provenanceMode">[] = [],
+) {
+  const pageCounts: Record<WikiPageKind, number> = {
+    entity: 0,
+    concept: 0,
+    source: 0,
+    synthesis: 0,
+    report: 0,
+  };
+  const sourceCounts = {
+    native: 0,
+    bridge: 0,
+    bridgeEvents: 0,
+    unsafeLocal: 0,
+    other: 0,
+  };
+  for (const page of pages) {
+    pageCounts[page.kind] += 1;
+    if (page.kind !== "source") {
+      continue;
+    }
+    if (page.sourceType === "memory-bridge-events") {
+      sourceCounts.bridgeEvents += 1;
+    } else if (page.sourceType === "memory-bridge") {
+      sourceCounts.bridge += 1;
+    } else if (
+      page.provenanceMode === "unsafe-local" ||
+      page.sourceType === "memory-unsafe-local"
+    ) {
+      sourceCounts.unsafeLocal += 1;
+    } else if (!page.sourceType) {
+      sourceCounts.native += 1;
+    } else {
+      sourceCounts.other += 1;
+    }
+  }
+  return { pageCounts, sourceCounts };
+}
+
 const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
 const COMPILED_CACHE_MAX_BYTES_PER_ENTRY = 100 * 1024 * 1024;
@@ -136,6 +178,7 @@ type ActiveVault = {
   compiledCachePublicationId?: string;
   reconciled: boolean;
   snapshot?: MemoryWikiCompiledCacheSnapshot;
+  counts?: Promise<MemoryWikiVaultCounts>;
 };
 
 type DurableVaultIdentity = {
@@ -206,6 +249,7 @@ export function activateMemoryWikiCompiledCacheOwner(
     active.vaultGeneration === normalizedVaultGeneration &&
     active.compiledCachePublicationId === publicationId
   ) {
+    active.counts = undefined;
     return false;
   }
   activeVaults.set(ownerId, {
@@ -234,10 +278,43 @@ export function setMemoryWikiDashboardState(
   config: ResolvedMemoryWikiConfig,
   state: MemoryWikiDashboardPendingState,
 ): void {
+  if (state.state !== "compile-required") {
+    invalidateMemoryWikiVaultCounts(config);
+  }
   dashboardStates.set(dashboardStateKey(config), {
     ownerId: resolveMemoryWikiCompiledCacheOwnerId(config),
     state,
   });
+}
+
+export function invalidateMemoryWikiVaultCounts(config: ResolvedMemoryWikiConfig): void {
+  const active = resolveActiveVault(config);
+  if (active) {
+    active.counts = undefined;
+  }
+}
+
+export async function loadMemoryWikiVaultCounts(
+  config: ResolvedMemoryWikiConfig,
+  collect: (snapshot: MemoryWikiCompiledCacheSnapshot | null) => Promise<MemoryWikiVaultCounts>,
+): Promise<MemoryWikiVaultCounts> {
+  const active = resolveActiveVault(config);
+  if (!active?.reconciled) {
+    return collect(null);
+  }
+  const counts = (active.counts ??= (
+    dashboardStates.has(dashboardStateKey(config))
+      ? Promise.resolve(null)
+      : loadMemoryWikiCompiledCache(config)
+  ).then(collect));
+  try {
+    return await counts;
+  } catch (error) {
+    if (active.counts === counts) {
+      active.counts = undefined;
+    }
+    throw error;
+  }
 }
 
 function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | null {
@@ -533,6 +610,7 @@ export async function writeMemoryWikiCompiledCache(
   validatePublication: () => Promise<void>,
   commitPublication: () => Promise<void>,
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
+  counts?: MemoryWikiVaultCounts,
 ): Promise<void> {
   const store = requireConfiguredStore();
   const { activeVault, serializedSnapshot } = await store.write(
@@ -588,6 +666,7 @@ export async function writeMemoryWikiCompiledCache(
     ...activeVault,
     compiledCachePublicationId: publicationId,
     reconciled: true,
+    counts: counts ? Promise.resolve(counts) : undefined,
     // Own the persisted payload, not compiler strings whose slices can retain entire
     // source pages. Reuse the serialized snapshot to detach every nested string
     // without changing its JSON representation (including lone surrogates).

@@ -269,9 +269,12 @@ describe("memory-wiki cli", () => {
       return program;
     };
 
-    await register().parseAsync(["wiki", "--agent", "marketing", "status", "--json"], {
-      from: "user",
-    });
+    await register().parseAsync(
+      ["wiki", "--agent", "marketing", "status", "--json", "--timeout", "600000"],
+      {
+        from: "user",
+      },
+    );
     await register().parseAsync(["wiki", "--agent", "marketing", "doctor", "--json"], {
       from: "user",
     });
@@ -286,6 +289,11 @@ describe("memory-wiki cli", () => {
         ["wiki.bridge.import", { agentId: "marketing" }],
       ],
     );
+    expect(callGatewayFromCliMock.mock.calls.map(([, options]) => options.timeout)).toEqual([
+      "600000",
+      "120000",
+      "120000",
+    ]);
   });
 
   it("registers OKF import and searches imported concepts", async () => {
@@ -642,7 +650,7 @@ cli note
     expect(activeResult.importedCount).toBe(1);
     expect(callGatewayFromCliMock).toHaveBeenCalledWith(
       "wiki.bridge.import",
-      { timeout: "30000" },
+      { timeout: "120000" },
       undefined,
       { progress: false },
     );

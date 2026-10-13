@@ -53,7 +53,6 @@ import {
 } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const WIKI_GATEWAY_TIMEOUT_MS = "30000";
 const GATEWAY_TERMINAL_STRING_MAX_CHARS = 2_000;
 const GATEWAY_RESPONSE_MAX_ARRAY_ITEMS = 10_000;
 const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
@@ -67,6 +66,7 @@ const UNICODE_FORMAT_CONTROL_PATTERN = /[\u061C\u200B-\u200F\u202A-\u202E\u2060-
 
 type WikiJsonOptions = {
   json?: boolean;
+  timeout?: number;
 };
 
 type WikiIngestCommandOptions = WikiJsonOptions & {
@@ -247,22 +247,29 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
   );
 }
 
-async function callWikiGateway(method: "wiki.status", agentId?: string): Promise<MemoryWikiStatus>;
+async function callWikiGateway(
+  method: "wiki.status",
+  agentId?: string,
+  timeout?: number,
+): Promise<MemoryWikiStatus>;
 async function callWikiGateway(
   method: "wiki.doctor",
   agentId?: string,
+  timeout?: number,
 ): Promise<MemoryWikiDoctorReport>;
 async function callWikiGateway(
   method: "wiki.bridge.import",
   agentId?: string,
+  timeout?: number,
 ): Promise<MemoryWikiImportedSourceSyncResult>;
 async function callWikiGateway(
   method: "wiki.status" | "wiki.doctor" | "wiki.bridge.import",
   agentId?: string,
+  timeout = 120_000,
 ) {
   const result = await callGatewayFromCli(
     method,
-    { timeout: WIKI_GATEWAY_TIMEOUT_MS },
+    { timeout: String(timeout) },
     agentId ? { agentId } : undefined,
     { progress: false },
   );
@@ -401,6 +408,7 @@ async function runWikiStatus(params: {
   agentId?: string;
   json?: boolean;
   doctor?: boolean;
+  timeout?: number;
 }) {
   const routeThroughGateway = shouldRouteBridgeRuntimeThroughGateway(params.config);
   let localStatus: MemoryWikiStatus | undefined;
@@ -412,14 +420,15 @@ async function runWikiStatus(params: {
   if (params.doctor) {
     const report = localStatus
       ? buildMemoryWikiDoctorReport(localStatus)
-      : await callWikiGateway("wiki.doctor", params.agentId);
+      : await callWikiGateway("wiki.doctor", params.agentId, params.timeout);
     if (!report.healthy) {
       process.exitCode = 1;
     }
     writeOutput(format(report, params.json, renderMemoryWikiDoctor));
     return report;
   }
-  const status = localStatus ?? (await callWikiGateway("wiki.status", params.agentId));
+  const status =
+    localStatus ?? (await callWikiGateway("wiki.status", params.agentId, params.timeout));
   writeOutput(format(status, params.json, renderMemoryWikiStatus));
   return status;
 }
@@ -429,11 +438,12 @@ async function runWikiBridgeImport(params: {
   appConfig?: OpenClawConfig;
   agentId?: string;
   json?: boolean;
+  timeout?: number;
 }) {
   const render = (value: MemoryWikiImportedSourceSyncResult) =>
     `Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`;
   if (shouldRouteBridgeRuntimeThroughGateway(params.config)) {
-    const result = await callWikiGateway("wiki.bridge.import", params.agentId);
+    const result = await callWikiGateway("wiki.bridge.import", params.agentId, params.timeout);
     writeOutput(formatGatewayJsonOrText(result, params.json, render));
     return result;
   }
@@ -527,10 +537,14 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   ] as const) {
     vaultCommand(wiki, name, description)
       .option("--json", "Print JSON")
+      .option("--timeout <ms>", "Gateway request timeout in milliseconds", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--timeout"),
+      )
       .action(async (opts: WikiJsonOptions) => {
         await runWikiStatus({
           ...requireCommandContext(),
           json: opts.json,
+          timeout: opts.timeout,
           doctor: name === "doctor",
         });
       });
@@ -729,9 +743,18 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .description("Import public memory artifacts into the wiki vault");
   vaultCommand(bridge, "import", "Sync bridge-backed memory artifacts into wiki source pages")
     .option("--json", "Print JSON")
+    .option("--timeout <ms>", "Gateway request timeout in milliseconds", (value: string) =>
+      parseWikiPositiveIntegerOption(value, "--timeout"),
+    )
     .action(async (opts: WikiJsonOptions) => {
       const { agentId, appConfig, config } = requireCommandContext();
-      await runWikiBridgeImport({ config, appConfig, agentId, json: opts.json });
+      await runWikiBridgeImport({
+        config,
+        appConfig,
+        agentId,
+        json: opts.json,
+        timeout: opts.timeout,
+      });
     });
 
   const unsafeLocal = wiki
