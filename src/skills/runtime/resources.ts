@@ -17,8 +17,10 @@ import {
   WorkspaceAccessUnavailableError,
 } from "../../agents/workspace-access.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { hasActiveDiagnosticTracePropagation } from "../../infra/diagnostic-trace-propagation.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { acquireFileLock } from "../../infra/file-lock.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -50,13 +52,9 @@ import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
 import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
 import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import type {
-  ExplicitSkillSelection,
-  SkillEntry,
-  SkillSnapshot,
-  SkillResourceSourceReader,
-} from "../types.js";
+import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
+import { getSkillsResourceVersion } from "./refresh-state.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
 import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
 
@@ -130,59 +128,79 @@ const localSkillResourceReader: SkillResourceSourceReader = {
 };
 
 /**
- * Stamps the retained bundle identity onto ordinary local entries at the
- * preparation boundary. The fingerprint identifies the loaded skill bundle —
- * the bundle this preparation's reader gathers — never the exact bytes a later
- * delivery serves: identity is a property of the loaded bundle, computed here
- * once per loaded bundle per preparation through its owning host reader (the
- * existing `prepareSkillBundle` digest over the walked tree), and every
- * emission looks the retained field up. Stamp caches key by host identity (the
- * reader object) and directory, so a Gateway skill and a same-path workspace
- * skill never share an identity, and a remote path absent on the Gateway is
- * read through the workspace that owns it. `node://` locators and unreadable
- * roots omit the field; a telemetry-only read failure omits rather than weakens
- * resource integrity or fails the run. Stamps copy entries instead of mutating
- * them so caller-owned snapshots and cached library pins stay untouched, and a
- * restamped entry whose identity is unchanged keeps the original object. A
- * source edit after preparation is a disclosed staleness window, not a defect
- * here: the skill watcher reloads edited skills within seconds and the next
- * preparation restamps from the reloaded tree, so emissions carry the
- * previously loaded bundle's identity only until that reload
- * (watching-disabled routes, such as the cron snapshot path, restamp at their
- * next reload).
+ * Stamps the retained bundle identity onto discovered directory-skill entries
+ * at the catalog intake. The fingerprint identifies the loaded skill bundle —
+ * the bundle the entry's owning host reader gathers at discovery — never the
+ * exact bytes a later delivery serves: identity is a property of the loaded
+ * bundle, computed here once per loaded version per bundle directory through
+ * the existing `prepareSkillBundle` digest over the walked tree, and every
+ * emission looks the retained field up. Discovery identity caches key by host
+ * identity (the reader object), bundle directory, and the skills resource
+ * version, so a Gateway skill and a same-path workspace skill never share an
+ * identity, a remote path absent on the Gateway is read through the workspace
+ * that owns it, and a watcher reload (or any skills source refresh) restamps
+ * from the reloaded tree: future spans carry the new fingerprint while a live
+ * delivery keeps its generation's identity for the turn. A skill that already
+ * carries a fingerprint keeps it verbatim — worker materialization, the node
+ * session route, the remote transfer adapter, and library pins stamp their own
+ * identities, and discovery never re-hashes another producer's stamp.
+ * `node://` locators, unreadable roots, and unavailable owning readers omit
+ * the field; a telemetry-only read failure omits rather than weakens resource
+ * integrity or fails the run. Stamping copies skills instead of mutating them
+ * so loader caches and caller-owned snapshots stay untouched, and a skill
+ * whose identity is unchanged keeps the original object. The whole pass is
+ * gated on the active tracing consumer, checked once per intake: zero bundle
+ * hashing or filesystem walks while tracing is disabled.
  */
-export async function stampLocalSkillBundleIdentities(params: {
-  snapshot: SkillSnapshot | undefined;
-  libraryEntries: readonly SkillEntry[];
-  /** Skills source workspace for host-aware reader selection. */
-  workspaceDir?: string;
-}): Promise<{
-  snapshot: SkillSnapshot | undefined;
-  libraryEntries: SkillEntry[];
-}> {
+const MAX_DISCOVERED_IDENTITY_CACHE_ENTRIES = 256;
+const discoveredBundleIdentityCaches = new WeakMap<
+  SkillResourceSourceReader,
+  Map<string, Promise<string | undefined>>
+>();
+
+async function readDiscoveredBundleIdentity(
+  skill: Skill,
+  reader: SkillResourceSourceReader,
+): Promise<string | undefined> {
+  try {
+    const files = await reader.readSkillFiles(skill, { allowMissingRoot: true });
+    return files ? prepareSkillBundle(files).revision : undefined;
+  } catch {
+    // Telemetry-only acquisition: omit rather than weaken resource integrity.
+    return undefined;
+  }
+}
+
+/** Stamps the loaded-bundle identity onto discovered skills, by lookup per loaded version. */
+export async function stampDiscoveredSkillBundleIdentities(
+  skills: readonly Skill[],
+  workspaceDir?: string,
+): Promise<Skill[]> {
+  if (
+    !skills.length ||
+    // Zero telemetry-driven hashing while no exporter-owned tracing consumer
+    // is active: the gate is the trace-propagation bridge, never the
+    // process-diagnostics dispatcher flag.
+    !hasActiveDiagnosticTracePropagation()
+  ) {
+    return [...skills];
+  }
   // Host-aware reader selection mirrors prepareSkillResourceDelivery: entries
   // owned by the Gateway read locally; every other entry reads through the
   // remote workspace's owning reader when that workspace owns skill loading.
-  // Reader object identity doubles as host identity in the caches below, so
+  // Reader object identity doubles as host identity in the cache below, so
   // same-path cross-host bundles hash their own host's bytes.
-  const sourceWorkspace = params.snapshot?.skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
   let workspaceAccess: AgentWorkspaceAccess | undefined;
   let workspaceAccessUnavailable = false;
-  if (sourceWorkspace) {
+  if (workspaceDir) {
     try {
-      workspaceAccess = getAgentWorkspaceAccess(sourceWorkspace, "loadSkills");
+      workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
     } catch {
       // A stale workspace binding must never fail a run for telemetry: omit
       // non-Gateway identities instead of guessing which host owns the bytes.
       workspaceAccessUnavailable = true;
     }
   }
-  // A pinned library revision's bytes live in the Gateway library store behind
-  // the pin, never on a workspace host, so its owning reader is Gateway-local —
-  // the same split the installed-skill catalog applies to pins. Pins are
-  // identified by their exclusive library source, never by name: a workspace
-  // skill can share a selection's name, and a pin's immutable bytes are
-  // distinct from that workspace tree.
   const isLibraryPin = (skill: Skill): boolean => skill.source === "openclaw-library";
   const resolveSourceReader = (skill: Skill): SkillResourceSourceReader | undefined => {
     if (resolveSkillFileHost(skill) === "gateway" || isLibraryPin(skill)) {
@@ -193,104 +211,50 @@ export async function stampLocalSkillBundleIdentities(params: {
     }
     return workspaceAccessUnavailable ? undefined : localSkillResourceReader;
   };
-  /**
-   * Reads one loaded bundle's identity through its owning host reader. The
-   * walk is telemetry-only: a failure omits the identity rather than failing
-   * the run, and it never bounds or replaces the resource-integrity reads
-   * delivery preparation itself performs.
-   */
-  const readBundleIdentity = async (
-    skill: Skill,
-    reader: SkillResourceSourceReader,
-  ): Promise<string | undefined> => {
-    try {
-      const files = await reader.readSkillFiles(skill, { allowMissingRoot: true });
-      return files ? prepareSkillBundle(files).revision : undefined;
-    } catch {
-      // Telemetry-only acquisition: omit rather than weaken resource integrity.
-      return undefined;
-    }
-  };
-  /** Preparation-boundary discovery identities: one walk per loaded bundle. */
-  type BundleIdentityCache = Map<string, Promise<string | undefined>>;
-  const cachesByReader = new WeakMap<SkillResourceSourceReader, BundleIdentityCache>();
-  const resolveCaches = (reader: SkillResourceSourceReader): BundleIdentityCache => {
-    let caches = cachesByReader.get(reader);
-    if (!caches) {
-      caches = new Map();
-      cachesByReader.set(reader, caches);
-    }
-    return caches;
-  };
-  const resolveDiscoveredIdentity = (skill: Skill): Promise<string | undefined> => {
-    if (skill.filePath.startsWith("node://")) {
-      return Promise.resolve(undefined);
-    }
-    const reader = resolveSourceReader(skill);
-    if (!reader) {
-      return Promise.resolve(undefined);
-    }
-    const directory = path.resolve(skill.baseDir);
-    const caches = resolveCaches(reader);
-    let identity = caches.get(directory);
-    if (!identity) {
-      // The fingerprint is computed once per loaded bundle: same-directory
-      // siblings coalesce into this single walk for the whole preparation.
-      identity = readBundleIdentity(skill, reader);
-      caches.set(directory, identity);
-      // Do not pin a failed lookup: a later sibling may legitimately retry.
-      void identity.then((acquired) => {
-        if (acquired === undefined) {
-          caches.delete(directory);
-        }
-      });
-    }
-    return identity;
-  };
-  const stampSkills = async (skills: readonly Skill[]): Promise<Skill[]> => {
-    // Discovery walks run concurrently, and the reader+directory caches
-    // coalesce same-bundle siblings into a single walk per loaded bundle.
-    const identities = await Promise.all(
-      skills.map((skill) =>
-        skill.bundleFingerprint
-          ? Promise.resolve(skill.bundleFingerprint)
-          : resolveDiscoveredIdentity(skill),
-      ),
-    );
-    return skills.map((skill, index) => {
-      const identity = identities[index];
-      return identity === undefined || skill.bundleFingerprint === identity
+  // The resource version is the watcher/reload signal: one identity per bundle
+  // directory per loaded version, so a reload restamps and a steady state
+  // reuses the cached walk without re-hashing.
+  const version = getSkillsResourceVersion(workspaceDir ?? "");
+  return await Promise.all(
+    skills.map(async (skill) => {
+      // Another producer's retained identity is trusted verbatim: worker
+      // materialization, the session route, the transfer adapter, and library
+      // pins stamp their own, and discovery never re-hashes a carried stamp.
+      if (skill.bundleFingerprint) {
+        return skill;
+      }
+      // node:// locators have no bundle directory on this host: omit.
+      if (skill.filePath.startsWith("node://")) {
+        return skill;
+      }
+      const reader = resolveSourceReader(skill);
+      if (!reader) {
+        return skill;
+      }
+      let caches = discoveredBundleIdentityCaches.get(reader);
+      if (!caches) {
+        caches = new Map();
+        discoveredBundleIdentityCaches.set(reader, caches);
+      }
+      const key = `${path.resolve(skill.baseDir)}\u0000${version}`;
+      let identity = caches.get(key);
+      if (!identity) {
+        identity = readDiscoveredBundleIdentity(skill, reader);
+        caches.set(key, identity);
+        pruneMapToMaxSize(caches, MAX_DISCOVERED_IDENTITY_CACHE_ENTRIES);
+        // Do not pin a failed lookup: a later intake may legitimately retry.
+        void identity.then((acquired) => {
+          if (acquired === undefined) {
+            caches?.delete(key);
+          }
+        });
+      }
+      const fingerprint = await identity;
+      return fingerprint === undefined || skill.bundleFingerprint === fingerprint
         ? skill
-        : { ...skill, bundleFingerprint: identity };
-    });
-  };
-  const resolvedSkills = params.snapshot?.resolvedSkills;
-  const discoverySkills = params.snapshot?.discoverySkills;
-  const stampedResolved = resolvedSkills ? await stampSkills(resolvedSkills) : resolvedSkills;
-  const stampedDiscovery = discoverySkills
-    ? discoverySkills === resolvedSkills
-      ? stampedResolved
-      : await stampSkills(discoverySkills)
-    : undefined;
-  const stampedLibrary = await Promise.all(
-    params.libraryEntries.map(async (entry) => {
-      const identity =
-        entry.skill.bundleFingerprint ?? (await resolveDiscoveredIdentity(entry.skill));
-      return identity === undefined || entry.skill.bundleFingerprint === identity
-        ? entry
-        : { ...entry, skill: { ...entry.skill, bundleFingerprint: identity } };
+        : { ...skill, bundleFingerprint: fingerprint };
     }),
   );
-  const snapshot = params.snapshot
-    ? stampedResolved !== resolvedSkills || stampedDiscovery !== discoverySkills
-      ? {
-          ...params.snapshot,
-          ...(stampedResolved ? { resolvedSkills: stampedResolved } : {}),
-          ...(stampedDiscovery ? { discoverySkills: stampedDiscovery } : {}),
-        }
-      : params.snapshot
-    : undefined;
-  return { snapshot, libraryEntries: stampedLibrary };
 }
 
 function matchesExplicitSelection(skill: Skill, selection: ExplicitSkillSelection): boolean {

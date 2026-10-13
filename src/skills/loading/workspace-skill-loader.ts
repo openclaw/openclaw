@@ -12,6 +12,7 @@ import {
 import { getSkillsSourceVersion } from "../runtime/refresh-state.js";
 import { prepareLocalSkillSources, prepareSkillSourcePlan } from "../runtime/refresh.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
+import { stampDiscoveredSkillBundleIdentities } from "../runtime/resources.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
@@ -154,6 +155,25 @@ function loadLocalSkillTiers(
   return entries;
 }
 
+/** Stamps discovered skills' loaded-bundle identities, preserving entry records. */
+async function stampDiscoveredEntries(
+  workspaceDir: string,
+  entries: SkillEntry[],
+): Promise<SkillEntry[]> {
+  const stamped = await stampDiscoveredSkillBundleIdentities(
+    entries.map((entry) => entry.skill),
+    workspaceDir,
+  );
+  return entries.map((entry, index) =>
+    stamped[index] === entry.skill
+      ? entry
+      : {
+          ...entry,
+          skill: stamped[index]!,
+        },
+  );
+}
+
 function mergeSkillTiers(
   tiers: LocalSkillTiers,
   opts?: LocalWorkspaceSkillLoadOptions,
@@ -226,7 +246,8 @@ async function prepareCapturedWorkspaceSkillEntries(
   const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   const bundledOnly = opts?.bundledSkillName !== undefined;
   if (!access?.loadSkills && !bundledOnly && opts?.entries !== undefined) {
-    return { entries: opts.entries };
+    return { entries: await stampDiscoveredEntries(workspaceDir, opts.entries) };
+  }
   }
   const libraryEntries = libraryContext
     ? await prepareSkillLibrarySelection(
@@ -261,17 +282,20 @@ async function prepareCapturedWorkspaceSkillEntries(
     );
     assertCurrent();
     return {
-      entries: bundledOnly
-        ? sources.entries
-        : mergeSkillTiers(
-            {
-              sourceKey: JSON.stringify(sourcePlan),
-              agent: sources.entries,
-              execution: sources.executionEntries,
-            },
-            opts,
-            libraryEntries,
-          ),
+      entries: await stampDiscoveredEntries(
+        workspaceDir,
+        bundledOnly
+          ? sources.entries
+          : mergeSkillTiers(
+              {
+                sourceKey: JSON.stringify(sourcePlan),
+                agent: sources.entries,
+                execution: sources.executionEntries,
+              },
+              opts,
+              libraryEntries,
+            ),
+      ),
       runtime: sources.runtime,
       status: sources.status,
     };
@@ -348,20 +372,23 @@ async function prepareCapturedWorkspaceSkillEntries(
     return order(left) - order(right);
   });
   return {
-    entries: bundledOnly
-      ? gatewayEntries
-      : (opts?.entries ??
-        mergeSkillTiers(
-          {
-            sourceKey: JSON.stringify(["remote", agentWorkspaceDir, executionWorkspaceDir]),
-            agent: agentEntries,
-            execution: gatewayExecutionWorkspaceDir
-              ? gatewayExecutionEntries
-              : sources.executionEntries.map(onWorkspace),
-          },
-          opts,
-          libraryEntries,
-        )),
+    entries: await stampDiscoveredEntries(
+      workspaceDir,
+      bundledOnly
+        ? gatewayEntries
+        : (opts?.entries ??
+            mergeSkillTiers(
+              {
+                sourceKey: JSON.stringify(["remote", agentWorkspaceDir, executionWorkspaceDir]),
+                agent: agentEntries,
+                execution: gatewayExecutionWorkspaceDir
+                  ? gatewayExecutionEntries
+                  : sources.executionEntries.map(onWorkspace),
+              },
+              opts,
+              libraryEntries,
+            )),
+    ),
     runtime: sources.runtime,
     status: sources.status
       ? {

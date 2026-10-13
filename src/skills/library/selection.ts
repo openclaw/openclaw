@@ -256,16 +256,22 @@ function materializeSkillLibrarySelection(
     const invocation = resolveSkillInvocationPolicy(frontmatter);
     const name = selection.name;
     return {
-      skill: materializeSkill({
-        content,
-        frontmatter,
-        name,
-        description: revision.description,
-        baseDir,
-        filePath,
-        source: "openclaw-library",
-        sourceOptions: { source: "openclaw-library" },
-      }),
+      // The pinned revision is the verified bundle-tree digest (the library
+      // store admits only revisions whose walked tree digests to it), so the
+      // loaded-bundle identity rides the pin verbatim: no re-walk, no re-hash.
+      skill: {
+        ...materializeSkill({
+          content,
+          frontmatter,
+          name,
+          description: revision.description,
+          baseDir,
+          filePath,
+          source: "openclaw-library",
+          sourceOptions: { source: "openclaw-library" },
+        }),
+        bundleFingerprint: selection.revision,
+      },
       frontmatter,
       invocation,
       // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.
