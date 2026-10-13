@@ -15,6 +15,24 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
 }
 
 describe("telegram custom commands schema", () => {
+  it("keeps the progress waiver explicit and accepts account overrides", () => {
+    const result = TelegramConfigSchema.safeParse({
+      streaming: { mode: "progress", progress: {} },
+      accounts: {
+        ops: { streaming: { mode: "progress", progress: { previewWithHooks: true } } },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.streaming?.progress?.previewWithHooks).toBeUndefined();
+      expect(result.data.accounts?.ops?.streaming?.progress?.previewWithHooks).toBe(true);
+    }
+    expectTelegramConfigIssue(
+      { streaming: { mode: "progress", progress: { previewWithHooks: "true" } } },
+      "streaming.progress.previewWithHooks",
+    );
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     expectTelegramConfigIssue(
       { dmPolicy: "open", allowFrom: ["123456789"], botToken: "fake" },

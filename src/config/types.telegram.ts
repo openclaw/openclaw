@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   DmPolicy,
   GroupPolicy,
   SessionThreadBindingsConfig,
@@ -48,7 +49,19 @@ export type TelegramNetworkConfig = {
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 
-export type TelegramPreviewStreamingConfig = ChannelPreviewStreamingConfig;
+export type TelegramStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /**
+   * Explicit default-off waiver for unfiltered progress drafts with modifying
+   * outbound hooks. Applies only in progress mode without commentary or streamed
+   * reasoning. Headlines, plans, approvals and tool lines bypass those hooks;
+   * questions and every other durable payload still pass through them.
+   */
+  previewWithHooks?: boolean;
+};
+
+export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
+  progress?: TelegramStreamingProgressConfig;
+};
 
 export type TelegramExecApprovalConfig = ChannelExecApprovalConfig;
 

@@ -66,6 +66,8 @@ export type TelegramSendPayloadOptions = {
 
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
+  /** False when a stream is allowed only for transient, unfiltered progress. */
+  allowStream?: boolean;
   sendPayload: (
     payload: ReplyPayload,
     options?: TelegramSendPayloadOptions,
@@ -125,13 +127,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     buttons,
     finalizePreview: requestedFinalizePreview,
     durable: requestedDurable,
-    allowStream = true,
+    allowStream: requestedAllowStream = true,
     promptContextSequence: suppliedPromptContextSequence,
     onPlatformSendDispatch,
     assertPlatformSendAuthorized,
     bindPendingFinalDelivery,
     onMediaAccepted,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
+    const allowStream = params.allowStream !== false && requestedAllowStream;
     let text = initialText;
     let payload = initialPayload;
     const lane = params.lanes[laneName];

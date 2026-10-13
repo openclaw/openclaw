@@ -82,6 +82,8 @@ type TelegramAnswerBlockDelivery = {
 
 export type TelegramDispatchTurnConfig = Omit<DispatchTelegramMessageParams, "telegramDeps"> & {
   allowProviderPreview: boolean;
+  /** Operator permission for transient progress; never durable preview delivery. */
+  allowProgressPreview?: boolean;
   chunkMode: TextChunkMode;
   dispatchStartedAt: number;
   draftReplyToMessageId?: number;

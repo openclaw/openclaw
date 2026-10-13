@@ -31,7 +31,8 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
     params.resolvedReasoningLevel === "on" && params.streamMode !== "progress";
   const streamDeliveryEnabled = !isRoomEvent && params.streamMode !== "off";
   const previewAvailable =
-    params.allowProviderPreview &&
+    (params.allowProviderPreview ||
+      (params.streamMode === "progress" && params.allowProgressPreview === true)) &&
     streamDeliveryEnabled &&
     !(params.replyToMode !== "off" && params.replyQuoteText != null) &&
     !forceBlockStreamingForReasoning;

@@ -36,6 +36,7 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { resolveTelegramProgressDraftWithHooks } from "./preview-streaming.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
@@ -289,11 +290,21 @@ export const dispatchTelegramMessage = async (
       (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
       (hookRunner?.hasHooks("message_sending") ?? false)
     );
+  // The operator waiver permits transient progress only. It must not grant
+  // the shared lane permission to finalize questions or other durable payloads.
+  const allowProgressPreview =
+    !dispatchContext.ctxPayload.GroupThread &&
+    resolveTelegramProgressDraftWithHooks({
+      streaming: telegramCfg.streaming,
+      streamMode: dispatchParams.streamMode,
+      reasoningLevel: resolvedReasoningLevel,
+    });
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {
     ...dispatchParams,
     ...quote,
     allowProviderPreview,
+    allowProgressPreview,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
     dispatchStartedAt,
