@@ -127,6 +127,8 @@ suite.define(() => {
       await configureRealComposerPet(page, 42);
       const sprite = page.locator(".lobster-pet");
       await sprite.waitFor();
+      // Native dismissal completion needs live animation frames.
+      await page.clock.resume();
       const composer = page.locator(".new-session-page__message");
       await composer.focus();
       await sprite.click({ button: "right" });
@@ -151,14 +153,12 @@ suite.define(() => {
       const panel = page.locator(".lobster-pet-dismiss-menu__panel");
       await page.keyboard.press("Escape");
       expect(await composer.evaluate((input) => input === document.activeElement)).toBe(true);
-      await page.clock.runFor(150);
       await panel.waitFor({ state: "detached" });
       expect(await sprite.count()).toBe(1);
 
       await sprite.click({ button: "right" });
       await panel.waitFor();
       await composer.click();
-      await page.clock.runFor(150);
       await panel.waitFor({ state: "detached" });
       expect(await composer.evaluate((input) => input === document.activeElement)).toBe(true);
       expect(await sprite.count()).toBe(1);
@@ -167,7 +167,6 @@ suite.define(() => {
       await panel.waitFor();
       await page.keyboard.press("Enter");
       expect(await composer.evaluate((input) => input === document.activeElement)).toBe(true);
-      await page.clock.runFor(350);
       await expect.poll(() => sprite.count()).toBe(0);
     }));
 
@@ -235,7 +234,7 @@ suite.define(() => {
         const point = await sprite.evaluate(
           (element, direction) => ({
             clientX: direction === "left" ? 12 : innerWidth - 12,
-            clientY: element.getBoundingClientRect().top + 12,
+            clientY: Math.trunc(element.getBoundingClientRect().top + 12),
           }),
           edge,
         );
