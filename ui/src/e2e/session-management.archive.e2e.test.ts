@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
-import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { expectRequestCountStable, pauseVirtualClock } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
@@ -107,6 +107,7 @@ suite.define(() => {
   it("refreshes the archived sidebar after restoring a session during a stale roster load", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.clock.install();
     const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", updatedAt);
     const archived = sessionRow("agent:main:restore-pending", "Restore pending", updatedAt - 1, {
@@ -138,11 +139,14 @@ suite.define(() => {
         );
       const initialRequests = (await archivedRequests()).length;
       await gateway.deferNext("sessions.list", { archived: true });
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...archived,
         reason: "update",
         sessionKey: archived.key,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await expect.poll(archivedRequests).toHaveLength(initialRequests + 1);
 
       await archivedRow.hover();
@@ -746,6 +750,7 @@ suite.define(() => {
   it("keeps archive state after navigating away and back", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.clock.install();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", baseTime);
     const target = {
@@ -803,12 +808,15 @@ suite.define(() => {
 
       await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
       let listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 1_000,
         reason: "update",
         sessionKey: target.key,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
@@ -822,12 +830,15 @@ suite.define(() => {
         ]),
       );
       listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 2_000,
         reason: "update",
         sessionKey: target.key,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
@@ -847,6 +858,7 @@ suite.define(() => {
   it("recovers a deleted active chat without repeatedly resolving its missing session", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.clock.install();
     const routeErrors: string[] = [];
     page.on("console", (message) => {
       if (message.type() === "error" && message.text().includes("route")) {
@@ -891,12 +903,15 @@ suite.define(() => {
       const requestsBeforeDeletion = (await gateway.getRequests("sessions.list", rosterMatch))
         .length;
       await gateway.setSessionsListResponse(sessionsListResponse([mainSession]));
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
         reason: "delete",
         sessionKey: deletedKey,
         sessionId: `session:${deletedKey}`,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
 
       await expect
         .poll(() => new URL(page.url()).pathname, { timeout: 15_000 })

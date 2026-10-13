@@ -3,7 +3,7 @@ import { flush } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import type { BoardCommandEvent, BoardProvider } from "../../lib/board/provider.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
