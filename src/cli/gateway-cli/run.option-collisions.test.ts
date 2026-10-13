@@ -163,6 +163,13 @@ vi.mock("../../config/config.js", () => ({
     readConfigFileSnapshotWithPluginMetadata(options),
 }));
 
+vi.mock("../../config/io.factory.js", () => ({
+  createConfigIO: () => ({
+    readConfigFileSnapshot: async () => configState.snapshot,
+    prepareConfigRecovery: async () => null,
+  }),
+}));
+
 vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
