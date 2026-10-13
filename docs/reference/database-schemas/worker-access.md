@@ -60,9 +60,11 @@ prove worker execution. Update the generator's evidence, not its generated page.
 ## Check once on load; trust the owner
 
 The Gateway is the single runtime owner of its databases. Load physical format,
-schema, integrity, and canonical-index facts once per physical database per
-process load, then share them across handles and workers, including idle reopen.
-Replacement files require new admission; migration and repair owners publish
+schema, integrity, and canonical-index facts through the shared admission owner,
+then reuse them across handles and workers while admission retains a live
+reference. An idle reopen can reuse facts retained by another handle; closing
+the final handle retires those facts, so the next open admits the database again.
+Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
