@@ -16,8 +16,6 @@ import {
   storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
 
-// getSafeLocalStorage only accepts an own value property under Vitest, so the
-// jsdom getter-backed localStorage must be replaced with a plain mock.
 let originalLocalStorage: PropertyDescriptor | undefined;
 
 beforeEach(() => {

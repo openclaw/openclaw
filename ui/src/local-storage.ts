@@ -9,10 +9,6 @@ function isStorage(value: unknown): value is Storage {
 function getSafeStorage(name: "localStorage" | "sessionStorage"): Storage | null {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
 
-  if (typeof process !== "undefined" && process.env?.VITEST) {
-    return descriptor && !descriptor.get && isStorage(descriptor.value) ? descriptor.value : null;
-  }
-
   if (typeof window !== "undefined" && typeof document !== "undefined") {
     try {
       const storage = window[name];
