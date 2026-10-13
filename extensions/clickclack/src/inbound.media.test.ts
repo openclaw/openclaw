@@ -13,7 +13,10 @@ import type { ClickClackMessage } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./outbound.js", () => ({ sendClickClackText: sendClickClackTextMock }));
+vi.mock("./outbound.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./outbound.js")>();
+  return { ...actual, sendClickClackText: sendClickClackTextMock };
+});
 
 function prepare(account = createInboundAgentAccount()) {
   const runtime = createInboundRuntime(true);
@@ -127,7 +130,7 @@ describe("ClickClack inbound media", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sendClickClackTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "This ClickClack bot is configured for text-only model replies and cannot process attachments.",
+        text: "This ClickClack bot is configured for text-only model replies and cannot process attachments. Please send the relevant content as text.",
       }),
     );
   });
@@ -152,7 +155,7 @@ describe("ClickClack inbound media", () => {
       expect(fetchMock).toHaveBeenCalledTimes(kind === "metadata" ? 0 : 1);
       expect(sendClickClackTextMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "I could not process this attachment because it exceeds this bot's media limit.",
+          text: "I could not process this attachment because it exceeds this bot's media limit. Please reduce or split the file and upload it again.",
         }),
       );
     },
@@ -200,6 +203,14 @@ describe("ClickClack inbound media", () => {
         message: createMediaMessage("upl_retired", 3),
         abortSignal: abort.signal,
       });
+      const assertCurrent = vi.mocked(runtime.channel.media.saveResponseMedia).mock.calls[0]?.[1]
+        ?.assertCurrent;
+      if (!assertCurrent) throw new Error("missing media publication admission callback");
+      expect(assertCurrent).toThrow(
+        change === "shutdown"
+          ? abort.signal.reason
+          : "ClickClack attachment admission is no longer current",
+      );
       expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
       expect(sendClickClackTextMock).not.toHaveBeenCalled();
     },

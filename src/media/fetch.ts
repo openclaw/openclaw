@@ -105,6 +105,8 @@ type FetchMediaOptions = {
 };
 
 type SaveResponseMediaOptions = {
+  /** Revalidate caller-owned read authority through streaming and final publication. */
+  assertCurrent?: () => void;
   sourceUrl?: string;
   filePathHint?: string;
   maxBytes?: number;
@@ -571,21 +573,23 @@ export async function saveResponseMedia(
   res: Response,
   options: SaveResponseMediaOptions = {},
 ): Promise<SavedRemoteMedia> {
-  const sourceUrl = redactSensitiveText((options.sourceUrl ?? res.url) || "response");
-  const finalUrl = options.sourceUrl ?? res.url;
-  await assertMediaResponseOk({
-    res,
-    url: options.sourceUrl ?? finalUrl,
-    finalUrl,
-    sourceUrl,
-    readIdleTimeoutMs: options.readIdleTimeoutMs,
-  });
-  return await saveOkMediaResponse({
-    ...options,
-    res,
-    finalUrl,
-    sourceUrl,
-    maxBytes: options.maxBytes ?? MAX_DOCUMENT_BYTES,
+  return await withMediaReadScope(options, async (scopedOptions) => {
+    const sourceUrl = redactSensitiveText((scopedOptions.sourceUrl ?? res.url) || "response");
+    const finalUrl = scopedOptions.sourceUrl ?? res.url;
+    await assertMediaResponseOk({
+      res,
+      url: scopedOptions.sourceUrl ?? finalUrl,
+      finalUrl,
+      sourceUrl,
+      readIdleTimeoutMs: scopedOptions.readIdleTimeoutMs,
+    });
+    return await saveOkMediaResponse({
+      ...scopedOptions,
+      res,
+      finalUrl,
+      sourceUrl,
+      maxBytes: scopedOptions.maxBytes ?? MAX_DOCUMENT_BYTES,
+    });
   });
 }
 

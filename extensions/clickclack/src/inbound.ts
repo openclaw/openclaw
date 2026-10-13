@@ -56,7 +56,7 @@ async function stageClickClackInboundMedia(params: {
   account: ResolvedClickClackAccount;
   cfg: CoreConfig;
   message: ClickClackMessage;
-  isCurrent: () => boolean;
+  assertCurrent: () => void;
   correlationId?: string;
   abortSignal?: AbortSignal;
 }) {
@@ -65,17 +65,11 @@ async function stageClickClackInboundMedia(params: {
     return [];
   }
   const runtime = getClickClackRuntime();
-  const assertCurrent = () => {
-    params.abortSignal?.throwIfAborted();
-    if (!params.isCurrent()) {
-      throw new Error("ClickClack attachment admission is no longer current");
-    }
-  };
   const client = createClickClackClient({
     baseUrl: params.account.apiEndpoint,
     token: params.account.token,
     correlationId: params.correlationId,
-    beforeRequest: assertCurrent,
+    beforeRequest: params.assertCurrent,
   });
   const maxBytes = Math.min(
     resolveChannelMediaMaxBytes({
@@ -99,8 +93,9 @@ async function stageClickClackInboundMedia(params: {
     const saved = await client.consumeUpload(
       attachment.id,
       (response) => {
-        assertCurrent();
+        params.assertCurrent();
         return runtime.channel.media.saveResponseMedia(response, {
+          assertCurrent: params.assertCurrent,
           sourceUrl,
           filePathHint: attachment.filename,
           originalFilename: attachment.filename,
@@ -126,7 +121,7 @@ function permanentMediaRejectionNotice(error: unknown): string | undefined {
     return "I could not process this attachment because it is no longer available in ClickClack. Please upload it again.";
   }
   if (error instanceof ClickClackPermanentMediaError || extractErrorCode(error) === "max_bytes") {
-    return "I could not process this attachment because it exceeds this bot's media limit.";
+    return "I could not process this attachment because it exceeds this bot's media limit. Please reduce or split the file and upload it again.";
   }
   return undefined;
 }
@@ -138,6 +133,7 @@ async function sendClickClackInboundNotice(params: {
   target: string;
   text: string;
   correlationId?: string;
+  assertCurrent: () => void;
 }) {
   await sendClickClackText({
     cfg: params.cfg,
@@ -147,6 +143,7 @@ async function sendClickClackInboundNotice(params: {
     threadId: params.message.parent_message_id ? params.message.thread_root_id : undefined,
     replyToId: params.message.id,
     correlationId: params.correlationId,
+    assertDirectAdapterHandoff: params.assertCurrent,
   });
 }
 
@@ -258,6 +255,12 @@ export async function handleClickClackInbound(params: {
   if (params.abortSignal?.aborted) {
     return;
   }
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    if (!access.isCurrent()) {
+      throw new Error("ClickClack attachment admission is no longer current");
+    }
+  };
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
   if (params.account.replyMode === "model" && !discussionRoute && hasAttachments) {
     if (
@@ -273,8 +276,9 @@ export async function handleClickClackInbound(params: {
       cfg: params.config,
       message,
       target,
-      text: "This ClickClack bot is configured for text-only model replies and cannot process attachments.",
+      text: "This ClickClack bot is configured for text-only model replies and cannot process attachments. Please send the relevant content as text.",
       correlationId: params.correlationId,
+      assertCurrent,
     });
     return;
   }
@@ -284,7 +288,7 @@ export async function handleClickClackInbound(params: {
       account: params.account,
       cfg: params.config,
       message,
-      isCurrent: access.isCurrent,
+      assertCurrent,
       correlationId: params.correlationId,
       abortSignal: params.abortSignal,
     });
@@ -311,6 +315,7 @@ export async function handleClickClackInbound(params: {
       target,
       text: notice,
       correlationId: params.correlationId,
+      assertCurrent,
     });
     return;
   }

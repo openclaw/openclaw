@@ -3,6 +3,7 @@ import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startClickClackGatewayAccount } from "./gateway.js";
+import { handleClickClackInbound } from "./inbound.js";
 import {
   createInboundAccountConfig,
   createInboundAgentAccount,
@@ -24,6 +25,128 @@ vi.mock("./http-client.js", async (importOriginal) => {
       websocket: sockets.websocket,
     }),
   };
+});
+
+describe("ClickClack attachment notice admission", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const texts = {
+    unavailable:
+      "I could not process this attachment because it is no longer available in ClickClack. Please upload it again.",
+    oversized:
+      "I could not process this attachment because it exceeds this bot's media limit. Please reduce or split the file and upload it again.",
+    model:
+      "This ClickClack bot is configured for text-only model replies and cannot process attachments. Please send the relevant content as text.",
+  };
+  const cases = [
+    { kind: "unavailable", outcome: "allowed" },
+    { kind: "unavailable", outcome: "revoked" },
+    { kind: "unavailable", outcome: "shutdown" },
+    { kind: "oversized", outcome: "allowed" },
+    { kind: "oversized", outcome: "revoked" },
+    { kind: "model", outcome: "allowed" },
+    { kind: "model", outcome: "revoked" },
+  ] as const;
+
+  it.each(cases)(
+    "rechecks $kind notice admission after DM preparation ($outcome)",
+    async ({ kind, outcome }) => {
+      const runtime = createInboundRuntime(true);
+      const account = createInboundAgentAccount({
+        replyMode: kind === "model" ? "model" : "agent",
+      });
+      const config = createInboundAccountConfig(account);
+      publishInboundAccountConfig(runtime, account);
+      setClickClackRuntime(runtime);
+      const abort = new AbortController();
+      const stopped = new Error("notice gateway stopped");
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const notices: unknown[] = [];
+      const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/uploads/upl_notice")
+          return new Response("missing", { status: 404 });
+        if (url.pathname === "/api/dms" && init?.method === "POST") {
+          preparing.resolve();
+          await prepared.promise;
+          return Response.json({ conversation: { id: "dm_notice" } });
+        }
+        if (url.pathname === "/api/dms/dm_notice/messages" && init?.method === "POST") {
+          notices.push(JSON.parse(String(init.body)));
+          return Response.json({ message: createInboundMessage({ id: "msg_notice" }) });
+        }
+        throw new Error(`unexpected synthetic notice request ${url.pathname}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const operation = handleClickClackInbound({
+        account,
+        config,
+        abortSignal: abort.signal,
+        message: createInboundMessage({
+          channel_id: undefined,
+          direct_conversation_id: "dm_notice",
+          attachments: [
+            {
+              id: "upl_notice",
+              workspace_id: "wsp_1",
+              owner_id: "usr_owner",
+              filename: "notice.pdf",
+              content_type: "application/pdf",
+              byte_size: kind === "oversized" ? 64 * 1024 * 1024 + 1 : 3,
+              width: 0,
+              height: 0,
+              duration_ms: 0,
+              created_at: "2026-05-09T12:00:00.000Z",
+            },
+          ],
+        }),
+      });
+      const sending = operation.then(
+        () => ({ accepted: true }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          sending.then(() => {
+            throw new Error("notice settled before DM preparation");
+          }),
+        ]);
+        if (outcome === "revoked")
+          publishInboundAccountConfig(runtime, { ...account, allowFrom: [] });
+        if (outcome === "shutdown") abort.abort(stopped);
+        prepared.resolve();
+        const result = await sending;
+        expect(result).toEqual(
+          outcome === "allowed"
+            ? { accepted: true }
+            : outcome === "shutdown"
+              ? { error: stopped }
+              : {
+                  error: expect.objectContaining({
+                    message: "ClickClack attachment admission is no longer current",
+                  }),
+                },
+        );
+        expect(notices).toEqual(
+          outcome === "allowed" ? [{ body: texts[kind], quoted_message_id: "msg_1" }] : [],
+        );
+        expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+          ...(kind === "unavailable" ? ["/api/uploads/upl_notice"] : []),
+          "/api/dms",
+          ...(outcome === "allowed" ? ["/api/dms/dm_notice/messages"] : []),
+        ]);
+        expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+        expect(runtime.llm.complete).not.toHaveBeenCalled();
+      } finally {
+        prepared.resolve();
+        await sending;
+      }
+    },
+  );
 });
 
 class FakeSocket extends EventEmitter {

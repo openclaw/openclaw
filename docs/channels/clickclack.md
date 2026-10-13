@@ -571,7 +571,10 @@ and staged in OpenClaw's managed media store before the agent turn starts. The c
 `mediaMaxMb` limit and ClickClack's 64 MiB ceiling both apply.
 Attachments over these limits or no longer available receive a visible terminal
 notice so later messages can proceed. Transient retrieval failures remain
-retryable. ClickClack servers
+retryable. Reduce or split oversized files, upload unavailable files again, and
+send the relevant content as text when using model reply mode. Sender admission
+is rechecked during reads and final file publication, and before notice requests
+even after a DM target has been prepared. ClickClack servers
 that support atomic `upload_id` message creation publish `message.created` only
 after the attachment link exists, preventing consumers from seeing a transient
 text-only message.
