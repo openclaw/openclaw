@@ -60,6 +60,11 @@ export async function drainGatewayActiveWork({
         }
 
         reportDrainSnapshot(initialSnapshot);
+        if (request.interruptAfterDrain) {
+          logger.info("external restart owner already drained; interrupting remaining work");
+          runtime.abortActiveCronTaskRuns();
+          return;
+        }
         const remainingDrainTimeoutMs =
           restartDrainDeadlineAt === undefined
             ? undefined
