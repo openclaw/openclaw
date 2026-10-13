@@ -142,6 +142,31 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
 }
 
 describe("placement session retirement", () => {
+  it.each(["stable-alias", "cloud"] as const)(
+    "does not apply retired local cron evidence to a %s replacement",
+    async (target) => {
+      const original = {
+        ...localPlacement("cron-run"),
+        sessionKey: "agent:main:cron:daily:run:cron-run",
+      };
+      const replacement =
+        target === "cloud"
+          ? { ...activePlacement(original.sessionId), sessionKey: original.sessionKey }
+          : { ...original, sessionKey: "agent:main:cron:daily" };
+      const harness = createHarness([original]);
+      harness.resolveSessionEvidence.mockImplementationOnce(async () => {
+        harness.placements.set(original.sessionId, replacement);
+        return "absent";
+      });
+
+      await harness.retirement.reconcile();
+
+      expect(harness.placements.get(original.sessionId)).toEqual(replacement);
+      expect(harness.retired).toEqual([]);
+      expect(harness.forceDestroyEnvironment).not.toHaveBeenCalled();
+    },
+  );
+
   it("retires an exact local placement after its session disappears", async () => {
     const harness = createHarness([localPlacement("session-local")]);
 
@@ -227,6 +252,54 @@ describe("placement session retirement", () => {
     }
   });
 
+  it.each(["owner", "key", "state", "generation", "environment", "epoch"] as const)(
+    "does not retire a placement whose %s changed during teardown",
+    async (changed) => {
+      const original = activePlacement("session-teardown");
+      const failed = failedPlacement(original);
+      const replacement: WorkerSessionPlacementRecord =
+        changed === "state"
+          ? {
+              ...failed,
+              state: "reclaimed",
+              turnClaim: null,
+              environmentId: original.environmentId,
+              activeOwnerEpoch: original.activeOwnerEpoch,
+              workspaceBaseManifestRef: original.workspaceBaseManifestRef,
+              remoteWorkspaceDir: original.remoteWorkspaceDir,
+              workerBundleHash: original.workerBundleHash,
+              lastTranscriptAckCursor: original.lastTranscriptAckCursor,
+              lastLiveEventAckCursor: original.lastLiveEventAckCursor,
+              recoveryError: null,
+              terminalReason: null,
+              terminalAtMs: 3,
+            }
+          : {
+              ...failed,
+              ...(changed === "owner" ? { agentId: "replacement" } : {}),
+              ...(changed === "key" ? { sessionKey: "agent:main:replacement" } : {}),
+              ...(changed === "generation" ? { generation: failed.generation + 1 } : {}),
+              ...(changed === "environment" ? { environmentId: "replacement-environment" } : {}),
+              ...(changed === "epoch" ? { activeOwnerEpoch: failed.activeOwnerEpoch! + 1 } : {}),
+            };
+      const harness = createHarness([original]);
+      const destroyEnvironment = harness.forceDestroyEnvironment.getMockImplementation()!;
+      harness.forceDestroyEnvironment.mockImplementationOnce(async (environmentId) => {
+        await destroyEnvironment(environmentId);
+        harness.placements.set(original.sessionId, replacement);
+      });
+
+      await harness.retirement.reconcile();
+
+      expect(harness.placements.get(original.sessionId)).toEqual(replacement);
+      expect(harness.retired).toEqual([]);
+      expect(harness.forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith(
+        original.environmentId,
+        expect.any(Function),
+      );
+    },
+  );
+
   it("fences a live environment before retiring its failed placement", async () => {
     const harness = createHarness([activePlacement("session-active")]);
 
@@ -236,6 +309,16 @@ describe("placement session retirement", () => {
       "environment:session-active",
       expect.any(Function),
     );
+    expect(harness.retired).toEqual([]);
+    const failed = harness.placements.get("session-active");
+    expect(failed).toMatchObject({ state: "failed", generation: 3 });
+    harness.resolveSessionEvidence.mockClear();
+    harness.forceDestroyEnvironment.mockClear();
+
+    await harness.retirement.reconcile();
+
+    expect(harness.resolveSessionEvidence).toHaveBeenCalledExactlyOnceWith(failed);
+    expect(harness.forceDestroyEnvironment).not.toHaveBeenCalled();
     expect(harness.retired).toEqual([
       {
         sessionId: "session-active",

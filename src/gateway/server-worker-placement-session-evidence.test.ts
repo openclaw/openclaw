@@ -90,6 +90,58 @@ async function resolvePlacementEvidence(placement: WorkerSessionPlacementRecord)
 }
 
 describe("worker placement session evidence", () => {
+  it.each(["present", "removed", "invalid"] as const)(
+    "requires the local cron placement's exact run row when it is %s",
+    async (state) => {
+      const stateDir = tempDirs.make("openclaw-placement-cron-alias-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sessionId = "isolated-run";
+        const base = { agentId: "main", sessionKey: "agent:main:cron:daily" };
+        const exact = { ...base, sessionKey: `${base.sessionKey}:run:${sessionId}` };
+        await sessionAccessor.upsertSessionEntryCore(base, { sessionId, updatedAt: 1 });
+        if (state !== "removed") {
+          await sessionAccessor.upsertSessionEntryCore(exact, {
+            sessionId,
+            updatedAt: 1,
+            cronRunContinuation: {
+              lifecycleRevision: "fixture",
+              phase: "ready",
+              basePersisted: true,
+            },
+          });
+        }
+        if (state === "invalid") {
+          const database = openOpenClawAgentDatabase({ agentId: "main" });
+          database.db
+            .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+            .run("{", exact.sessionKey);
+        }
+        const subject = localPlacement(sessionId, exact.sessionKey);
+        await expect(resolvePlacementEvidence(subject)).resolves.toBe(
+          state === "present" ? "current" : state === "removed" ? "absent" : "unknown",
+        );
+        // Physical cloud custody and ordinary legacy-key fallback are unaffected.
+        const activeSubject: Extract<WorkerSessionPlacementRecord, { state: "active" }> = {
+          ...subject,
+          state: "active",
+          generation: 2,
+          turnClaim: null,
+          environmentId: "environment",
+          activeOwnerEpoch: 1,
+          workspaceBaseManifestRef: "manifest",
+          remoteWorkspaceDir: "/workspace",
+          workerBundleHash: "bundle",
+        };
+        await expect(resolvePlacementEvidence(activeSubject)).resolves.toBe(
+          state === "invalid" ? "unknown" : "current",
+        );
+        await expect(
+          resolvePlacementEvidence(localPlacement(sessionId, "agent:main:legacy")),
+        ).resolves.toBe(state === "present" || state === "invalid" ? "unknown" : "current");
+      });
+    },
+  );
+
   it.each([
     { count: 12, prompt: "saved prompt ".repeat(16_384) },
     { count: 401, prompt: "" },

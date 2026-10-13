@@ -1,6 +1,9 @@
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 export type PlacementSessionEvidence = "current" | "absent" | "unknown";
@@ -70,8 +73,13 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       return;
     }
 
-    let current = await deps.placements.getAsync(placement.sessionId);
-    if (!current) {
+    const current = await deps.placements.getAsync(placement.sessionId);
+    if (
+      !current ||
+      current.agentId !== placement.agentId ||
+      current.sessionKey !== placement.sessionKey ||
+      !matchesWorkerPlacementTarget(current, placement)
+    ) {
       return;
     }
     try {
@@ -89,25 +97,18 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     try {
       await deps.forceDestroyEnvironment(environmentId, (error) => {
         deps.warn(
-          `Worker placement orphan cleanup deferred for ${current?.sessionId ?? placement.sessionId}: ${String(error)}`,
+          `Worker placement orphan cleanup deferred for ${current.sessionId}: ${String(error)}`,
         );
       });
     } catch (error) {
       deps.warn(
         `Worker placement orphan teardown failed for ${current.sessionId}: ${String(error)}`,
       );
-      return;
     }
 
-    current = await deps.placements.getAsync(placement.sessionId);
-    if (!current) {
-      return;
-    }
-    try {
-      await retireCurrent(current);
-    } catch {
-      // A concurrent placement transition owns the next reconciliation pass.
-    }
+    // Teardown can change the placement or yield to a replacement. Its result
+    // does not carry the old absence evidence: the next sweep observes the
+    // resulting target and establishes fresh evidence before retiring it.
   };
 
   const reconcile = async (): Promise<void> => {

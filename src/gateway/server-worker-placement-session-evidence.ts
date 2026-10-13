@@ -3,6 +3,7 @@ import { readPlacementSessionIdentityEvidence } from "../config/sessions/session
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import type {
@@ -77,10 +78,27 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       })),
     );
     for (const [index, result] of evidence.entries()) {
-      const placement = identities[index]?.placement;
-      const subject = placement && subjects.get(placement);
-      if (subject && subject.evidence !== "current" && result.status !== "absent") {
-        subject.evidence = result.status;
+      const identity = identities[index];
+      if (!identity) {
+        continue;
+      }
+      const { placement } = identity;
+      const subject = subjects.get(placement);
+      if (!subject) {
+        continue;
+      }
+      // The stable cron row preserves the transcript, not a retired run's local
+      // placement. Retain exact-run authority only while its own row is current;
+      // ordinary retirement then lets the stable row allocate its own placement.
+      const status =
+        placement.state === "local" &&
+        parseCronRunScopeSuffix(placement.sessionKey).runId &&
+        result.status === "current" &&
+        result.sessionKey !== placement.sessionKey
+          ? "absent"
+          : result.status;
+      if (subject.evidence !== "current" && status !== "absent") {
+        subject.evidence = status;
       }
     }
     return async (placement) => {
