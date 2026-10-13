@@ -1,4 +1,4 @@
-import { resolve as resolvePath } from "node:path";
+import { posix, resolve as resolvePath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
@@ -16,6 +16,12 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
+import {
+  resolveSandboxFsMount,
+  resolveSandboxFsPathWithMounts,
+} from "../../agents/sandbox/fs-paths.js";
+import { resolveSandboxSessionWorkspace } from "../../agents/sandbox/session-workspace.js";
+import { buildSandboxContainerName, slugifySessionKey } from "../../agents/sandbox/shared.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -25,6 +31,7 @@ import { captureSessionEntryMetadataRead } from "../../config/sessions/session-e
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -103,6 +110,76 @@ function loadSessionFileRoot(loaded: ReturnType<typeof loadGatewaySessionEntryRe
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,
   };
+}
+
+/**
+ * Sandboxed agents name workspace files by container path, such as /workspace/report.md.
+ * Map a path outside the session root onto its host mount; the session boundary still decides access.
+ */
+async function resolveSandboxedSessionFilePath(
+  source: ReturnType<typeof loadSessionFileRoot>,
+  filePath: string,
+): Promise<string> {
+  if (
+    !source.root ||
+    !source.agentId ||
+    !source.entry ||
+    !posix.isAbsolute(filePath) ||
+    isPathInside(source.root, resolvePath(source.root, filePath))
+  ) {
+    return filePath;
+  }
+  const { sandboxCfg, sandboxWorkdir, workspaceLayout, workspaceMounts } =
+    resolveSandboxSessionWorkspace({
+      cfg: source.cfg,
+      agentId: source.agentId,
+      sessionKey: source.canonicalKey,
+      sessionEntry: source.entry,
+    });
+  if (!sandboxWorkdir || !resolveSandboxFsMount(workspaceMounts, filePath)) {
+    return filePath;
+  }
+  // Container-only storage hides the host files below it, so translate only when the live
+  // container shows this path through the bind the current plan maps it to. Podman can target
+  // a remote machine, so only Docker sandboxes are verified here.
+  if (sandboxCfg.backend.toLowerCase() !== "docker") {
+    return filePath;
+  }
+  const { DOCKER_SANDBOX_ENGINE } = await import("../../agents/sandbox/container-engine.js");
+  const { prepareSandboxMountPlan, sandboxContainerShowsPlannedBind } =
+    await import("../../agents/sandbox/mount-plan.js");
+  const visible = await prepareSandboxMountPlan({
+    engine: DOCKER_SANDBOX_ENGINE,
+    workspaceDir: workspaceLayout.workspaceDir,
+    agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,
+    skillsWorkspaceDir: workspaceLayout.skillsWorkspaceDir,
+    workdir: sandboxWorkdir,
+    workspaceAccess: sandboxCfg.workspaceAccess,
+    binds: sandboxCfg.docker.binds,
+    tmpfs: sandboxCfg.docker.tmpfs,
+  })
+    .then((plan) =>
+      sandboxContainerShowsPlannedBind({
+        engine: DOCKER_SANDBOX_ENGINE,
+        containerName: buildSandboxContainerName(
+          sandboxCfg.docker.containerPrefix,
+          sandboxCfg.scope === "shared" ? "shared" : slugifySessionKey(workspaceLayout.scopeKey),
+        ),
+        plan,
+        target: filePath,
+      }),
+    )
+    .catch(() => false);
+  if (!visible) {
+    return filePath;
+  }
+  return resolveSandboxFsPathWithMounts({
+    filePath,
+    cwd: workspaceLayout.workspaceDir,
+    defaultWorkspaceRoot: workspaceLayout.workspaceDir,
+    defaultContainerRoot: sandboxWorkdir,
+    mounts: workspaceMounts,
+  }).hostPath;
 }
 
 /**
@@ -402,6 +479,7 @@ async function handleSessionFilesRead(
                 : await getSessionWorkspaceFile({
                     ...loaded,
                     ...query,
+                    path: await resolveSandboxedSessionFilePath(source, request.params.path),
                     assertCurrent,
                     authorizeHostRead: hostRead.authorizeHostRead,
                   });
@@ -516,6 +594,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
             )
           : await setSessionWorkspaceFile({
               ...params,
+              path: await resolveSandboxedSessionFilePath(loaded, params.path),
               root: loaded.root,
               fileRoot: loaded.fileRoot,
               assertCurrent: authorize,

@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { DOCKER_SANDBOX_ENGINE, execContainer } from "./container-engine.js";
 import { resolveDockerSourceNamespace } from "./docker-mount-source.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import {
+  prepareSandboxMountPlan,
+  sandboxContainerShowsPlannedBind,
+  sandboxMountPlanMatchesContainer,
+} from "./mount-plan.js";
 
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
@@ -463,5 +467,81 @@ describe("retained mount identity", () => {
         { Type: "bind", Source: "d:\\skills", Destination: "/workspace/skills", RW: false },
       ]),
     ).toBe(true);
+  });
+});
+
+describe("planned bind visibility", () => {
+  // Without a Gateway source namespace the plan keeps local host paths, on every platform.
+  beforeEach(() => {
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue(undefined);
+  });
+
+  async function showsPlannedBind(
+    mounts: (
+      workspace: string,
+    ) => { Type: string; Source: string; Destination: string; RW: boolean }[],
+    mountInfo: (workspace: string) => string[],
+    target: string,
+  ) {
+    const workspace = path.join(root, "empty");
+    const plan = await prepareSandboxMountPlan({ ...params("none"), workspaceDir: workspace });
+    vi.mocked(execContainer).mockImplementation(async (_engine, args) => ({
+      stdout: args.includes("/proc/self/mountinfo")
+        ? `${mountInfo(workspace).join("\n")}\n`
+        : JSON.stringify({ Mounts: mounts(workspace), Tmpfs: null }),
+      stderr: "",
+      code: 0,
+    }));
+    return sandboxContainerShowsPlannedBind({
+      engine: DOCKER_SANDBOX_ENGINE,
+      containerName: "retained",
+      plan,
+      target,
+    });
+  }
+  const workspaceBind = (source: string) => ({
+    Type: "bind",
+    Source: source,
+    Destination: "/workspace",
+    RW: true,
+  });
+  const rootMountInfo = "1 1 0:1 / / rw - overlay overlay rw";
+  const workspaceMountInfo = "2 1 8:1 /project /workspace rw - ext4 /dev/root rw";
+
+  it("accepts a path the live container shows through the planned bind", async () => {
+    expect(
+      await showsPlannedBind(
+        (workspace) => [workspaceBind(workspace)],
+        () => [rootMountInfo, workspaceMountInfo],
+        "/workspace/report.md",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a path under a volume the image declared after the plan", async () => {
+    expect(
+      await showsPlannedBind(
+        (workspace) => [
+          workspaceBind(workspace),
+          { Type: "volume", Source: "/engine/v", Destination: "/workspace/hidden", RW: true },
+        ],
+        () => [
+          rootMountInfo,
+          workspaceMountInfo,
+          "3 2 8:1 /volume /workspace/hidden rw - ext4 /dev/root rw",
+        ],
+        "/workspace/hidden/report.md",
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses a path whose live bind has a different source than the plan", async () => {
+    expect(
+      await showsPlannedBind(
+        () => [workspaceBind("/old/source")],
+        () => [rootMountInfo, workspaceMountInfo],
+        "/workspace/report.md",
+      ),
+    ).toBe(false);
   });
 });

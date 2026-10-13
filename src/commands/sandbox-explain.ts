@@ -9,15 +9,9 @@ import {
   resolveAgentConfig,
   resolveConfiguredAgentId,
   resolveSessionAgentId,
-  resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
-import { getSandboxBackendWorkdirResolver } from "../agents/sandbox/backend.js";
-import { buildSandboxFsMounts } from "../agents/sandbox/fs-paths.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { resolveSandboxSessionWorkspace } from "../agents/sandbox/session-workspace.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import {
@@ -155,77 +149,29 @@ export async function sandboxExplainCommand(
   });
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const {
+    sandboxRuntime,
+    sandboxCfg,
+    sessionIsSandboxed,
+    effectiveAgentWorkspaceDir,
+    workspaceLayout,
+    sandboxWorkdir,
+    workspaceMounts,
+  } = resolveSandboxSessionWorkspace({
     cfg,
-    sessionKey,
     agentId: resolvedAgentId,
-    classificationAgentId: resolvedAgentId,
-    preparedSessionEntry: sessionEntry ?? null,
+    sessionKey,
+    sessionEntry,
   });
-  const configuredSandbox = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
-  const sandboxCfg = sandboxRuntime.sandboxRequired
-    ? {
-        ...configuredSandbox,
-        scope: "agent" as const,
-        workspaceAccess: sandboxRuntime.workspaceAccess,
-      }
-    : configuredSandbox;
   const mainSessionKey = sandboxRuntime.mainSessionKey;
-  const sessionIsSandboxed = sandboxRuntime.sandboxed;
-
   const agentConfig = resolveAgentConfig(cfg, resolvedAgentId);
-  // Spawned sessions persist their inherited workspace and direct-mode cwd so
-  // later turns keep running in the same location. Explain must mirror those
-  // overrides or its effective paths point at a different runtime.
-  const configuredWorkspaceDir = resolveAgentWorkspaceDir(cfg, resolvedAgentId);
-  const sessionWorkspaceDir = resolveIngressWorkspaceOverrideForSessionRun({
-    spawnedBy: sessionEntry?.spawnedBy,
-    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-    cwd: sessionEntry?.spawnedCwd,
-  });
-  const effectiveAgentWorkspaceDir = sessionWorkspaceDir ?? configuredWorkspaceDir;
   const directRuntimeCwd =
     normalizeOptionalString(sessionEntry?.spawnedCwd) ?? effectiveAgentWorkspaceDir;
-  const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
-    cfg: sandboxCfg,
-    agentId: resolvedAgentId,
-    isolationSubject: sandboxRuntime.isolationSubject,
-    rawSessionKey:
-      sessionKey === "global"
-        ? buildAgentMainSessionKey({
-            agentId: resolvedAgentId,
-            mainKey: normalizeMainKey(cfg.session?.mainKey),
-          })
-        : sessionKey,
-    workspaceDir: effectiveAgentWorkspaceDir,
-  });
-  const sandboxWorkdir = getSandboxBackendWorkdirResolver(sandboxCfg.backend)?.({
-    sessionKey,
-    scopeKey: workspaceLayout.scopeKey,
-    workspaceDir: workspaceLayout.workspaceDir,
-    agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,
-    skillsWorkspaceDir: workspaceLayout.skillsWorkspaceDir,
-    cfg: sandboxCfg,
-  });
   const effectiveHostWorkspaceRoot = sessionIsSandboxed
     ? workspaceLayout.workspaceDir
     : workspaceLayout.agentWorkspaceDir;
   const runtimeWorkdir = sessionIsSandboxed ? sandboxWorkdir : directRuntimeCwd;
   const workspaceSource = sessionIsSandboxed ? workspaceLayout.workspaceSource : "direct";
-  const usesLocalContainerMounts =
-    sandboxCfg.backend.toLowerCase() === "docker" || sandboxCfg.backend.toLowerCase() === "podman";
-  const workspaceMounts =
-    sessionIsSandboxed && usesLocalContainerMounts && sandboxWorkdir
-      ? buildSandboxFsMounts({
-          workspaceDir: workspaceLayout.workspaceDir,
-          agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,
-          skillsWorkspaceDir: workspaceLayout.skillsWorkspaceDir,
-          workspaceAccess: sandboxCfg.workspaceAccess,
-          containerName: "",
-          containerWorkdir: sandboxWorkdir,
-          docker: sandboxCfg.docker,
-        })
-      : [];
 
   const channel = resolveActiveChannel({
     cfg,

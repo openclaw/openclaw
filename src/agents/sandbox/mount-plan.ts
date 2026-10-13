@@ -286,3 +286,33 @@ export async function sandboxMountPlanMatchesContainer(params: {
     })
   );
 }
+
+/**
+ * Whether a live container shows `target` through the bind the current plan places over it:
+ * that bind is the deepest realized mount over `target`, and nothing container-only covers it.
+ */
+export async function sandboxContainerShowsPlannedBind(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  plan: SandboxMountPlan;
+  target: string;
+}): Promise<boolean> {
+  const target = normalizeMountContainerPath(params.target);
+  const covering = (await inspectSandboxMounts(params))
+    .filter((mount) => isPathInsideContainerRoot(mount.destination, target))
+    .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+  const planned = params.plan.binds
+    .map((bind) => splitSandboxBindSpec(bind))
+    .find((bind) => bind && normalizeMountContainerPath(bind.container) === covering?.destination);
+  if (
+    covering?.type !== "bind" ||
+    !planned ||
+    getSandboxHostPathPolicyKey(covering.source) !== getSandboxHostPathPolicyKey(planned.host)
+  ) {
+    return false;
+  }
+  const masks = await resolveSandboxContainerOnlyMounts(params);
+  return !masks.some(
+    (mask) => isPathInsideContainerRoot(mask, target) && mask.length >= covering.destination.length,
+  );
+}
