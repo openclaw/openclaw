@@ -11,7 +11,6 @@ import {
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
-import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -38,6 +37,7 @@ import {
   readChatPaneMutationAccess,
   readChatPublicationAccess,
   renderChatPaneComposerControls,
+  openChatPaneModelPicker,
 } from "./chat-pane-session-controls.ts";
 import { resolveChatPaneUserPresentation } from "./chat-pane-session-presentation.ts";
 import {
@@ -46,6 +46,8 @@ import {
 } from "./chat-pane-sidebar-layout.ts";
 import {
   chatSubmitState,
+  createChatPaneSendActions,
+  createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
   projectChatPaneTranscript,
@@ -65,7 +67,7 @@ import type { ChatProps } from "./chat-view.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
-import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
+import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
@@ -342,7 +344,9 @@ export class ChatPane extends ChatPaneLayoutRender {
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
           ? placementComposer.failedUnavailableMessage
           : null) ??
-        (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
+        // Send carries connection recovery; offline it stays enabled for the outbox, so only
+        // this band can explain an unresolved initial turn.
+        (state.connected ? null : pendingReason),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||
@@ -400,6 +404,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
+      environmentStartStatus:
+        placement?.state === "provisioning" ? placement.startStatus : undefined,
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
@@ -461,7 +467,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
-      queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
@@ -585,20 +590,21 @@ export class ChatPane extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      onSend: (followUpModeOverride, submissionAction) =>
-        !composerAvailability.canSend ||
-        (modelRequiredReason &&
-          (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
-          ? undefined
-          : catalogKey
-            ? this.continueCatalogSession(catalogKey)
-            : suggestionViewer
-              ? this.addCurrentSessionSuggestion()
-              : state.handleSendChat(
-                  undefined,
-                  followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
-                  submissionAction,
-                ),
+      ...createChatPaneSendActions(state, {
+        canSend: composerAvailability.canSend,
+        modelRequiredReason,
+        continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
+        addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
+      }),
+      ...createChatPaneRunRecoveryActions(state, {
+        canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
+        canChangeModel: mutationAccess.model.allowed && !catalogKey && !suggestionViewer,
+        isCurrent: () =>
+          this.state === state && this.connectionGeneration === selectionConnectionGeneration,
+        latestFailedRunId: () =>
+          chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
+        openModelPicker: () => openChatPaneModelPicker(state),
+      }),
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),

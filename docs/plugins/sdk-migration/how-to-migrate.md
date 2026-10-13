@@ -331,6 +331,39 @@ contracts through the next Plugin SDK major compatibility window. Use the narrow
 subpaths above for new imports; broad compatibility barrels retain existing APIs
 without duplicating the replacements.
 
+## Await session-backed approval routing
+
+Use the async approval-routing replacements when selecting an account, resolving
+a session target, or constructing native approval routes. They read delivery
+facts through the session worker instead of querying SQLite on the Gateway
+thread. Each synchronous API below is deprecated; append `Async` to its name
+to select the replacement:
+
+| SDK subpath                 | Deprecated APIs                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approval-native-runtime`   | `createNativeApprovalChannelRouteGates`, `createChannelNativeOriginTargetResolver`, `resolveExecApprovalSessionTarget`, `resolveApprovalRequestSessionTarget`, `resolveApprovalRequestOriginTarget`, `resolveApprovalRequestAccountId`, `resolveApprovalRequestChannelAccountId`, `doesApprovalRequestMatchChannelAccount`, `doesApprovalRequestSelectChannelAccount` |
+| `approval-client-runtime`   | `createChannelExecApprovalProfile`                                                                                                                                                                                                                                                                                                                                    |
+| `approval-delivery-runtime` | `createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes`                                                                                                                                                                                                                                                                                                |
+
+The factories still return their adapters synchronously. Await the resulting
+session-dependent routing and eligibility methods. The direct account and target
+resolvers return promises. The existing `approval-runtime` facade also exposes
+the replacements for its retained APIs.
+
+For a routing operation that needs several decisions, call
+`resolveApprovalRequestSessionDeliveryAsync` once and pass its `sessionDelivery`
+result to the async helpers. `null` records that the session has no delivery
+facts. The `ApprovalRequestSessionDelivery` type describes this prepared value.
+Use `createChannelApproverDmTargetResolverAsync` and
+`createNativeApprovalForwardingFallbackSuppressorAsync` when their callbacks
+need asynchronous routing.
+
+Prepared delivery facts select a route; they do not authorize an approval.
+Keep the host's current-authority check at the actual approval effect. The
+deprecated synchronous APIs emit a migration warning and remain available during
+their deprecation period. They will be removed in a later release after stable
+deprecation. This changes no stored format, permissions, or update behavior.
+
 ## Await Gateway approval publication
 
 Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
@@ -361,7 +394,7 @@ Synchronous OpenClaw database access in the callback is allowed and deprecated;
 a warning explains the timing and typed replacement once per process.
 
 There is no compatibility break for legacy callbacks or their database reads.
-The timing nuance is that the legacy check runs just before dispatch, while
+The timing difference is that the legacy check runs just before dispatch, while
 `guard.assertHost` is also rechecked inside transaction and commit grants.
 Prefer the typed guard for live revocation at commit. Callback errors continue
 to propagate. No schema, retention, durability, or update migration is required.
@@ -578,6 +611,19 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
 
+## Prepare harness tool surfaces
+
+Use `await createAgentHarnessToolSurfaceRuntimeAsync(params)` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` before compacting a harness tool
+catalog. The returned runtime keeps the same synchronous `compactTools` and
+`cleanup` methods. When local-model lean filtering is enabled, construction
+prepares its session policy through the session worker; compaction reuses those
+facts. Other surfaces do not load session metadata for lean filtering.
+
+The synchronous `createAgentHarnessToolSurfaceRuntime` remains supported during
+its deprecation period, warns once per plugin, and will be removed in a later
+release after stable deprecation. Bundled harnesses use the asynchronous factory.
+
 ## Prepare session catalog identities
 
 Await `readSessionTranscriptCatalogTitleAsync({ agentId, sessionKey, storePath, entry })`
@@ -606,9 +652,9 @@ Foreign commits after the identity read do not rewrite that page's attribution s
 the next unpinned page reads fresh facts. This snapshot never replaces a permission check.
 Recheck the source's current sharing policy before disclosure. The existing
 `runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
-this final read to exact persisted keys while preserving canonical listing validation.
+this final read to exact persisted keys while preserving stored-data listing validation.
 Selected reads include derived participants and counts by default. Guards that consume only
-sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+sharing metadata can pass `includeParticipants: false` to skip that hydration; stored-data
 validation remains enabled in both read-only and writable listings.
 Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
 invoke the supplied assertion after preparation and before the final sharing read to reject
@@ -836,7 +882,7 @@ still match; successful appends advance that version. A duplicate replay can
 return its original receipt after another writer advances the transcript, but
 the stale scope then refuses further mutations.
 
-Durable targets retain their canonical worker writer across callback awaits;
+Durable targets retain their shared worker writer across callback awaits;
 native compatibility and unbound native incognito targets retain their native
 writer queue. Their reads do not automatically impose an exact version
 precondition on later appends. On every path, awaited
@@ -904,7 +950,7 @@ retain that binding and the caller's live authority across queue waits. File-bac
 SQLite persistence uses the existing writer worker and per-session FIFO order.
 Append and persisted tree-mutation promises resolve after the manager adopts the
 committed result; failed writes reject instead of publishing an uncommitted view. Parent,
-leaf, branch, idempotency, and returned-entry semantics stay with the existing
+leaf, branch, duplicate-prevention, and returned-entry semantics stay with the existing
 transcript owner. Handle errors before continuing; do not retry an uncertain write
 by calling a synchronous method.
 
@@ -1119,7 +1165,7 @@ an existing compatibility window.
 Keep legacy file readers in the plugin's `PluginDoctorStateMigration`, exposed
 through its Doctor contract. Declare source directories and the destination
 database in `collectBackupResources`; detection remains read-only. Runtime
-consumers use canonical SQLite ingress queues.
+consumers use shared SQLite ingress queues.
 
 During repair, trusted channel plugins receive channel-bound access through
 `context.channelIngressQueues`. Require `assertCurrent` and
@@ -1135,7 +1181,7 @@ source's discovered `claimPaths` to the backup helper. It restores interrupted
 claims through the shared migration owner before
 capturing its snapshot; receipts always use the original source path.
 
-Call `importLegacyEntries({ accountId, entries })` with canonical channel/account
+Call `importLegacyEntries({ accountId, entries })` with normalized channel/account
 identities. Each item contains an `entry` and `sources`, whose records contain
 `sourcePath`, `sha256`, and `size` from the backed-up snapshots. The host commits
 pending entries or payload-free failed tombstones together with source receipts
@@ -1331,7 +1377,7 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
 
   <Step title="Audit Windows wrapper fallback behavior">
     If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
-    `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
+    `.cmd`/`.bat` wrappers are now rejected unless you explicitly pass
     `allowShellFallback: true`:
 
     ```typescript

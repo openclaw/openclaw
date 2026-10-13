@@ -8,8 +8,13 @@ import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/them
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import {
+  interruptedChatHistory,
+  interruptedChatCommentary,
+} from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
@@ -36,6 +41,30 @@ async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each([true, false])(
+    "renders an inactive run without a terminal row (show tools=%s)",
+    async (showTools) => {
+      const props = threadProps(
+        "interrupted-history",
+        "agent:main:dashboard:synthetic",
+        attachHistoryActivity(interruptedChatHistory()).messages,
+      );
+      props.showToolCalls = showTools;
+      const { container, transcript } = await mountThread(props);
+      try {
+        for (const text of interruptedChatCommentary) {
+          expect(container.textContent).toContain(text);
+        }
+        expect(Boolean(container.querySelector(".chat-activity-group__summary"))).toBe(showTools);
+        expect(container.textContent).toContain("Interrupted");
+        expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
 
   it.each([
     ["blob:configured-agent", "gutter", "props"],

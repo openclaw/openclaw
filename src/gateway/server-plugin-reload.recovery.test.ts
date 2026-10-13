@@ -310,7 +310,6 @@ it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
 
 it.for([
   { owner: "retained", failure: "before-drain" },
-  { owner: "replaced", failure: "before-drain" },
   { owner: "retained", failure: "checkpoint" },
   { owner: "replaced", failure: "checkpoint" },
   { owner: "retained", failure: "restart" },

@@ -222,9 +222,11 @@ export async function verifyUpdatedGateway(
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
     ),
   );
-  if (launchAgentRecovery?.attempted) {
+  if (launchAgentRecovery && launchAgentRecovery.status !== "not-needed") {
     defaultRuntime.error(
-      launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
+      launchAgentRecovery.status === "recovered"
+        ? launchAgentRecovery.message
+        : launchAgentRecovery.detail,
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
@@ -363,9 +365,9 @@ export async function verifyUpdatedGateway(
       ? ["Gateway responded, but the managed service did not report running after restart."]
       : []),
     ...renderRestartDiagnostics(health),
-    ...(launchAgentRecovery?.attempted
+    ...(launchAgentRecovery && launchAgentRecovery.status !== "not-needed"
       ? [
-          launchAgentRecovery.recovered
+          launchAgentRecovery.status === "recovered"
             ? `LaunchAgent recovery: ${launchAgentRecovery.message}`
             : `LaunchAgent recovery failed: ${launchAgentRecovery.detail}`,
         ]
@@ -428,7 +430,7 @@ export async function verifyUpdatedGateway(
       code: health.waitOutcome ?? "restart-unhealthy",
       message:
         health.probeError ??
-        `Gateway did not settle${health.startupPhase ? `; startup phase: ${health.startupPhase}` : "."}`,
+        `Gateway readiness was not verified; service status: ${health.runtime.status ?? "unknown"}${health.startupPhase ? `; startup phase: ${health.startupPhase}` : ""}. Check ${formatCliCommand("openclaw gateway status --deep", params.serviceEnv)}.`,
     });
   }
   recordVerificationStep(

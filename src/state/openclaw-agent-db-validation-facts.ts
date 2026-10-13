@@ -8,6 +8,8 @@ export type OpenClawAgentDatabaseValidation = {
   birthtime: string;
   /** Shared-buffer wrappers change across worker transfers; this identifies the proof instance. */
   receiptId: string;
+  /** Preserve the full-check age when a worker borrows proof after host eviction. */
+  integrityVerifiedAt?: number;
   /** Shared with admitted workers so owner invalidation revokes borrowed proof. */
   valid: SharedArrayBuffer;
   /** First full canonical proof; subsequent changes remain visible through the pending table. */

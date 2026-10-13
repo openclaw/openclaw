@@ -199,11 +199,9 @@ suite.define(() => {
         const close = element.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
         const header = element.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
         const list = element.querySelector<HTMLElement>(".sidebar-issues-panel__list-wrap")!;
-        const tabTrack = element
-          .querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!
-          .shadowRoot!.querySelector<HTMLElement>(".tabs")!;
+        const tabTrack = element.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
         const tabTrackBounds = tabTrack.getBoundingClientRect();
-        const tabs = Array.from(element.querySelectorAll<HTMLElement>("wa-tab.hub-tab"));
+        const tabs = Array.from(element.querySelectorAll<HTMLElement>(".hub-tab"));
         return {
           closeBackground: getComputedStyle(close).backgroundColor,
           closeBorderRadius: getComputedStyle(close).borderRadius,
@@ -228,7 +226,7 @@ suite.define(() => {
             const labelBounds = range.getBoundingClientRect();
             const bounds = tab.getBoundingClientRect();
             return {
-              panel: tab.getAttribute("panel"),
+              panel: tab.getAttribute("data-tab-value"),
               left: bounds.left,
               right: bounds.right,
               labelLeft: labelBounds.left,
@@ -249,15 +247,13 @@ suite.define(() => {
               border: 0;
               background: transparent;
             }
-            .shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+            .shell--mobile-nav .sidebar-issues-panel__tabs {
               gap: var(--space-1);
               padding-inline: 8px;
             }
-            .shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab {
+            .shell--mobile-nav .sidebar-issues-panel__tabs .hub-tab {
               min-width: auto;
               flex: 0 1 auto;
-            }
-            .shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
               width: auto;
               justify-content: normal;
             }
@@ -290,7 +286,7 @@ suite.define(() => {
         expect(dismissShownAfter).toEqual(dismissShownBefore);
       }
       for (const name of ["approvals", "mentions", "automations", "system", "all"]) {
-        const tab = panel.locator(`wa-tab[panel="${name}"]`);
+        const tab = panel.locator(`.hub-tab[data-tab-value="${name}"]`);
         await tab.click();
         await expect.poll(() => tab.getAttribute("aria-selected")).toBe("true");
         await expect

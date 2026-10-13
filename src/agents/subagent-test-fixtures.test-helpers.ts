@@ -351,15 +351,6 @@ export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSuba
   ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
 
-export function createSubagentRegistryHarness(
-  registry: SubagentRegistryModule,
-): SubagentRegistryHarness {
-  return {
-    ...registry,
-    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
-  };
-}
-
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
   const now = Date.now();
   const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);

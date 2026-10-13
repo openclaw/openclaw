@@ -26,11 +26,11 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
 function senderAttributedTextMessage(
   text: string,
   sender: { senderId?: string; senderName?: string; senderUsername?: string },
-): AgentMessage {
+) {
   return {
     ...textMessage("user", text),
     __openclaw: sender,
-  } as unknown as AgentMessage;
+  };
 }
 
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
@@ -163,6 +163,61 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("[user]\nNeed the latest answer");
     expect(result.promptText).toContain("Current user request:\nNeed the latest answer");
     expect(result.developerInstructionAddition).toBe("memory recall");
+  });
+
+  it.each([true, false])(
+    "places stable current sender provenance beside the request (history: %s)",
+    async (withHistory) => {
+      const prompt = "i am Bea coded wdym";
+      const currentUserMessage = {
+        ...senderAttributedTextMessage(prompt, {
+          senderId: "bea-id",
+          senderName: "Bea",
+          senderUsername: "bea",
+        }),
+        idempotencyKey: "current:user",
+      };
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: withHistory
+          ? [
+              senderAttributedTextMessage("Alice asked about the roster.", {
+                senderId: "alice-id",
+                senderName: "Alice",
+              }),
+              textMessage("assistant", "Alice got the strategist role; Bea got the scout role."),
+              currentUserMessage,
+            ]
+          : [currentUserMessage],
+        prompt,
+        currentUserMessage,
+        currentUserTurnIdempotencyKey: "current:user",
+      });
+
+      if (withHistory) {
+        expect(result.promptText).toContain('[user sender={"id":"alice-id","name":"Alice"}]');
+      }
+      expect(result.promptText).toMatch(
+        /\[user sender={"id":"bea-id","name":"Bea","username":"bea"}\]\ni am Bea coded wdym$/,
+      );
+      expect(result.promptText.match(/i am Bea coded wdym/g)).toHaveLength(1);
+    },
+  );
+
+  it("does not infer current sender identity from display names without a stable ID", async () => {
+    const prompt = "Current direct request";
+    const currentUserMessage = senderAttributedTextMessage(prompt, {
+      senderName: "Bea",
+      senderUsername: "bea",
+    });
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier reply.")],
+      prompt,
+      currentUserMessage,
+    });
+
+    expect(result.promptText.slice(result.promptText.lastIndexOf("Current user request:"))).toBe(
+      `Current user request:\n${prompt}`,
+    );
   });
 
   it("preserves role order and falls back to the raw prompt for empty history", async () => {

@@ -500,13 +500,26 @@ suite.define(() => {
             await page.reload();
             await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
             await gateway.waitForRequest("connect");
-            await gateway.deferNext("sessions.list", { hasBoard: true });
+            // A queued refresh must not recover before the failed-catalog snapshot check.
+            await gateway.setMethodResponse("sessions.list", {
+              cases: [
+                {
+                  match: { hasBoard: true },
+                  response: {
+                    __mockError: {
+                      code: "UNAVAILABLE",
+                      message: "Synthetic dashboard catalog unavailable",
+                    },
+                  },
+                },
+                {
+                  match: {},
+                  response: { ...sessionsListResponse(rosterSessions), ownerSessionCounts },
+                },
+              ],
+            });
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
-            await gateway.rejectDeferred("sessions.list", {
-              code: "UNAVAILABLE",
-              message: "Synthetic dashboard catalog unavailable",
-            });
             await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
             await sidebar
               .getByRole("alert")
@@ -535,9 +548,7 @@ suite.define(() => {
             message: "Synthetic plugin catalog temporarily unavailable",
           });
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar
-            .locator(".sidebar-session-toolbar button.sidebar-new-session:enabled")
-            .waitFor();
+          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
           const pluginPin = sidebar.locator(
             '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
           );
@@ -577,9 +588,7 @@ suite.define(() => {
           });
           await gateway.resolveDeferred("connect");
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar
-            .locator(".sidebar-session-toolbar button.sidebar-new-session:enabled")
-            .waitFor();
+          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
           expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
         },
       );

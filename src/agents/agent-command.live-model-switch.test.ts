@@ -6,7 +6,7 @@ import { expectDefined, toStringifiedError } from "@openclaw/normalization-core"
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -292,9 +292,9 @@ vi.mock("./command/run-context.js", () => ({
   }),
 }));
 
+// mock-isolation: Model-switch fixtures own session reads and run-end writes without opening storage.
 vi.mock("./command/session-store.runtime.js", () => ({
-  loadSessionEntry: (...args: unknown[]) => state.loadSessionEntryMock(...args),
-  loadSessionEntryReadOnly: (...args: unknown[]) => state.loadSessionEntryMock(...args),
+  readSessionEntryInWorker: async (...args: unknown[]) => state.loadSessionEntryMock(...args),
   updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
@@ -2567,8 +2567,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSuccessfulAttempt();
     setupBareStoredSession();
     state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
-      const onDeliveryResult = (params as { onDeliveryResult?: (result: unknown) => void })
-        .onDeliveryResult;
+      const onDeliveryResult = (
+        params as { onDeliveryResult?: (result: unknown, payloads: ReplyPayload[]) => void }
+      ).onDeliveryResult;
       const deliveryResult = {
         payloads: [{ isReasoning: true }, { text: "ready", mediaUrls: ["/tmp/payload.png"] }],
         meta: {},
@@ -2589,7 +2590,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           },
         ],
       };
-      onDeliveryResult?.(deliveryResult);
+      onDeliveryResult?.(deliveryResult, deliveryResult.payloads);
       return deliveryResult;
     });
 

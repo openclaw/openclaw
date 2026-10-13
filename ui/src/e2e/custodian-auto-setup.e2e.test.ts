@@ -40,6 +40,11 @@ const configured: SetupAutoResult = {
   attempts: [],
   installedPlugins: [],
 };
+const shared: SetupAutoResult = {
+  ...configured,
+  selected: { ...codex, shared: true },
+  separateSignIn: { authOptionId: "codex-separate-sign-in", label: "ChatGPT" },
+};
 const needsSignIn: SetupAutoResult = {
   status: "needs-sign-in",
   alternatives: [],
@@ -191,12 +196,13 @@ suite.define(() => {
     });
   });
 
-  it("runs ChatGPT sign-in through the existing wizard and checks setup again", async () => {
+  it.each([false, true])("runs ChatGPT sign-in and refreshes setup (shared=%s)", async (reuse) => {
     await suite.withPage(options, async ({ page }) => {
+      await nativeSetup(page);
       const gateway = await install(page, {
         methodResponses: {
           "openclaw.setup.auto": {
-            sequence: [needsSignIn, { ...configured, status: "activated" }],
+            sequence: [reuse ? shared : needsSignIn, { ...configured, status: "activated" }],
           },
           "openclaw.setup.auth.start": { sessionId: "sign-in", done: false, status: "running" },
           "wizard.next": {
@@ -219,13 +225,24 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
-      const signIn = card.getByRole("button", { name: "Sign in with ChatGPT" });
+      const signIn = card.getByRole("button", {
+        name: reuse ? "Use a separate login" : "Sign in with ChatGPT",
+      });
       await signIn.waitFor();
-      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-      await capture(page, "needs-sign-in-automatic-setup", card, [signIn]);
+      const sharedNotice = card.getByText(
+        "Using your existing Codex login · sessions shared with Codex",
+        { exact: true },
+      );
+      if (reuse) {
+        await sharedNotice.waitFor();
+        await capture(page, "shared-codex-login", card, [signIn, sharedNotice]);
+      } else {
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        await capture(page, "needs-sign-in-automatic-setup", card, [signIn]);
+      }
       await signIn.click();
       expect((await gateway.waitForRequest("openclaw.setup.auth.start")).params).toMatchObject({
-        authChoice: "openai-codex",
+        authChoice: reuse ? "codex-separate-sign-in" : "openai-codex",
       });
       const confirmation = card.getByRole("textbox", { name: "Enter the confirmation code" });
       await confirmation.fill("DEMO-CONFIRMATION");
@@ -239,7 +256,13 @@ suite.define(() => {
         ).params,
       ).toMatchObject({ answer: { stepId: "confirmation", value: "DEMO-CONFIRMATION" } });
       await gateway.waitForRequest("openclaw.setup.auto", { after: 1 });
-      await card.getByRole("heading", { name: /Using Codex/ }).waitFor();
+      const selected = card.getByRole("heading", { name: /Using Codex/ });
+      await selected.waitFor();
+      await sharedNotice.waitFor({ state: "detached" });
+      expect(await card.getByRole("button", { name: "Use a separate login" }).count()).toBe(0);
+      if (reuse) {
+        await capture(page, "separate-codex-login", card, [selected]);
+      }
       await page
         .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
         .waitFor();

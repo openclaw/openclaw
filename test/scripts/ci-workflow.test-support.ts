@@ -35,11 +35,7 @@ export type WorkflowStep = {
   "working-directory"?: string;
 };
 
-export const readCiWorkflow = (() => {
-  // The checked-in workflow is fixed for this suite; clones keep fixture mutations local.
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-  return () => structuredClone(workflow);
-})();
+export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
 
 export function evaluateWorkflowExpression(
   expression: unknown,
@@ -333,23 +329,32 @@ export function runWorkflowShellScript(
 }
 
 export function readAndroidToolchainAction() {
-  return parse(readFileSync(SETUP_ANDROID_TOOLCHAIN_ACTION, "utf8"));
+  return readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
 }
 
 export function readBuildArtifactsTestboxWorkflow() {
-  return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
+  return readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
 }
 
 export function readMaturityScorecardWorkflow() {
-  return parse(readFileSync(MATURITY_SCORECARD_WORKFLOW, "utf8"));
+  return readWorkflow(MATURITY_SCORECARD_WORKFLOW);
 }
 
 export function readReleaseChecksWorkflow() {
-  return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+  return readWorkflow(".github/workflows/openclaw-release-checks.yml");
 }
 
+const parsedWorkflows = new Map<string, { source: string; workflow: ReturnType<typeof parse> }>();
 export function readWorkflow(filePath: string) {
-  return parse(readFileSync(filePath, "utf8"));
+  const absolutePath = path.resolve(filePath);
+  const source = readFileSync(absolutePath, "utf8");
+  let cached = parsedWorkflows.get(absolutePath);
+  if (cached?.source !== source) {
+    cached = { source, workflow: parse(source) };
+    parsedWorkflows.set(absolutePath, cached);
+  }
+  // Reuse parsing, not mutable fixtures; changed files still invalidate the cache.
+  return structuredClone(cached.workflow);
 }
 
 export function readTrackedText(relativePath: string): string {

@@ -384,6 +384,21 @@ vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readConfigFileSnapshotMock }));
 
+// Gateway admission reads synthetic snapshots through its isolated config factory.
+vi.mock("../config/io.factory.js", () => ({
+  createConfigIO: (
+    options: Parameters<typeof import("../config/io.factory.js").createConfigIO>[0] = {},
+  ) => ({
+    readConfigFileSnapshot: () =>
+      readConfigFileSnapshotMock({
+        isolateEnv: options.env !== undefined && options.env !== process.env,
+        observe: options.observe,
+        pluginValidation: options.pluginValidation,
+      }),
+    prepareConfigRecovery: async () => null,
+  }),
+}));
+
 vi.mock("../state/local-onboarding-state.js", () => ({
   readLocalOnboardingStateForConfig: readLocalOnboardingStateMock,
 }));

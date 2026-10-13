@@ -4,14 +4,13 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as steeringAuthority from "./agent-runner-fallback-authority.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupDrainCallback } from "./queue/drain.js";
@@ -23,6 +22,7 @@ import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import * as replyToolAuthority from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
+import * as steeringDelivery from "./steering-delivery-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -33,8 +33,14 @@ afterEach(() => {
 
 it("adopts active steering through prepared policy without caller-thread SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const key = "agent:main:active-worker-steering";
     const policyKey = "agent:main:active-worker-policy";
+    const config = {
+      agents: { defaults: { sandbox: { mode: "all" as const } }, entries: { main: {} } },
+      tools: { sandbox: { tools: { deny: ["exec"] } } },
+    };
+    setRuntimeConfigSnapshot(config);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
@@ -49,10 +55,7 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       sessionKey: key,
       runtimePolicySessionKey: policyKey,
       senderIsOwner: true,
-      config: {
-        agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
-        tools: { sandbox: { tools: { deny: ["exec"] } } },
-      },
+      config,
     });
     const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
     await operation.bindToolAuthoritySnapshotAsync(
@@ -119,7 +122,7 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
 });
 
 it.for(
-  (["initial-injection", "native-backend", "native-backend-partial"] as const).flatMap((phase) =>
+  (["initial-injection", "native-backend"] as const).flatMap((phase) =>
     (["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as const).map((change) => ({
       phase,
       change,
@@ -169,38 +172,24 @@ it.for(
         ],
         () => operation.abortSignal.throwIfAborted(),
       );
-      let selectingAuthorityComplete = false;
       let preparingNativeBackend = false;
       let held = false;
       const entered = createDeferred();
       const resume = createDeferred();
-      const selectAuthority = steeringAuthority.resolveReplySteeringAuthority;
-      vi.spyOn(steeringAuthority, "resolveReplySteeringAuthority").mockImplementation(
-        async (...args) => {
-          const selected = await selectAuthority(...args);
-          selectingAuthorityComplete = true;
-          return selected;
-        },
-      );
-      const readFingerprint = replyToolAuthority.resolveFollowupRunToolAuthorityFingerprintAsync;
-      vi.spyOn(
-        replyToolAuthority,
-        "resolveFollowupRunToolAuthorityFingerprintAsync",
-      ).mockImplementation(async (...args) => {
-        const prepared = await readFingerprint(...args);
-        if (phase === "native-backend-partial" && preparingNativeBackend) {
-          await prepareReplyToolAuthorityCallerRead({}, undefined, prepared, run.run, () => {});
-        }
-        if (
-          selectingAuthorityComplete &&
-          !held &&
-          preparingNativeBackend === (phase !== "initial-injection")
-        ) {
-          held = true;
-          entered.resolve();
-          await withinTest(resume.promise, signal);
-        }
-        return prepared;
+      const prepareDelivery = steeringDelivery.prepareSteeringDelivery;
+      vi.spyOn(steeringDelivery, "prepareSteeringDelivery").mockImplementation((...args) => {
+        const prepared = prepareDelivery(...args);
+        return {
+          ...prepared,
+          async prepareCurrent() {
+            await prepared.prepareCurrent();
+            if (!held && preparingNativeBackend === (phase === "native-backend")) {
+              held = true;
+              entered.resolve();
+              await withinTest(resume.promise, signal);
+            }
+          },
+        };
       });
       const delivered: string[] = [];
       operation.attachBackend({

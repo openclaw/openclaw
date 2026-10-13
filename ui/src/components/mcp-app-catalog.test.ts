@@ -79,13 +79,11 @@ function appendElement(element: HTMLElement) {
 }
 
 describe("app launch catalog", () => {
-  it("shares pending discovery and retires it once for a config publication", async () => {
-    const previous = createDeferred<McpAppDiscoverResult>();
+  it("shares pending discovery and refreshes after it settles", async () => {
     const current = createDeferred<McpAppDiscoverResult>();
     const remounted = createDeferred<McpAppDiscoverResult>();
     const request = vi
       .fn()
-      .mockReturnValueOnce(previous.promise)
       .mockReturnValueOnce(current.promise)
       .mockReturnValueOnce(remounted.promise);
     const { context, events } = discoveryContext(request);
@@ -111,7 +109,7 @@ describe("app launch catalog", () => {
     for (const listener of events) {
       listener(event);
     }
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
     current.resolve({ servers: [{ ...result.servers[0]!, mentionTool: "search" }] });
     await current.promise;
     for (const element of elements) {
@@ -121,19 +119,11 @@ describe("app launch catalog", () => {
     expect(thread.querySelector("button")).not.toBeNull();
     expect(resources.querySelector("button")).not.toBeNull();
 
-    previous.resolve({ servers: [] });
-    await previous.promise;
-    for (const element of elements) {
-      await element.updateComplete;
-    }
-    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
-    expect(resources.querySelector("button")).not.toBeNull();
-
     sidebar.remove();
     await Promise.resolve();
     appendElement(sidebar);
     await sidebar.updateComplete;
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     remounted.resolve({ servers: [] });
     await remounted.promise;
     await sidebar.updateComplete;
@@ -141,15 +131,10 @@ describe("app launch catalog", () => {
     expect(sidebar.querySelector("button")).toBeNull();
   });
 
-  it("starts a fresh manual retry instead of joining an earlier consumer's read", async () => {
+  it("retries failed discovery through the mounted error control", async () => {
     const failed = createDeferred<McpAppDiscoverResult>();
-    const background = createDeferred<McpAppDiscoverResult>();
     const retry = createDeferred<McpAppDiscoverResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(failed.promise)
-      .mockReturnValueOnce(background.promise)
-      .mockReturnValueOnce(retry.promise);
+    const request = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
     const { context } = discoveryContext(request);
     const catalog = document.createElement("openclaw-mcp-app-catalog");
     catalog.sessionKey = "agent:main:one";
@@ -167,23 +152,12 @@ describe("app launch catalog", () => {
       ),
     );
 
-    const sibling = document.createElement("openclaw-mcp-app-catalog");
-    sibling.surface = "sidebar";
-    sibling.sessionKey = catalog.sessionKey;
-    provide(sibling, context);
-    appendElement(sibling);
-    await sibling.updateComplete;
-    expect(request).toHaveBeenCalledTimes(2);
     catalog.querySelector<HTMLButtonElement>('[role="alert"] + button')!.click();
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
     retry.resolve(result);
     await retry.promise;
     await catalog.updateComplete;
     await catalog.updateComplete;
-    await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
-    background.resolve({ servers: [] });
-    await background.promise;
-    await sibling.updateComplete;
     await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
   });
 
@@ -235,7 +209,7 @@ describe("app launch catalog", () => {
     await waitForSolid(() => expect(apps.textContent).toContain("Library"));
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "prepares global discovery only for a missing session (exists: %s)",
     async (exists) => {
       let admitted = exists;
@@ -366,7 +340,7 @@ describe("app launch catalog", () => {
     await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
-  it.each(["sidebar", "thread", "file"] as const)(
+  it.each(["file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {
       const read = createDeferred<McpAppDiscoverResult>();

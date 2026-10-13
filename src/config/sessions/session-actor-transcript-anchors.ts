@@ -41,6 +41,7 @@ export function readSessionActorTranscriptAnchors(
     ? {
         entry: current && {
           sessionId: current.sessionId,
+          updatedAt: current.updatedAt,
           lifecycleRevision: current.lifecycleRevision,
           activeWriterRunId: current.activeWriterRunId,
           cliHistoryBoundary: current.cliHistoryBoundary,

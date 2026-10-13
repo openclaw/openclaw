@@ -1,6 +1,10 @@
 import { statSync, type BigIntStats } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import {
@@ -20,7 +24,10 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
-import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
+import {
+  captureSqliteWorkerWalMaintenanceSuspension,
+  getSqliteWorkerExistingDatabaseIdentity,
+} from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
@@ -192,9 +199,24 @@ function openNativeStateDatabase(
               checkpoint: walMaintenance?.health,
             }),
           runMaintenance: (operation) => {
-            assertStateDatabaseAccessAllowed(params.pathname);
+            try {
+              assertStateDatabaseAccessAllowed(params.pathname);
+            } catch (error) {
+              if (
+                !(error instanceof StateDatabaseAdmissionPendingError) &&
+                !(error instanceof StateDatabaseOfflineMaintenanceError)
+              ) {
+                throw error;
+              }
+              // Another process's offline maintenance refuses this pass; the next tick retries.
+              stateDbLog.debug("Shared-state WAL maintenance deferred during offline maintenance", {
+                path: params.pathname,
+              });
+              return false;
+            }
             return operation();
           },
+          isScheduledMaintenanceSuspended: captureSqliteWorkerWalMaintenanceSuspension(),
           foreignKeys: true,
           synchronous: "NORMAL",
         });

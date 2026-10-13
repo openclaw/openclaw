@@ -47,7 +47,7 @@ use Real channels. The server resolves taxonomy membership, provider/model
 eligibility, declared `execution.channel`, runtime-pair-lane membership, and
 supported execution kinds before launch. The Run panel shows the selected
 execution kinds plus explicit exclusions or errors. Unknown, empty explicit,
-profile-incompatible, or lane-incompatible selections fail closed instead of
+profile-incompatible, or lane-incompatible selections are rejected instead of
 being replaced by a default suite.
 
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
@@ -105,7 +105,7 @@ tokens, or local paths.
 ### Matrix live lane
 
 For a transport-real Matrix lane that does not require model-provider
-credentials, use the deterministic mock OpenAI provider:
+credentials, use the fixed-response mock OpenAI provider:
 
 ```bash
 pnpm openclaw qa matrix --provider-mode mock-openai
@@ -144,18 +144,18 @@ reports manifests for `linux/arm64`, `linux/amd64`, `linux/amd64/v2`, and
 
 Common options:
 
-| Flag                     | Default           | Purpose                                                                              |
-| ------------------------ | ----------------- | ------------------------------------------------------------------------------------ |
-| `--scenario <id>`        | -                 | Select one scenario; repeatable.                                                     |
-| `--fail-fast`            | off               | Stop after the first failed check or scenario.                                       |
-| `--allow-failures`       | off               | Write artifacts without returning a failing exit code for scenario failures.         |
-| `--provider-mode <mode>` | `live-frontier`   | Use `mock-openai` for deterministic dispatch or `live-frontier` for a live provider. |
-| `--model <ref>`          | provider default  | Set the primary `provider/model` reference.                                          |
-| `--alt-model <ref>`      | provider default  | Set the alternate model used by scenarios that switch models.                        |
-| `--fast`                 | off               | Enable provider fast mode where supported.                                           |
-| `--output-dir <path>`    | generated         | Choose the report directory; relative paths resolve against `--repo-root`.           |
-| `--repo-root <path>`     | current directory | Run from a neutral working directory.                                                |
-| `--sut-account <id>`     | `sut`             | Select the Matrix account id in the child gateway config.                            |
+| Flag                     | Default           | Purpose                                                                           |
+| ------------------------ | ----------------- | --------------------------------------------------------------------------------- |
+| `--scenario <id>`        | -                 | Select one scenario; repeatable.                                                  |
+| `--fail-fast`            | off               | Stop after the first failed check or scenario.                                    |
+| `--allow-failures`       | off               | Write artifacts without returning a failing exit code for scenario failures.      |
+| `--provider-mode <mode>` | `live-frontier`   | Use `mock-openai` for repeatable dispatch or `live-frontier` for a live provider. |
+| `--model <ref>`          | provider default  | Set the primary `provider/model` reference.                                       |
+| `--alt-model <ref>`      | provider default  | Set the alternate model used by scenarios that switch models.                     |
+| `--fast`                 | off               | Enable provider fast mode where supported.                                        |
+| `--output-dir <path>`    | generated         | Choose the report directory; relative paths resolve against `--repo-root`.        |
+| `--repo-root <path>`     | current directory | Run from a neutral working directory.                                             |
+| `--sut-account <id>`     | `sut`             | Select the Matrix account id in the child gateway config.                         |
 
 Matrix QA does not lease shared Matrix credentials: the adapter creates
 disposable users locally, so it does not accept `--credential-source` or
@@ -247,7 +247,7 @@ manually through VNC; reused leases also keep Crabbox's pnpm store cache
 warm. The default `--hydrate-mode source` verifies from a source checkout and
 runs install/build inside the VM. Use `--hydrate-mode prehydrated` only when
 the reused remote workspace already has `node_modules` and a built `dist/`;
-that mode skips the expensive install/build step and fails closed when the
+that mode skips the expensive install/build step and refuses to run when the
 workspace is not ready. With `--gateway-setup`, Mantis leaves a persistent
 OpenClaw Slack gateway running inside the VM on port `38973`; without it, the
 command runs the normal bot-to-bot Slack QA lane and exits after artifact

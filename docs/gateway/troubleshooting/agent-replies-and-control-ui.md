@@ -37,7 +37,7 @@ If a reply says OpenClaw could not connect to the AI service, check the provider
 
 If a reply says OpenClaw could not read the conversation's history, ask the Gateway operator to try `openclaw doctor --fix` on the host and profile that own the session. This notice also appears for unmentioned group turns when silent replies are allowed.
 
-Doctor can restore a missing header when the stored transcript entries are already canonical. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
+Doctor can restore a missing header when the stored transcript entries already use the supported format. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
 
 See [Doctor's session repairs](/gateway/doctor/state-and-sessions) and [running Doctor](/gateway/doctor/running).
 

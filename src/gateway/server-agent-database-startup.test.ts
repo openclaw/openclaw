@@ -26,6 +26,11 @@ import {
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import * as logging from "../logging/subsystem.js";
@@ -52,8 +57,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
-import { resolveQuarantineStorePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
@@ -211,7 +214,7 @@ it.for([
       sessionKey: `agent:${agentId}:retained`,
     };
     const healthyAgentId = agentId === "main" ? "worker" : "main";
-    openOpenClawAgentDatabase({ agentId: healthyAgentId, env });
+    const healthyPath = openOpenClawAgentDatabase({ agentId: healthyAgentId, env }).path;
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persistSessionTranscriptTurn(scope, {
       messages: [
@@ -244,9 +247,13 @@ it.for([
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
+    // A new process reloads sealed facts instead of retaining the test reset's revoked cells.
+    for (const pathname of [healthyPath, agentPath]) {
+      retireSqliteDatabaseAdmissionForPath(pathname);
+    }
     if (outcome !== "fast") {
       // Unclean external mutation requires the writable owner's integrity gate.
-      clearOpenClawAgentIntegrityVerification(agentPath, env);
+      revokeSqliteDatabaseAdmissionsForPath(agentPath);
       const raw = new DatabaseSync(agentPath);
       try {
         raw.exec("PRAGMA journal_mode=DELETE");
@@ -287,6 +294,7 @@ it.for([
     Object.assign(env, pause?.env);
     const preparationRelease = createDeferredCore();
     const preparationEntered = createDeferredCore();
+    const maintenanceCompleted = createDeferredCore();
     let sessionPrepared = false;
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
@@ -337,20 +345,28 @@ it.for([
     });
     if (outcome === "recover" || outcome === "superseded") {
       const session = await import("./server-startup-session-migration.js");
-      const migrate = session.runGatewaySessionStartupMaintenance;
+      const prepare = session.prepareGatewayStartupSessions;
+      vi.spyOn(session, "prepareGatewayStartupSessions").mockImplementation(async (params) => {
+        const databases = await prepare(params);
+        if (params.agentIds?.has(agentId)) {
+          if (outcome === "recover") {
+            const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
+              logOutput: false,
+            });
+            preparationParent = Number(result.stdout);
+          }
+          sessionPrepared = true;
+          preparationEntered.resolve();
+          await preparationRelease.promise;
+        }
+        return databases;
+      });
+      const maintain = session.runGatewaySessionStartupMaintenance;
       vi.spyOn(session, "runGatewaySessionStartupMaintenance").mockImplementation(
         async (params) => {
-          await migrate(params);
+          await maintain(params);
           if (params.databases.some(({ database: prepared }) => prepared.agentId === agentId)) {
-            if (outcome === "recover") {
-              const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
-                logOutput: false,
-              });
-              preparationParent = Number(result.stdout);
-            }
-            sessionPrepared = true;
-            preparationEntered.resolve();
-            await preparationRelease.promise;
+            maintenanceCompleted.resolve();
           }
         },
       );
@@ -371,6 +387,7 @@ it.for([
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let inspectionSettled: Promise<unknown> | undefined;
+    let waitForHealthyAgent = (): Promise<void> | undefined => undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
     let unadoptedPortClaim: TestPortClaim | undefined;
     try {
@@ -404,6 +421,8 @@ it.for([
         }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
+        waitForHealthyAgent = () =>
+          admission.waitForAgentPreparation(healthyAgentId, { env, signal });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -455,7 +474,9 @@ it.for([
         await withinTest(inspectionSettled ?? Promise.resolve(), signal);
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
-          repairHint: expect.stringContaining("doctor --fix"),
+          repairHint: expect.stringContaining(
+            `openclaw doctor --session-sqlite recover --session-sqlite-agent ${agentId}`,
+          ),
         });
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(
@@ -472,6 +493,8 @@ it.for([
           agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
         });
       }
+      // Sidecar readiness can precede an unpaused sibling's database admission.
+      await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
       if (paused) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
@@ -615,6 +638,7 @@ it.for([
           () => expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined(),
           { timeout: 10000 },
         );
+        await withinTest(maintenanceCompleted.promise, signal);
         expect(
           withOpenClawAgentDatabaseReadOnly(
             ({ db }) => sessionTranscriptIndexNeedsReconcile(db, scope.sessionId),
@@ -685,7 +709,7 @@ it.for([
   },
 );
 
-it("admits a deferred fleet without gating readiness on stale configured or unconfigured stores", async ({
+it("admits an unsealed fleet in parallel without gating readiness on an unconfigured leftover", async ({
   signal,
 }) => {
   testState.agentsConfig = {
@@ -709,18 +733,9 @@ it("admits a deferred fleet without gating readiness on stale configured or unco
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-  const receipts = new DatabaseSync(resolveQuarantineStorePath(env));
-  try {
-    expect(
-      receipts
-        .prepare(
-          "SELECT COUNT(*) AS count FROM agent_integrity_verifications WHERE clean_close = 1",
-        )
-        .get()?.count,
-    ).toBe(7);
-    receipts.prepare("UPDATE agent_integrity_verifications SET app_version = ?").run("2026.9.7");
-  } finally {
-    receipts.close();
+  for (const pathname of [...paths, leftover]) {
+    expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
   }
   fs.writeFileSync(leftover, "unconfigured leftover must not be inspected or repaired");
   const leftoverBytes = fs.readFileSync(leftover);

@@ -63,11 +63,12 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   return (
     message.stopReason === "toolUse" ||
-    (message.stopReason === "aborted" &&
-      (message.errorCode !== undefined
-        ? message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-        : message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR) &&
-      message.content.every((part) => part.type === "text" && part.text === ""))
+    ((message.stopReason === "aborted" || message.stopReason === "error") &&
+      (message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE ||
+        (message.stopReason === "aborted" &&
+          message.errorCode === undefined &&
+          message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR &&
+          message.content.every((part) => part.type === "text" && part.text === ""))))
   );
 }
 

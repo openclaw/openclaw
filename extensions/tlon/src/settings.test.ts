@@ -91,4 +91,41 @@ describe("tlon settings store", () => {
 
     expect(updates).toEqual([expect.objectContaining({ autoDiscoverChannels: false })]);
   });
+
+  it("preserves pending approval contents without logging them", async () => {
+    const approval: PendingApproval = {
+      id: "approval-1",
+      type: "dm",
+      requestingShip: "~zod",
+      timestamp: 1,
+      messagePreview: "private-tlon-preview",
+      originalMessage: {
+        messageId: "message-1",
+        messageText: "private-tlon-body",
+        messageContent: { text: "private-tlon-body" },
+        timestamp: 1,
+      },
+    };
+    const { api, emitSettingsEvent } = createMockSettingsApi({
+      all: { moltbot: { tlon: { pendingApprovals: [approval] } } },
+    });
+    const logs: string[] = [];
+    const manager = createSettingsManager(api, { log: (message) => logs.push(message) });
+    expect((await manager.load()).pendingApprovals).toEqual([approval]);
+    const updates: TlonSettingsStore[] = [];
+    await manager.startSubscription((settings) => updates.push(settings));
+    await emitSettingsEvent({
+      "put-entry": {
+        desk: "moltbot",
+        "bucket-key": "tlon",
+        "entry-key": "pendingApprovals",
+        value: JSON.stringify([approval]),
+      },
+    });
+
+    expect(updates[0]?.pendingApprovals).toEqual([approval]);
+    expect(logs).toContain("[settings] Loaded");
+    expect(logs).toContain("[settings] Update: pendingApprovals");
+    expect(logs.join("\n")).not.toContain("private-tlon-");
+  });
 });

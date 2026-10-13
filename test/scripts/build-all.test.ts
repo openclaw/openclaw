@@ -20,6 +20,8 @@ import {
   resolveBuildStepCacheStampState,
   restoreBuildStepCacheOutputs,
   finalizeBuildStepCache,
+  resetBuildCacheInputs,
+  writeBuildCacheInputs,
   type BuildCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -147,27 +149,39 @@ describe("resolveBuildAllStep", () => {
     ).toThrow("full 40-character hexadecimal SHA");
   });
 
-  it("passes encoded import URLs literally to managed Node on Windows", () => {
-    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-    const result = resolveBuildAllStep(
-      { label: "tsdown", args: ["--import", importUrl, "scripts/tsdown-build.mts"] },
-      { nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
-    );
+  it.each([
+    { heapMb: "4352", concurrency: "1" },
+    { heapMb: "12288", concurrency: "2" },
+  ])(
+    "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
+    ({ heapMb, concurrency }) => {
+      const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+      const result = resolveBuildAllStep(
+        {
+          ...getBuildAllStep("tsdown"),
+          args: ["--import", importUrl, ...getBuildAllStep("tsdown").args.slice(2)],
+        },
+        {
+          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+          env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb },
+        },
+      );
 
-    expect(
-      createManagedCommandInvocation({
-        bin: result.command,
-        args: result.args,
-        ...result.options,
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["--import", importUrl, "scripts/tsdown-build.mts"],
-      shell: false,
-      windowsVerbatimArguments: undefined,
-    });
-  });
+      expect(
+        createManagedCommandInvocation({
+          bin: result.command,
+          args: result.args,
+          ...result.options,
+          platform: "win32",
+        }),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+      });
+    },
+  );
 
   it.each([false, true])(
     "runs plugin builds through managed Node on Windows (defer isolated: %s)",
@@ -556,6 +570,106 @@ describe("resolveBuildAllSteps", () => {
       }
     },
   );
+  it.each([
+    { runtimeExit: 0, uiExit: 0, expectedExit: 0, throws: false },
+    { runtimeExit: 0, uiExit: 7, expectedExit: 7, throws: false },
+    { runtimeExit: 8, uiExit: 0, expectedExit: 8, throws: false },
+    { runtimeExit: 0, uiExit: 0, expectedExit: 0, throws: true },
+  ])(
+    "joins independent UI and runtime writers before final metadata ($runtimeExit/$uiExit/$throws)",
+    async ({ runtimeExit, uiExit, expectedExit, throws }) => {
+      const ui = Promise.withResolvers<{ status: number }>();
+      const runtimeReached = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      let settled = false;
+      const build = runBuildAllSteps("runtime", {
+        ...buildRunner(),
+        steps: [
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "ui:build",
+          "write-build-info",
+        ].map((label) => ({ label, args: [label] })),
+        runStep({ args: [label] }) {
+          calls.push(label!);
+          if (label === "ui:build") {
+            return ui.promise;
+          }
+          if (label === "check-cli-bootstrap-imports") {
+            runtimeReached.resolve();
+            if (throws) {
+              throw new Error("runtime writer failed");
+            }
+            return { status: runtimeExit };
+          }
+          return { status: 0 };
+        },
+      });
+      void build.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      try {
+        await runtimeReached.promise;
+        expect(calls).toEqual([
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "ui:build",
+        ]);
+        expect(settled).toBe(false);
+      } finally {
+        ui.resolve({ status: uiExit });
+      }
+      if (throws) {
+        await expect(build).rejects.toThrow("runtime writer failed");
+      } else {
+        expect((await build).exitCode).toBe(expectedExit);
+      }
+      expect(calls.includes("write-build-info")).toBe(!throws && expectedExit === 0);
+    },
+  );
+  it.each(["write-unified-entry-dts", "write-plugin-sdk-entry-dts"])(
+    "finishes late %s compiler work before starting the independent UI build",
+    async (compiler) => {
+      const started = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<{ status: number }>();
+      const calls: string[] = [];
+      const build = runBuildAllSteps("full", {
+        ...buildRunner(),
+        steps: [
+          "tsdown",
+          "external-plugins:local-dist",
+          compiler,
+          "check-cli-bootstrap-imports",
+          "ui:build",
+        ].map((label) => ({ label, args: [label] })),
+        runStep({ args: [label] }) {
+          calls.push(label!);
+          if (label === compiler) {
+            started.resolve();
+            return finished.promise;
+          }
+          return { status: 0 };
+        },
+      });
+      try {
+        await started.promise;
+        expect(calls).toEqual(["tsdown", "external-plugins:local-dist", compiler]);
+      } finally {
+        finished.resolve({ status: 0 });
+      }
+      expect((await build).exitCode).toBe(0);
+      expect(calls).toEqual([
+        "tsdown",
+        "external-plugins:local-dist",
+        compiler,
+        "check-cli-bootstrap-imports",
+        "ui:build",
+      ]);
+    },
+  );
   it.each([undefined, "0"])(
     "preserves source-run declaration choice %s through the canonical runtime build",
     async (skipDts) => {
@@ -822,11 +936,32 @@ describe("resolveBuildStepCacheState", () => {
     expect(restore).toMatchObject({ fresh: true, restorable: true });
     expect(restore.outputRoot).toBe(path.join(cacheRoot, "tsdown-unified", "outputs"));
     expect(restoreBuildStepCacheOutputs(restore, targetParams)).toBe(true);
+    const cachedFile = path.join(restore.outputRoot!, "dist/plugin-sdk/current.d.ts");
+    const restoredFile = path.join(target.rootDir, "dist/plugin-sdk/current.d.ts");
+    expect(fs.statSync(restoredFile).ino).not.toBe(fs.statSync(cachedFile).ino);
     expect(fs.readFileSync(path.join(target.rootDir, "dist/plugin-sdk/current.d.ts"), "utf8")).toBe(
       "export declare const current: true;",
     );
     expect(fs.existsSync(removedDts)).toBe(false);
     expect(fs.readFileSync(removedJs, "utf8")).toBe("runtime");
+    writeBuildCacheInputs(target.rootDir);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(target.rootDir, "dist/build-cache-inputs.json"), "utf8"),
+      ),
+    ).toEqual({
+      version: 1,
+      steps: { "tsdown-unified": state.signature },
+    });
+    resetBuildCacheInputs(target.rootDir);
+    writeBuildCacheInputs(target.rootDir);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(target.rootDir, "dist/build-cache-inputs.json"), "utf8"),
+      ),
+    ).toEqual({ version: 1, steps: {} });
+    fs.writeFileSync(cachedFile, "changed writable cache");
+    expect(fs.readFileSync(restoredFile, "utf8")).toBe("export declare const current: true;");
   });
 
   it("keeps workspace declaration caches independent of core inputs", () => {

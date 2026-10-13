@@ -12,6 +12,7 @@ import { historyLane } from "../config/sessions/session-transcript-worker-resour
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import * as operationAdmission from "./sqlite-worker-operation-admission.js";
@@ -26,6 +27,8 @@ it.each(["none", "cleanup", "after-open", "during-open"] as const)(
     const failAfterOpen = failure === "after-open" || failDuringOpen;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
+      // Prepare shared schema while leaving the competing agent creation cold.
+      openOpenClawStateDatabase({ env: state.env });
       const sessionFile = state.path("cache-creation.jsonl");
       await fs.writeFile(
         sessionFile,

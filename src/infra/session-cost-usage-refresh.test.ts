@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -249,6 +251,71 @@ describe("session cost usage refresh", () => {
           await work;
           await vi.advanceTimersByTimeAsync(50);
           await scope.drain();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { failure: "abort", closing: true, level: "debug" },
+    { failure: "abort", closing: false, level: "warn" },
+    { failure: "write", closing: true, level: "warn" },
+    { failure: "cleanup", closing: true, level: "warn" },
+  ] as const)(
+    "logs $failure at $level with closing=$closing and settles the refresh queue",
+    async ({ failure, closing, level }) => {
+      await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+        const scope = new AsyncWorkScope();
+        const release = createDeferredCore<"refreshed">();
+        const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockReturnValue(release.promise);
+        const previousLogging = {
+          overrideSettings: loggingState.overrideSettings,
+          cachedLogger: loggingState.cachedLogger,
+          cachedSettings: loggingState.cachedSettings,
+          cachedConsoleSettings: loggingState.cachedConsoleSettings,
+          rawConsole: loggingState.rawConsole,
+          consoleSubsystemFilter: loggingState.consoleSubsystemFilter,
+        };
+        const write = vi.fn();
+        setLoggerOverride({ level: "silent", consoleLevel: "debug", consoleStyle: "json" });
+        loggingState.rawConsole = { log: write, info: write, warn: write, error: write };
+        loggingState.consoleSubsystemFilter = null;
+        try {
+          scope.run(() =>
+            requestCostUsageCacheRefresh({
+              config,
+              agentId,
+              storePath: path.dirname(sessionFiles[0]),
+            }),
+          );
+          await vi.advanceTimersByTimeAsync(0);
+          expect(refresh).toHaveBeenCalledOnce();
+          if (closing) {
+            scope.beginClose();
+          }
+          const aborted = new DOMException("This operation was aborted", "AbortError");
+          const writeFailure = new Error("usage checkpoint write failed");
+          release.reject(
+            failure === "abort"
+              ? aborted
+              : failure === "write"
+                ? writeFailure
+                : new AggregateError([aborted, writeFailure], aborted.message),
+          );
+          await scope.runWhenIdle(() => {});
+          expect(write).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`"level":"${level}"`),
+          );
+          expect(write).toHaveBeenCalledWith(expect.stringContaining("background refresh"));
+          expect(refresh).toHaveBeenCalledOnce();
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          try {
+            release.resolve("refreshed");
+            await scope.drain();
+          } finally {
+            Object.assign(loggingState, previousLogging);
+          }
         }
       });
     },

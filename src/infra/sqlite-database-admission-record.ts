@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats } from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
+  isSoleDatabaseFileDescriptor,
   readDatabaseIdentityBirthtime,
   normalizeDatabasePath,
   type DatabaseFileIdentity,
@@ -22,6 +23,7 @@ export const SqliteDatabaseGenerationSlot = {
   hostRevision: 5,
   unscopedWriteRevision: 6,
   writeScopeCount: 7,
+  sealPresent: 8,
 } as const;
 const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 
@@ -254,6 +256,30 @@ export class SqliteDatabaseAdmissionRegistry {
     return record;
   }
 
+  /** Only the joined lifecycle owner may release a retained descriptor. */
+  retireDescriptor(identity: string, options: { requireSoleDescriptor?: boolean }): boolean {
+    const record = this.records.get(identity);
+    const descriptor = this.descriptors.get(identity) ?? record?.descriptor;
+    if (descriptor === undefined) {
+      return false;
+    }
+    const file = fs.fstatSync(descriptor, { bigint: true });
+    if (
+      file.nlink > 1n ||
+      (options.requireSoleDescriptor && !isSoleDatabaseFileDescriptor(descriptor, file))
+    ) {
+      return false;
+    }
+    if (record) {
+      Atomics.store(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.retired, 1);
+    }
+    fs.closeSync(descriptor);
+    this.descriptors.delete(identity);
+    this.forget(identity);
+    this.publish();
+    return true;
+  }
+
   publish(record?: Admission): void {
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
     for (const [identity, current] of this.records) {
@@ -315,6 +341,9 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   install(admissions: SqliteDatabaseAdmissions): void {
+    if (admissions.length === 0) {
+      return;
+    }
     this.publish();
     for (const incoming of admissions) {
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {

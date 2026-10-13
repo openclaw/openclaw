@@ -207,6 +207,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
+      requireStandaloneRuntimeGraph("worker/gateway-state-owner-heartbeat.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),

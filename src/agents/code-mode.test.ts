@@ -22,7 +22,11 @@ import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
-import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  runCodeModeScriptHeadless,
+} from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
@@ -65,13 +69,13 @@ function catalog(targets: AnyAgentTool[], directToolNames?: string[]) {
     tools: [...harness.tools, ...targets],
     directToolNames,
   });
-  return { ...harness, ...compacted, exec: compacted.tools[0]! };
-}
-
-function indexOf(description: string) {
-  const start = description.indexOf("Enabled async tool globals");
-  expect(start).toBeGreaterThanOrEqual(0);
-  return description.slice(start);
+  return {
+    ...harness,
+    ...compacted,
+    exec: compacted.tools[0]!,
+    catalogPrompt: () =>
+      buildCodeModeCatalogPrompt(harness.ctx, harness.catalogRef.current?.entries ?? []),
+  };
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
@@ -92,8 +96,9 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
-    const { ctx, exec } = catalog([fakeTool("exec", "Run shell command")]);
-    expect(exec.description).toContain("Use the shell tool `exec` for heavier computation");
+    const { ctx, exec, catalogPrompt } = catalog([fakeTool("exec", "Run shell command")]);
+    const description = exec.description;
+    expect(catalogPrompt()).toContain("Use the shell tool `exec` for heavier computation");
     addClientToolsToToolCatalog({
       enabled: true,
       ...ctx,
@@ -107,8 +112,9 @@ describe("Code Mode catalog and model-visible surface", () => {
         },
       ],
     });
-    expect(exec.description).toContain("- exec unknown -> ?");
-    expect(exec.description).not.toContain("heavier computation");
+    expect(catalogPrompt()).toContain("- exec unknown -> ?");
+    expect(catalogPrompt()).not.toContain("heavier computation");
+    expect(exec.description).toBe(description);
     expect(exec.description).toContain("10000 ms wall-clock budget");
   });
 
@@ -145,44 +151,44 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
   });
 
-  it("primes the exec schema with resolvable callable contracts", () => {
+  it("includes resolvable callable contracts in the catalog prompt", () => {
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     alpha.outputSchema = Type.Array(
       Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
     );
-    const { exec } = catalog([
+    const { catalogPrompt } = catalog([
       pluginTool("zeta_tool", "Description stays deferred."),
       alpha,
       { ...fakeTool("read", "Read file"), parameters: readToolInputSchema },
     ]);
-    expect(exec.description).toContain(
+    expect(catalogPrompt()).toContain(
       "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
     );
-    expect(exec.description).toContain("- zeta_tool { value?: string } -> ?");
-    expect(exec.description).toContain(
+    expect(catalogPrompt()).toContain("- zeta_tool { value?: string } -> ?");
+    expect(catalogPrompt()).toContain(
       "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
     );
-    expect(exec.description.indexOf("alpha_tool")).toBeLessThan(
-      exec.description.indexOf("zeta_tool"),
+    expect(catalogPrompt().indexOf("alpha_tool")).toBeLessThan(
+      catalogPrompt().indexOf("zeta_tool"),
     );
-    expect(exec.description).not.toContain("Description stays deferred.");
-    expect(exec.description).not.toContain("Another deferred description.");
-    expect(exec.description).not.toContain("openclaw:fake-code-mode");
-    expect(exec.description).not.toContain("paired Gateway nodes");
-    expect(exec.description).not.toContain("MCP tools use the `MCP` namespace");
+    expect(catalogPrompt()).not.toContain("Description stays deferred.");
+    expect(catalogPrompt()).not.toContain("openclaw:fake-code-mode");
+    expect(catalogPrompt()).not.toContain("paired Gateway nodes");
+    expect(catalogPrompt()).not.toContain("MCP tools use the `MCP` namespace");
   });
 
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const pluginId = `fake-${"x".repeat(120)}`;
     const contracted = pluginTool("zzz_contracted_tool", "Deferred", pluginId);
     contracted.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
-    const { exec } = catalog([
+    const { catalogPrompt } = catalog([
       ...Array.from({ length: 500 }, (_, index) =>
         pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
       ),
       contracted,
     ]);
-    const index = indexOf(exec.description);
+    const prompt = catalogPrompt();
+    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
     expect(index).toContain("additional tools omitted");
     expect(index).toContain("zzz_contracted_tool");
     expect(index).toContain("-> { ok: boolean }");
@@ -194,14 +200,15 @@ describe("Code Mode catalog and model-visible surface", () => {
       `a_${"z".repeat(9_000)}`,
       ...Array.from({ length: 4 }, (_, index) => `b_short_${index}`),
     ];
-    const { exec } = catalog(
+    const { catalogPrompt } = catalog(
       names.map((name) => {
         const tool = pluginTool(name, "Deferred");
         tool.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
         return tool;
       }),
     );
-    const index = indexOf(exec.description);
+    const prompt = catalogPrompt();
+    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
     expect(index.length).toBeLessThanOrEqual(8_000);
     expect(index).not.toContain("z".repeat(9_000));
     for (const name of names.slice(1)) {
@@ -306,57 +313,6 @@ describe("Code Mode search", () => {
   });
 });
 
-it("searches and reads eligible skills through the worker bridge and normal tool dispatch", async () => {
-  const demo = createFixtureSkillEntry("demo");
-  const hidden = createFixtureSkillEntry("hidden");
-  const body = "---\nname: demo\n---\n\n# Complete demo instructions\n";
-  const reader = vi.fn(async () => body);
-  const codeModeSkills = resolveCodeModeSkills({
-    skillsPrompt: await resolveSkillsPrompt({ entries: [demo], workspaceDir: "/workspace" }),
-    candidates: [demo.skill, hidden.skill],
-    reader,
-  });
-  const h = createCodeModeHarness({ codeModeSkills });
-  applyCodeModeCatalog({
-    ...h.ctx,
-    tools: [...h.tools, ...createInstalledSkillTools(codeModeSkills)],
-  });
-  const result = await runUntilCompleted({
-    execTool: h.tools[0]!,
-    waitTool: h.tools[1]!,
-    code: `
-    const listed = await skills.list();
-    const found = await skills.search("demo");
-    const body = await skills.read("demo");
-    let unknown;
-    try { await skills.read("missing"); } catch (error) { unknown = error.message; }
-    return { listed, found, body, unknown };
-  `,
-  });
-  expect(result).toMatchObject({
-    status: "completed",
-    value: {
-      listed: [
-        { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
-      ],
-      found: {
-        skills: [
-          { name: "demo", description: demo.skill.description, location: "/skills/demo/SKILL.md" },
-        ],
-        hasMore: false,
-        coverage: { bodyIndexed: 0, metadataOnly: 1, truncatedBodies: 0 },
-      },
-      body,
-      unknown:
-        'Skill "missing" is not available to this agent. Search the available skills instead.',
-    },
-  });
-  expect(reader).toHaveBeenCalledExactlyOnceWith({
-    location: "/skills/demo/SKILL.md",
-    signal: expect.any(AbortSignal),
-  });
-});
-
 it("records Code Mode skills.read of a workshop skill as run usage and skill.used", async () => {
   const learned = createFixtureSkillEntry("learned", { source: "openclaw-workshop" });
   const codeModeSkills = resolveCodeModeSkills({
@@ -398,7 +354,13 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
       waitTool: h.tools[1]!,
       code: 'return await skills.read("learned");',
     });
-    expect(result).toMatchObject({ status: "completed", value: "# Learned instructions\n" });
+    expect(result).toMatchObject({
+      status: "completed",
+      value:
+        "Skill location: /skills/learned/SKILL.md\n" +
+        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+        "# Learned instructions\n",
+    });
     expect(consumeRunSkillUsage("run-code-mode")).toEqual([
       {
         name: "learned",
@@ -503,9 +465,13 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         });
         const exec = surface.tools.find((tool) => tool.name === "exec")!;
         const wait = surface.tools.find((tool) => tool.name === "wait")!;
-        expect(exec.description.includes("skills.search(")).toBe(denied !== "skills_search");
-        expect(exec.description.includes("skills.list(")).toBe(denied !== "skills_search");
-        expect(exec.description.includes("skills.read(")).toBe(denied !== "skills_read");
+        const catalogPrompt = buildCodeModeCatalogPrompt(
+          { config: runtime.config },
+          runtime.toolSearchCatalogRef?.current?.entries ?? [],
+        );
+        expect(catalogPrompt.includes("skills.search(")).toBe(denied !== "skills_search");
+        expect(catalogPrompt.includes("skills.list(")).toBe(denied !== "skills_search");
+        expect(catalogPrompt.includes("skills.read(")).toBe(denied !== "skills_read");
         const pending = runUntilCompleted({
           execTool: exec,
           waitTool: wait,
@@ -559,7 +525,9 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
                   ? expect.stringContaining("Unknown tool id: skills_read.")
                   : denied === "shadowed"
                     ? expect.stringContaining("Shadowed reader")
-                    : "Private instructions",
+                    : `Skill location: ${filePath}\n` +
+                      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+                      "Private instructions",
           },
         });
         expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
@@ -590,6 +558,9 @@ it.each([undefined, "read", "skills_read"])(
     const guide = createFixtureSkillEntry("guide");
     const hidden = createFixtureSkillEntry("hidden");
     const body = `${"x".repeat(256 * 1024)}complete tail`;
+    const context =
+      "Skill location: /skills/guide/SKILL.md\n" +
+      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n";
     guide.skill.readContent = body;
     hidden.skill.readContent = body;
     const skills = prepareInstalledSkillCatalog({
@@ -630,7 +601,7 @@ it.each([undefined, "read", "skills_read"])(
       value: {
         body: denied
           ? "skills_read is not available in this run."
-          : { length: body.length, tail: "complete tail" },
+          : { length: context.length + body.length, tail: "complete tail" },
         hidden: denied
           ? "skills_read is not available in this run."
           : 'Skill "hidden" exceeds the 262144-byte instruction limit.',

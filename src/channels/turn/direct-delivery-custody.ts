@@ -3,7 +3,10 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { assertReplyPayloadSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import type { ChannelDeliveryInfo } from "./types.js";
@@ -11,11 +14,13 @@ import type { ChannelDeliveryInfo } from "./types.js";
 type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDelivery"> & {
   assertPlatformSendAuthorized: () => void;
   onPlatformSendDispatch: () => Promise<void>;
+  release: () => void;
 };
 
 export const NO_PENDING_FINAL_CUSTODY: DirectPendingFinalCustody = {
   assertPlatformSendAuthorized: () => undefined,
   onPlatformSendDispatch: () => Promise.resolve(),
+  release: () => undefined,
 };
 
 export function resolvePendingFinalCompletion(payload: ReplyPayload) {
@@ -23,47 +28,47 @@ export function resolvePendingFinalCompletion(payload: ReplyPayload) {
   return identity ? { kind: "pending-final" as const, ...identity } : undefined;
 }
 
-export function createDirectPendingFinalCustody(
+export async function createDirectPendingFinalCustody(
   payload: ReplyPayload,
   fallbackStorePath?: string,
-): DirectPendingFinalCustody | undefined {
+): Promise<DirectPendingFinalCustody | undefined> {
   const completion = resolvePendingFinalCompletion(payload);
-  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
-  if (!completion && !authority) {
+  const originalAuthority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!completion && !originalAuthority) {
     return undefined;
   }
+  const { authority, release } = await prepareSessionWriterDeliveryAuthority(
+    originalAuthority,
+    fallbackStorePath,
+  );
   const identity = completion ? (({ kind: _kind, ...value }) => value)(completion) : undefined;
-  let firstDispatch = true;
-  let admissionTail = Promise.resolve();
+  let admission: Promise<void> | undefined;
   return {
     bindPendingFinalDelivery: (nextPayload) =>
       setReplyPayloadMetadata(nextPayload, {
         ...(identity ? { pendingFinalDeliveryCompletion: identity } : {}),
         ...(authority ? { sessionWriterDeliveryAuthority: authority } : {}),
       }),
-    assertPlatformSendAuthorized: () =>
-      assertReplyPayloadSessionWriterDeliveryAuthorized(payload, fallbackStorePath),
-    onPlatformSendDispatch: () => {
-      const expectedStates = firstDispatch
-        ? (["prepared", "queued"] as const)
-        : (["unknown"] as const);
-      firstDispatch = false;
-      const admission = admissionTail.then(async () => {
-        assertReplyPayloadSessionWriterDeliveryAuthorized(payload, fallbackStorePath);
+    assertPlatformSendAuthorized: () => assertSessionWriterDeliveryAuthorized(authority),
+    release,
+    onPlatformSendDispatch: async () => {
+      // One logical delivery retains custody across all of its physical posts.
+      await (admission ??= (async () => {
         if (!completion) {
           return;
         }
-        const result = await settlePendingFinalDelivery(completion, "unknown", expectedStates);
+        const result = await settlePendingFinalDelivery(completion, "unknown", [
+          "prepared",
+          "queued",
+        ]);
         if (result.state !== "unknown") {
           throw new PlatformMessageNotDispatchedError(
             "Pending final delivery ownership changed before platform dispatch",
             { cause: new Error(`pending final delivery is ${result.state}`) },
           );
         }
-      });
-      // Every physical post must observe the state left by the prior post's check.
-      admissionTail = admission.catch(() => undefined);
-      return admission;
+      })());
+      assertSessionWriterDeliveryAuthorized(authority);
     },
   };
 }

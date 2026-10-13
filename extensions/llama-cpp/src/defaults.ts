@@ -169,7 +169,6 @@ export function buildLlamaCppProviderConfig(
     ...existing,
     baseUrl:
       managed?.baseUrl ?? existing?.baseUrl ?? `http://127.0.0.1:${LLAMA_CPP_DEFAULT_PORT}/v1`,
-    apiKey: existing?.apiKey ?? LLAMA_CPP_LOCAL_AUTH_MARKER,
     api: "openai-completions",
     timeoutSeconds: existing?.timeoutSeconds ?? 600,
     ...(managed

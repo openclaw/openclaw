@@ -37,7 +37,10 @@ count toward the same 10-iteration threshold.
 
 A queued review starts after 30 seconds with no agent or reply run active; later
 activity in the same session restarts that wait. Reviews run one at a time.
-The foreground reply never waits for a review.
+The foreground reply never waits for a review. Once started, the review keeps
+its original completed-turn snapshot while later turns continue. Resetting the
+conversation or changing its permissions cancels the review. Before changing a
+skill, the review also verifies that its original transcript anchor is still valid.
 
 These turns do not count:
 
@@ -70,25 +73,30 @@ and the review never re-runs your task. The review must `view` a skill
 before it patches, writes, or archives it, and an archive needs `absorbed_into`
 or `reason`.
 
-The reviewer looks for:
+The reviewer keeps your learned skills a small set of repeatable procedures, so
+most reviews change nothing. It changes a skill only for a class of task you
+will ask for again, where the next run would go wrong or redo work without the
+change. The evidence is one of:
 
-- a correction to your approach, output, or style.
-- a non-obvious technique, fix, or command sequence that worked after trial and
-  error.
-- a learned skill that was wrong, missing a step, or outdated.
+- a correction to the agent's method.
+- a non-obvious method that worked after trial and error.
+- a learned skill with a wrong, missing, or outdated step.
 
-It lists learned skills first, then prefers patching a skill that was used or
-already covers the task, then adding a `references/`, `templates/`, or
-`scripts/` file to one, and creates a new skill only when none covers the task.
-Listed skills that cover the same class of task get merged into one umbrella
-skill: the review patches the survivor and archives the rest with
-`absorbed_into`. When the turn was interrupted, it keeps only steps that visibly
-worked before the stop.
+Details true of only one request, such as one product, order, menu, date,
+place, or booking, stay in the conversation.
+
+A review makes at most one change. It lists learned skills first, then either
+sharpens the step the lesson changes in the skill for that class of task, or
+creates one focused skill when none covers it. An unrelated class of task gets
+its own skill instead of a new branch in an existing one. When two listed skills
+cover the same class of task, the review merges them: it patches the survivor
+and archives the other with `absorbed_into`. When the turn was interrupted, it
+keeps only steps that visibly worked before the stop.
 
 It does not capture environment-specific or transient failures, negative claims
 about tools, unresolved failures or guesses, knowledge about one codebase,
 one-off tasks, personal facts, secrets, or generic advice without concrete
-commands, paths, or ids. When nothing durable was learned, it changes nothing.
+commands, paths, or ids.
 
 ## What you see
 
@@ -117,6 +125,8 @@ agent restores the previous version. See
 A review stops without changing anything further if you turn learning off, or
 if the source session is deleted, replaced, or changes permission mode while it
 runs. Changes it already made stay, each with a saved previous version.
+Expected cancellations during Gateway shutdown or a source transcript change
+appear only in debug logs. Provider and storage failures still produce warnings.
 
 ## Turn it on or off
 

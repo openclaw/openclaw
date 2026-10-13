@@ -110,6 +110,7 @@ export async function withInterruptedTurn(
   }) => Promise<void>,
   options: {
     interruptedTurn?: boolean;
+    partialText?: string;
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
@@ -201,9 +202,15 @@ export async function withInterruptedTurn(
       await appendCompletedToolWork(original, runId);
     }
     if (options.interruptedTurn !== false) {
-      await original.appendMessageAsync(
-        createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-      );
+      await original.appendMessageAsync({
+        ...createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
+        ...(options.partialText
+          ? {
+              content: [{ type: "text" as const, text: options.partialText }],
+              errorCode: "OPENCLAW_RESTART_ABORT",
+            }
+          : {}),
+      });
       await appendInterruptedTurnMessage([], async (event) => {
         if (event.type !== "message_end") {
           return;

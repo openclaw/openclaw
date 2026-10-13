@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,7 +16,6 @@ import { withEnvAsync } from "../../src/test-utils/env.js";
 import {
   createDesktopResizeGuest,
   observeDesktopEndpointPackets,
-  readDesktopResizeFixture,
   resizeSources,
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
@@ -88,36 +86,6 @@ describe("desktop resize fixture provenance and carrier", () => {
       }
     },
   );
-  it("retains explicit upstream provenance for a node carrier", async () => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    const value = fixture("node");
-    await writeFile(file, JSON.stringify(value));
-    expect(await readDesktopResizeFixture(file)).toEqual(value);
-  });
-
-  it("retains real Crabbox provenance as a separate source kind", async () => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    const value = fixture();
-    value.provenance = {
-      kind: "crabbox",
-      commit: "c".repeat(40),
-      installerSha256: "d".repeat(64),
-    };
-    await writeFile(file, JSON.stringify(value));
-    expect(await readDesktopResizeFixture(file)).toEqual(value);
-  });
-
-  it.each([
-    { carrier: "physical" },
-    { provenance: undefined },
-    { provenance: { kind: "upstream-os", serverBinarySha256: "unverified" } },
-    { provenance: { kind: "crabbox", commit: "not-a-commit", installerSha256: "e".repeat(64) } },
-  ])("rejects an unqualified fixture %j", async (invalid) => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    await writeFile(file, JSON.stringify({ ...fixture(), ...invalid }));
-    await expect(readDesktopResizeFixture(file)).rejects.toThrow("provenance");
-  });
-
   it.each(["ssh", "node"] as const)(
     "persists a ready %s worker and synthetic receipt across reopen",
     async (carrier) => {

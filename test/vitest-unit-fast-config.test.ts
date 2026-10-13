@@ -89,7 +89,7 @@ describe("unit-fast vitest lane", () => {
       import path from "node:path";
       const selectedTests = [
         "src/agents/agent-tools.deferred-followup-guidance.test.ts",
-        "src/test-utils/openclaw-test-state.test.ts",
+        "src/test-utils/temp-home.test.ts",
         "src/utils.test.ts",
         "src/media-generation/runtime-shared.test.ts",
       ];
@@ -290,7 +290,7 @@ describe("unit-fast vitest lane", () => {
     expect(selection, configProbeResult.stdout).not.toBeNull();
     const selectedFastIncludes = [
       ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
-      ["src/test-utils/openclaw-test-state.test.ts"],
+      ["src/test-utils/temp-home.test.ts"],
       ["src/utils.test.ts"],
     ];
     expect(JSON.parse(selection?.[1] ?? "null")).toEqual({
@@ -301,7 +301,7 @@ describe("unit-fast vitest lane", () => {
     expect(unitSelection, configProbeResult.stdout).not.toBeNull();
     const excluded = [
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
-      "src/test-utils/openclaw-test-state.test.ts",
+      "src/test-utils/temp-home.test.ts",
       "src/utils.test.ts",
     ];
     const include = [...excluded, "src/media-generation/runtime-shared.test.ts"];
@@ -557,6 +557,7 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/auth-profiles/session-override.model-endpoint.test.ts",
       "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/provider-transport-fetch.test.ts",

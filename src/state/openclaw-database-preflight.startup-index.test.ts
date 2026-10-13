@@ -5,10 +5,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -27,7 +35,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
@@ -37,9 +44,11 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   await flushLogger();
+  clearRuntimeConfigSnapshot();
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -63,6 +72,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     configPath,
     JSON.stringify({ ...config, logging: { level: "warn", file: logPath } }),
   );
+  setRuntimeConfigSnapshot(config);
   setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
   const agents = [];
   for (const agentId of ids) {
@@ -88,6 +98,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
       writer.exec("DROP TABLE session_key_contract;");
     }
     writer.close();
+    retireSqliteDatabaseAdmissionForPath(agent.path);
   }
   return {
     env,
@@ -112,7 +123,7 @@ it.for(["missing", "drifted"] as const)(
         log: { info: vi.fn(), warn: vi.fn() },
       });
     for (const agent of agents) {
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
     }
     const allAdmitted = createDeferredCore();
     const admitted = new Set<string>();
@@ -166,6 +177,7 @@ it.for(["missing", "drifted"] as const)(
           activateGatewayAgentDatabaseStartup({
             admission,
             preparationReady: Promise.resolve(),
+            waitForPostReadyWork: async () => {},
             getConfig: () => config,
             getPluginRegistry: vi.fn(),
             getPluginMetadataSnapshot: () => undefined,

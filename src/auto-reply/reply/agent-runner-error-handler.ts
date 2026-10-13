@@ -122,6 +122,10 @@ export async function handleAgentExecutionError(params: {
     if (!reason) {
       return undefined;
     }
+    if (reason === "restart") {
+      // Backend-owned drain aborts must retain reply recovery custody through cleanup.
+      turn.replyOperation?.abortForRestart();
+    }
     if (isCliPartialOutputRejected(abortError)) {
       turn.replyOperation?.fail("run_failed", abortError);
     }

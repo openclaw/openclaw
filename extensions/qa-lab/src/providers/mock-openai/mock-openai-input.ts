@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { countImageInputs } from "../shared/image-inputs.js";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,
@@ -18,6 +19,9 @@ import {
   QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE,
   QA_WHATSAPP_BATCHED_FINAL_MARKER_RE,
 } from "./mock-openai-contracts.js";
+
+export { countImageInputs } from "../shared/image-inputs.js";
+
 const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
@@ -304,11 +308,7 @@ function stringifyFunctionCallOutput(output: unknown): string {
     if (text !== undefined) {
       return text;
     }
-    try {
-      return JSON.stringify(output);
-    } catch {
-      return "";
-    }
+    return JSON.stringify(output);
   }
   return "";
 }
@@ -587,37 +587,6 @@ export function buildWhatsAppBatchedReply(prompt: string) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];
-}
-
-export function countImageInputs(value: unknown): number {
-  const seen = new WeakSet<object>();
-  const stack = [value];
-  let count = 0;
-  let visited = 0;
-  while (stack.length > 0 && visited < 50_000) {
-    visited += 1;
-    const current = stack.pop();
-    if (Array.isArray(current)) {
-      for (const entry of current) {
-        stack.push(entry);
-      }
-      continue;
-    }
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-    if (seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    const record = current as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : "";
-    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
-      count += 1;
-    }
-    stack.push(record.content, record.image_url, record.source);
-  }
-  return count;
 }
 
 export function extractCurrentImageRequest(

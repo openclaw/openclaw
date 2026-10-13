@@ -63,8 +63,10 @@ An explicit server-close failure retains exit status `1`, including when final
 provider cleanup crosses the native shutdown deadline.
 
 Admission-close logs name the shutdown trigger, for example `stop (SIGTERM)` or
-`restart (SIGUSR2: config reload: gateway.bind)`. A signal alone does not identify
-its sender: Node does not expose the sender PID or command. Three occurrences of
+`restart (SIGUSR2: config reload: gateway.bind)`. Process failures retain their
+cause, for example `stop (process exit: unhandled rejection)`, while host lifeline
+closure is reported only when the hosting process closes its lifeline. A signal
+alone does not identify its sender: Node does not expose the sender PID or command. Three occurrences of
 the same signal within five minutes in one process, or three recorded plain
 SIGTERM/SIGINT stops across process lifetimes, produce a hint to check
 `openclaw gateway status --deep` for another supervisor. Deep local status shows

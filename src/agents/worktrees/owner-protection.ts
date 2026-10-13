@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { scheduler } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { readResolvedSessionEntriesInWorker } from "../../config/sessions/session-accessor.entry.js";
-import type { ResolvedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import { readResolvedSessionStoreTargetsInWorker } from "../../config/sessions/session-accessor.entry-read-runtime.js";
+import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -36,12 +36,12 @@ export function createManagedWorktreeOwnerPolicy(
     context: SessionWorkerPlacementContext;
     current: () => readonly WorkerSessionPlacementRecord[];
   };
-  let preparedOwners = new Map<string, ResolvedSessionEntryAccessTarget>();
+  let preparedOwners = new Map<string, ResolvedSessionEntryStoreTarget>();
   const cleanupOwner = new AsyncLocalStorage<{
     ownerId: string;
     scope: string;
     entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
-    target: ResolvedSessionEntryAccessTarget;
+    target: ResolvedSessionEntryStoreTarget;
     hasChanged: () => boolean;
     lifecycleHeld?: boolean;
     placements: PlacementFacts;
@@ -50,7 +50,7 @@ export function createManagedWorktreeOwnerPolicy(
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
     prepared?: {
-      target: ResolvedSessionEntryAccessTarget;
+      target: ResolvedSessionEntryStoreTarget;
       placements: PlacementFacts;
     },
   ) => {
@@ -145,7 +145,7 @@ export function createManagedWorktreeOwnerPolicy(
           throw new Error("Worker placement census is unavailable");
         }
         const [targets, placements] = await Promise.all([
-          readResolvedSessionEntriesInWorker({ cfg, sessionKeys: ownerIds }, "worktree"),
+          readResolvedSessionStoreTargetsInWorker({ cfg, sessionKeys: ownerIds }, "worktree"),
           context.workerSessionPlacementService.listAsync(),
         ]);
         preparedOwners = targets;
@@ -188,7 +188,7 @@ export function createManagedWorktreeOwnerPolicy(
       });
       try {
         target = (
-          await readResolvedSessionEntriesInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")
+          await readResolvedSessionStoreTargetsInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")
         ).get(ownerId);
         signal?.throwIfAborted();
         if (!target) {

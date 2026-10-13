@@ -193,7 +193,7 @@ describe("GatewayClient transport defaults", () => {
     });
   });
 
-  it("enforces the 15 second connect-challenge watchdog", async () => {
+  it("enforces the 30 second connect-challenge watchdog", async () => {
     const socketReady = createDeferred<WebSocket>();
     const errors: Error[] = [];
     const url = await listen(() => {});
@@ -216,13 +216,13 @@ describe("GatewayClient transport defaults", () => {
     });
     await flushSocketIo();
 
-    await vi.advanceTimersByTimeAsync(14_999);
+    await vi.advanceTimersByTimeAsync(29_999);
     expect(errors).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toContain(
-      "gateway connect challenge timeout (waited 15000ms, limit 15000ms)",
+      "gateway connect challenge timeout (waited 30000ms, limit 30000ms)",
     );
     await expect(closed).resolves.toEqual({
       code: 1008,

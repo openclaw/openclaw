@@ -10,7 +10,7 @@ import {
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
@@ -170,12 +170,14 @@ export function classifyHeartbeatAgentOutcome(params: {
     !shouldSuppressSourceReply &&
     (!heartbeatToolResponse || agentRunFailed) &&
     replyPayload !== undefined &&
-    hasOutboundReplyContent({
-      ...replyPayload,
-      text: undefined,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    hasOutboundReplyContent(
+      copyReplyPayloadMetadata(replyPayload, {
+        ...replyPayload,
+        text: undefined,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      }),
+    );
   const shouldSkipMain =
     // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
     (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
