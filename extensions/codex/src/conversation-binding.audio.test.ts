@@ -332,7 +332,14 @@ describe("Codex native bind voice notes", () => {
   });
 
   it("passes an audio URL and classifying MIME for an opaque cached clip", async () => {
-    const runMediaUnderstandingFile = vi.fn(async () => ({ text: "from the opaque clip" }));
+    const runMediaUnderstandingFile = vi.fn(
+      async (params: {
+        capability: string;
+        filePath: string;
+        mediaUrl?: string;
+        mime?: string;
+      }) => ({ text: `from the opaque clip ${params.filePath}` }),
+    );
     const event = voiceEvent([
       {
         path: "/tmp/opaque",
