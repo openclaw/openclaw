@@ -389,7 +389,7 @@ export function installEmbeddedAttemptStreamGuards(
       } as typeof options);
     };
   }
-  let diagnosticModelCallSeq = 0;
+  const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
   let modelResponseTerminal = false;
   let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
@@ -416,7 +416,7 @@ export function installEmbeddedAttemptStreamGuards(
       : {}),
     trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
