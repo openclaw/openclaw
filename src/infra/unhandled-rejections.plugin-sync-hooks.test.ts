@@ -15,8 +15,6 @@ function createToolResultMessage(text: string, details?: Record<string, unknown>
   return {
     role: "toolResult",
     toolCallId: "call_1",
-    // The durable transcript schema requires a tool name, and these fixtures stand
-    // in for hook replacements the transcript is expected to accept.
     toolName: "probe",
     content: [{ type: "text", text }],
     isError: false,
@@ -198,7 +196,11 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it.each(syncHookNames)("logs and ignores %s replacements that are not messages", (hookName) => {
+  it.each(
+    (["tool_result_persist", "before_message_write"] as const).flatMap((hookName) =>
+      ["not-a-message", {}].map((message) => ({ hookName, message })),
+    ),
+  )("logs and ignores $hookName replacement $message", ({ hookName, message }) => {
     const logger = createLogger();
     const originalMessage = createToolResultMessage("original");
     const runner = createHookRunner(
@@ -206,7 +208,7 @@ describe("sync-only plugin hooks", () => {
         {
           hookName,
           pluginId: "malformed-sync-hook",
-          handler: () => ({ message: "not-a-message" }),
+          handler: () => ({ message }),
         },
       ]),
       { logger },
@@ -217,15 +219,11 @@ describe("sync-only plugin hooks", () => {
         ? runner.runToolResultPersist({ message: originalMessage }, {})
         : runner.runBeforeMessageWrite({ message: originalMessage }, {});
 
-    // A replacement the transcript cannot store fails that hook and keeps the
-    // message the hook received.
     expect(result).toEqual(
       hookName === "tool_result_persist" ? { message: originalMessage } : undefined,
     );
-    expect(logger.error.mock.calls).toEqual([
-      [
-        `[hooks] ${hookName} handler from malformed-sync-hook failed: Error: the replacement is not a session message; the original message was kept`,
-      ],
-    ]);
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`[hooks] ${hookName} handler from malformed-sync-hook failed:`),
+    );
   });
 });

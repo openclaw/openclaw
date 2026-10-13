@@ -29,7 +29,6 @@ import {
   isHookDecision,
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
-import { resolveSyncMessageReplacement } from "./hook-message-replacement.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
@@ -556,7 +555,15 @@ export function createHookRunner(
       if (hookName === "before_message_write" && result.block) {
         return { block: true };
       }
-      return resolveSyncMessageReplacement(result.message);
+      const nextMessage = result.message;
+      if (!nextMessage) {
+        return undefined;
+      }
+      // Reject non-messages without traversing payloads; the transcript owner validates content.
+      if (typeof nextMessage !== "object" || typeof nextMessage.role !== "string") {
+        throw new Error("the replacement is not a session message; the original message was kept");
+      }
+      return { message: nextMessage };
     } catch (err) {
       const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
       if (shouldCatchHookErrors(hookName)) {
