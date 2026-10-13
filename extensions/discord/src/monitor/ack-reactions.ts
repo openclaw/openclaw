@@ -17,10 +17,7 @@ export function createDiscordAckReactionContext(params: {
 }): DiscordReactionRuntimeContext {
   return {
     rest: params.rest,
-    ...createDiscordRuntimeAccountContext({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
+    ...createDiscordRuntimeAccountContext(params),
   };
 }
 

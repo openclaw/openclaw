@@ -16,6 +16,8 @@ export type HandoffSessionWorkAdmission = {
   identities: ReadonlySet<string>;
   interrupt?: SessionWorkAdmissionInterrupt;
   interrupted: Error | undefined;
+  isSettling?: () => boolean;
+  getAbortReason?: () => unknown;
 };
 
 type SessionWorkAdmissionHandoff = {
@@ -56,6 +58,8 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   onInterrupt?: SessionWorkAdmissionInterrupt;
+  isSettling?: () => boolean;
+  getAbortReason?: () => unknown;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.handoffId.trim();
   if (!handoffId) {
@@ -75,6 +79,8 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   SESSION_WORK_ADMISSION_HANDOFFS.delete(handoffId);
   handoff.admission.handoffIds.delete(handoffId);
   handoff.admission.interrupt = params.onInterrupt;
+  handoff.admission.isSettling = params.isSettling ?? handoff.admission.isSettling;
+  handoff.admission.getAbortReason = params.getAbortReason ?? handoff.admission.getAbortReason;
   if (handoff.admission.interrupted) {
     params.onInterrupt?.(handoff.admission.interrupted);
   }

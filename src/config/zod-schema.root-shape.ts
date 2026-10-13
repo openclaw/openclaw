@@ -16,6 +16,7 @@ import {
   SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { DatabaseConfigSchema } from "./zod-schema.database.js";
 import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -509,6 +510,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  database: DatabaseConfigSchema,
   storage: StorageConfigSchema,
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
@@ -529,7 +531,7 @@ export const OpenClawSchemaShape = {
            * sit outside the configured source root.
            */
           allowSymlinkTargets: z.array(z.string()).optional(),
-          /** Watch skill folders for changes and refresh the skills snapshot. */
+          /** Enable passive skill rescans; explicit changes and startup still refresh immediately. */
           watch: z.boolean().optional(),
         })
         .optional(),
@@ -559,18 +561,16 @@ export const OpenClawSchemaShape = {
         .optional(),
       workshop: z
         .strictObject({
-          /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */
+          /** Autonomous Skill Workshop learning. */
           autonomous: z
             .strictObject({
-              /** Capture policy for durable conversation signals and substantial completed work. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
+              /** "auto" lets agents save and update Workshop skills; "off" disables autonomous learning. */
+              mode: z.union([z.literal("off"), z.literal("auto")]).optional(),
+              /** Post background review notices to supported channels. Default: false. */
+              channelNotices: z.boolean().optional(),
             })
             .optional(),
-          /** Whether proposal lifecycle actions need explicit approval. */
-          approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
-          /** Maximum pending/quarantined proposals retained per workspace. */
-          maxPending: z.number().int().min(1).optional(),
-          /** Maximum generated skill proposal size in bytes. */
+          /** Maximum Workshop skill file size in bytes. */
           maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),

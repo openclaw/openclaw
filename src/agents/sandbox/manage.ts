@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { getSandboxBackendManager, usesSandboxRuntimeReservations } from "./backend.js";
+import type { SandboxBackendManager, SandboxBackendRuntimeInfo } from "./backend.types.js";
 import {
   BROWSER_BRIDGES,
   stopCachedBrowserBridgesForContainer,
@@ -44,35 +45,30 @@ function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): Sandbo
   };
 }
 
-export async function listSandboxContainers(
-  matches?: (entry: SandboxRegistryEntry) => boolean,
-): Promise<SandboxContainerInfo[]> {
+async function listSandboxRuntimes<T extends SandboxRegistryEntry>(
+  read: () => Promise<{ entries: T[] }>,
+  resolveRuntime: (entry: T) => {
+    manager: SandboxBackendManager | null;
+    entry: SandboxRegistryEntry;
+  },
+  matches?: (entry: T) => boolean,
+): Promise<Array<T & { running: boolean; imageMatch: boolean }>> {
   const config = getRuntimeConfig();
-  const registry = await readRegistry();
-  const results: SandboxContainerInfo[] = [];
-
+  const registry = await read();
+  const results: Array<T & { running: boolean; imageMatch: boolean }> = [];
   for (const entry of registry.entries) {
-    // Scope selection precedes backend probes: an unrelated target can be offline
-    // or require a different connection without blocking this runtime's recovery.
+    // Select before probing: an unrelated backend may be unavailable or use another connection.
     if (matches && !matches(entry)) {
       continue;
     }
-    const backendId = entry.backendId ?? "docker";
-    const manager = getSandboxBackendManager(backendId);
-    if (!manager) {
-      results.push({
-        ...entry,
-        running: false,
-        imageMatch: true,
-      });
-      continue;
-    }
-    const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const runtime = await manager.describeRuntime({
-      entry,
-      config,
-      agentId,
-    });
+    const selected = resolveRuntime(entry);
+    const runtime: SandboxBackendRuntimeInfo = selected.manager
+      ? await selected.manager.describeRuntime({
+          entry: selected.entry,
+          config,
+          agentId: resolveSandboxAgentId(entry.sessionKey),
+        })
+      : { running: false, configLabelMatch: true };
     results.push({
       ...entry,
       image: runtime.actualConfigLabel ?? entry.image,
@@ -80,36 +76,33 @@ export async function listSandboxContainers(
       imageMatch: runtime.configLabelMatch,
     });
   }
-
   return results;
+}
+
+export async function listSandboxContainers(
+  matches?: (entry: SandboxRegistryEntry) => boolean,
+): Promise<SandboxContainerInfo[]> {
+  return listSandboxRuntimes(
+    readRegistry,
+    (entry) => ({
+      manager: getSandboxBackendManager(entry.backendId ?? "docker"),
+      entry,
+    }),
+    matches,
+  );
 }
 
 export async function listSandboxBrowsers(
   matches?: (entry: SandboxBrowserRegistryEntry) => boolean,
 ): Promise<SandboxBrowserInfo[]> {
-  const config = getRuntimeConfig();
-  const registry = await readBrowserRegistry();
-  const results: SandboxBrowserInfo[] = [];
-
-  for (const entry of registry.entries) {
-    if (matches && !matches(entry)) {
-      continue;
-    }
-    const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const runtime = await dockerSandboxBackendManager.describeRuntime({
+  return listSandboxRuntimes(
+    readBrowserRegistry,
+    (entry) => ({
+      manager: dockerSandboxBackendManager,
       entry: toBrowserDockerRuntimeEntry(entry),
-      config,
-      agentId,
-    });
-    results.push({
-      ...entry,
-      image: runtime.actualConfigLabel ?? entry.image,
-      running: runtime.running,
-      imageMatch: runtime.configLabelMatch,
-    });
-  }
-
-  return results;
+    }),
+    matches,
+  );
 }
 
 /** Retire only the physical generation fenced by local workspace settlement. */

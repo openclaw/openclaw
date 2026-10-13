@@ -5,6 +5,7 @@ import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
@@ -57,7 +58,7 @@ export function prepareEmbeddedRunTerminal(input: {
   authProfileId?: string;
   sessionIdUsed: string;
   sessionFileUsed?: string;
-  outerContextTokenMeta: { contextTokens?: number };
+  outerContextTokenMeta: { contextTokens?: number; contextTokensSource?: "resolved-v1" };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
@@ -65,6 +66,7 @@ export function prepareEmbeddedRunTerminal(input: {
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { runParams, attempt } = input;
+  const replyDeliveryState = resolveSourceReplyDelivery(attempt, input.replyDeliveryState);
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
     attempt.terminal,
   );
@@ -84,11 +86,13 @@ export function prepareEmbeddedRunTerminal(input: {
   // A runtime can observe its model without emitting message_end. That scoped
   // attribution is useful here, but is not completed text or usage evidence.
   const attributionAssistant = terminalAssistant ?? attempt.currentAttemptAssistant;
+  const requestedModelRef = { provider: input.provider, model: input.model };
   const reportedModelRef = resolveReportedModelRef({
-    ...(attempt.runtimeModelSelection ?? { provider: input.provider, model: input.model }),
+    ...(attempt.runtimeModelSelection ?? requestedModelRef),
     assistant: attributionAssistant,
   });
   const responseModel = attributionAssistant?.responseModel?.trim() || reportedModelRef.model;
+  const effectiveModelRef = { ...reportedModelRef, responseModel };
   // The turn's answer: an earlier completed answer the terminal message kept, else the terminal.
   const answerAssistant = attempt.keptAnswer?.assistant ?? terminalAssistant;
   const finalAssistantStopReason = (answerAssistant?.stopReason ?? "").trim().toLowerCase();
@@ -105,6 +109,12 @@ export function prepareEmbeddedRunTerminal(input: {
   // into the accumulator, so read it directly instead of re-adding the attempt.
   const runAssistantTurns = input.usageAccumulator.assistantTurns;
   const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
+  // The outer window was resolved for the prepared model. A different reported identity is
+  // persisted next to it, so only the prepared model may carry its trusted provenance.
+  const outerContextTokensSource =
+    reportedModelRef.provider === input.provider && reportedModelRef.model === input.model
+      ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
+      : "resolved";
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -116,7 +126,7 @@ export function prepareEmbeddedRunTerminal(input: {
           contextTokensSource:
             attempt.contextTokens !== undefined
               ? (attempt.contextTokensSource ?? "resolved")
-              : "resolved",
+              : outerContextTokensSource,
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
@@ -145,9 +155,12 @@ export function prepareEmbeddedRunTerminal(input: {
       : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-  const attemptFinalText = attempt.assistantTexts
-    .findLast((text) => text.trim().length > 0)
-    ?.trim();
+  const attemptFinalText = answerAssistant
+    ? undefined
+    : attempt.assistantTexts
+        .map((text) => sanitizeAssistantVisibleStreamText(text))
+        .findLast((text) => text.trim().length > 0)
+        ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
     : undefined;
@@ -160,19 +173,12 @@ export function prepareEmbeddedRunTerminal(input: {
       runId: runParams.runId,
       sessionId: input.sessionIdUsed,
       turnId: terminalTurnId?.trim() || runParams.runId,
-      requested: { provider: input.provider, model: input.model },
-      effective: {
-        provider: reportedModelRef.provider,
-        model: reportedModelRef.model,
-        responseModel,
-      },
+      requested: requestedModelRef,
+      effective: effectiveModelRef,
       successfulToolNames: resolveSuccessfulToolNames(attempt),
       assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
-      sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
-      rerouted: isProviderModelRerouted(
-        { provider: input.provider, model: input.model },
-        { ...reportedModelRef, responseModel },
-      ),
+      sourceReplyDelivered: replyDeliveryState === "delivered" ? true : undefined,
+      rerouted: isProviderModelRerouted(requestedModelRef, effectiveModelRef, runParams.config),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";
@@ -207,7 +213,8 @@ export function prepareEmbeddedRunTerminal(input: {
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
-    didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
+    didDeliverSourceReplyViaMessageTool: replyDeliveryState === "delivered",
+    sourceReplyDeliveryState: replyDeliveryState,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
     agentId: runParams.agentId,
     runId: runParams.runId,
@@ -220,25 +227,30 @@ export function prepareEmbeddedRunTerminal(input: {
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
-  const payloadsWithToolMedia = mergeToolMedia(
-    {
-      payloads,
-      toolMediaUrls: attempt.toolMediaUrls,
-      // Preserve harness provenance through terminal delivery. Without it,
-      // message-tool-only routes silently drop native runtime artifacts.
-      hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
-      toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
-        attempt,
-        attempt.toolMediaUrls,
-        runParams.admittedRunContext?.operationalRunInstance,
-      ),
-      toolAudioAsVoice: attempt.toolAudioAsVoice,
-      toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
-      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-    },
-    runParams.admittedRunContext?.operationalRunInstance,
-  );
+  // Pending source custody also holds terminal media; committed mirrors and earlier inputs stay.
+  const payloadsWithToolMedia =
+    replyDeliveryState === "pending"
+      ? payloads
+      : mergeToolMedia(
+          {
+            payloads,
+            toolMediaUrls: attempt.toolMediaUrls,
+            // Preserve harness provenance through terminal delivery. Without it,
+            // message-tool-only routes silently drop native runtime artifacts.
+            hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
+            toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
+              attempt,
+              attempt.toolMediaUrls,
+              runParams.admittedRunContext?.operationalRunInstance,
+            ),
+            toolAudioAsVoice: attempt.toolAudioAsVoice,
+            toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+            sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+          },
+          runParams.admittedRunContext?.operationalRunInstance,
+        );
   const recoveredFinalAssistantTextAfterPromptTimeout =
+    replyDeliveryState === "missing" &&
     timedOutDuringPrompt &&
     !timeoutFinal &&
     ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
@@ -289,7 +301,7 @@ export function prepareEmbeddedRunTerminal(input: {
   });
   return {
     agentMeta,
-    replyDeliveryState: input.replyDeliveryState ?? "missing",
+    replyDeliveryState,
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,

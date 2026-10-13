@@ -209,6 +209,60 @@ describe("update run report", () => {
   );
 
   it.each([
+    { health: "target", reason: "runtime-verification-failed", recovered: true },
+    { health: "previous", reason: "runtime-verification-failed", recovered: false },
+    { health: "unavailable", reason: "runtime-verification-failed", recovered: false },
+    { health: "unknown-target", reason: "runtime-verification-failed", recovered: false },
+    { health: "target", reason: "state-migration-started", recovered: false },
+  ] as const)(
+    "reconciles only stale runtime recovery advice when $health is serving ($reason)",
+    ({ health, reason, recovered }) => {
+      const record = run({
+        status: "failed",
+        reason: "state-migrated-no-rollback",
+        after: health === "unknown-target" ? {} : { version: "2026.9.2" },
+        origin: {
+          nextAction: `Your Gateway is still serving 2026.9.1; nothing to restore. Restart remains unsafe (${reason}). Keep the new installation and recovery snapshots; do not roll back code alone.`,
+        },
+        steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
+        verification: {
+          runningVersion: "2026.9.1",
+          versionMatch: true,
+          readyz: true,
+          settled: true,
+          recovery: { serviceRestartSafe: false, reason },
+        },
+      });
+      const saved = structuredClone(record);
+      const report = renderUpdateRunReport(record, {
+        currentHealth:
+          health === "unavailable"
+            ? { kind: "unavailable" }
+            : { kind: "responding", version: health === "previous" ? "2026.9.1" : "2026.9.2" },
+      });
+      expect(report.headline).toContain("update failed: state-migrated-no-rollback");
+      if (recovered) {
+        expect(report.markdown).not.toContain("runtime-verification-failed");
+        expect(report.markdown).not.toContain("restart remains unsafe");
+        expect(report.markdown).not.toContain("Restart remains unsafe");
+        expect(report.markdown).not.toContain("Historical recovery advice");
+        expect(report.markdown).toContain(
+          "Current health: Gateway answered on the recorded port (2026.9.2).",
+        );
+        expect(report.markdown).toContain("saved runtime verification failure no longer applies");
+        expect(report.markdown).toContain("Keep the new installation and backups");
+        expect(report.markdown).toContain("rolling back code alone is unsafe");
+      } else {
+        expect(report.markdown).toContain(`restart remains unsafe (${reason})`);
+        expect(report.markdown).toContain("Historical recovery advice");
+        expect(report.markdown).toContain("recovery snapshots");
+        expect(report.markdown).toContain("do not roll back code alone");
+      }
+      expect(record).toEqual(saved);
+    },
+  );
+
+  it.each([
     ["external-supervisor-update-required", "Use your server or deployment's update workflow"],
     ["container-image-install", "Pull or build the target Docker/container image"],
     ["unmanaged-package-install", "Reinstall using the original method"],
@@ -489,6 +543,28 @@ describe("update run report", () => {
       patch: { reason: "preflight-insufficient-space" },
       contains: ["Free space on the preflight staging"],
     },
+    ...[
+      { reason: "state-migrated-no-rollback" },
+      {
+        reason: "post-install-verify",
+        verification: {
+          rollbackOutcome: {
+            status: "not-attempted" as const,
+            reason: "state-migrated-no-rollback",
+          },
+        },
+      },
+    ].map((patch) => ({
+      label: `migration rollback refusal without saved guidance (${patch.reason})`,
+      patch,
+      contains: [
+        "State may have changed during migration, so rolling back code alone is unsafe.",
+        "Keep the new installation and backups",
+        "openclaw update status",
+        "openclaw doctor",
+      ],
+      excludes: ["Run openclaw triage"],
+    })),
     ...(
       [
         ["requester-revoked", "A current command owner must start a new update"],
@@ -502,19 +578,22 @@ describe("update run report", () => {
       },
       contains: [reason, guidance],
     })),
-    ...[null, "requester-revoked"].map((reason) => ({
+    ...[null, "requester-revoked", "state-migrated-no-rollback"].map((reason) => ({
       label: `saved profile after ${reason}`,
       patch: { reason, origin: { nextAction: originAction } },
       historical: true,
       contains: [
         "Historical recovery advice:",
         originAction,
-        ...(reason ? ["Further recovery requires a current command owner."] : []),
+        ...(reason === "requester-revoked"
+          ? ["Further recovery requires a current command owner."]
+          : []),
       ],
       excludes: [
         "Run openclaw triage",
         "run openclaw doctor --fix",
         "operator can run openclaw triage locally",
+        "State may have changed during migration",
       ],
     })),
     {

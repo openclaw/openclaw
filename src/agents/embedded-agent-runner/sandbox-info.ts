@@ -25,36 +25,27 @@ export function resolveEmbeddedFullAccessState(params: {
   available: boolean;
   blockedReason?: EmbeddedFullAccessBlockedReason;
 } {
-  if (
+  const blockedByPolicy =
     (params.execPolicy?.mode !== undefined && params.execPolicy.mode !== "full") ||
     (params.execPolicy?.security !== undefined && params.execPolicy.security !== "full") ||
     params.execPolicy?.ask === "always" ||
     (params.hostPolicy?.security !== undefined && params.hostPolicy.security !== "full") ||
-    params.hostPolicy?.ask === "always"
-  ) {
-    // Explicit exec/host policy wins over elevated availability. A configured elevated backend
-    // must not bypass ask/security restrictions chosen for this agent or session.
-    return {
-      available: false,
-      blockedReason: "host-policy",
-    };
-  }
-  if (params.execElevated?.fullAccessAvailable === true) {
-    return { available: true };
-  }
-  if (params.execElevated?.fullAccessAvailable === false) {
-    return {
-      available: false,
-      blockedReason: params.execElevated.fullAccessBlockedReason ?? "host-policy",
-    };
-  }
-  if (!params.execElevated?.enabled || !params.execElevated.allowed) {
-    return {
-      available: false,
-      blockedReason: "host-policy",
-    };
-  }
-  return { available: true };
+    params.hostPolicy?.ask === "always";
+  // Explicit exec/host policy wins over elevated availability. A configured elevated backend
+  // must not bypass ask/security restrictions chosen for this agent or session.
+  const available =
+    !blockedByPolicy &&
+    (params.execElevated?.fullAccessAvailable ??
+      Boolean(params.execElevated?.enabled && params.execElevated.allowed));
+  return available
+    ? { available }
+    : {
+        available,
+        blockedReason:
+          !blockedByPolicy && params.execElevated?.fullAccessAvailable === false
+            ? (params.execElevated.fullAccessBlockedReason ?? "host-policy")
+            : "host-policy",
+      };
 }
 
 export async function resolveEmbeddedSandboxInfoExecPolicy(

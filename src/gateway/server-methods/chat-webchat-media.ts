@@ -41,23 +41,19 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   if (!trimmed || /^(?:data|https?):/i.test(trimmed)) {
     return null;
   }
-  if (/^file:/iu.test(trimmed)) {
-    try {
+  try {
+    if (/^file:/iu.test(trimmed)) {
       const p = safeFileURLToPath(trimmed);
       return path.isAbsolute(p) ? p : null;
-    } catch {
+    }
+    if (!path.isAbsolute(trimmed)) {
       return null;
     }
-  }
-  if (!path.isAbsolute(trimmed)) {
-    return null;
-  }
-  try {
     assertNoWindowsNetworkPath(trimmed, "Local media path");
+    return trimmed;
   } catch {
     return null;
   }
-  return trimmed;
 }
 
 async function readLocalAudioContentBlockForEmbedding(
@@ -70,10 +66,7 @@ async function readLocalAudioContentBlockForEmbedding(
     return null;
   }
   const resolved = resolveLocalMediaPathForEmbedding(raw);
-  if (!resolved) {
-    return null;
-  }
-  if (!isAudioFileName(resolved)) {
+  if (!resolved || !isAudioFileName(resolved)) {
     return null;
   }
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | undefined;
@@ -112,10 +105,7 @@ async function readLocalAudioContentBlockForEmbedding(
 
 function resolveEmbeddableImageUrl(url: string): string | null {
   const trimmed = url.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.length > MAX_WEBCHAT_IMAGE_DATA_URL_CHARS) {
+  if (!trimmed || trimmed.length > MAX_WEBCHAT_IMAGE_DATA_URL_CHARS) {
     return null;
   }
   const commaIndex = trimmed.indexOf(",");

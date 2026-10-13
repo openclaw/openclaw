@@ -109,140 +109,66 @@ describe("session persistence hooks", () => {
     expectPersistedToolResultDetailsCapped(sm);
   });
 
-  it("redacts small recursive details, including keys and depth-limited branches", () => {
+  it("preserves small recursive details byte-for-byte", () => {
     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    const bearerValue = "bearerdiagnosticvalue1234567890";
-    const adjacentLongGithubToken = "ghp_" + "a".repeat(5_000);
     let deepDetails: Record<string, unknown> = { token: tokenValue };
     for (let index = 0; index < 10; index++) {
       deepDetails = { child: deepDetails };
     }
-    const sm = createGuardedSession();
-    appendToolResultDetails(sm, {
+    const details = {
       status: "completed",
       token: tokenValue,
       card_number: 4242424242424242,
       authToken: [tokenValue],
-      adjacentLongGithubToken: "x".repeat(1_000) + adjacentLongGithubToken + " z",
       ["https://example.test/callback?token=" + tokenValue]: "ok",
       deepDetails,
-      nested: {
-        apiKey: { value: bearerValue },
-        stdout: "Authorization: Bearer " + bearerValue,
-      },
-    });
+      nested: { apiKey: { value: tokenValue }, stdout: "Authorization: Bearer " + tokenValue },
+    };
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, details);
     const toolResult = requirePersistedToolResult(sm);
-    const serialized = JSON.stringify(toolResult.details);
     expect(toolResultText(toolResult)).toBe("visible output stays small");
-    for (const retained of ["Bearer", "…", "token=", "***", "max depth exceeded"]) {
-      expect(serialized).toContain(retained);
-    }
-    for (const secret of [
-      tokenValue,
-      bearerValue,
-      adjacentLongGithubToken,
-      "a".repeat(100),
-      "4242424242424242",
-    ]) {
-      expect(serialized).not.toContain(secret);
-    }
+    expect(JSON.stringify(toolResult.details)).toBe(JSON.stringify(details));
   });
 
-  it("applies in-memory redaction config to persisted details", () => {
+  it("keeps logging patterns out of tool persistence", () => {
     const customSecret = "customsecret=abcdef1234567890ghij";
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",
       sessionKey: "main",
-      config: {
-        logging: {
-          redactPatterns: [String.raw`customsecret=([^\s]+)`],
-        },
-      },
+      config: { logging: { redactPatterns: [String.raw`customsecret=([^\s]+)`] } },
     });
-    appendToolResultDetails(
-      sm,
-      {
-        diagnostic: customSecret,
-      },
-      customSecret,
-    );
-
+    appendToolResultDetails(sm, { diagnostic: customSecret }, customSecret);
     const toolResult = requirePersistedToolResult(sm);
-    const serialized = JSON.stringify(toolResult);
-    expect(serialized).toContain("customsecret=abcdef…ghij");
-    expect(serialized).not.toContain(customSecret);
+    expect(toolResult.details).toEqual({ diagnostic: customSecret });
+    expect(toolResultText(toolResult)).toBe(customSecret);
   });
 
-  it("redacts oversized summary fields without leaking lookahead or splitting surrogate pairs", () => {
-    const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    const boundaryGhToken = "ghp_" + "a".repeat(36);
-    const postBoundarySecret = "UNREDACTED_AFTER_LIMIT_SECRET";
-    const shrinkPrefix =
-      Array.from({ length: 20 }, () => "GITHUB_TOKEN=" + tokenValue).join(" ") + " ";
-    const scanPrefix = Array.from({ length: 5 }, () => "ghp_" + "a".repeat(140)).join(" ");
+  it("caps oversized summary fields without masking or splitting surrogate pairs", () => {
+    const tokenValue = "ghp_" + "a".repeat(36);
+    const originalTail = tokenValue + " " + "x".repeat(1_959) + "😀" + "y".repeat(6_000);
     const sm = createGuardedSession();
     appendToolResultDetails(sm, {
       status: { state: "completed", token: tokenValue },
       sessionId: "exec-1",
-      ["https://example.test/callback?token=" + tokenValue]: "ok",
       aggregated: "x".repeat(120_000),
-      tail:
-        "GITHUB_TOKEN=" +
-        tokenValue +
-        " " +
-        "x".repeat(1_940) +
-        " " +
-        boundaryGhToken +
-        " GITHUB_TOKEN=" +
-        "a".repeat(5_000) +
-        ' {"token":"' +
-        "b".repeat(5_000) +
-        '"}',
-      name: "x".repeat(1_000) + '{"token":"' + "r".repeat(10_000) + "z".repeat(1_000),
-      cwd:
-        shrinkPrefix +
-        "x".repeat(2_300 - shrinkPrefix.length) +
-        postBoundarySecret +
-        "z".repeat(5_000),
-      fullOutputPath: "u".repeat(1_487) + "😀" + "v".repeat(9_000),
-      truncation: scanPrefix + "x".repeat(1_999 - scanPrefix.length) + "😀" + "z".repeat(9_000),
-      sessions: [
-        {
-          sessionId: "proc-1",
-          status: { state: "completed", token: tokenValue },
-          command: "x".repeat(490) + " --token " + tokenValue + " " + "y".repeat(6_000),
-          aggregated: "a".repeat(80_000),
-          tail: "z".repeat(8_000),
-        },
-      ],
+      tail: originalTail,
+      sessions: [{ sessionId: "proc-1", command: tokenValue + " " + "x".repeat(6_000) }],
     });
     const toolResult = requirePersistedToolResult(sm);
     const details = toolResult.details;
-    const serialized = JSON.stringify(details);
     expect(toolResultText(toolResult)).toBe("visible output stays small");
     expect(details.persistedDetailsTruncated).toBe(true);
-    expect(serialized).toContain("token=***");
-    for (const value of [details.tail, details.name, details.cwd]) {
-      expect(value).toContain("partial secret span omitted");
-      expect(value).toContain("boundary overlap omitted");
-    }
-    for (const value of [details.fullOutputPath, details.truncation]) {
-      expect(value).toContain("boundary overlap omitted");
-      expect(value).not.toMatch(LONE_SURROGATE_RE);
-    }
-    for (const secret of [
-      tokenValue,
-      boundaryGhToken.slice(0, 12),
-      postBoundarySecret,
-      "a".repeat(100),
-      "b".repeat(100),
-      "r".repeat(100),
-    ]) {
-      expect(serialized).not.toContain(secret);
-    }
+    expect(details.status).toEqual({ state: "completed", token: tokenValue });
+    expect(details.tail).toContain(tokenValue);
+    expect(details.tail).toContain("persisted detail truncated");
+    expect(details.tail).not.toMatch(LONE_SURROGATE_RE);
+    expect(String(details.tail).length).toBeLessThan(2_100);
+    expect(details.aggregated).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(details), "utf8")).toBeLessThan(8_192);
   });
 
-  it("redacts retained structured fields in fallback oversized details summaries", () => {
+  it("preserves retained structured fields in fallback oversized details summaries", () => {
     const tokenValue = "fallback-token-abcdefghijklmnopqrstuv";
     const spill = Object.freeze({
       path: "/tmp/web-fetch-output",
@@ -279,11 +205,11 @@ describe("session persistence hooks", () => {
     expect(details.finalDetailsTruncated).toBe(true);
     expect(details).toMatchObject({ success: true, disabled: false, unavailable: false });
     expect(details.error).toBe("upstream unavailable");
-    expect(details.status).toMatchObject({ token: "***" });
+    expect(details.status).toMatchObject({ token: tokenValue });
     expect(details.spilledChars).toBe(2_000_000);
     expect(details.spillTruncated).toBe(true);
     expect(details.spill).toEqual(spill);
-    expect(serialized).not.toContain(tokenValue);
+    expect(serialized).toContain(tokenValue);
   });
 
   it("caps oversized toolResult details without serializing the original payload", () => {
@@ -347,9 +273,8 @@ describe("session persistence hooks", () => {
     expect(details.originalDetailKeys).toContain("debug_0");
   });
 
-  it("reapplies the details cap after redaction expands hook details", () => {
-    const deepItems = Array.from({ length: 2_000 }, () => ({}));
-    const hookDetails = { a: { b: { c: { d: { e: { f: { g: deepItems } } } } } } };
+  it("caps oversized details returned by tool_result_persist", () => {
+    const hookDetails = { aggregated: "x".repeat(20_000) };
     installHook("tool_result_persist", ({ message }) =>
       message.role === "toolResult" ? { message: { ...message, details: hookDetails } } : undefined,
     );

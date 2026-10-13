@@ -19,7 +19,7 @@ Ordinary canonical manual CI also retains QA Smoke's full profile and Control UI
 performance without owner-path filtering. When the target declares
 `docker-seed-e2e-contract-v1`, it selects `published-upgrade-survivor`, preserving
 the exact `legacy-operator-state` plus `auto-auth` proof used by every admitted
-canonical main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`, `fleet-cache`,
+canonical main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`,
 `mcp-channels`, `mcp-code-mode-gateway`, and `update-channel-switch` through
 `resolveDockerSeedLanes`, including `npm-beta` and `npm-stable` qualification.
 Older targets without the tier selector retain the survivor. Ordinary manual CI
@@ -126,7 +126,8 @@ to a JSON object with `nodeVersion`, `packageManager`, `vitestVersion`,
 `maxWorkers`, `files`, and `projects`. Use an exact Node 24 patch and the
 checkout's complete pnpm integrity pin and Vitest version. `maxWorkers` is an
 integer from 1 through 4. `files` is the original ordered array of literal,
-tracked test paths; `projects` is the original ordered array of
+tracked test paths under `src/`, `test/`, `extensions/`, or `packages/`;
+`projects` is the original ordered array of
 `test/vitest/vitest.<name>.config.ts` paths. Globs, shell text, arbitrary CLI
 arguments, and environment overrides are not accepted.
 

@@ -4,6 +4,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { HealthSummary } from "./health.js";
@@ -36,112 +37,103 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
   return (await import("./status-usage.runtime.js")).resolveStatusUsageSummary(params);
 }
 
-/** Calls gateway health and lets errors propagate to deep status callers. */
-export async function resolveStatusGatewayHealth(params: {
+type StatusGatewayQuery = {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayProbeDeadlineMs: number;
-}) {
-  const { callGateway } = await import("../gateway/call.js");
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
-  if (timeoutMs === 0) {
-    throw new Error("Gateway check budget exhausted before health check.");
-  }
-  return await callGateway<HealthSummary>({
-    method: "health",
-    params: { probe: true },
-    timeoutMs,
-    config: params.config,
-  });
-}
+  callOverrides?: { url: string; token?: string; password?: string };
+};
+type StatusGatewayFailure = { kind: "budget" } | { kind: "request"; cause: unknown };
 
-/** Calls gateway health but converts unreachable/failing probes into an error object. */
-export async function resolveStatusGatewayHealthSafe(params: {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  gatewayReachable: boolean;
-  gatewayProbeError?: string | null;
-  callOverrides?: {
-    url: string;
-    token?: string;
-    password?: string;
-  };
-}) {
-  if (!params.gatewayReachable) {
-    // Preserve the probe error so status-all can explain why health was not called.
-    return { error: params.gatewayProbeError ?? "gateway unreachable" };
-  }
+async function queryStatusGateway<T>(
+  params: StatusGatewayQuery,
+  buildRequest: () => Pick<CallGatewayOptions, "method" | "params">,
+): Promise<Result<T, StatusGatewayFailure>> {
   const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
-    return { error: "Gateway check budget exhausted before health check." };
+    return { ok: false, error: { kind: "budget" } };
   }
-  return await callGateway<HealthSummary>({
-    method: "health",
-    params: { probe: true },
+  // Import failures still propagate; only an attempted RPC becomes a request failure.
+  return await callGateway<T>({
+    ...buildRequest(),
     timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch((err: unknown) => ({ error: String(err) }));
+  }).then<Result<T, StatusGatewayFailure>, Result<T, StatusGatewayFailure>>(
+    (value) => ({ ok: true, value }),
+    (cause: unknown) => ({ ok: false, error: { kind: "request", cause } }),
+  );
+}
+
+function formatStatusGatewayFailure(error: StatusGatewayFailure, operation: string): string {
+  return error.kind === "budget"
+    ? `Gateway check budget exhausted before ${operation}.`
+    : String(error.cause);
+}
+
+/** Calls gateway health and lets errors propagate to deep status callers. */
+export async function resolveStatusGatewayHealth(
+  params: Omit<StatusGatewayQuery, "callOverrides">,
+) {
+  const result = await queryStatusGateway<HealthSummary>(params, () => ({
+    method: "health",
+    params: { probe: true },
+  }));
+  if (!result.ok) {
+    throw result.error.kind === "request"
+      ? result.error.cause
+      : new Error(formatStatusGatewayFailure(result.error, "health check"));
+  }
+  return result.value;
+}
+
+/** Calls gateway health but converts unreachable/failing probes into an error object. */
+export async function resolveStatusGatewayHealthSafe(
+  params: StatusGatewayQuery & { gatewayReachable: boolean; gatewayProbeError?: string | null },
+) {
+  if (!params.gatewayReachable) {
+    return { error: params.gatewayProbeError ?? "gateway unreachable" };
+  }
+  const result = await queryStatusGateway<HealthSummary>(params, () => ({
+    method: "health",
+    params: { probe: true },
+  }));
+  return result.ok
+    ? result.value
+    : { error: formatStatusGatewayFailure(result.error, "health check") };
 }
 
 export type StatusGatewayDiagnosticsResult = Result<unknown, string>;
 
 /** Reads gateway diagnostics while preserving whether data or an unavailable outcome was observed. */
-export async function resolveStatusGatewayDiagnosticsSafe(params: {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  gatewayReachable: boolean;
-  type?: string;
-  callOverrides?: {
-    url: string;
-    token?: string;
-    password?: string;
-  };
-}): Promise<StatusGatewayDiagnosticsResult> {
+export async function resolveStatusGatewayDiagnosticsSafe(
+  params: StatusGatewayQuery & { gatewayReachable: boolean; type?: string },
+): Promise<StatusGatewayDiagnosticsResult> {
   if (!params.gatewayReachable) {
     return { ok: false, error: "gateway unreachable" };
   }
-  const { callGateway } = await import("../gateway/call.js");
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
-  if (timeoutMs === 0) {
-    return { ok: false, error: "Gateway check budget exhausted before diagnostics." };
-  }
-  return await callGateway<unknown>({
+  const result = await queryStatusGateway<unknown>(params, () => ({
     method: "diagnostics.stability",
     params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
-    timeoutMs,
-    config: params.config,
-    ...params.callOverrides,
-  }).then<StatusGatewayDiagnosticsResult, StatusGatewayDiagnosticsResult>(
-    (value) => ({ ok: true, value }),
-    (error: unknown) => ({ ok: false, error: String(error) }),
-  );
+  }));
+  return result.ok
+    ? result
+    : { ok: false, error: formatStatusGatewayFailure(result.error, "diagnostics") };
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-async function resolveStatusLastHeartbeat(params: {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  gatewayProbeDeadlineMs: number;
-  gatewayReachable: boolean;
-}) {
+async function resolveStatusLastHeartbeat(
+  params: Omit<StatusGatewayQuery, "callOverrides"> & { gatewayReachable: boolean },
+) {
   if (!params.gatewayReachable) {
     return null;
   }
-  const { callGateway } = await import("../gateway/call.js");
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
-  if (timeoutMs === 0) {
-    return null;
-  }
-  return await callGateway<HeartbeatEventPayload | null>({
+  const result = await queryStatusGateway<HeartbeatEventPayload | null>(params, () => ({
     method: "last-heartbeat",
     params: {},
-    timeoutMs,
-    config: params.config,
-  }).catch(() => null);
+  }));
+  return result.ok ? result.value : null;
 }
 
 // Default bound for service-manager probes when status runs without an explicit
@@ -227,17 +219,15 @@ export async function resolveStatusRuntimeSnapshot(params: {
     params.deep && !params.gatewayStartupPhase
       ? !params.gatewayReachable
         ? { error: params.gatewayProbeError ?? "Gateway is unreachable" }
-        : params.suppressHealthErrors
-          ? await resolveGatewayHealthSummary({
-              config: params.config,
-              timeoutMs: params.timeoutMs,
-              gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-            }).catch((error: unknown) => ({ error: String(error) }))
-          : await resolveGatewayHealthSummary({
-              config: params.config,
-              timeoutMs: params.timeoutMs,
-              gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-            })
+        : await resolveGatewayHealthSummary({
+            config: params.config,
+            timeoutMs: params.timeoutMs,
+            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+          }).catch(
+            params.suppressHealthErrors
+              ? (error: unknown) => ({ error: String(error) })
+              : undefined,
+          )
       : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat =

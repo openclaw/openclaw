@@ -34,7 +34,7 @@ export async function prepareDoctorContext(
     confirm?: Parameters<typeof loadAndMaybeMigrateDoctorConfig>[0]["confirm"];
     prompter?: DoctorPrompter;
   } = {},
-): Promise<DoctorHealthFlowContext> {
+): Promise<DoctorHealthFlowContext & AsyncDisposable> {
   const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
   const options: DoctorOptions = params.options ?? { nonInteractive: true, repair: true };
   const prompter = params.prompter ?? createDoctorPrompter({ runtime, options });
@@ -45,6 +45,7 @@ export async function prepareDoctorContext(
     prompter,
   });
   return {
+    [Symbol.asyncDispose]: () => configResult[Symbol.asyncDispose](),
     runtime,
     options,
     prompter,

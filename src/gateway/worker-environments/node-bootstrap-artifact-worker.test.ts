@@ -38,7 +38,7 @@ describe("node bootstrap artifact worker", () => {
       expect(bytes.length).toBe(artifact.tarballBytes);
       expect(createHash("sha256").update(bytes).digest("hex")).toBe(artifact.tarballSha256);
       const closing = provider.close();
-      await expect(fs.access(artifact.tarballPath)).resolves.toBeUndefined();
+      await fs.access(artifact.tarballPath);
       enrollment.abort();
       await closing;
       await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });

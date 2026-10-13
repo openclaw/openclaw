@@ -27,74 +27,71 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
-  "children after a Homebrew Node upgrade",
-  () => {
-    it("runs exec and owned MCP stdio through the replacement runtime", async () => {
+describe.skipIf(process.platform === "win32")("children after a Homebrew Node upgrade", () => {
+  it("runs exec and owned MCP stdio through the replacement runtime", async () => {
+    const supervisor = createProcessSupervisor();
+    try {
+      const run = await supervisor.spawn({ mode: "anchored-shell", command: "printf exec-ok" });
+      await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, stdout: "exec-ok" });
+      const child = await createOwnedStdioProcess({ argv: ["/bin/sh", "-c", "printf mcp-ok"] });
+      let stdout = "";
+      child.onStdout((chunk) => (stdout += chunk));
+      try {
+        await expect(child.wait()).resolves.toMatchObject({ code: 0 });
+        expect(stdout).toBe("mcp-ok");
+      } finally {
+        await closeOwnedStdioProcess(child);
+      }
+      await rm(stableNode);
+      await expect(createOwnedStdioProcess({ argv: ["/bin/sh", "-c", "true"] })).rejects.toThrow(
+        "Restart the Gateway.",
+      );
+    } finally {
+      await supervisor.shutdown();
+    }
+  });
+
+  it.each(["darwin", "linux"] as const)(
+    "keeps an explicitly selected worker binary and reports the restart action once (%s OOM policy)",
+    async (platform) => {
+      const oomScore = await import("../linux-oom-score.js");
+      const prepare = oomScore.prepareOomScoreAdjustedSpawn;
+      vi.spyOn(oomScore, "prepareOomScoreAdjustedSpawn").mockImplementation(
+        (command, args, options) => prepare(command, args, { ...options, platform }),
+      );
+      const env = {
+        PATH: tempDirs.make("openclaw-empty-path-"),
+        OPENCLAW_CHILD_OOM_SCORE_ADJ: "1",
+      };
+      const log = await import("../supervisor/supervisor-log.runtime.js");
+      const warning = vi
+        .spyOn(log, "warnProcessSupervisorSpawnFailure")
+        .mockImplementation(() => {});
       const supervisor = createProcessSupervisor();
       try {
-        const run = await supervisor.spawn({ mode: "anchored-shell", command: "printf exec-ok" });
-        await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, stdout: "exec-ok" });
-        const child = await createOwnedStdioProcess({ argv: ["/bin/sh", "-c", "printf mcp-ok"] });
-        let stdout = "";
-        child.onStdout((chunk) => (stdout += chunk));
-        try {
-          await expect(child.wait()).resolves.toMatchObject({ code: 0 });
-          expect(stdout).toBe("mcp-ok");
-        } finally {
-          await closeOwnedStdioProcess(child);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await expect(
+            supervisor.spawn({
+              mode: "child",
+              argv: [removedNode, "-e", "process.exit(0)"],
+              env,
+            }),
+          ).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
         }
-        await rm(stableNode);
-        await expect(createOwnedStdioProcess({ argv: ["/bin/sh", "-c", "true"] })).rejects.toThrow(
-          "Restart the Gateway.",
-        );
+        expect(warning).toHaveBeenCalledTimes(1);
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining("Restart the Gateway."));
       } finally {
         await supervisor.shutdown();
       }
-    });
+    },
+  );
 
-    it.each(["darwin", "linux"] as const)(
-      "keeps an explicitly selected worker binary and reports the restart action once (%s OOM policy)",
-      async (platform) => {
-        const oomScore = await import("../linux-oom-score.js");
-        const prepare = oomScore.prepareOomScoreAdjustedSpawn;
-        vi.spyOn(oomScore, "prepareOomScoreAdjustedSpawn").mockImplementation(
-          (command, args, options) => prepare(command, args, { ...options, platform }),
-        );
-        const env = {
-          PATH: tempDirs.make("openclaw-empty-path-"),
-          OPENCLAW_CHILD_OOM_SCORE_ADJ: "1",
-        };
-        const log = await import("../supervisor/supervisor-log.runtime.js");
-        const warning = vi
-          .spyOn(log, "warnProcessSupervisorSpawnFailure")
-          .mockImplementation(() => {});
-        const supervisor = createProcessSupervisor();
-        try {
-          for (let attempt = 0; attempt < 2; attempt++) {
-            await expect(
-              supervisor.spawn({
-                mode: "child",
-                argv: [removedNode, "-e", "process.exit(0)"],
-                env,
-              }),
-            ).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
-          }
-          expect(warning).toHaveBeenCalledTimes(1);
-          expect(warning).toHaveBeenCalledWith(expect.stringContaining("Restart the Gateway."));
-        } finally {
-          await supervisor.shutdown();
-        }
-      },
-    );
-
-    it("keeps the broker on the exact runtime and reports why it cannot start", async () => {
-      const host = createSpawnBrokerHost({ nativeResources: true });
-      try {
-        await expect(host.ready()).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
-      } finally {
-        await host.close();
-      }
-    });
-  },
-);
+  it("keeps the broker on the exact runtime and reports why it cannot start", async () => {
+    const host = createSpawnBrokerHost({ nativeResources: true });
+    try {
+      await expect(host.ready()).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+    } finally {
+      await host.close();
+    }
+  });
+});

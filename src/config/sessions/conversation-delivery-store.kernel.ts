@@ -7,16 +7,20 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { assertConversationAuthority } from "./conversation-authority.js";
 import {
-  ConversationDeliveryInputError,
+  assertConversationDeliveryInput,
+  normalizeConversationDeliveryOperationId,
+} from "./conversation-delivery-policy.js";
+import {
   ConversationDeliveryMissingError,
   type ConversationDeliveryRecord,
   type ConversationDeliveryStatus,
-  type ConversationDeliveryInput,
   type ConversationDeliveryBegin,
   type ConversationDeliveryTransition,
   type ConversationDeliveryLookup,
 } from "./conversation-delivery-store.types.js";
+import { resolveConversationInDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 
@@ -25,14 +29,6 @@ type ConversationDeliveryRow = Selectable<
 > & {
   channel: string;
 };
-
-function normalizeOperationId(value: string): string {
-  const operationId = value.trim();
-  if (!operationId) {
-    throw new Error("Conversation delivery operation id is required");
-  }
-  return operationId;
-}
 
 function normalizeStatus(value: string): ConversationDeliveryStatus {
   switch (value) {
@@ -85,23 +81,6 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   };
 }
 
-function assertConversationDeliveryInput(
-  record: ConversationDeliveryRecord,
-  input: ConversationDeliveryInput,
-  messageHash = sha256Hex(input.message),
-): void {
-  if (
-    record.conversationRef !== input.conversationRef ||
-    record.operationKind !== input.operationKind ||
-    record.sourceSessionKey !== (input.sourceSessionKey?.trim() || undefined) ||
-    record.messageHash !== messageHash
-  ) {
-    throw new ConversationDeliveryInputError(
-      `Conversation delivery operation was reused with different input: ${record.operationId}`,
-    );
-  }
-}
-
 const operationQuery = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
@@ -141,7 +120,7 @@ export function readConversationDeliveryInDatabase(
     return findConversationTurnDeliveryInDatabase(database, lookup);
   }
   const { operationId, expectedInput } = lookup;
-  const record = selectOperation(database, normalizeOperationId(operationId));
+  const record = selectOperation(database, normalizeConversationDeliveryOperationId(operationId));
   if (record && expectedInput) {
     assertConversationDeliveryInput(record, expectedInput);
   }
@@ -152,7 +131,13 @@ export function beginConversationDeliveryInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   params: ConversationDeliveryBegin,
 ): { created: boolean; record: ConversationDeliveryRecord } {
-  const operationId = normalizeOperationId(params.operationId);
+  if (params.authority) {
+    assertConversationAuthority(
+      resolveConversationInDatabase(database, params.authority.conversationRef),
+      params.authority,
+    );
+  }
+  const operationId = normalizeConversationDeliveryOperationId(params.operationId);
   const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
   const messageHash = sha256Hex(params.message);
   const existing = selectOperation(database, operationId);
@@ -202,7 +187,7 @@ export function transitionConversationDeliveryInDatabase(
       throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
     }
   }
-  const operationId = normalizeOperationId(params.operationId);
+  const operationId = normalizeConversationDeliveryOperationId(params.operationId);
   const current = selectOperation(database, operationId);
   if (!current) {
     throw new ConversationDeliveryMissingError(

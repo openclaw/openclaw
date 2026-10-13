@@ -339,6 +339,7 @@ type GatewaySessionLifecycleEventParams = {
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
+    requireYielded?: true;
     runId: string;
     sessionId: string;
     lifecycleRevision?: string;
@@ -430,6 +431,14 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           (entry.activeWriterRunId !== expected.runId && entry.lifecycleRunId !== expected.runId) ||
           (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== expected.runId) ||
           (entry.lifecycleRunId !== undefined && entry.lifecycleRunId !== expected.runId))
+      ) {
+        return null;
+      }
+      if (
+        expected?.requireYielded &&
+        (entry.status !== undefined ||
+          !Number.isFinite(entry.endedAt) ||
+          entry.pendingFinalDelivery !== undefined)
       ) {
         return null;
       }
@@ -552,7 +561,8 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
-          // The SQLite writer already published sharing facts; this adapter only projects run state.
+          // The writer already published stored facts; this adapter only projects run state.
+          scope: "runtime",
           facts: { kind: "unchanged" },
         }),
     },

@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
+import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
   runCap,
@@ -149,11 +150,11 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
-  getTtsProvider: vi.fn(() => "openai"),
+  getTtsProviderAsync: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
   resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
-  resolveExplicitTtsOverrides: vi.fn(
+  resolveExplicitTtsOverridesAsync: vi.fn(
     ({
       provider,
       modelId,
@@ -270,10 +271,15 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
   }),
 }));
 
+// mock-isolation: Capability commands use fixture config and snapshot publication without host state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
 
@@ -332,8 +338,13 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProviderCore: mocks.resolveApiKeyForProviderCore,
 }));
 
-vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
+    version: 1,
+    profiles: {},
+  })),
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
@@ -399,17 +410,18 @@ vi.mock("../video-generation/runtime.js", () => ({
   listRuntimeVideoGenerationProviders: mocks.listRuntimeVideoGenerationProviders,
 }));
 
+// mock-isolation: TTS CLI cases use fixture preferences and synthesis without machine-state bindings.
 vi.mock("../tts/tts.js", () => ({
   getTtsPersona: vi.fn(() => undefined),
-  getTtsProvider: mocks.getTtsProvider,
+  getTtsProviderAsync: mocks.getTtsProviderAsync,
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: mocks.resolveTtsConfig,
-  resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
+  resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
   setTtsPersona: mocks.setTtsPersona,
   setTtsProvider: mocks.setTtsProvider,
-  resolveExplicitTtsOverrides: mocks.resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync: mocks.resolveExplicitTtsOverridesAsync,
   textToSpeech: mocks.textToSpeech,
 }));
 
@@ -863,6 +875,7 @@ describe("capability cli", () => {
           provider,
           config: mocks.loadConfig(),
           agentDir: "/tmp/agent-beta",
+          authStore: { version: 1, profiles: {} },
         });
       } else {
         expect(firstJsonOutput()).toMatchObject({
@@ -1333,6 +1346,8 @@ describe("capability cli", () => {
       "portrait",
       "--quality",
       "max",
+      "--resolution",
+      " 2k ",
       "--openai-moderation",
       "low",
       "--json",
@@ -1341,6 +1356,7 @@ describe("capability cli", () => {
     expect(firstImageGenerationCall()).toMatchObject({
       agentDir: "/tmp/agent-beta",
       quality: "max",
+      resolution: "2K",
       providerOptions: { openai: { moderation: "low" } },
     });
   });
@@ -1415,6 +1431,27 @@ describe("capability cli", () => {
     expect(inputImages).toHaveLength(2);
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
+
+  it.each(["generate", "edit"])(
+    "rejects invalid image %s resolution before dispatch",
+    async (action) => {
+      await expect(
+        runCapability(
+          "image",
+          action,
+          "--prompt",
+          "portrait",
+          ...(action === "edit" ? ["--file", "unused.png"] : []),
+          "--resolution",
+          "1080p",
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains("resolution must be one of 1K, 2K, or 4K");
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["--timeout-ms", ""],
@@ -1825,7 +1862,7 @@ describe("capability cli", () => {
 
   it("preserves explicit TTS selection without inventing overrides", async () => {
     await convertTts("--provider", "xiaomi");
-    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+    expect(mocks.resolveExplicitTtsOverridesAsync).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "xiaomi", modelId: undefined }),
     );
     expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
@@ -1899,72 +1936,13 @@ describe("capability cli", () => {
     }
   });
 
-  it("creates embeddings with explicit provider selection", async () => {
-    await runCapability(
-      "embedding",
-      "create",
-      "--text",
-      "hello",
-      "--text",
-      "world",
-      "--model",
-      "openai/text-embedding-3-large",
-      "--json",
-    );
-    expect(firstEmbeddingProviderCall()).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-large",
-      fallback: "none",
-    });
-    expect(firstJsonOutput()).toMatchObject({
-      capability: "embedding.create",
-      provider: "openai",
-      model: "text-embedding-3-small",
-      outputs: [
-        { text: "hello", embedding: [0.1, 0.2] },
-        { text: "world", embedding: [0.1, 0.2] },
-      ],
-    });
-    expect(mocks.embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
-    mocks.embedBatch.mockResolvedValueOnce([
-      [0.1, -0.2],
-      Array.from({ length: 1536 }, (_, index) => index + 1),
-      [],
-    ]);
-
-    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--text", "");
-
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      [
-        "embedding.create via local",
-        "provider: openai",
-        "model: text-embedding-3-small",
-        "outputs: 3",
-        "hello",
-        "dimensions: 2",
-        "embedding: [0.1, -0.2]",
-        "world",
-        "dimensions: 1536",
-        "embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]",
-        "",
-        "dimensions: 0",
-        "embedding: []",
-      ].join("\n"),
-    );
-  });
-
-  it("retries embedding cleanup without masking the primary failure", async () => {
-    closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
-    mocks.embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
-    await expect(runCapability("embedding", "create", "--text", "hello", "--json")).rejects.toThrow(
-      "exit 1",
-    );
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
-    expectRuntimeErrorContains("embedding failed");
+  registerEmbeddingCapabilityCliTests({
+    embedBatch: mocks.embedBatch,
+    closeProvider: closeEmbeddingProviderMock,
+    providerCall: firstEmbeddingProviderCall,
+    jsonOutput: firstJsonOutput,
+    log: mocks.runtime.log,
+    expectError: expectRuntimeErrorContains,
   });
 
   it.each(["populated", "lock-failed"])(

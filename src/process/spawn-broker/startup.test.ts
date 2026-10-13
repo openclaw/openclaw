@@ -7,7 +7,7 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
   it("imports without resolving defaults and starts an explicit captured source after Gateway fallback", () => {

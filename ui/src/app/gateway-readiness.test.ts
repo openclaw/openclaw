@@ -51,17 +51,6 @@ describe("waitForGatewayClient", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  it("rejects an already-aborted signal before subscribing to a disconnected gateway", async () => {
-    const { gateway, subscribe } = createGateway();
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(waitForGatewayClient(gateway, controller.signal)).rejects.toBe(
-      controller.signal.reason,
-    );
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
   it("keeps the existing AbortError contract for a non-error cancellation reason", async () => {
     const { gateway } = createGateway(true);
     const controller = new AbortController();

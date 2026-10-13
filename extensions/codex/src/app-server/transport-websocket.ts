@@ -75,14 +75,10 @@ export function createWebSocketTransport(
   let heartbeatSequence = 0;
 
   const clearConnectionHealthTimers = () => {
-    if (pingTimeout) {
-      clearTimeout(pingTimeout);
-      pingTimeout = undefined;
-    }
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
-    }
+    clearTimeout(pingTimeout);
+    pingTimeout = undefined;
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
     expectedPong = undefined;
   };
 
@@ -129,10 +125,8 @@ export function createWebSocketTransport(
 
   const recordConnectionActivity = () => {
     consecutiveMissedPongs = 0;
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
-    }
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
     expectedPong = undefined;
     scheduleHeartbeatPing();
   };
@@ -219,10 +213,7 @@ export function createWebSocketTransport(
       callback();
     },
     final(callback) {
-      pendingLine += stdinDecoder.end();
-      if (pendingLine) {
-        sendFrame(pendingLine);
-      }
+      sendFrame(pendingLine + stdinDecoder.end());
       pendingLine = "";
       callback();
     },

@@ -4,8 +4,8 @@ import {
   disposeTerminalController,
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
+import { updateTerminalFont } from "./terminal-fonts.ts";
 import {
-  TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
   type TerminalPanelSessionControllerHost,
   type TerminalPanelSessionTab,
@@ -54,7 +54,7 @@ export async function bootTerminalPanelSession(params: {
       readOnly: controllerOptions?.readOnly ?? false,
       terminalOptions: {
         fontSize: 11,
-        fontFamily: TERMINAL_FONT_FAMILY,
+        fontFamily: panel.terminalFontFamily,
         cursorBlink: true,
         theme: terminalTheme(panel.themeMode),
         scrollback: 5000,
@@ -115,8 +115,13 @@ export async function bootTerminalPanelSession(params: {
       tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
       if (mode === "recovery") {
         return replaceTerminalController(tab, createController, data, signal).then((replaced) => {
-          if (replaced && data) {
-            params.onReady(tab);
+          if (replaced && !tab.cancelled && !signal.aborted) {
+            // Preferences may change during creation or deferred publication.
+            // An already-live tab does not schedule another panel render.
+            updateTerminalFont(tab.controller, panel.terminalFontFamily);
+            if (data) {
+              params.onReady(tab);
+            }
           }
         });
       }

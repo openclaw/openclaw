@@ -1,8 +1,28 @@
 /** Agent-run result projections shared by execution owners and diagnostic probes. */
-import { isReplyPayloadTerminalContent, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "./agent-run-terminal-outcome.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+
+/** Only the transcript owner's receipt makes a final CLI reply durable. */
+export function hasCommittedCliFinalReply(result: EmbeddedAgentRunResult): boolean {
+  return (
+    result.meta.executionTrace?.runner === "cli" &&
+    result.meta.completion?.finishReason === "stop" &&
+    !result.meta.error &&
+    result.payloads?.some((payload) => {
+      const metadata = getReplyPayloadMetadata(payload);
+      return (
+        metadata?.assistantTranscriptOwned === true &&
+        Boolean(metadata.assistantTranscriptIdempotencyKey)
+      );
+    }) === true
+  );
+}
 
 /** Adds an owner-bounded, redacted diagnostic without discarding returned work. */
 export function appendAgentRunFailure(
@@ -78,8 +98,4 @@ export function extractAgentRunTerminalError(result: AgentRunResultView): string
     outcome.error ||
     (outcome.status === "timeout" ? "Inference timed out." : `Inference ${outcome.reason}.`)
   );
-}
-
-export function agentRunHasVisibleReply(result: AgentRunResultView): boolean {
-  return Boolean(extractAgentRunText(result));
 }

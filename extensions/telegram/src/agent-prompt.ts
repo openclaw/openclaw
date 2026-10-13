@@ -6,13 +6,8 @@ import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 
 export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
   messageToolHints: telegramMessageToolHints,
-  messageToolCapabilities: ({ cfg, accountId }) => {
-    const inlineButtonsScope = resolveTelegramInlineButtonsScope({
-      cfg,
-      accountId: accountId ?? undefined,
-    });
-    return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
-  },
+  messageToolCapabilities: (params) =>
+    resolveTelegramInlineButtonsScope(params) === "off" ? [] : ["inlineButtons"],
   // The only Telegram formatting contract, including `<details>`. Core delivers it to
   // every turn whose output reaches this account: replies, heartbeats, cron, announces.
   inboundFormattingHints: ({ cfg, accountId }) => {

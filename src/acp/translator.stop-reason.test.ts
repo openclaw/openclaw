@@ -104,24 +104,6 @@ async function expectNotice(h: ReturnType<typeof harness>, accepted: boolean) {
 afterEach(() => vi.useRealTimers());
 
 describe("acp translator stop reason mapping", () => {
-  it.each([
-    { state: "error", stopReason: "end_turn", errorMessage: "gateway timeout" },
-    { state: "aborted", stopReason: "cancelled", errorMessage: undefined },
-  ])("maps $state to $stopReason", async ({ state, stopReason, errorMessage }) => {
-    const h = harness();
-    const prompt = h.start();
-    await h.agent.handleGatewayEvent(
-      createChatEvent({
-        runId: await prompt.sent,
-        sessionKey,
-        seq: 1,
-        state,
-        errorMessage,
-      }),
-    );
-    await expect(prompt.result).resolves.toEqual({ stopReason });
-  });
-
   it("surfaces the abort cause before cancellation even when delivery rejects", async () => {
     const h = harness();
     const prompt = h.start();

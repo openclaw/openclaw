@@ -22,8 +22,17 @@ vi.mock("./one-shot-exit.js", () => ({
   exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
     runtime.exit(exitCode),
 }));
-vi.mock("../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => Promise.resolve(undefined),
+// mock-isolation: These policy tests use the offline branch; owner routing has its own boundary suite.
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: Parameters<typeof import("./local-state-owner.js").runWithLocalStateOwner>[0]) =>
+    runLocal({
+      env: process.env,
+      config: {},
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
 }));
 vi.mock("./secrets-store-input.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./secrets-store-input.js")>();
@@ -79,7 +88,8 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     // Same kernel the state worker runs, applied directly so the write needs no
     // host-broker worker thread (the CLI test pool runs files off the main thread).
     purgeExpiredSecretStoreEntries: () =>
-      purgeExpiredSecretStoreEntriesInDatabase(captureSecretStoreExpiryCutoffs(), mocks.database),
+      purgeExpiredSecretStoreEntriesInDatabase(captureSecretStoreExpiryCutoffs(), mocks.database)
+        .removed,
   };
 });
 

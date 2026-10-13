@@ -50,11 +50,8 @@ describe("hook-runner-global", () => {
     return { modA, registry };
   }
 
-  it("preserves the initialized runner across module reloads", async () => {
-    const { modA, registry } = await createInitializedModule();
-    expect(expectGlobalHookRunner(modA.getGlobalHookRunner()).hasHooks("message_received")).toBe(
-      true,
-    );
+  it("clears the shared state across module reloads", async () => {
+    const { registry } = await createInitializedModule();
 
     vi.resetModules();
 
@@ -62,14 +59,6 @@ describe("hook-runner-global", () => {
     expect(expectGlobalHookRunner(modB.getGlobalHookRunner()).hasHooks("message_received")).toBe(
       true,
     );
-  });
-
-  it("clears the shared state across module reloads", async () => {
-    await createInitializedModule();
-
-    vi.resetModules();
-
-    const modB = await expectGlobalRunnerState({ hasRunner: true });
     modB.resetGlobalHookRunner();
     expect(modB.getGlobalHookRunner()).toBeNull();
     expect(modB.getGlobalPluginRegistry()).toBeNull();

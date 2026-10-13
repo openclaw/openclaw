@@ -19,18 +19,6 @@ export function hashCodexAppServerBindingFingerprint(canonical: string): string 
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
-function normalizeLegacyBindingFingerprint(value: unknown): unknown {
-  if (
-    typeof value !== "string" ||
-    value === "" ||
-    value === "[]" ||
-    BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
-  ) {
-    return value;
-  }
-  return hashCodexAppServerBindingFingerprint(value);
-}
-
 function normalizeLegacyBindingFingerprints<
   T extends {
     dynamicToolsFingerprint?: unknown;
@@ -42,7 +30,13 @@ function normalizeLegacyBindingFingerprints<
   let normalized = record;
   for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
     const value = record[key];
-    const next = normalizeLegacyBindingFingerprint(value);
+    const next =
+      typeof value === "string" &&
+      value !== "" &&
+      value !== "[]" &&
+      !BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
+        ? hashCodexAppServerBindingFingerprint(value)
+        : value;
     if (next === value) {
       continue;
     }
@@ -68,13 +62,13 @@ export function normalizeStoredCodexAppServerBindingFingerprints(
 }
 
 /** Encodes a migrated sidecar binding as one canonical plugin-state row. */
-export function createStoredCodexAppServerBinding(
+export async function createStoredCodexAppServerBinding(
   value: unknown,
   options: {
     now?: string;
     lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
   } = {},
-): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
+): Promise<Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined> {
   const rawRecord = asOptionalRecord(value);
   if (!rawRecord) {
     return undefined;
@@ -93,7 +87,7 @@ export function createStoredCodexAppServerBinding(
   const authProfileId = typeof record.authProfileId === "string" ? record.authProfileId : undefined;
   const binding = readCodexAppServerThreadBinding({
     ...record,
-    modelProvider: normalizeCodexAppServerBindingModelProvider({
+    modelProvider: await normalizeCodexAppServerBindingModelProvider({
       ...options.lookup,
       authProfileId,
       modelProvider: typeof record.modelProvider === "string" ? record.modelProvider : undefined,

@@ -41,7 +41,6 @@ export type MemoryAudienceResolution =
   | ({ status: "granted" } & MemoryAudienceGrant)
   | { status: "denied"; kind: MemoryAudienceDenialKind; reason: string };
 
-const hostAudiences = new WeakSet<object>();
 const audienceRecords = new WeakMap<object, AudienceRecord>();
 const audienceSessionKeys = new WeakMap<object, string>();
 
@@ -153,7 +152,6 @@ function mintMemoryAudience(
   record: AudienceRecord,
 ): MemoryAudienceGrant {
   const frozen = Object.freeze(audience);
-  hostAudiences.add(frozen);
   audienceRecords.set(frozen, record);
   audienceSessionKeys.set(frozen, sessionKey);
   for (let current: AudienceRecord | undefined = record; current; current = current.parent) {
@@ -318,7 +316,7 @@ export async function resolveMemoryAudienceFromEntry(
 
 /** Return whether a memory audience was minted by this host process. */
 export function isHostMemoryAudience(value: unknown): value is MemoryAudience {
-  return typeof value === "object" && value !== null && hostAudiences.has(value);
+  return typeof value === "object" && value !== null && audienceRecords.has(value);
 }
 
 /** Reject an audience presented outside its host-bound invocation session. */
@@ -391,6 +389,51 @@ export async function delegateMemoryAudience(
     throw error;
   }
   return mintMemoryAudience({ ...audience }, child.sessionKey, record);
+}
+
+/** Join admitted session publications without weakening the synchronous final guard. */
+export function prepareMemoryAudienceRead(audience: MemoryAudience): Promise<void> | undefined {
+  const record = audienceRecords.get(audience);
+  if (!record) {
+    throw new Error("memory audience was not minted by this host");
+  }
+  const pending: Promise<void>[] = [];
+  try {
+    // Delegated grants depend on every captured parent, not just the current session.
+    for (let current: AudienceRecord | undefined = record; current; current = current.parent) {
+      if (current.state !== "current") {
+        assertRecordCurrent(current);
+      }
+      for (const lease of current.leases) {
+        const publication = lease.prepareRead();
+        if (publication) {
+          pending.push(publication);
+        }
+      }
+    }
+  } catch (error) {
+    // A later ancestor can reject after earlier leases started waiting on publication.
+    // Observe those promises without hiding the synchronous authority failure.
+    void Promise.all(pending).catch(() => {});
+    throw error;
+  }
+  if (pending.length > 0) {
+    // A successor may have been admitted while the exact publication promises settled.
+    return Promise.all(pending).then(() => prepareMemoryAudienceRead(audience));
+  }
+  assertRecordCurrent(record);
+  return undefined;
+}
+
+/** Prepare only the host-owned audience; callers still recheck their full authority after await. */
+export function prepareMemoryCallerRead(context: MemoryCallerContext): Promise<void> | undefined {
+  context.signal?.throwIfAborted();
+  const { authority } = context;
+  if (authority.kind === "session" && authority.audience) {
+    assertMemoryAudienceSession(authority.audience, authority.sessionKey);
+    return prepareMemoryAudienceRead(authority.audience);
+  }
+  return undefined;
 }
 
 /** Reject a retained audience after any captured session incarnation changes. */

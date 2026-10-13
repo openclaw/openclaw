@@ -1,61 +1,35 @@
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
-import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-} from "../../../app/lazy-custom-element.ts";
-import type { QuestionDraft, QuestionPrompt } from "../../../app/question-prompt.ts";
-import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
-import { renderLoadingState } from "../../../components/loading-state.ts";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
-import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
-
-type QuestionPanelQuestion = QuestionPrompt["questions"][number];
-
-type QuestionPanelViewModel = {
-  requestKey: string;
-  title: string;
-  questions: QuestionPanelQuestion[];
-  agentId?: string;
-  sessionKey?: string;
-  secretStoreAllowedHostsDraft?: string;
-  collapsed: boolean;
-  autoFocus?: boolean;
-  nonBlocking?: boolean;
-  collapsedLabel?: string;
-  disabled: boolean;
-  submitting?: boolean;
-  drafts: Map<string, QuestionDraft>;
-  error?: string | null;
-  notice?: string;
-  requestPosition?: { current: number; total: number };
-};
-
-export type QuestionPanelProps = {
-  model: QuestionPanelViewModel;
-  onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
-  onSkip?: () => void | Promise<void>;
-  onChange?: () => void;
-  onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
-  onDismissError?: () => void;
-  onCollapsedChange?: (collapsed: boolean) => void;
-  onPreviousRequest?: () => void;
-  onNextRequest?: () => void;
-};
-
-export type QuestionPanelOptions = Pick<
+import type {
+  QuestionPanelOptions,
   QuestionPanelProps,
-  "onChange" | "onSubmit" | "onSkip" | "onCollapsedChange" | "onPreviousRequest" | "onNextRequest"
-> & {
-  collapsed?: boolean;
-  requestPosition?: QuestionPanelViewModel["requestPosition"];
-};
+  QuestionPanelQuestion,
+} from "./chat-question-types.ts";
+import "./chat-question-card-view.tsx";
+
+export type {
+  QuestionPanelOptions,
+  QuestionPanelProps,
+  QuestionPanelQuestion,
+} from "./chat-question-types.ts";
 
 export function createGatewayQuestionPanelProps(
   prompt: QuestionPrompt,
   options: QuestionPanelOptions,
 ): QuestionPanelProps {
   const { onChange, onSubmit, onSkip } = options;
+  const checkedAction = <Args extends unknown[]>(
+    action: ((...args: Args) => void | Promise<void>) | undefined,
+  ) =>
+    action
+      ? async (...args: Args) => {
+          await action(...args);
+          if (prompt.status === "pending" && prompt.error) {
+            throw new Error(prompt.error);
+          }
+        }
+      : undefined;
   return {
     model: {
       requestKey: prompt.id,
@@ -76,22 +50,8 @@ export function createGatewayQuestionPanelProps(
       prompt.secretStoreAllowedHostsDraft = allowedHosts;
       onChange?.();
     },
-    onSubmit: onSubmit
-      ? async (answersById) => {
-          await onSubmit(answersById);
-          if (prompt.status === "pending" && prompt.error) {
-            throw new Error(prompt.error);
-          }
-        }
-      : undefined,
-    onSkip: onSkip
-      ? async () => {
-          await onSkip();
-          if (prompt.status === "pending" && prompt.error) {
-            throw new Error(prompt.error);
-          }
-        }
-      : undefined,
+    onSubmit: checkedAction(onSubmit),
+    onSkip: checkedAction(onSkip),
     onDismissError:
       prompt.error && onChange
         ? () => {
@@ -146,57 +106,4 @@ export function renderChatQuestionSummary(prompt: QuestionPrompt) {
   `;
 }
 
-// Summaries and panel props are needed during chat boot; interactive controls are not.
-const questionPanelElement = {
-  tagName: "openclaw-chat-question-panel",
-  get label() {
-    return t("chat.questions.eyebrow");
-  },
-  loadModule: () => import("./chat-question-panel.ts"),
-};
-
-export class ChatQuestionCard extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) props?: QuestionPanelProps;
-  private readonly panelLoader = new LazyCustomElementRequestController(this);
-
-  override willUpdate(): void {
-    this.panelLoader.requestWhileActive(
-      questionPanelElement,
-      this.isConnected && Boolean(this.props),
-    );
-  }
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.requestUpdate();
-  }
-
-  override disconnectedCallback(): void {
-    this.panelLoader.requestWhileActive(questionPanelElement, false);
-    super.disconnectedCallback();
-  }
-
-  override render() {
-    if (!this.props) {
-      return nothing;
-    }
-    if (isOptionalElementDefined(questionPanelElement)) {
-      return html`<openclaw-chat-question-panel
-        .props=${this.props}
-      ></openclaw-chat-question-panel>`;
-    }
-    const state = this.panelLoader.visibleState;
-    return state?.status === "error"
-      ? renderLazyViewError({
-          error: state.error,
-          stale: state.stale,
-          subtitle: questionPanelElement.label,
-          onRetry: () => this.panelLoader.retry(),
-        })
-      : renderLoadingState();
-  }
-}
-
-if (!customElements.get("openclaw-chat-question-card")) {
-  customElements.define("openclaw-chat-question-card", ChatQuestionCard);
-}
+export type { ChatQuestionCard } from "./chat-question-card-view.tsx";

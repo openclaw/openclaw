@@ -97,6 +97,18 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet
   return allowlist.has(key) || allowlist.has(entry.skill.name);
 }
 
+/** Learned Workshop skills bypass agent allowlists and session toggles; archiving hides them. */
+export function isSkillEntrySelected(
+  entry: SkillEntry,
+  skillFilter: readonly string[] | undefined,
+  skillOverrides: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  return (
+    resolveSkillSource(entry.skill) === "openclaw-workshop" ||
+    isSessionSkillEnabled(entry.skill.name, skillFilter, skillOverrides, resolveSkillKey(entry))
+  );
+}
+
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
@@ -160,14 +172,7 @@ export async function prepareSkillBinaryProbe(
     return true;
   };
   for (const entry of entries) {
-    if (
-      !isSessionSkillEnabled(
-        entry.skill.name,
-        opts?.skillFilter,
-        opts?.skillOverrides,
-        resolveSkillKey(entry),
-      )
-    ) {
+    if (!isSkillEntrySelected(entry, opts?.skillFilter, opts?.skillOverrides)) {
       continue;
     }
     const requires = entry.metadata?.requires;
@@ -183,10 +188,7 @@ export async function prepareSkillBinaryProbe(
       hasBin: recordBinaryRequirement,
     });
     if (needsBinaries) {
-      for (const bin of entry.metadata?.requires?.bins ?? []) {
-        bins.add(bin);
-      }
-      for (const bin of entry.metadata?.requires?.anyBins ?? []) {
+      for (const bin of resolveSkillRequiredBins(entry)) {
         bins.add(bin);
       }
     }
@@ -204,4 +206,8 @@ export async function prepareSkillBinaryProbe(
     },
     needsRetry: () => unprepared || !facts.isCurrent(),
   };
+}
+
+export function resolveSkillRequiredBins(entry: SkillEntry): string[] {
+  return (entry.metadata?.requires?.bins ?? []).concat(entry.metadata?.requires?.anyBins ?? []);
 }

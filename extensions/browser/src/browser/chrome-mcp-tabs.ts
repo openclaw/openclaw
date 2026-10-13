@@ -7,7 +7,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   resolveCdpTabOwnership,
 } from "./cdp.helpers.js";
-import { resolveChromeMcpNavigateCallTimeoutMs } from "./chrome-mcp-actions.js";
+import { navigateChromeMcpPageOnTarget } from "./chrome-mcp-actions.js";
 import {
   CHROME_MCP_NAVIGATE_TIMEOUT_MS,
   CHROME_MCP_NEW_PAGE_TIMEOUT_MS,
@@ -19,9 +19,7 @@ import {
 } from "./chrome-mcp-contracts.js";
 import { extractStructuredPages } from "./chrome-mcp-result.js";
 import {
-  callTool,
   getChromeMcpRoutingState,
-  listChromeMcpTargetsWithLease,
   registerChromeMcpTargets,
   withChromeMcpLease,
 } from "./chrome-mcp-routing.js";
@@ -33,16 +31,14 @@ export async function ensureChromeMcpAvailable(
   profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
-  await withChromeMcpLease(profileName, profileOptions, options, async (lease, normalized) => {
+  await withChromeMcpLease(profileName, profileOptions, options, async (operation) => {
     if (!options.pageProbe) {
       return;
     }
     try {
-      const pages = await listChromeMcpTargetsWithLease({
-        profileName,
-        profileOptions: normalized,
-        lease,
-        options: { ...options, timeoutMs: options.pageProbe.timeoutMs?.() ?? options.timeoutMs },
+      const pages = await operation.listTargets({
+        ...options,
+        timeoutMs: options.pageProbe.timeoutMs?.() ?? options.timeoutMs,
       });
       options.pageProbe.onResult(pages.length);
     } catch {
@@ -59,24 +55,13 @@ async function readChromeMcpTabs(
 ): Promise<BrowserTab[]> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await withChromeMcpLease(
-        profileName,
-        profileOptions,
-        options,
-        async (lease, normalizedProfileOptions) =>
-          (
-            await listChromeMcpTargetsWithLease({
-              profileName,
-              profileOptions: normalizedProfileOptions,
-              lease,
-              options,
-            })
-          ).map(({ page, targetId }) => ({
-            targetId,
-            title: "",
-            url: page.url ?? "",
-            type: "page",
-          })),
+      return await withChromeMcpLease(profileName, profileOptions, options, async (operation) =>
+        (await operation.listTargets()).map(({ page, targetId }) => ({
+          targetId,
+          title: "",
+          url: page.url ?? "",
+          type: "page",
+        })),
       );
     } catch (err) {
       if (err instanceof ChromeMcpReconnectRequiredError && attempt === 0) {
@@ -188,161 +173,129 @@ export async function openChromeMcpTab(
   options: ChromeMcpOpenOptions = {},
 ): Promise<BrowserOpenResult> {
   const targetUrl = url.trim() || "about:blank";
-  return await withChromeMcpLease(
-    profileName,
-    profileOptions,
-    options,
-    async (lease, normalizedProfileOptions) => {
-      const existingPages = await listChromeMcpTargetsWithLease({
-        profileName,
-        profileOptions: normalizedProfileOptions,
-        lease,
-        options: { timeoutMs: CHROME_MCP_NEW_PAGE_TIMEOUT_MS, signal: options.signal },
-      });
-      const canUseMcpCompensation = existingPages.length > 0;
-      if (!canUseMcpCompensation && !normalizedProfileOptions.browserUrl) {
-        throw new Error(
-          "Chrome MCP cannot safely open the first page without an explicit CDP endpoint.",
-        );
-      }
-      const markerUrl = normalizedProfileOptions.browserUrl
-        ? `about:blank#openclaw-${randomUUID()}`
-        : undefined;
-      const initialUrl = markerUrl ?? "about:blank";
-      const result = await callTool(
-        profileName,
-        normalizedProfileOptions,
-        "new_page",
-        { url: initialUrl, timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
-        options,
-        lease,
+  return await withChromeMcpLease(profileName, profileOptions, options, async (operation) => {
+    const { session, profileOptions: normalizedProfileOptions } = operation;
+    const existingPages = await operation.listTargets({
+      timeoutMs: CHROME_MCP_NEW_PAGE_TIMEOUT_MS,
+      signal: options.signal,
+    });
+    const canUseMcpCompensation = existingPages.length > 0;
+    if (!canUseMcpCompensation && !normalizedProfileOptions.browserUrl) {
+      throw new Error(
+        "Chrome MCP cannot safely open the first page without an explicit CDP endpoint.",
       );
-      // new_page may return only its created page. Merge that partial response;
-      // only list_pages may prune unrelated live target and ref mappings.
-      const createdPages = registerChromeMcpTargets(lease.session, extractStructuredPages(result), {
-        authoritative: false,
-      });
-      const created = createdPages.find(({ page }) => page.selected) ?? createdPages.at(-1);
-      if (!created) {
-        throw new Error("Chrome MCP did not return the created page.");
-      }
-      let capturedNativeTargetId: string | undefined;
-      const closeUntrackedPage = async () => {
-        // Page creation already succeeded, so cleanup must not reuse an aborted
-        // caller signal that would leave the marker page untracked.
-        let directCloseError: unknown;
-        if (normalizedProfileOptions.browserUrl && markerUrl) {
-          try {
-            const nativeTargetId =
-              capturedNativeTargetId ??
-              (await lookupChromeMcpMarkerNativeTarget({
-                browserUrl: normalizedProfileOptions.browserUrl,
-                markerUrl,
-                options: { ...options, signal: undefined },
-              }));
-            if (nativeTargetId) {
-              const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(
-                normalizedProfileOptions.browserUrl,
-              );
-              await fetchOk(
-                appendCdpPath(cdpHttpBase, `/json/close/${encodeURIComponent(nativeTargetId)}`),
-                options.cdpTimeouts?.httpTimeoutMs,
-                undefined,
-                options.cdpPolicy,
-              );
-              const routing = getChromeMcpRoutingState(lease.session);
-              routing.targetIdByPageId.delete(created.page.id);
-              routing.snapshotsByTarget.delete(created.targetId);
-              return;
-            }
-          } catch (error) {
-            directCloseError = error;
-          }
-        }
-        if (!canUseMcpCompensation) {
-          throw directCloseError instanceof Error
-            ? directCloseError
-            : new Error("Could not resolve the created Chrome MCP target", {
-                cause: directCloseError,
-              });
-        }
-        await callTool(
-          profileName,
-          normalizedProfileOptions,
-          "close_page",
-          { pageId: created.page.id },
-          { timeoutMs: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
-          lease,
-        );
-        const routing = getChromeMcpRoutingState(lease.session);
-        routing.targetIdByPageId.delete(created.page.id);
-        routing.snapshotsByTarget.delete(created.targetId);
-      };
-      try {
-        const captured = await captureChromeMcpTabOwnership({
-          profileName,
-          browserUrl: normalizedProfileOptions.browserUrl,
-          markerUrl,
-          options,
-        });
-        capturedNativeTargetId = captured.nativeTargetId;
-        if (!canUseMcpCompensation && captured.ownership.status !== "durable") {
-          throw new Error(
-            "Chrome MCP cannot safely track the first page without durable CDP ownership.",
-          );
-        }
-        let page = created.page;
-        if (targetUrl !== initialUrl) {
-          const navigateCallTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(
-            CHROME_MCP_NAVIGATE_TIMEOUT_MS,
-          );
-          await callTool(
-            profileName,
-            normalizedProfileOptions,
-            "navigate_page",
-            {
-              pageId: created.page.id,
-              type: "url",
-              url: targetUrl,
-              timeout: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
-            },
-            { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
-            lease,
-          );
-          const verified = await listChromeMcpTargetsWithLease({
-            profileName,
-            profileOptions: normalizedProfileOptions,
-            lease,
-            options: { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
-          });
-          const finalPage = verified.find((entry) => entry.targetId === created.targetId);
-          if (!finalPage) {
-            throw new Error(
-              "Chrome MCP created page identity changed before navigation completed.",
-            );
-          }
-          page = finalPage.page;
-        }
-        return {
-          targetId: created.targetId,
-          title: "",
-          url: page.url ?? targetUrl,
-          type: "page",
-          ownership: captured.ownership,
-        };
-      } catch (openError) {
+    }
+    const markerUrl = normalizedProfileOptions.browserUrl
+      ? `about:blank#openclaw-${randomUUID()}`
+      : undefined;
+    const initialUrl = markerUrl ?? "about:blank";
+    const result = await operation.callTool("new_page", {
+      url: initialUrl,
+      timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS,
+    });
+    // new_page may return only its created page. Merge that partial response;
+    // only list_pages may prune unrelated live target and ref mappings.
+    const createdPages = registerChromeMcpTargets(session, extractStructuredPages(result), {
+      authoritative: false,
+    });
+    const created = createdPages.find(({ page }) => page.selected) ?? createdPages.at(-1);
+    if (!created) {
+      throw new Error("Chrome MCP did not return the created page.");
+    }
+    let capturedNativeTargetId: string | undefined;
+    const closeUntrackedPage = async () => {
+      // Page creation already succeeded, so cleanup must not reuse an aborted
+      // caller signal that would leave the marker page untracked.
+      let directCloseError: unknown;
+      if (normalizedProfileOptions.browserUrl && markerUrl) {
         try {
-          await closeUntrackedPage();
-        } catch (closeError) {
-          throw Object.assign(
-            new Error("Failed to open a tracked Chrome MCP page and close its marker", {
-              cause: openError,
-            }),
-            { errors: [openError, closeError] },
-          );
+          const nativeTargetId =
+            capturedNativeTargetId ??
+            (await lookupChromeMcpMarkerNativeTarget({
+              browserUrl: normalizedProfileOptions.browserUrl,
+              markerUrl,
+              options: { ...options, signal: undefined },
+            }));
+          if (nativeTargetId) {
+            const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(
+              normalizedProfileOptions.browserUrl,
+            );
+            await fetchOk(
+              appendCdpPath(cdpHttpBase, `/json/close/${encodeURIComponent(nativeTargetId)}`),
+              options.cdpTimeouts?.httpTimeoutMs,
+              undefined,
+              options.cdpPolicy,
+            );
+            const routing = getChromeMcpRoutingState(session);
+            routing.targetIdByPageId.delete(created.page.id);
+            routing.snapshotsByTarget.delete(created.targetId);
+            return;
+          }
+        } catch (error) {
+          directCloseError = error;
         }
-        throw openError;
       }
-    },
-  );
+      if (!canUseMcpCompensation) {
+        throw directCloseError instanceof Error
+          ? directCloseError
+          : new Error("Could not resolve the created Chrome MCP target", {
+              cause: directCloseError,
+            });
+      }
+      await operation.callTool(
+        "close_page",
+        { pageId: created.page.id },
+        { timeoutMs: CHROME_MCP_NEW_PAGE_TIMEOUT_MS },
+      );
+      const routing = getChromeMcpRoutingState(session);
+      routing.targetIdByPageId.delete(created.page.id);
+      routing.snapshotsByTarget.delete(created.targetId);
+    };
+    try {
+      const captured = await captureChromeMcpTabOwnership({
+        profileName,
+        browserUrl: normalizedProfileOptions.browserUrl,
+        markerUrl,
+        options,
+      });
+      capturedNativeTargetId = captured.nativeTargetId;
+      if (!canUseMcpCompensation && captured.ownership.status !== "durable") {
+        throw new Error(
+          "Chrome MCP cannot safely track the first page without durable CDP ownership.",
+        );
+      }
+      let page = created.page;
+      if (targetUrl !== initialUrl) {
+        page = await navigateChromeMcpPageOnTarget(
+          {
+            targetId: created.targetId,
+            url: targetUrl,
+            timeoutMs: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+            signal: options.signal,
+          },
+          { ...operation, pageId: created.page.id },
+          "Chrome MCP created page identity changed before navigation completed.",
+        );
+      }
+      return {
+        targetId: created.targetId,
+        title: "",
+        url: page.url ?? targetUrl,
+        type: "page",
+        ownership: captured.ownership,
+      };
+    } catch (openError) {
+      try {
+        await closeUntrackedPage();
+      } catch (closeError) {
+        throw Object.assign(
+          new Error("Failed to open a tracked Chrome MCP page and close its marker", {
+            cause: openError,
+          }),
+          { errors: [openError, closeError] },
+        );
+      }
+      throw openError;
+    }
+  });
 }

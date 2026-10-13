@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendSessionTranscriptReport,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -26,6 +29,7 @@ afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);
   }
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 const maxBytes = 1_000_000;
@@ -38,6 +42,7 @@ const sessionSnapshot = buildGatewaySessionSnapshot({
 });
 
 async function createTranscript() {
+  setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
     sessionKey,
@@ -715,7 +720,6 @@ describe("chat history channel mirror cursor reconciliation", () => {
       expect(reconciled.deltaCursor).toEqual(expect.any(String));
     },
   );
-
   it.each([
     { name: "legacy identity", legacyIdentity: true, media: false, expectedIds: ["source"] },
     {
@@ -777,9 +781,7 @@ describe("chat history recovery cursor eligibility", () => {
       expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
 
       const pending = await readTail(scope, offset);
-      expect(pending.messages).toContainEqual(
-        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "failed-attempt" }) }),
-      );
+      expect(pending.messages).toEqual([]);
       expect(pending).not.toHaveProperty("deltaCursor");
 
       await appendTranscriptMessage(scope, {
@@ -812,44 +814,6 @@ describe("chat history recovery cursor eligibility", () => {
       });
     },
   );
-
-  it.each([
-    ["empty provider failure", failedAssistant],
-    [
-      "legacy stream placeholder",
-      {
-        ...failedAssistant,
-        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-      },
-    ],
-  ])("resets a single delta containing %s and its recovered answer", async (_name, failure) => {
-    const { scope, cursor } = await createTranscript();
-    await appendTranscriptMessage(scope, { eventId: "failed-attempt", message: failure });
-    await appendTranscriptMessage(scope, {
-      eventId: "recovered-answer",
-      message: recoveredAssistant,
-    });
-
-    expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
-    const recovered = await readTail(scope);
-    expect(recovered.messages).toEqual([
-      expect.objectContaining({ __openclaw: expect.objectContaining({ id: "recovered-answer" }) }),
-    ]);
-    expect(recovered.deltaCursor).toEqual(expect.any(String));
-  });
-
-  it("retains incremental delivery for failed attempts with visible partial output", async () => {
-    const { scope, cursor } = await createTranscript();
-    await appendTranscriptMessage(scope, {
-      eventId: "partial-failure",
-      message: { ...failedAssistant, content: [{ type: "text", text: "Partial answer" }] },
-    });
-    expect(await readDelta(scope, cursor)).toMatchObject({
-      kind: "delta",
-      messages: [{ messageId: "partial-failure" }],
-    });
-    expect((await readTail(scope)).deltaCursor).toEqual(expect.any(String));
-  });
 });
 
 describe("chat history TTS supplement cursor reconciliation", () => {

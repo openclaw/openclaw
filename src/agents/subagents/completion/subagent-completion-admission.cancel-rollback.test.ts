@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -130,27 +131,16 @@ describe("requester wake cancellation rollback", () => {
         "not-committed",
         new Error("Stop write rejected"),
       );
-      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
       let stopHeld = false;
-      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-        (context, operation, options) =>
-          runWorker(
-            context,
-            (scope) =>
-              operation({
-                execute: async (command, executeOptions) => {
-                  if (command.type === "subagents.persistChanges" && !stopHeld) {
-                    stopHeld = true;
-                    writerEntered.resolve();
-                    await releaseWriter.promise;
-                    throw writeFailure;
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-      );
+      probe.command(stateWorker, async (command, executeOptions, scope) => {
+        if (command.type === "subagents.persistChanges" && !stopHeld) {
+          stopHeld = true;
+          writerEntered.resolve();
+          await releaseWriter.promise;
+          throw writeFailure;
+        }
+        return scope.execute(command, executeOptions);
+      });
       let stopResult: Promise<PromiseSettledResult<void>[]> | undefined;
       try {
         await driver.run();

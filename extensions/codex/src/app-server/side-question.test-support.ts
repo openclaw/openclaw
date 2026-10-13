@@ -20,6 +20,17 @@ import {
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 
+export function codexHookCommand(config: unknown, key: string) {
+  const entries = (config as Record<string, unknown> | undefined)?.[key];
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  return (
+    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+  )
+    .at(0)
+    ?.hooks?.at(0);
+}
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
 const getSharedCodexAppServerClientMock = vi.fn();
@@ -28,17 +39,16 @@ const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
-type SelectionRetryParams = {
+type RequestScopeParams = {
   lease: { client?: unknown };
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
   run: (
     client: unknown,
     requestOptions: () => { timeoutMs: number; signal?: AbortSignal; assertCurrent: () => void },
   ) => Promise<unknown>;
-  onClientChange: (client: unknown) => void;
 };
-const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
-  async (params: SelectionRetryParams) =>
+const withCodexAppServerClientRequestScopeMock = vi.fn(
+  async (params: RequestScopeParams) =>
     await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
       signal: params.options.abandonSignal,
@@ -52,18 +62,23 @@ vi.mock("./auth-profile.js", async (importOriginal) => ({
     isCodexAppServerNativeAuthProfileMock(...args),
 }));
 
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
     getSharedCodexAppServerClientMock(...args),
+  retainSharedCodexAppServerClientByInstanceId: async () => ({
+    client: await getSharedCodexAppServerClientMock(),
+    release: vi.fn(),
+  }),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
   }),
   retireSharedCodexAppServerClientIfCurrent: (...args: unknown[]) =>
     retireSharedCodexAppServerClientIfCurrentMock(...args),
-  withLeasedCodexAppServerClientStartSelectionRetry: (params: SelectionRetryParams) =>
-    withLeasedCodexAppServerClientStartSelectionRetryMock(params),
+  withCodexAppServerClientRequestScope: (params: RequestScopeParams) =>
+    withCodexAppServerClientRequestScopeMock(params),
 }));
 
 vi.mock("./approval-bridge.js", () => ({
@@ -82,6 +97,7 @@ const baseBindingStore = createCodexTestBindingStore();
 const bindingStore: CodexAppServerBindingStore = {
   ...baseBindingStore,
   read: (...args) => readCodexAppServerBindingMock(...args),
+  readAsync: async (...args) => readCodexAppServerBindingMock(...args),
 };
 
 async function runCodexAppServerSideQuestion(
@@ -354,9 +370,9 @@ export function useSideQuestionTestSetup() {
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
-    withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
-    withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
-      async (params: SelectionRetryParams) =>
+    withCodexAppServerClientRequestScopeMock.mockReset();
+    withCodexAppServerClientRequestScopeMock.mockImplementation(
+      async (params: RequestScopeParams) =>
         await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
@@ -413,7 +429,6 @@ export {
   toolExecuteMock,
   handleCodexAppServerApprovalRequestMock,
   resolveCodexProviderWebSearchSupportForClientMock,
-  withLeasedCodexAppServerClientStartSelectionRetryMock,
   runCodexAppServerSideQuestion,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
@@ -423,7 +438,6 @@ export {
   turnCompleted,
   sideParams,
   TEST_HOST_CAPABILITIES,
-  type SelectionRetryParams,
 };
 
 export async function runSideQuestionWithManagedWebSearchCall(

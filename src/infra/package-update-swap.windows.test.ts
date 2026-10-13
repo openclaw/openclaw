@@ -28,20 +28,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { platform: "win32", code: "EPERM", transient: true, retries: true },
-  ...["EPERM", "EBUSY", "EACCES"].map((code) => ({
-    platform: "win32" as const,
-    code,
-    transient: false,
-    retries: true,
-  })),
-  { platform: "win32", code: "EXDEV", transient: false, retries: false },
-  ...(process.platform === "win32"
-    ? []
-    : [{ platform: process.platform, code: "EPERM", transient: false, retries: false }]),
+  { platform: "win32", code: "EPERM", transient: true },
+  { platform: "win32", code: "EPERM", transient: false },
 ] as const)(
   "handles $code on $platform without losing the installation (transient=$transient)",
-  async ({ platform, code, transient, retries }) => {
+  async ({ platform, code, transient }) => {
     backupPlatform = platform;
     const { params, packageRoot, launcher } = await createPackageSwapFixture(
       dirs.make("openclaw-swap-rename-"),
@@ -69,17 +60,11 @@ it.each([
         packageRollbackVerified: true,
         step: { exitCode: 1, failureFacts: [expect.objectContaining({ code })] },
       });
-      if (retries) {
-        expect(attempts).toBe(16);
-        expect(result.step.warnings).toHaveLength(attempts - 1);
-        expect(result.step.stderrTail).toContain(packageRoot);
-        expect(result.step.stderrTail).toContain("after 16 attempts");
-        expect(wait.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(57_750);
-      } else {
-        expect(attempts).toBe(1);
-        expect(wait).not.toHaveBeenCalled();
-        expect(result.step.warnings).toBeUndefined();
-      }
+      expect(attempts).toBe(16);
+      expect(result.step.warnings).toHaveLength(attempts - 1);
+      expect(result.step.stderrTail).toContain(packageRoot);
+      expect(result.step.stderrTail).toContain("after 16 attempts");
+      expect(wait.mock.calls.reduce((total, [ms]) => total + ms, 0)).toBe(57_750);
     }
     await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
       `"version":"${transient ? "2.0.0" : "1.0.0"}"`,

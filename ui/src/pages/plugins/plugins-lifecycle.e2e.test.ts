@@ -102,11 +102,18 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(0);
       }
       await page.locator(".settings-sidebar").getByRole("button", { name: "Back to app" }).click();
-      const workboardRoute = page.locator(
-        'openclaw-app-sidebar .sidebar-zone-entry[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const workboardRoute = sidebar.locator(
+        '.sidebar-pages [data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
       );
       await workboardRoute.waitFor();
       expect(await workboardRoute.getAttribute("href")).toBe("/workboard");
+      expect(
+        await sidebar
+          .locator('.sidebar-rail [data-sidebar-entry="plugin:workboard/workboard"]')
+          .count(),
+      ).toBe(0);
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(3);
       expect(await gateway.getRequests("connect")).toHaveLength(connects);
       expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -376,6 +383,75 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
           .getByRole("heading", { name: "Updated calendar workflows", exact: true })
           .waitFor();
         expect(await readme.count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
+  it.each([
+    { surface: "hub", heading: "Calendar Plus" },
+    { surface: "settings", heading: "Plugins" },
+  ] as const)(
+    "keeps keyboard focus on the $surface page after canceling and confirming removal",
+    async ({ surface, heading }) => {
+      const context = await newContext();
+      const page = await context.newPage();
+      const installedCalendar = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: pluginMethodResponses(),
+      });
+      const hasFocus = (locator: ReturnType<typeof page.locator>) =>
+        locator.evaluate((element) => element === document.activeElement);
+      try {
+        await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
+        await gateway.deferNext("plugins.install");
+        await page.getByRole("button", { name: "Install", exact: true }).click();
+        await gateway.waitForRequest("plugins.install");
+        await gateway.setMethodResponse(
+          "plugins.list",
+          inventory([...initialInventory.plugins, installedCalendar]),
+        );
+        await gateway.resolveDeferred("plugins.install", {
+          ok: true,
+          plugin: installedCalendar,
+          restartRequired: false,
+        });
+        await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
+        if (surface === "settings") {
+          await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
+        }
+        const trigger = page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true });
+        const dialog = page.locator("openclaw-modal-dialog");
+        await trigger.focus();
+        await page.keyboard.press("Enter");
+        const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+        await expect.poll(() => hasFocus(cancel)).toBe(true);
+        await page.keyboard.press("Enter");
+        await expect.poll(() => hasFocus(trigger)).toBe(true);
+        expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(0);
+
+        await gateway.deferNext("plugins.uninstall");
+        await page.keyboard.press("Enter");
+        const remove = dialog.getByRole("button", { name: "Remove", exact: true });
+        await remove.focus();
+        await page.keyboard.press("Enter");
+        await gateway.waitForRequest("plugins.uninstall");
+        await gateway.setMethodResponse("plugins.list", initialInventory);
+        await gateway.setMethodResponse("config.get", configSnapshot(false));
+        await gateway.resolveDeferred("plugins.uninstall", {
+          ok: true,
+          pluginId: "calendar-plus",
+          removed: ["config entry", "install record"],
+          warnings: [],
+        });
+        const title = page.getByRole("heading", { level: 1, name: heading, exact: true });
+        await expect.poll(() => hasFocus(title)).toBe(true);
+        expect(await trigger.count()).toBe(0);
+        expect(new URL(page.url()).pathname).toBe(
+          surface === "hub" ? `/plugins/${calendarDiscoveryPlugin.id}` : "/settings/plugins",
+        );
       } finally {
         await context.close();
       }

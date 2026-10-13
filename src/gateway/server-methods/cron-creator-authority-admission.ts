@@ -4,6 +4,7 @@ import {
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { readGatewayOperatorRecoverySource } from "../operator-run-recovery.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
@@ -106,6 +107,36 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   isRestartRecoveryResumeRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
+  if (
+    params.isRestartRecoveryResumeRun &&
+    params.resolvedSessionKey &&
+    params.sessionId &&
+    !params.spawnedBy &&
+    !params.hasRestoredCronContinuation &&
+    !params.isOneShotModelRun &&
+    hasGatewayAdminScope(params.client)
+  ) {
+    const restored = readGatewayOperatorRecoverySource(
+      params.client?.internal?.operatorRunAuthority,
+      { runId: params.runId, sessionKey: params.resolvedSessionKey, sessionId: params.sessionId },
+    );
+    if (restored && (restored.localOperator || restored.controlUiAdmin)) {
+      return Object.freeze({
+        runId: params.runId,
+        callerOrigin: restored.localOperator
+          ? { kind: "local" as const }
+          : { kind: "unknown" as const },
+        ...(restored.controlUiAdmin
+          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+          : {}),
+        ...(!restored.localOperator ? { callerScopedCreation: true as const } : {}),
+        isCurrent: () => {
+          params.client?.internal?.operatorRunAuthority?.assertCurrent();
+          return params.isCurrent?.() !== false;
+        },
+      });
+    }
+  }
   if (
     params.client?.internal?.syntheticClient === true &&
     !params.hasRestoredCronContinuation &&

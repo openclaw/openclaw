@@ -289,7 +289,10 @@ configured default model is never replaced.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
     models keep the OpenAI Responses transport. The bundled static catalog
     includes these transports and request compatibility settings, so Gemini
-    keeps using Chat Completions when live discovery is unavailable.
+    keeps using Chat Completions when live discovery is unavailable. When your
+    account's model list names the endpoints a model supports and the default
+    transport is not among them, OpenClaw uses a listed endpoint instead, so
+    Chat Completions-only models such as `kimi-k3` work.
   </Accordion>
 
   <Accordion title="Thinking levels">
@@ -299,7 +302,9 @@ configured default model is never replaced.
     When a Responses model starts its native effort range at `low`, `minimal`
     maps to `low` instead of sending an unsupported value.
     Explicit live limits take precedence over the bundled catalog. Gemini's
-    Chat Completions transport does not expose `max`.
+    Chat Completions transport does not expose `max`. A Claude model whose live
+    entry lists `xhigh` uses adaptive thinking even before OpenClaw recognizes
+    its model ID.
     See [Thinking levels](/tools/thinking) for session and per-message controls.
   </Accordion>
 

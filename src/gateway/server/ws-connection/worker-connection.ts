@@ -34,6 +34,7 @@ import {
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
+import { isReplayableWorkerTranscriptCommitError } from "../../worker-environments/transcript-commit-failure.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import { raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
@@ -438,6 +439,12 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     } catch (error) {
       outcome = "threw";
       if (parsed.method !== "worker.transcript.commit") {
+        throw error;
+      }
+      if (isReplayableWorkerTranscriptCommitError(error)) {
+        params.logGateway.warn(
+          `worker transcript commit interrupted; reconnecting: ${formatErrorMessage(error)}`,
+        );
         throw error;
       }
       // A settled persistence failure must not masquerade as a lost ACK and replay forever.

@@ -128,7 +128,7 @@ function interruptionScript(
               await migrateCanonicalTranscriptArchives({
                 agentId: "main", database, pathname: root + "/agent.sqlite",
                 start: { sessionId: "", generation: "" }, verifyOnly: true,
-                transformContent: content => ({ changed: false, content }),
+                transformLine: line => ({ changed: false, content: line }),
                 onArchive() {
                   visited++;
                   if (visited === 1) {

@@ -14,10 +14,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import {
-  advanceCliHistoryBoundaryRangeInTransaction,
-  type CliHistoryWriterFacts,
-} from "./session-accessor.sqlite-cli-history-boundary.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   SessionTranscriptContextVersion,
@@ -97,12 +95,13 @@ export function bindSqliteWorkerBackend(
     }
     assertTransactionUsable(database.db);
   };
-  const readRefusal = () =>
-    resolveTranscriptAppendRefusal(
-      readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-      resolved,
-      { ...resolved, ...fence },
-    );
+  const readCurrentEntry = () => {
+    const entry = readSessionEntryRow(database, resolved.sessionKey, "list")?.entry;
+    return {
+      entry,
+      refusal: resolveTranscriptAppendRefusal(entry, resolved, { ...resolved, ...fence }),
+    };
+  };
   let prepared:
     | {
         facts: PreparedTranscriptReport;
@@ -117,7 +116,7 @@ export function bindSqliteWorkerBackend(
           Result<PreparedTranscriptReport, TranscriptAppendRefusal>
         >(database.db, () => {
           prepared = undefined;
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             return err(refusal);
           }
@@ -136,7 +135,7 @@ export function bindSqliteWorkerBackend(
             throw new Error("Transcript report lost its canonical database owner");
           }
           admit("transaction");
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             admit("commit");
             return err(refusal);
@@ -220,7 +219,7 @@ export function bindSqliteWorkerBackend(
                   authorizeCommit,
                 )
               : false;
-          const rebound = readRefusal();
+          const { entry, refusal: rebound } = readCurrentEntry();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
@@ -229,6 +228,10 @@ export function bindSqliteWorkerBackend(
             committed: true,
             projectionNeedsReconcile,
             cliHistoryChanged,
+            ...((cliHistoryChanged ||
+              (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
+              entry,
+            }),
             ...(abortedPartial
               ? {
                   abortedPartial,

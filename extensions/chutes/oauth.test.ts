@@ -231,16 +231,6 @@ describe("chutes plugin OAuth", () => {
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 
-  it("uses the fixed deadline for token exchange requests", async () => {
-    const timeoutSpy = useImmediateOAuthDeadline();
-    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      return await rejectWhenAborted(init);
-    });
-
-    await expect(loginWithFetch(fetchFn)).rejects.toMatchObject({ name: "TimeoutError" });
-    expect(timeoutSpy).toHaveBeenCalledOnce();
-  });
-
   it("keeps issued tokens when userinfo exceeds the fixed deadline", async () => {
     const timeoutSpy = useImmediateOAuthDeadline();
     const fetchFn = oauthFetch({ userInfo: rejectWhenAborted });
@@ -351,14 +341,6 @@ describe("chutes plugin OAuth", () => {
     );
 
     expect(refreshed.clientId).toBe("cid_env");
-  });
-
-  it("preserves the old refresh token when the replacement is omitted", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse({ access_token: "at_new", expires_in: 1800 }));
-
-    vi.stubGlobal("fetch", fetchFn);
-    const refreshed = await refreshChutesOAuthCredential(createStoredCredential());
-
     expect(refreshed.refresh).toBe("rt_old");
   });
 

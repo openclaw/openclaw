@@ -4,7 +4,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -16,14 +16,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
+import { convertToOllamaMessages } from "./stream-messages.js";
+import { parseNdjsonStream } from "./stream-ndjson.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
-  convertToOllamaMessages,
   buildAssistantMessage,
-  parseNdjsonStream,
 } from "./stream.runtime.js";
 
 type GuardedFetchCall = Parameters<typeof fetchWithSsrFGuard>[0];
@@ -1116,9 +1116,7 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(events[6]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
     }
     const done = events.at(-1);
-    if (done?.type !== "done") {
-      throw new Error("Expected done event");
-    }
+    assert(done?.type === "done", "Expected done event");
     expect(done.message.content).toEqual([
       ...(visible ? [{ type: "text", text: "Visible answer" }] : []),
       { type: "toolCall", id: expect.any(String), name: "bash", arguments: { command: "ls" } },
@@ -1759,23 +1757,29 @@ describe("createConfiguredOllamaStreamFn", () => {
     },
   );
 
-  it("does not acquire or fetch when payload preparation rejects", async () => {
-    const acquire = vi.fn();
+  it.each(["hook rejection", "serialization failure"] as const)(
+    "does not acquire or fetch after payload %s",
+    async (failure) => {
+      const acquire = vi.fn(async () => ({ release: vi.fn() }));
 
-    const events = await collectStreamEvents(
-      await createManagedOllamaTestStream({
-        options: {
-          onPayload: () => {
-            throw new Error("payload rejected");
+      const events = await collectStreamEvents(
+        await createManagedOllamaTestStream({
+          options: {
+            onPayload: () => {
+              if (failure === "hook rejection") {
+                throw new Error("payload rejected");
+              }
+              return { value: 1n };
+            },
           },
-        },
-        acquire,
-      }),
-    );
+          acquire,
+        }),
+      );
 
-    expect(events).toMatchObject([{ type: "error", reason: "error" }]);
-    expect(acquire).not.toHaveBeenCalled();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+      expect(events).toMatchObject([{ type: "error", reason: "error" }]);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

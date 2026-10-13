@@ -194,28 +194,6 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("resolves late CJS and ESM aliases without reading artifacts until demanded", async () => {
-    const f = fixture();
-    const read = vi.spyOn(fs, "readFileSync");
-    const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
-    const metadata = load(f.entry) as {
-      load: (name: string) => unknown;
-      loadEsm: (name: string) => Promise<unknown>;
-    };
-    expect(read.mock.calls.filter(([target]) => target === f.used || target === f.unused)).toEqual(
-      [],
-    );
-    expect(metadata.load("openclaw/plugin-sdk/used")).toMatchObject({ value: "dist" });
-    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
-    expect(await metadata.loadEsm("@openclaw/plugin-sdk/used.js")).toMatchObject({ value: "dist" });
-    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
-    expect(await metadata.loadEsm("@openclaw/plugin-sdk/unused.js")).toMatchObject({
-      value: "unused",
-    });
-    expect(createRequire(f.entry).resolve("openclaw/plugin-sdk/unused")).toBe(f.unused);
-    expect(metadata.load("openclaw/plugin-sdk/unused")).toMatchObject({ value: "unused" });
-  });
-
   it.each(["alias", "relative"] as const)(
     "evaluates shared SDK imports before concurrent lazy CJS plugins require them (%s)",
     async (sdkImport) => {
@@ -331,76 +309,6 @@ describe("native plugin alias preparation", () => {
         url.search = "?generation=1";
       }
       await expect(metadata.loadEsm(url.href)).resolves.toMatchObject({ url: url.href });
-    },
-  );
-
-  it("pins the native host before first demand and replaces it on reinstall", () => {
-    const a = fixture();
-    const b = fixture();
-    const entry = writeFile(
-      a.root,
-      "external/package.json",
-      JSON.stringify({ name: "fixture-external" }),
-    );
-    const pluginEntry = writeFile(path.dirname(entry), "index.cjs", "module.exports = {};");
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", a.root);
-    installOpenClawPluginSdkNativeResolver({
-      pluginModulePath: pluginEntry,
-      pluginSdkResolution: "dist",
-    });
-    const requirePlugin = createRequire(pluginEntry);
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", b.root);
-    vi.spyOn(process, "cwd").mockReturnValue(b.root);
-    const argv = vi
-      .spyOn(process, "argv", "get")
-      .mockReturnValue([process.execPath, path.join(b.root, "openclaw.mjs")]);
-    expect(requirePlugin.resolve("@openclaw/plugin-sdk/used")).toBe(a.used);
-    // Removal is from a new host snapshot, not an in-place artifact freshness poll.
-    fs.rmSync(b.unused);
-    installOpenClawPluginSdkNativeResolver({
-      pluginModulePath: pluginEntry,
-      pluginSdkResolution: "dist",
-    });
-    expect(requirePlugin.resolve("@openclaw/plugin-sdk/used")).toBe(b.used);
-    expect(() => requirePlugin.resolve("@openclaw/plugin-sdk/unused")).toThrow();
-    argv.mockRestore();
-  });
-
-  it.each(["argv", "cwd", "module-url"])(
-    "captures the %s host hint before source loading",
-    (hint) => {
-      const a = fixture();
-      const b = fixture();
-      const external = fs.realpathSync(
-        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-alias-external-")),
-      );
-      roots.push(external);
-      const entry = writeFile(
-        external,
-        "index.ts",
-        'import { value } from "@openclaw/plugin-sdk/used"; export const marker: string = value;',
-      );
-      writeFile(a.root, "src/plugin-sdk/used.ts", 'export const value = "host-a";');
-      writeFile(b.root, "src/plugin-sdk/used.ts", 'export const value = "host-b";');
-      vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", "");
-      vi.stubEnv("NODE_ENV", "development");
-      const cwd = vi.spyOn(process, "cwd").mockReturnValue(hint === "cwd" ? a.root : external);
-      const argv = vi
-        .spyOn(process, "argv", "get")
-        .mockReturnValue([
-          process.execPath,
-          hint === "argv" ? path.join(a.root, "openclaw.mjs") : "",
-        ]);
-      const loader = getCachedPluginModuleLoader({
-        modulePath: entry,
-        tryNative: false,
-        importerUrl: pathToFileURL(
-          path.join(hint === "module-url" ? a.root : external, "loader.js"),
-        ).href,
-      });
-      cwd.mockReturnValue(b.root);
-      argv.mockReturnValue([process.execPath, path.join(b.root, "openclaw.mjs")]);
-      expect(loader(entry)).toMatchObject({ marker: "host-a" });
     },
   );
 

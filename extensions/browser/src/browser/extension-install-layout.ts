@@ -52,7 +52,7 @@ export function generateChromeExtensionIdForPath(
   const isAbsolute =
     platform === "win32" ? path.win32.isAbsolute(canonicalPath) : path.isAbsolute(canonicalPath);
   if (!isAbsolute) {
-    throw new Error("Chrome extension ID paths must be canonical absolute paths");
+    throw new Error("Chrome extension ID paths must be resolved absolute paths");
   }
   let nativePath = canonicalPath;
   if (platform === "win32" && /^[a-z]:/u.test(nativePath)) {
@@ -189,7 +189,7 @@ export async function assertOwnedPath(
       ? canonical.toLowerCase() !== expected.toLowerCase()
       : canonical !== expected
   ) {
-    throw new Error(`Refusing non-canonical path at ${target}`);
+    throw new Error(`Refusing unresolved path at ${target}`);
   }
 }
 
@@ -380,6 +380,14 @@ export async function discoverChromeExtensionIds(params: {
               state?: unknown;
               disable_reasons?: unknown;
             };
+            const identity = {
+              product: root.product,
+              browser: root.label,
+              userDataDir: root.userDataDir,
+              profile: profileEntry.name,
+              securePreferencesPath: preferencesPath,
+              extensionId,
+            };
             if (
               extensionId === params.storeExtensionId &&
               entry.from_webstore === true &&
@@ -397,12 +405,7 @@ export async function discoverChromeExtensionIds(params: {
                 ? reasons.includes(8_192)
                 : typeof reasons === "number" && (reasons & 8_192) !== 0;
               storeDiscovered.push({
-                product: root.product,
-                browser: root.label,
-                userDataDir: root.userDataDir,
-                profile: profileEntry.name,
-                securePreferencesPath: preferencesPath,
-                extensionId,
+                ...identity,
                 enabled,
                 awaitingApproval,
               });
@@ -426,12 +429,7 @@ export async function discoverChromeExtensionIds(params: {
               continue;
             }
             discovered.push({
-              product: root.product,
-              browser: root.label,
-              userDataDir: root.userDataDir,
-              profile: profileEntry.name,
-              securePreferencesPath: preferencesPath,
-              extensionId,
+              ...identity,
               extensionPath: canonicalPath,
             });
           }
@@ -443,29 +441,25 @@ export async function discoverChromeExtensionIds(params: {
       }
     }
   }
-  const unique = new Map(
-    discovered.map((entry) => [
-      `${entry.product}\0${entry.profile}\0${entry.extensionId}\0${entry.extensionPath}`,
-      entry,
-    ]),
-  );
-  const uniqueStore = new Map(
-    storeDiscovered.map((entry) => [
-      `${entry.product}\0${entry.profile}\0${entry.extensionId}`,
-      entry,
-    ]),
-  );
+  const uniqueSorted = <T extends { product: ChromeProduct; profile: string; extensionId: string }>(
+    entries: T[],
+    suffix: (entry: T) => string,
+  ): T[] => {
+    const unique = new Map(
+      entries.map((entry) => [
+        `${entry.product}\0${entry.profile}\0${entry.extensionId}${suffix(entry)}`,
+        entry,
+      ]),
+    );
+    return [...unique.values()].toSorted((a, b) =>
+      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
+        `${b.product}/${b.profile}/${b.extensionId}`,
+      ),
+    );
+  };
   return {
-    discovered: [...unique.values()].toSorted((a, b) =>
-      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
-        `${b.product}/${b.profile}/${b.extensionId}`,
-      ),
-    ),
-    storeDiscovered: [...uniqueStore.values()].toSorted((a, b) =>
-      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
-        `${b.product}/${b.profile}/${b.extensionId}`,
-      ),
-    ),
+    discovered: uniqueSorted(discovered, (entry) => `\0${entry.extensionPath}`),
+    storeDiscovered: uniqueSorted(storeDiscovered, () => ""),
     issues,
     identityMismatches,
   };

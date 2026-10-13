@@ -76,16 +76,9 @@ enum HostEnvSanitizer {
 
     private static func normalizeOverrideKey(_ rawKey: String) -> String? {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return nil }
-        guard let first = key.unicodeScalars.first, self.isPortableHead(first) else {
-            return nil
-        }
-        for scalar in key.unicodeScalars.dropFirst() {
-            if self.isPortableTail(scalar) || scalar == "(" || scalar == ")" {
-                continue
-            }
-            return nil
-        }
+        guard let first = key.unicodeScalars.first, self.isPortableHead(first),
+              key.unicodeScalars.dropFirst().allSatisfy({ self.isPortableTail($0) || $0 == "(" || $0 == ")" })
+        else { return nil }
         return key
     }
 

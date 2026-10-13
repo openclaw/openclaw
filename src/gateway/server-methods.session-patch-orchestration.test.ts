@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,6 +24,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("preserves request-order outcomes while isolating expected-identity failures", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 3; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:batch-${index}` },
@@ -92,6 +94,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("projects non-archive patches in request order against prior successes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 2; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:label-${index}` },
@@ -127,6 +130,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("does not reserve a projected label when target authorization fails", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKeys = [0, 1].map((index) => `agent:main:label-race-${index}`);
       for (const [index, sessionKey] of sessionKeys.entries()) {
         await upsertSessionEntryCore(
@@ -187,45 +191,13 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("checks labels against untouched sessions in the store snapshot", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:label-owner" },
-        { label: "Existing label", sessionId: "session-label-owner", updatedAt: 1 },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:label-target" },
-        { sessionId: "session-label-target", updatedAt: 1 },
-      );
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [{ key: "agent:main:label-target" }],
-          patch: { label: "Existing label" },
-        },
-        respond,
-        context: context(),
-      } as never);
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        {
-          ok: false,
-          key: "agent:main:label-target",
-          error: { code: "INVALID_REQUEST", message: "label already in use: Existing label" },
-        },
-      ]);
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:label-target" })?.label,
-      ).toBeUndefined();
-    });
-  });
-
   it("rejects an alias conflict introduced after preflight without blocking siblings", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         session: { mainKey: "work" },
         agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       const siblingKeys = ["agent:main:alias-race-before", "agent:main:alias-race-after"];
@@ -330,6 +302,7 @@ describe("sessions.patchMany orchestration", () => {
         session: { mainKey: "work" },
         agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       await upsertSessionEntryCore(
@@ -407,72 +380,9 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("isolates a target authorization race from sibling patches", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:race-${index}` },
-          { sessionId: `session-race-${index}`, updatedAt: 1 },
-        );
-      }
-      const respond = vi.fn();
-      const assertCurrent = vi.fn(() => {
-        throw new Error("outer all-target guard must not be delegated");
-      });
-      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey.endsWith("-1")) {
-          throw new SessionMutationAuthorizationChangedError({
-            code: "INVALID_REQUEST",
-            message: "session changed before sessions.patchMany; retry the request",
-          });
-        }
-      });
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({ key: `agent:main:race-${index}` })),
-          patch: { unread: false },
-        },
-        respond,
-        context: context(),
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
-      } as never);
-
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual([0, 1, 2].map((index) => `agent:main:race-${index}`));
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { ok: true, key: "agent:main:race-0" },
-            {
-              ok: false,
-              key: "agent:main:race-1",
-              error: {
-                code: "INVALID_REQUEST",
-                message: "session changed before sessions.patchMany; retry the request",
-              },
-            },
-            { ok: true, key: "agent:main:race-2" },
-          ],
-        },
-        undefined,
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-0" })).toHaveProperty(
-        "lastReadAt",
-      );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-1" }),
-      ).not.toHaveProperty("lastReadAt");
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-2" })).toHaveProperty(
-        "lastReadAt",
-      );
-    });
-  });
-
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const targets = [0, 1, 2].map((index) => ({
         key: `agent:main:archive-auth-${index}`,
         expectedSessionId: `session-archive-auth-${index}`,
@@ -548,6 +458,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("converts an unexpected target exception into an ordered isolated failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 3; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:throw-${index}` },

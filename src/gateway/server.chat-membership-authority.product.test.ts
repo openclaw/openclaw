@@ -15,6 +15,7 @@ import {
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -25,7 +26,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import * as sessionStoreLookup from "./session-utils-store-lookup.js";
+import * as sessionSharingAuthorization from "./session-sharing-authorization-async.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -33,29 +34,34 @@ import {
 } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-function holdSessionAuthorizationRead(sessionKey: string) {
-  const readCaptured = createDeferredCore();
-  const resumeRead = createDeferredCore();
-  const read = sessionStoreLookup.withGatewaySessionStoreTarget;
+function holdSessionAuthorization(sessionKey: string) {
+  const authorizationCaptured = createDeferredCore();
+  const resumeAuthorization = createDeferredCore();
+  const resolveAuthorization = sessionSharingAuthorization.resolveSessionMutationAuthorizationAsync;
   let held = false;
-  const readWithHold: typeof read = async (params, consume) => {
-    const reply = await read(params, consume);
-    if (!held && params.key === sessionKey && params.includeMembership === true) {
+  const resolveWithHold: typeof resolveAuthorization = async (params) => {
+    const reply = await resolveAuthorization(params);
+    if (
+      !held &&
+      params.method === "chat.send" &&
+      asOptionalRecord(params.requestParams)?.sessionKey === sessionKey &&
+      reply.authorization
+    ) {
       held = true;
-      readCaptured.resolve();
-      // The ordered read releases its writer FIFO before the test commits a revocation.
-      await resumeRead.promise;
+      authorizationCaptured.resolve();
+      // Revoke captured authority before the handler can persist or dispatch input.
+      await resumeAuthorization.promise;
     }
     return reply;
   };
-  const authorizationRead = vi
-    .spyOn(sessionStoreLookup, "withGatewaySessionStoreTarget")
-    .mockImplementation(readWithHold);
+  const authorization = vi
+    .spyOn(sessionSharingAuthorization, "resolveSessionMutationAuthorizationAsync")
+    .mockImplementation(resolveWithHold);
   return {
-    entered: readCaptured.promise,
-    resume: () => resumeRead.resolve(),
+    entered: authorizationCaptured.promise,
+    resume: () => resumeAuthorization.resolve(),
     wasHeld: () => held,
-    restore: () => authorizationRead.mockRestore(),
+    restore: () => authorization.mockRestore(),
   };
 }
 
@@ -276,13 +282,15 @@ it(
         },
       );
       expect(accepted.status).toBe("started");
-      await expect(
-        gateway.client.request<{ status: string }>(
-          "agent.wait",
-          { runId: accepted.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        ),
-      ).resolves.toMatchObject({ status: "ok" });
+      const acceptedTerminal = await gateway.client.request<{ status: string }>(
+        "agent.wait",
+        { runId: accepted.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      );
+      const acceptedDiagnostic = redactSensitiveText(JSON.stringify(acceptedTerminal), {
+        mode: "tools",
+      }).slice(0, 4_000);
+      expect(acceptedTerminal, acceptedDiagnostic).toMatchObject({ status: "ok" });
       const allowedTranscript = await loadTranscriptEvents(scope);
       expect(JSON.stringify(allowedTranscript)).toContain(allowedMessage);
       expect(JSON.stringify(allowedTranscript)).toContain("Authorized member reply.");
@@ -293,7 +301,7 @@ it(
       const transcriptBeforeDeniedTurn = structuredClone(await loadTranscriptEvents(scope));
       for (const change of ["membership revoked", "session replaced"] as const) {
         await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
-        const heldRead = holdSessionAuthorizationRead(sessionKey);
+        const heldRead = holdSessionAuthorization(sessionKey);
         const denied = gateway.client.request("chat.send", {
           sessionKey,
           message: "This in-flight revoked member turn must have no effects.",
@@ -304,7 +312,7 @@ it(
           await Promise.race([
             heldRead.entered,
             denied.then(() => {
-              throw new Error("chat.send completed before its authorization read was held");
+              throw new Error("chat.send completed before its authorization was held");
             }),
           ]);
           expect(requests).toHaveLength(1);
@@ -412,13 +420,26 @@ it(
                 },
               );
               expect(started.status).toBe(method === "chat.send" ? "started" : "accepted");
-              await expect(
-                gateway.client.request<{ status: string }>(
-                  "agent.wait",
-                  { runId: started.runId, timeoutMs: 30_000 },
-                  { timeoutMs: 35_000 },
-                ),
-              ).resolves.toMatchObject({ status: "ok" });
+              const terminal = await gateway.client.request<{ status: string }>(
+                "agent.wait",
+                { runId: started.runId, timeoutMs: 30_000 },
+                { timeoutMs: 35_000 },
+              );
+              const terminalDiagnostic =
+                terminal.status === "ok"
+                  ? undefined
+                  : redactSensitiveText(
+                      JSON.stringify({
+                        firstAgent: first,
+                        agentId,
+                        method,
+                        withAttachment,
+                        providerRequests: requests.length - requestOffset,
+                        terminal,
+                      }),
+                      { mode: "tools" },
+                    ).slice(0, 4_000);
+              expect(terminal, terminalDiagnostic).toMatchObject({ status: "ok" });
               const providerInput = requests.slice(requestOffset).join("\n");
               expect(providerInput).toContain(message);
               expect(providerInput).not.toContain(markers[otherAgentId]);
@@ -513,7 +534,7 @@ it(
       const aliasSource = ensureProfileForEmail(aliasEmail);
       const beforeProfileReplacement = await loadTranscriptEvents(profileScope);
       const beforeProfileRequests = requests.length;
-      const profileRead = holdSessionAuthorizationRead(profileScope.sessionKey);
+      const profileRead = holdSessionAuthorization(profileScope.sessionKey);
       const replaced = gateway.client.request("chat.send", {
         sessionKey: profileScope.sessionKey,
         message: "This replaced caller must not reach the transcript or provider.",
@@ -524,7 +545,7 @@ it(
         await Promise.race([
           profileRead.entered,
           replaced.then(() => {
-            throw new Error("Profile-bound chat completed before its worker read was held");
+            throw new Error("Profile-bound chat completed before its authorization was held");
           }),
         ]);
         linkEmail(proxyUser, replacement.id);

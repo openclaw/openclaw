@@ -1,19 +1,25 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
 } from "../config/sessions/restart-recovery-types.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   prepareSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readAdmittedHarnessCompletionInput } from "../config/sessions/session-harness-completion-source.kernel.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { readAdmittedHarnessCompletionInputFromSqlite } from "../config/sessions/session-harness-completion-source.kernel.js";
+import type { HarnessCompletionSourceSnapshot } from "../config/sessions/session-harness-completion-source.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "../config/sessions/session-history-worker-errors.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   composeSessionSourceAssertion,
   releaseSessionSourceAuthorities,
+  type PreparedSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import {
@@ -22,16 +28,110 @@ import {
 } from "../config/sessions/session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../config/sessions/session-transcript-read-source.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { assertHarnessCompletionSourceAdmission } from "./agent-harness-completion-scope.js";
 
-export { readAdmittedHarnessCompletionInput } from "../config/sessions/session-harness-completion-source.kernel.js";
+export async function readAdmittedHarnessCompletionInputAsync(
+  params: Parameters<typeof readAdmittedHarnessCompletionInputFromSqlite>[0],
+): Promise<boolean> {
+  const memory = getSessionActorStorageBinding({
+    sessionKey: params.claim.requesterSessionKey,
+    agentId: params.claim.requesterAgentId,
+    storePath: params.storePath,
+  });
+  if (!memory) {
+    const binding = captureIncognitoSessionBinding({
+      agentId: params.claim.requesterAgentId,
+      sessionKey: params.claim.requesterSessionKey,
+      storePath: params.storePath,
+    });
+    if (binding) {
+      const snapshot = await binding.actor.sessions.history(
+        { assertCurrent: () => binding.actor.assertReadable() },
+        {
+          type: "session.history.harness-completion-source",
+          input: {
+            sessionKey: params.claim.requesterSessionKey,
+            sessionId: params.entry.sessionId,
+            lifecycleRevision: params.entry.lifecycleRevision,
+            claim: params.claim,
+            admission: resolveSessionTranscriptReadFence({
+              agentId: params.claim.requesterAgentId,
+              sessionId: params.claim.sessionId,
+            }),
+          },
+        },
+        binding.admissionSignal,
+      );
+      if (snapshot.readError) {
+        throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+      }
+      return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+    }
+    return withSessionTranscriptReadSource(
+      {
+        agentId: params.claim.requesterAgentId,
+        sessionKey: params.claim.requesterSessionKey,
+        sessionId: params.entry.sessionId,
+        storePath: params.storePath,
+      },
+      () => readAdmittedHarnessCompletionInputFromSqlite(params),
+      async ({ owner, scope, expectedIdentity, assertCurrent }) => {
+        if (!expectedIdentity) {
+          return false;
+        }
+        const snapshot = await owner.readHarnessCompletionSource({
+          env: scope.env,
+          claim: params.claim,
+          source: {
+            agentId: scope.agentId,
+            path: scope.storePath,
+            databaseIdentity: expectedIdentity.key.slice(5),
+            databaseBirthtime: expectedIdentity.birthtime,
+          },
+          mode: "committed",
+          admission: resolveSessionTranscriptReadFence({
+            agentId: params.claim.requesterAgentId,
+            sessionId: params.claim.sessionId,
+          }),
+        });
+        assertCurrent();
+        if (snapshot.readError) {
+          throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+        }
+        return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+      },
+    );
+  }
+  const snapshot = memory.actor.storage!.readCurrent(
+    {
+      type: "session.completion.read",
+      input: {
+        sourceRunId: params.claim.sourceRunId,
+        claim: params.claim,
+        mode: "committed",
+        admission: resolveSessionTranscriptReadFence({
+          agentId: params.claim.requesterAgentId,
+          sessionId: params.claim.sessionId,
+        }),
+      },
+    },
+    memory.authority,
+  );
+  return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+}
 
 /** These receipts are stricter than legacy live-return classification: omission is not success. */
 export function hasHarnessCompletionFinalReceipt(
@@ -131,7 +231,13 @@ export function captureHarnessCompletionRecovery(params: {
 /** A current session incarnation and its exact admitted completion receipt own further effects. */
 export function getOwedHarnessCompletionTask(
   claim: HarnessCompletionRecovery,
-  entry: SessionEntry,
+  entry: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "lifecycleRevision"
+    | "restartRecoveryHarnessCompletion"
+    | "restartRecoveryTerminalDeliveryEvidence"
+  >,
 ): HarnessCompletionRecovery | undefined {
   if (entry.sessionId !== claim.sessionId || entry.lifecycleRevision !== claim.lifecycleRevision) {
     return undefined;
@@ -160,7 +266,8 @@ export function getOwedHarnessCompletionTask(
   try {
     assertSourceCurrent();
     return claim;
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return undefined;
   }
 }
@@ -169,120 +276,238 @@ export function getOwedHarnessCompletionTask(
 export function createHarnessCompletionSourceAssertion(params: {
   claim: HarnessCompletionRecovery;
   storePath: string;
+  mode?: "admission" | "committed";
   priorAssertion?: SessionSourceAssertion;
 }): SessionSourceAssertion {
-  const assertSource = () => {
-    const current = loadExactSessionEntry({
-      agentId: params.claim.requesterAgentId,
-      sessionKey: params.claim.requesterSessionKey,
-      storePath: params.storePath,
-      readConsistency: "latest",
+  const target = {
+    agentId: params.claim.requesterAgentId,
+    sessionKey: params.claim.requesterSessionKey,
+    storePath: params.storePath,
+  };
+  const memory = getSessionActorStorageBinding(target);
+  if (memory) {
+    const assertCurrent = () => {
+      const snapshot = memory.actor.storage!.readCurrent(
+        {
+          type: "session.completion.read",
+          input: {
+            sourceRunId: params.claim.sourceRunId,
+            claim: params.claim,
+            mode: params.mode,
+            admission: resolveSessionTranscriptReadFence({
+              agentId: target.agentId,
+              sessionId: params.claim.sessionId,
+            }),
+          },
+        },
+        memory.authority,
+      );
+      if (
+        !snapshot.entry ||
+        !snapshot.validInput ||
+        !getOwedHarnessCompletionTask(params.claim, snapshot.entry)
+      ) {
+        throw createSessionWorkStartChangedError(target.sessionKey);
+      }
+    };
+    const prepare = async (): Promise<PreparedSessionSourceAuthority> => ({
+      assertCurrent,
+      checks: [],
     });
-    // The original host claim precedes transcript commit. A recovery attempt
-    // already has a committed source and must keep it valid in its read fence.
-    if (
-      !current ||
-      current.sessionKey !== params.claim.requesterSessionKey ||
-      !getOwedHarnessCompletionTask(params.claim, current.entry) ||
-      (current.entry.restartRecoveryDeliveryRunId !== params.claim.sourceRunId &&
-        !readAdmittedHarnessCompletionInput({
-          claim: params.claim,
-          entry: current.entry,
-          storePath: params.storePath,
-          operationalRunId: current.entry.restartRecoveryDeliveryRunId,
-        }))
-    ) {
-      throw createSessionWorkStartChangedError(params.claim.requesterSessionKey);
+    return composeSessionSourceAssertion([
+      params.priorAssertion,
+      Object.assign(assertCurrent, {
+        prepareSessionSource: prepare,
+        prepareSessionSourceScope: prepare,
+      }),
+    ]);
+  }
+  const binding = captureIncognitoSessionBinding(target);
+  const capturedClaim = binding?.actor.sessions.captureCurrent(target.sessionKey);
+  const refuse = (): never => {
+    throw createSessionWorkStartChangedError(target.sessionKey);
+  };
+  const assertIncognitoClaim = () => {
+    if (!binding) {
+      return refuse();
+    }
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    capturedClaim?.assertCurrent();
+    const entry = binding.actor.sessions.readSteering(target.sessionKey);
+    if (!entry || !getOwedHarnessCompletionTask(params.claim, entry)) {
+      return refuse();
+    }
+    return entry;
+  };
+  const prepareIncognitoSource = async (): Promise<PreparedSessionSourceAuthority> => {
+    if (!binding) {
+      return refuse();
+    }
+    assertIncognitoClaim();
+    const retained = await binding.actor.sessions.retainCompletionSource(
+      { assertCurrent: assertIncognitoClaim },
+      {
+        sessionKey: target.sessionKey,
+        sessionId: params.claim.sessionId,
+        lifecycleRevision: params.claim.lifecycleRevision,
+        claim: params.claim,
+        admission: resolveSessionTranscriptReadFence({
+          agentId: target.agentId,
+          sessionId: params.claim.sessionId,
+        }),
+      },
+      binding.admissionSignal,
+    );
+    return {
+      assertCurrent: () => {
+        assertIncognitoClaim();
+        retained.assertCurrent();
+      },
+      checks: [],
+      release: () => retained.release(),
+    };
+  };
+  const prepareSnapshot = (
+    snapshot: HarnessCompletionSourceSnapshot,
+    source: CapturedSessionEntryReadSource & { databaseIdentity: string },
+    assertStorageCurrent: () => void,
+    release?: () => void | Promise<void>,
+  ): PreparedSessionSourceAuthority => {
+    assertStorageCurrent();
+    if (!snapshot.entry || !getOwedHarnessCompletionTask(params.claim, snapshot.entry)) {
+      refuse();
+    }
+    if (snapshot.readError) {
+      throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+    }
+    if (!snapshot.validInput) {
+      refuse();
+    }
+    const fields = [
+      "sessionId",
+      "lifecycleRevision",
+      "restartRecoveryHarnessCompletion",
+      "restartRecoveryTerminalDeliveryEvidence",
+    ] as const;
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${source.databaseIdentity}`,
+      sessionKey: target.sessionKey,
+      entry: snapshot.entry,
+      matches: (before, after) =>
+        fields.every((field) => isDeepStrictEqual(before?.[field], after?.[field])),
+    });
+    return {
+      assertCurrent() {
+        assertStorageCurrent();
+        if (
+          !retained.isCurrent() ||
+          !snapshot.entry ||
+          !getOwedHarnessCompletionTask(params.claim, snapshot.entry)
+        ) {
+          refuse();
+        }
+      },
+      checks: [
+        {
+          predicate: {
+            source,
+            sessionKey: target.sessionKey,
+            fields: [...fields],
+            expected: snapshot.entry,
+            ...(snapshot.version
+              ? { transcript: { sessionId: params.claim.sessionId, version: snapshot.version } }
+              : {}),
+          },
+          refuse,
+        },
+      ],
+      release: () => releaseSessionSourceAuthorities([retained, { release }]),
+    };
+  };
+  const assertSource = () => {
+    if (binding) {
+      const entry = assertIncognitoClaim();
+      // Recovery requires an async prepared scope. The original host claim
+      // precedes its transcript commit and retains its existing admission rule.
+      if (entry.restartRecoveryDeliveryRunId !== params.claim.sourceRunId) {
+        refuse();
+      }
+    }
+    // The durable requester receipt outlives the original source admission.
+    // Each effect scope prepares and validates that receipt before its callback.
+  };
+  const prepareSessionSource = async (
+    checkWriteToken = false,
+  ): Promise<PreparedSessionSourceAuthority> => {
+    const { claim } = params;
+    if (binding) {
+      return prepareIncognitoSource();
+    }
+    const env = captureSessionTranscriptStorageEnvironment(process.env);
+    const candidates = captureSessionStoreReadCandidates(params.storePath);
+    const identities = captureSessionStoreCandidateIdentities(candidates);
+    const admission = resolveSessionTranscriptReadFence({
+      agentId: claim.requesterAgentId,
+      sessionId: claim.sessionId,
+    });
+    const resolved = await prepareSqliteScope({
+      agentId: claim.requesterAgentId,
+      sessionKey: claim.requesterSessionKey,
+      storePath: params.storePath,
+      env,
+    });
+    const options = toDatabaseOptions(resolved);
+    const path = resolveOpenClawAgentSqlitePath(options);
+    const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
+    if (!identity?.key.startsWith("file:")) {
+      return refuse();
+    }
+    const source = {
+      agentId: options.agentId,
+      path,
+      databaseIdentity: identity.key.slice(5),
+      databaseBirthtime: identity.birthtime,
+    };
+    const retained = retainSessionHistoryWorkerDatabase({ ...options, path });
+    try {
+      const writeScopes = [target.sessionKey, sqliteSessionIdWriteScope(params.claim.sessionId)];
+      const snapshot = await retained.owner.readHarnessCompletionSource({
+        env,
+        claim,
+        mode: params.mode,
+        source,
+        ...(admission ? { admission } : {}),
+      });
+      return prepareSnapshot(
+        snapshot,
+        source,
+        () => {
+          retained.owner.assertCurrent();
+          assertSessionStoreReadCandidate(path, candidates);
+          assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
+          // Worker mutations validate their predicates in the committing transaction.
+          // External effects instead consume the read receipt at their final callback.
+          if (
+            checkWriteToken &&
+            (snapshot.writeToken === undefined ||
+              readSqliteDatabaseScopedWriteTokenForPath(path, writeScopes) !== snapshot.writeToken)
+          ) {
+            refuse();
+          }
+        },
+        retained.release,
+      );
+    } catch (error) {
+      await releaseSessionSourceAuthorities([retained], [error]);
+      throw error;
     }
   };
   return composeSessionSourceAssertion([
     params.priorAssertion,
     Object.assign(assertSource, {
-      async prepareSessionSource() {
-        const { claim } = params;
-        const env = captureSessionTranscriptStorageEnvironment(process.env);
-        const candidates = captureSessionStoreReadCandidates(params.storePath);
-        const identities = captureSessionStoreCandidateIdentities(candidates);
-        const admission = resolveSessionTranscriptReadFence({
-          agentId: claim.requesterAgentId,
-          sessionId: claim.sessionId,
-        });
-        const refuse = (): never => {
-          throw createSessionWorkStartChangedError(claim.requesterSessionKey);
-        };
-        const resolved = await prepareSqliteScope({
-          agentId: claim.requesterAgentId,
-          sessionKey: claim.requesterSessionKey,
-          storePath: params.storePath,
-          env,
-        });
-        const options = toDatabaseOptions(resolved);
-        const path = resolveOpenClawAgentSqlitePath(options);
-        const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
-        if (!identity?.key.startsWith("file:")) {
-          return refuse();
-        }
-        const source = {
-          agentId: options.agentId,
-          path,
-          databaseIdentity: identity.key.slice(5),
-          databaseBirthtime: identity.birthtime,
-        };
-        const retained = retainSessionHistoryWorkerDatabase({ ...options, path });
-        try {
-          const snapshot = await retained.owner.readHarnessCompletionSource({
-            env,
-            claim,
-            source,
-            ...(admission ? { admission } : {}),
-          });
-          const assertCurrent = () => {
-            retained.owner.assertCurrent();
-            assertSessionStoreReadCandidate(path, candidates);
-            assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-            if (!snapshot.entry || !getOwedHarnessCompletionTask(claim, snapshot.entry)) {
-              refuse();
-            }
-            if (snapshot.readError) {
-              throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
-            }
-            if (!snapshot.validInput) {
-              refuse();
-            }
-          };
-          assertCurrent();
-          return {
-            assertCurrent,
-            checks: [
-              {
-                predicate: {
-                  source,
-                  sessionKey: claim.requesterSessionKey,
-                  fields: [
-                    "sessionId",
-                    "lifecycleRevision",
-                    "restartRecoveryHarnessCompletion",
-                    "restartRecoveryTerminalDeliveryEvidence",
-                    "restartRecoveryDeliveryRunId",
-                    "restartRecoveryRuns",
-                  ] satisfies (keyof SessionEntry)[],
-                  expected: snapshot.entry,
-                  ...(snapshot.version
-                    ? {
-                        transcript: { sessionId: claim.sessionId, version: snapshot.version },
-                      }
-                    : {}),
-                },
-                refuse,
-              },
-            ],
-            release: retained.release,
-          };
-        } catch (error) {
-          await releaseSessionSourceAuthorities([retained], [error]);
-          throw error;
-        }
-      },
+      prepareSessionSourceScope: () => prepareSessionSource(true),
+      prepareSessionSource,
     }),
   ]);
 }

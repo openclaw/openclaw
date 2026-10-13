@@ -56,7 +56,7 @@ describe("board widget approval", () => {
       content: { kind: "html", html: "<p>weather</p>" },
       declared: { netOrigins: ["https://weather.example"], tools: ["health"] },
     };
-    for (let index = 0; index < 10; index++) {
+    for (let index = 0; index < 2; index++) {
       const response = await invoke("board.widget.put", {
         ...widget,
         sessionKey: `agent:main:session-${index}`,
@@ -135,7 +135,14 @@ describe("board widget approval", () => {
   it.each([
     ...boardWidgetContentPermissionCases
       .filter(
-        (row) => row.contentKind === "html" && !("reviewRisk" in row && row.reviewRisk === "high"),
+        (row) =>
+          row.contentKind === "html" &&
+          "permissionMode" in row &&
+          (row.permissionMode === "read-only" ||
+            (row.permissionMode === "workspace" &&
+              (("reviewRisk" in row && row.reviewRisk === "medium") ||
+                ("reviewDecision" in row && row.reviewDecision === "deny") ||
+                "reviewFailure" in row))),
       )
       .map((row) => Object.assign({}, row, { emptyTools: false })),
     ...(

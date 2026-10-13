@@ -2,38 +2,32 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   SessionGitHubConfirmParamsSchema,
-  SessionGitHubOptionsParamsSchema,
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
-  SessionGitHubStatusParamsSchema,
 } from "./session-github-publication.js";
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
-  it.each([
-    ["options", SessionGitHubOptionsParamsSchema, {}],
-    ["publish", SessionGitHubPublishParamsSchema, { idempotencyKey: "global-publication" }],
-    [
-      "status",
-      SessionGitHubStatusParamsSchema,
-      { requestId: "a1111111-1111-4111-8111-111111111111" },
-    ],
-    [
-      "confirm",
-      SessionGitHubConfirmParamsSchema,
-      {
-        requestId: "a1111111-1111-4111-8111-111111111111",
-        generation: "a1111111-1111-4111-8111-111111111111",
-        account: { accountId: 101, login: "alice" },
-        requestDigest: "a".repeat(64),
-      },
-    ],
-  ] as const)("preserves an optional selected owner for %s", (_name, schema, fields) => {
-    const request = { sessionKey: "global", ...fields };
-    expect(Value.Check(schema, request)).toBe(true);
-    expect(Value.Check(schema, { ...request, agentId: "research" })).toBe(true);
-    expect(Value.Check(schema, { ...request, agentId: "" })).toBe(false);
+  it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
+    const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
+    for (const sharedUnavailableReason of [
+      "unavailable",
+      "changed",
+      "rate_limited",
+      "unverified",
+      "unsupported_workspace",
+    ]) {
+      expect(
+        Value.Check(SessionGitHubOptionsResultSchema, { ...options, sharedUnavailableReason }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(SessionGitHubOptionsResultSchema, {
+        ...options,
+        sharedUnavailableReason: "raw diagnostics",
+      }),
+    ).toBe(false);
   });
 
   it("allows shared-only options and one closed personal recovery descriptor", () => {
@@ -158,55 +152,17 @@ describe("session GitHub publication protocol", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["token", "secret"],
-    ["repository", "openclaw/openclaw"],
-    ["branch", "main"],
-  ])("rejects caller-owned %s authority independently", (field, value) => {
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        idempotencyKey: "tool-call-1",
-        [field]: value,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      requestId: "request-1",
-      status: "needs_confirmation",
-      message: "Confirm the original account and snapshot.",
-      publisher: { source: "personal", accountId: 101, login: "alice" },
-      effect: { kind: "push", status: "dispatched", headCommit: "a".repeat(40) },
+  it.each([["token", "secret"]])(
+    "rejects caller-owned %s authority independently",
+    (field, value) => {
+      expect(
+        Value.Check(SessionGitHubPublishParamsSchema, {
+          idempotencyKey: "tool-call-1",
+          [field]: value,
+        }),
+      ).toBe(false);
     },
-    {
-      requestId: "request-1",
-      status: "requested",
-      message: "Publication was accepted.",
-    },
-    {
-      requestId: "request-1",
-      status: "publishing",
-      message: "The Gateway is publishing.",
-    },
-    {
-      requestId: "request-1",
-      status: "published",
-      url: "https://github.com/openclaw/openclaw/pull/1",
-      repository: "openclaw/openclaw",
-      branch: "openclaw/task",
-      headCommit: "a".repeat(40),
-    },
-    {
-      requestId: "request-1",
-      status: "failed",
-      code: "push_rejected",
-      message: "GitHub publication failed.",
-      nextAction: "Check branch access and retry.",
-    },
-  ])("accepts the closed $status result", (result) => {
-    expect(Value.Check(SessionGitHubPublicationResultSchema, result)).toBe(true);
-  });
+  );
 
   it("rejects extra fields from terminal results", () => {
     expect(

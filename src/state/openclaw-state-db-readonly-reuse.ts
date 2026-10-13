@@ -105,32 +105,38 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
   pathname: string,
   currentAuthority: boolean,
 ): ReusedOpenClawStateReadOnlyDatabase<T> {
-  const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname, {
-    readOnly: true,
-  });
-  if (!opened?.db.isOpen) {
-    return { reused: false };
-  }
-  const ownedTransaction = currentAuthority && isManagedStateTransaction(opened.db);
-  if (opened.db.isTransaction && !ownedTransaction) {
-    return { reused: false };
-  }
-  try {
-    // Cache acquisition already checked supported-version admission. Managed
-    // existing schemas retain their stricter runtime-shape policy.
-    if (isExistingOpenClawStateSchema(pathname, opened.db)) {
-      assertStateReadSchema(opened.db, pathname);
-    }
-    observeOpenClawDatabaseMaintenanceResource(opened.db);
-    const value = operation(opened);
-    if (ownedTransaction && isPromiseLike(value)) {
-      throw new SqliteCoordinatorError("SQLite current-authority read must remain synchronous");
-    }
-    return { reused: true, value };
-  } catch (error) {
-    openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
-    throw error;
-  }
+  return (
+    openClawStateDatabaseCache.withCachedOpenClawStateDatabase(
+      pathname,
+      { readOnly: true },
+      (opened): ReusedOpenClawStateReadOnlyDatabase<T> => {
+        if (!opened.db.isOpen) {
+          return { reused: false };
+        }
+        const ownedTransaction = currentAuthority && isManagedStateTransaction(opened.db);
+        if (opened.db.isTransaction && !ownedTransaction) {
+          return { reused: false };
+        }
+        try {
+          // Cache admission and the consuming read share this operation's fresh revision.
+          if (isExistingOpenClawStateSchema(pathname, opened.db)) {
+            assertStateReadSchema(opened.db, pathname);
+          }
+          observeOpenClawDatabaseMaintenanceResource(opened.db);
+          const value = operation(opened);
+          if (ownedTransaction && isPromiseLike(value)) {
+            throw new SqliteCoordinatorError(
+              "SQLite current-authority read must remain synchronous",
+            );
+          }
+          return { reused: true, value };
+        } catch (error) {
+          openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
+          throw error;
+        }
+      },
+    ) ?? { reused: false }
+  );
 }
 
 /** A native read borrow can avoid copying only while its original physical path still matches. */

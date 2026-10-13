@@ -247,13 +247,7 @@ function generateZshSubcmdList(cmd: Command): string {
 }
 
 function escapeZshDoubleQuotedDescription(description: string): string {
-  return description
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\$/g, "\\$")
-    .replaceAll("`", "\\`")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]");
+  return description.replace(/[\\$"`[\]]/g, "\\$&");
 }
 
 function generateZshCommandGroup(

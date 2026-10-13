@@ -162,14 +162,15 @@ vi.mock("./client.js", () => ({
   isGatewayProtocolResponseError,
 }));
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateDeviceIdentity: () => {
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: () => {
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: (options: unknown) => {
+  loadDeviceIdentityIfPresentAsync: (options: unknown) => {
     deviceIdentityState.identityPaths.push(options);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
@@ -196,8 +197,7 @@ vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   }),
 }));
 
-const { clampProbeTimeoutMs, getDeviceRequiredProbeCacheSizeForTest, probeGateway } =
-  await import("./probe.js");
+const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
 type ProbeGatewayParams = Parameters<typeof probeGateway>[0];
 
@@ -576,10 +576,31 @@ describe("probeGateway", () => {
 
   it("evicts the oldest device-required cache entries once the cap is reached", async () => {
     setDeviceRequiredProbeMode();
-    for (let i = 0; i <= 500; i += 1) {
-      await runLightweightProbe(nextProbeUrl(`cache-evict-${i}`));
+    const oldestUrl = nextProbeUrl("cache-oldest");
+    const newestUrl = nextProbeUrl("cache-newest");
+    const hint = "check short-circuited by recent device-required rejections";
+    // Expiry must not masquerade as capacity eviction.
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      await primeDeviceRequiredProbeFailures(oldestUrl);
+      for (let i = 0; i < 499; i += 1) {
+        await runLightweightProbe(nextProbeUrl(`cache-evict-${i}`));
+      }
+      const startsAtCapacity = gatewayClientState.startCalls;
+      expectDeviceRequiredClose(await runLightweightProbe(oldestUrl), hint);
+      expect(gatewayClientState.startCalls).toBe(startsAtCapacity);
+
+      await primeDeviceRequiredProbeFailures(newestUrl);
+      const startsAfterEviction = gatewayClientState.startCalls;
+      expectDeviceRequiredClose(await runLightweightProbe(newestUrl), hint);
+      expect(gatewayClientState.startCalls).toBe(startsAfterEviction);
+
+      expectDeviceRequiredClose(await runLightweightProbe(oldestUrl));
+      expect(gatewayClientState.startCalls).toBe(startsAfterEviction + 1);
+      expect(lastGatewayClientOptions()?.url).toBe(oldestUrl);
+    } finally {
+      dateNowSpy.mockRestore();
     }
-    expect(getDeviceRequiredProbeCacheSizeForTest()).toBeLessThanOrEqual(500);
   });
 
   it("lets paired probes clear prior device-required failures", async () => {

@@ -38,7 +38,7 @@ export function startUpdateRunWatcher(params: {
     | undefined;
   let notices = Promise.resolve();
   let reconciled: UpdateRunRecord[] = [];
-  let polling: { runId?: string; terminalRevision?: number } | undefined;
+  let polling = false;
   let pollAgain = false;
   let scanning: Promise<void> | undefined;
   let scanRequested = false;
@@ -84,7 +84,7 @@ export function startUpdateRunWatcher(params: {
       const nextActive = watched?.sentinelDeadline
         ? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]
         : undefined;
-      const observed =
+      const run =
         nextActive ??
         (watched
           ? await getUpdateRunAsync(watched.runId)
@@ -92,16 +92,10 @@ export function startUpdateRunWatcher(params: {
       if (work.isClosing) {
         return;
       }
-      if (!observed) {
+      if (!run) {
         watched = undefined;
         return;
       }
-      // A settlement may arrive while the active-run lookup is awaiting its snapshot.
-      const run = reconciled.reduce(
-        (latest, entry) =>
-          entry.runId === latest.runId && entry.updatedAtMs > latest.updatedAtMs ? entry : latest,
-        observed,
-      );
       reconciled = reconciled.filter((entry) => entry.runId !== run.runId);
       if (watched?.runId !== run.runId) {
         watched = { runId: run.runId };
@@ -145,9 +139,6 @@ export function startUpdateRunWatcher(params: {
           updatedAtMs: run.updatedAtMs,
         });
         watched.revision = run.updatedAtMs;
-        if (terminal && polling?.runId === run.runId) {
-          polling.terminalRevision = Math.max(polling.terminalRevision ?? 0, run.updatedAtMs);
-        }
       }
       if (watched.phase !== run.phase) {
         watched.phase = run.phase;
@@ -229,26 +220,16 @@ export function startUpdateRunWatcher(params: {
       pollAgain = true;
       return;
     }
-    polling = {};
-    const cycle = polling;
+    polling = true;
     void work
       .track(async () => {
-        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal }, (runId) => {
-          cycle.runId = runId;
-        });
+        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal });
         if (work.isClosing) {
           return;
         }
-        // A timer scan can publish this cycle's commit before its worker reply arrives.
-        reconciled.push(
-          ...settled.filter(
-            (run) =>
-              run.runId !== watched?.runId &&
-              (run.runId !== cycle.runId ||
-                cycle.terminalRevision === undefined ||
-                run.updatedAtMs > cycle.terminalRevision),
-          ),
-        );
+        // A delayed worker reply may repeat a terminal broadcast; notice delivery
+        // deduplicates at its durable effect boundary.
+        reconciled.push(...settled.filter((run) => run.runId !== watched?.runId));
         // The first history read may still be pending when verification settles.
         await scan();
       })
@@ -259,7 +240,7 @@ export function startUpdateRunWatcher(params: {
         }
       })
       .finally(() => {
-        polling = undefined;
+        polling = false;
         if (pollAgain) {
           pollAgain = false;
           if (!timer) {

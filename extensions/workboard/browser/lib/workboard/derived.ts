@@ -1,8 +1,24 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { getWorkboardLifecycle } from "./lifecycle.ts";
-import type { WorkboardCard, WorkboardHealthKey, WorkboardUiState } from "./types.ts";
+import type {
+  WorkboardCard,
+  WorkboardHealthKey,
+  WorkboardStatus,
+  WorkboardUiState,
+} from "./types.ts";
 
 const WORKBOARD_RECENT_DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function groupWorkboardCardsByStatus(
+  cards: readonly WorkboardCard[],
+  statuses: readonly WorkboardStatus[],
+) {
+  const groups = new Map<WorkboardStatus, WorkboardCard[]>(statuses.map((status) => [status, []]));
+  for (const card of cards) {
+    groups.get(card.status)?.push(card);
+  }
+  return groups;
+}
 
 function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
   return Boolean(

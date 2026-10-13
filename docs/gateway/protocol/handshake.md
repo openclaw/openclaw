@@ -66,6 +66,12 @@ Client replies with `connect`:
 
 Gateway responds with `hello-ok`:
 
+The default connect deadline is 30 seconds, allowing authentication and profile
+preparation to finish on busy or slower hosts. It is a total deadline, not an idle
+timeout: progress does not extend it. The client connect watchdog and server
+preauth timeout share this default. Operators can override the server budget with
+`OPENCLAW_HANDSHAKE_TIMEOUT_MS`; configure connecting clients with the same budget.
+
 ```json
 {
   "type": "res",
@@ -237,6 +243,12 @@ the general protocol version. Frames stay under 64 KiB, except a negotiated
 `worker.inference.start` frame may be up to 25 MiB. The closed allowlist contains
 `worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
 `worker.inference.start`, and `worker.inference.cancel`.
+
+Assistant messages in `worker.transcript.commit` may carry the live event's
+`itemId`. The Gateway binds it to its generated commit key, removes it before
+storage, and publishes the correlation only after the row commits. It is not
+provider replay data. This worker-only field travels between the exact
+builds admitted by the bundle, version, and feature checks above.
 
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission

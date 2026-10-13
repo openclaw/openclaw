@@ -14,10 +14,7 @@ import {
   type PersistedAuthProfileStores,
 } from "./ownership.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
-import {
-  removePersonalAuthProfileReferences,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
+import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
 import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
@@ -121,21 +118,17 @@ export function buildLocalAuthProfileStoreForSave(params: {
   for (const profileId of normalizeUniqueStringEntries(params.options?.pruneOrderProfileIds)) {
     keptOrderProfileIds.delete(profileId);
   }
-  for (const profileId of keptProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptProfileIds.delete(profileId);
-    }
-  }
-  for (const profileId of keptOrderProfileIds) {
-    if (isUserModelAuthProfileId(profileId)) {
-      keptOrderProfileIds.delete(profileId);
+  for (const profileIds of [keptProfileIds, keptOrderProfileIds]) {
+    for (const profileId of profileIds) {
+      if (isUserModelAuthProfileId(profileId)) {
+        profileIds.delete(profileId);
+      }
     }
   }
   pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);
   if (params.options?.filterExternalAuthProfiles !== false) {
     localStore.runtimeExternalProfileIds = undefined;
     localStore.runtimeExternalProfileIdsAuthoritative = undefined;
-    setRuntimeExternalCliProfileIds(localStore, []);
   }
   return localStore;
 }

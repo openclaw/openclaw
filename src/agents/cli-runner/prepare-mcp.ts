@@ -1,11 +1,12 @@
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../sandbox/runtime-status.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { finalizeCliMcpGrant } from "./mcp-grant-context.js";
+import { projectNativeMcpRunContext } from "./native-mcp-context.js";
 import { admitCliRunParams } from "./run-admission.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -13,7 +14,7 @@ type ResolveMcpTools = typeof resolveMcpLoopbackScopedTools;
 type McpScope = Parameters<ResolveMcpTools>[0];
 
 /** Project native MCP from the same requester and runtime cap as mediated tools. */
-export function resolveCliNativeMcpPolicy(
+export async function resolveCliNativeMcpPolicy(
   run: RunCliAgentParams,
   options: {
     config: McpScope["cfg"];
@@ -27,12 +28,15 @@ export function resolveCliNativeMcpPolicy(
   },
 ) {
   const requesterSessionKey = run.sessionKey ?? options.policySessionKey;
-  const sandboxStatus = resolveSandboxRuntimeStatus({
+  const sandboxStatus = await resolveSandboxRuntimeStatusAsync({
     cfg: options.config,
     sessionKey: options.policySessionKey,
     agentId: options.policyAgentId,
+    preparedSessionEntry:
+      options.policySessionKey === run.sessionKey ? run.sessionEntry : undefined,
   });
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  return prepareConversationCapabilityProfile({
+    ...projectNativeMcpRunContext(run),
     config: options.config,
     sessionKey: options.policySessionKey,
     sandboxSessionKey: requesterSessionKey,
@@ -42,22 +46,7 @@ export function resolveCliNativeMcpPolicy(
         : undefined,
     runSessionKey:
       run.sessionKey && run.sessionKey !== options.policySessionKey ? run.sessionKey : undefined,
-    sessionId: run.sessionId,
-    runId: run.runId,
     agentId: options.policyAgentId,
-    agentAccountId: run.agentAccountId,
-    messageProvider: run.messageProvider ?? run.messageChannel,
-    messageChannel: run.messageChannel,
-    groupId: run.groupId,
-    groupChannel: run.groupChannel,
-    groupSpace: run.groupSpace,
-    spawnedBy: run.spawnedBy,
-    senderId: run.senderId,
-    senderName: run.senderName,
-    senderUsername: run.senderUsername,
-    senderE164: run.senderE164,
-    senderIsOwner: run.senderIsOwner,
-    conversationToolPolicy: run.conversationToolPolicy,
     modelProvider: options.modelProvider,
     modelId: options.modelId,
     workspaceDir: options.workspaceDir,
@@ -65,11 +54,7 @@ export function resolveCliNativeMcpPolicy(
     sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
     runtimeToolAllowlist: options.runtimeToolsAllowPolicy,
     inheritRuntimeToolAllowlist: true,
-    inputProvenance: run.inputProvenance,
-    trustedInternalHandoff: run.trustedInternalHandoff,
-    scheduledToolPolicy: run.scheduledToolPolicy,
   });
-  return { capabilityProfile, sandboxStatus };
 }
 
 /** Project the CLI tool surface before prompt construction, retaining its exact run admission. */
@@ -79,32 +64,23 @@ export async function prepareCliMcpToolProjection(
     agentId: string;
     context: McpScope["context"];
     runtimeToolsAllowPolicy?: string[];
-    rootedToolsAllow?: string[];
     defaultMediatedToolNames?: readonly string[];
     scope: Pick<
       McpScope,
-      | "cfg"
-      | "rootedExecution"
-      | "skillLibraryAuthoring"
-      | "authProfileStore"
-      | "authProfileStoreAgentDir"
+      "cfg" | "skillLibraryAuthoring" | "authProfileStore" | "authProfileStoreAgentDir"
     >;
     resolvePolicyTools: ResolveMcpTools;
     resolveScopedTools: ResolveMcpTools;
   },
 ) {
   const requestedToolsAllow =
-    options.runtimeToolsAllowPolicy ??
-    (options.scope.rootedExecution
-      ? options.rootedToolsAllow
-      : params.cliToolAvailability?.openClaw);
+    options.runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
   const context =
     requestedToolsAllow !== undefined
       ? { ...options.context, toolsAllow: [...requestedToolsAllow] }
       : options.context;
   const resolveTools =
-    options.runtimeToolsAllowPolicy !== undefined ||
-    (options.scope.rootedExecution && options.rootedToolsAllow === undefined)
+    options.runtimeToolsAllowPolicy !== undefined
       ? options.resolvePolicyTools
       : options.resolveScopedTools;
   const admittedParams = await admitCliRunParams(params, options.agentId);
@@ -125,7 +101,6 @@ export function resolveCliMcpToolOwnership(
     backend: ResolvedCliBackend;
     enabled: boolean;
     nodePlacement: boolean;
-    rooted: boolean;
     skipPreparation: boolean;
   },
 ) {
@@ -138,7 +113,6 @@ export function resolveCliMcpToolOwnership(
       agentId: run.agentId,
       sessionKey: run.sessionKey,
     }).host !== "node" &&
-    !options.rooted &&
     run.cliToolAvailability === undefined &&
     options.backend.nativeToolMode === "selectable" &&
     options.backend.toolAvailabilityEnforcement === "execution-args" &&

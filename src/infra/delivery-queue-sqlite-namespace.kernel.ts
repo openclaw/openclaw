@@ -140,65 +140,61 @@ function matchesPendingDeliveryQueueEntry(
   );
 }
 
-/** Replaces a pending entry only while its authoritative serialized value is unchanged. */
-export function replacePendingDeliveryQueueEntryInDatabase(
-  database: OpenClawStateDatabase,
-  params: {
+function pendingEntryMutation<
+  Input extends {
     queueName: string;
     expectedEntry: DeliveryQueueEntryState;
-    replacementEntry: DeliveryQueueEntryState;
   },
-): boolean {
+>(
+  operationLabel: string,
+  mutation: (database: OpenClawStateDatabase, params: Input) => boolean,
+  validate?: (params: Input) => undefined,
+) {
+  return (database: OpenClawStateDatabase, params: Input): boolean => {
+    validate?.(params);
+    return runSqliteImmediateTransactionSync(
+      database.db,
+      () =>
+        matchesPendingDeliveryQueueEntry(database, params.queueName, params.expectedEntry) &&
+        mutation(database, params),
+      { databaseLabel: database.path, operationLabel },
+    );
+  };
+}
+
+type PendingDeliveryQueueReplacement = {
+  queueName: string;
+  expectedEntry: DeliveryQueueEntryState;
+  replacementEntry: DeliveryQueueEntryState;
+};
+
+export function assertDeliveryQueueReplacement(params: PendingDeliveryQueueReplacement): undefined {
   if (params.expectedEntry.id !== params.replacementEntry.id) {
     throw new Error(
       `Delivery queue replacement id mismatch: ${params.expectedEntry.id} != ${params.replacementEntry.id}`,
     );
   }
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      if (!matchesPendingDeliveryQueueEntry(database, params.queueName, params.expectedEntry)) {
-        return false;
-      }
-      return upsertDeliveryQueueEntryInDatabase(
-        {
-          queueName: params.queueName,
-          entry: params.replacementEntry,
-          updatePendingOnly: true,
-        },
-        database,
-      );
-    },
-    {
-      databaseLabel: database.path,
-      operationLabel: "replace pending delivery queue entry",
-    },
-  );
 }
 
+/** Replaces a pending entry only while its authoritative serialized value is unchanged. */
+export const replacePendingDeliveryQueueEntryInDatabase = pendingEntryMutation(
+  "replace pending delivery queue entry",
+  (database, params: PendingDeliveryQueueReplacement) =>
+    upsertDeliveryQueueEntryInDatabase(
+      { queueName: params.queueName, entry: params.replacementEntry, updatePendingOnly: true },
+      database,
+    ),
+  assertDeliveryQueueReplacement,
+);
+
 /** Completes a pending entry only while its authoritative serialized value is unchanged. */
-export function completePendingDeliveryQueueEntryInDatabase(
-  database: OpenClawStateDatabase,
-  params: {
-    queueName: string;
-    expectedEntry: DeliveryQueueEntryState;
+export const completePendingDeliveryQueueEntryInDatabase = pendingEntryMutation(
+  "complete pending delivery queue entry",
+  (database, params: { queueName: string; expectedEntry: DeliveryQueueEntryState }) => {
+    completeDeliveryQueueEntryInDatabase(database, params.queueName, params.expectedEntry.id);
+    return true;
   },
-): boolean {
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      if (!matchesPendingDeliveryQueueEntry(database, params.queueName, params.expectedEntry)) {
-        return false;
-      }
-      completeDeliveryQueueEntryInDatabase(database, params.queueName, params.expectedEntry.id);
-      return true;
-    },
-    {
-      databaseLabel: database.path,
-      operationLabel: "complete pending delivery queue entry",
-    },
-  );
-}
+);
 
 /**
  * Commits an asynchronously prepared replacement only if the authoritative
@@ -249,21 +245,12 @@ export function movePendingDeliveryQueueEntryNamespaceInDatabase(
       if (!inserted) {
         return "destination-exists";
       }
-      if (params.retainSourceCompletionFence) {
-        // Completion rewrites entry_json to a minimal tombstone. Never retain
-        // the legacy pre-policy payload or hook context in the source fence.
-        completeDeliveryQueueEntryInDatabase(
-          database,
-          params.sourceQueueName,
-          params.expectedSourceEntry.id,
-        );
-      } else {
-        deleteDeliveryQueueEntryInDatabase(
-          database,
-          params.sourceQueueName,
-          params.expectedSourceEntry.id,
-        );
-      }
+      // Completion rewrites entry_json to a minimal tombstone. Never retain
+      // the legacy pre-policy payload or hook context in the source fence.
+      const retireSource = params.retainSourceCompletionFence
+        ? completeDeliveryQueueEntryInDatabase
+        : deleteDeliveryQueueEntryInDatabase;
+      retireSource(database, params.sourceQueueName, params.expectedSourceEntry.id);
       if (params.stagingId && params.stagingQueueName) {
         deleteDeliveryQueueEntryInDatabase(database, params.stagingQueueName, params.stagingId);
       }

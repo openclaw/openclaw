@@ -11,13 +11,14 @@ import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
-  "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker"
+  "photo" | "video" | "video_note" | "animation" | "audio" | "voice" | "document" | "sticker"
 >;
 
 type TelegramMediaFileRef =
   | NonNullable<Message["photo"]>[number]
   | NonNullable<Message["video"]>
   | NonNullable<Message["video_note"]>
+  | NonNullable<Message["animation"]>
   | NonNullable<Message["audio"]>
   | NonNullable<Message["voice"]>
   | NonNullable<Message["document"]>
@@ -43,23 +44,17 @@ export function resolveTelegramPrimaryMedia(
   if (!msg) {
     return undefined;
   }
-  const photo = msg.photo?.[msg.photo.length - 1];
-  if (photo) {
-    return { kind: "image", fileRef: photo };
-  }
-  const video = msg.video ?? msg.video_note;
-  if (video) {
-    return { kind: "video", fileRef: video };
-  }
-  const audio = msg.audio ?? msg.voice;
-  if (audio) {
-    return { kind: "audio", fileRef: audio };
-  }
-  if (msg.document) {
-    return { kind: "document", fileRef: msg.document };
-  }
-  if (msg.sticker) {
-    return { kind: "sticker", fileRef: msg.sticker };
+  const candidates: Array<[TelegramMediaKind, TelegramMediaFileRef | undefined]> = [
+    ["image", msg.photo?.[msg.photo.length - 1]],
+    ["video", msg.video ?? msg.video_note ?? msg.animation],
+    ["audio", msg.audio ?? msg.voice],
+    ["document", msg.document],
+    ["sticker", msg.sticker],
+  ];
+  for (const [kind, fileRef] of candidates) {
+    if (fileRef) {
+      return { kind, fileRef };
+    }
   }
   return undefined;
 }
@@ -67,23 +62,12 @@ export function resolveTelegramPrimaryMedia(
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
-  let label = name;
-  if (name && username) {
-    label = `${name} (${username})`;
-  } else if (!name && username) {
-    label = username;
-  }
+  const label = name && username ? `${name} (${username})` : name || username;
   const normalizedSenderId =
     senderId != null ? normalizeOptionalString(String(senderId)) : undefined;
   const fallbackId = normalizedSenderId ?? (msg.from?.id != null ? String(msg.from.id) : undefined);
   const idPart = fallbackId ? `id:${fallbackId}` : undefined;
-  if (label && idPart) {
-    return `${label} ${idPart}`;
-  }
-  if (label) {
-    return label;
-  }
-  return idPart ?? "id:unknown";
+  return [label, idPart].filter(Boolean).join(" ") || "id:unknown";
 }
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
@@ -432,30 +416,18 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
-  const { venue, location } = msg;
-
-  if (venue) {
-    return {
-      latitude: venue.location.latitude,
-      longitude: venue.location.longitude,
-      accuracy: venue.location.horizontal_accuracy,
-      name: venue.title,
-      address: venue.address,
-      source: "place",
-      isLive: false,
-    };
+  const { venue } = msg;
+  const location = venue?.location ?? msg.location;
+  if (!location) {
+    return null;
   }
-
-  if (location) {
-    const isLive = typeof location.live_period === "number" && location.live_period > 0;
-    return {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.horizontal_accuracy,
-      source: isLive ? "live" : "pin",
-      isLive,
-    };
-  }
-
-  return null;
+  const isLive = !venue && typeof location.live_period === "number" && location.live_period > 0;
+  return {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.horizontal_accuracy,
+    ...(venue ? { name: venue.title, address: venue.address } : {}),
+    source: venue ? "place" : isLive ? "live" : "pin",
+    isLive,
+  };
 }

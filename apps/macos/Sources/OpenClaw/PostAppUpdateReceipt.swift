@@ -148,19 +148,16 @@ enum PostAppUpdateReceiptStore {
                 self.clear(defaults: defaults)
             }
             receipt = nil
-        } else if let pending = self.pending(
+        } else if var pending = self.pending(
             currentVersion: currentVersion,
             currentRuntimeBuildID: runtimeBuildID,
             defaults: defaults)
         {
             if pending.runtimeBuildID == nil, let runtimeBuildID {
-                var enriched = pending
-                enriched.runtimeBuildID = runtimeBuildID
-                self.persist(enriched, defaults: defaults)
-                receipt = enriched
-            } else {
-                receipt = pending
+                pending.runtimeBuildID = runtimeBuildID
+                self.persist(pending, defaults: defaults)
             }
+            receipt = pending
         } else if previousVersion != currentVersion ||
             (runtimeBuildID != nil && runtimeBuildID != previousBuildID) || setupRecovery ||
             previousReceipt?.coreUpdatePending == true

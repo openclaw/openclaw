@@ -159,6 +159,8 @@ The shared operator flow uses the following commands:
 
     OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
 
+    Providers may register an HTTP loopback callback without a port, as allowed by RFC 8252. OpenClaw retains that registration for the same `127.0.0.1`, `[::1]`, or `localhost` callback while sending the listener's port in authorization and token requests. Other callback components must match; non-loopback callbacks still require an exact match.
+
   </Step>
   <Step title="Use the manual fallback when needed">
     If the browser runs on another machine or cannot reach the printed loopback address, copy the returned code and pass it back to OpenClaw.
@@ -205,7 +207,7 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 | `clientCert` / `clientKey`  | mTLS client certificate and key paths                                                  |
 | `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server                                    |
 
-OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
+OpenClaw config uses `transport: "streamable-http"` as the current spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 
 Example:
 

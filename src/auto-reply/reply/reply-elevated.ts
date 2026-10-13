@@ -16,18 +16,6 @@ import {
 } from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
-function resolveElevatedAllowList(
-  allowFrom: AgentElevatedAllowFromConfig | undefined,
-  provider: string,
-  fallbackAllowFrom?: Array<string | number>,
-): Array<string | number> | undefined {
-  if (!allowFrom) {
-    return fallbackAllowFrom;
-  }
-  const value = allowFrom[provider];
-  return Array.isArray(value) ? value : fallbackAllowFrom;
-}
-
 function resolveAllowFromFormatter(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -38,7 +26,7 @@ function resolveAllowFromFormatter(params: {
     ? getChannelPlugin(normalizedProvider)?.config?.formatAllowFrom
     : undefined;
   if (!formatAllowFrom) {
-    return (values) => normalizeStringEntries(values);
+    return normalizeStringEntries;
   }
   return (values) =>
     formatAllowFrom({
@@ -57,16 +45,10 @@ function isApprovedElevatedSender(params: {
   allowFrom?: AgentElevatedAllowFromConfig;
   fallbackAllowFrom?: Array<string | number>;
 }): boolean {
-  const rawAllow = resolveElevatedAllowList(
-    params.allowFrom,
-    params.provider,
-    params.fallbackAllowFrom,
+  const configuredAllow = params.allowFrom?.[params.provider];
+  const allowTokens = normalizeStringEntries(
+    Array.isArray(configuredAllow) ? configuredAllow : params.fallbackAllowFrom,
   );
-  if (!rawAllow || rawAllow.length === 0) {
-    return false;
-  }
-
-  const allowTokens = normalizeStringEntries(rawAllow);
   if (allowTokens.length === 0) {
     return false;
   }
@@ -102,38 +84,27 @@ function isApprovedElevatedSender(params: {
     ...fieldTokens.e164,
   ]);
 
-  for (const entry of allowTokens) {
+  return allowTokens.some((entry) => {
     const explicitEntry = parseExplicitElevatedAllowEntry(entry);
     if (!explicitEntry) {
-      if (
-        matchesFormattedTokens({
-          formatAllowFrom: params.formatAllowFrom,
-          value: entry,
-          includeStripped: true,
-          tokens: senderIdentityTokens,
-        })
-      ) {
-        return true;
-      }
-      continue;
+      return matchesFormattedTokens({
+        formatAllowFrom: params.formatAllowFrom,
+        value: entry,
+        includeStripped: true,
+        tokens: senderIdentityTokens,
+      });
     }
     const { field, value } = explicitEntry;
     const tokens = fieldTokens[field];
-    const matches =
-      field === "name" || field === "username" || field === "tag"
-        ? matchesMutableTokens(value, tokens)
-        : matchesFormattedTokens({
-            formatAllowFrom: params.formatAllowFrom,
-            value,
-            includeStripped: field !== "e164",
-            tokens,
-          });
-    if (matches) {
-      return true;
-    }
-  }
-
-  return false;
+    return field === "name" || field === "username" || field === "tag"
+      ? matchesMutableTokens(value, tokens)
+      : matchesFormattedTokens({
+          formatAllowFrom: params.formatAllowFrom,
+          value,
+          includeStripped: field !== "e164",
+          tokens,
+        });
+  });
 }
 
 export function resolveElevatedPermissions(params: {
@@ -181,14 +152,15 @@ export function resolveElevatedPermissions(params: {
     provider: params.provider,
     accountId: params.ctx.AccountId,
   });
-  const globalAllowed = isApprovedElevatedSender({
-    provider: params.provider,
-    ctx: params.ctx,
-    formatAllowFrom,
-    allowFrom: globalConfig?.allowFrom,
-    fallbackAllowFrom,
-  });
-  if (!globalAllowed) {
+  const isAllowed = (allowFrom: AgentElevatedAllowFromConfig | undefined) =>
+    isApprovedElevatedSender({
+      provider: params.provider,
+      ctx: params.ctx,
+      formatAllowFrom,
+      allowFrom,
+      fallbackAllowFrom,
+    });
+  if (!isAllowed(globalConfig?.allowFrom)) {
     failures.push({
       gate: "allowFrom",
       key: `tools.elevated.allowFrom.${params.provider}`,
@@ -196,15 +168,7 @@ export function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const agentAllowed = agentConfig?.allowFrom
-    ? isApprovedElevatedSender({
-        provider: params.provider,
-        ctx: params.ctx,
-        formatAllowFrom,
-        allowFrom: agentConfig.allowFrom,
-        fallbackAllowFrom,
-      })
-    : true;
+  const agentAllowed = agentConfig?.allowFrom ? isAllowed(agentConfig.allowFrom) : true;
   if (!agentAllowed) {
     failures.push({
       gate: "allowFrom",

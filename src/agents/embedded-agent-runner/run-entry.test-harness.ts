@@ -1,5 +1,4 @@
 import { beforeEach, expect, vi } from "vitest";
-import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import {
   initialAttemptOptions,
   fallbackAttemptOptions,
@@ -13,16 +12,11 @@ const state = vi.hoisted(() => ({
     id: provider === "fallback-provider" ? "fallback-harness" : "primary-harness",
     contextEngineHostCapabilities: [],
   })),
-  discardedAttempts: [] as string[],
   finalizedAttempts: [] as string[],
 }));
 
+// mock-isolation: The entry fixture observes acceptance without opening the durable outbox.
 vi.mock("../harness/context-engine-turn-attempt.js", () => ({
-  discardContextEngineTurnAttemptIntent: vi.fn(
-    ({ facts }: { facts: ContextEngineTurnAttemptFacts }) => {
-      state.discardedAttempts.push(facts.sessionIdUsed);
-    },
-  ),
   finalizeAcceptedContextEngineTurn: vi.fn(async ({ facts }) => {
     state.finalizedAttempts.push(facts.sessionIdUsed);
   }),
@@ -45,7 +39,6 @@ export const { runEmbeddedAgentEntry } = await import("./run-entry.js");
 
 export function setupRunEntryTestState() {
   beforeEach(() => {
-    state.discardedAttempts.length = 0;
     state.finalizedAttempts.length = 0;
     state.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
     state.selectAgentHarness

@@ -17,10 +17,7 @@ import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 // matching email/lastGood/current OAuth profile instead of guessing broadly.
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
-  if (idx < 0) {
-    return "";
-  }
-  return profileId.slice(idx + 1);
+  return idx < 0 ? "" : profileId.slice(idx + 1);
 }
 
 function isEmailLike(value: string): boolean {
@@ -83,11 +80,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   }
 
   const emailLike = nonLegacy.filter((id) => isEmailLike(getProfileSuffix(id)));
-  if (emailLike.length === 1) {
-    return emailLike[0] ?? null;
-  }
-
-  return null;
+  return emailLike.length === 1 ? (emailLike[0] ?? null) : null;
 }
 
 /** Migrates config auth profile references away from a legacy OAuth default id. */

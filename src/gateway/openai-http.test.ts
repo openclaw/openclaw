@@ -53,6 +53,7 @@ import {
   emitIncompatibleAssistantReplacement,
   emitCompatibleAssistantReplacement,
   emitBufferedAssistantReplacement,
+  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseDataLines,
   readRawChatCompletionStream,
@@ -77,21 +78,6 @@ let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
-  const started = await startGatewayServerWithRetries({
-    port: await getGatewayTestPort(),
-    opts: {
-      host: "127.0.0.1",
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      openAiChatCompletionsEnabled: true,
-    },
-  });
-  enabledPort = started.port;
-  enabledServer = started.server;
-});
-
-afterAll(async () => {
-  await enabledServer?.close({ reason: "openai http enabled suite done" });
 });
 
 async function startSharedSecretServer(port: TestPortClaim, mode: "token" | "password") {
@@ -196,6 +182,24 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  beforeAll(async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openAiChatCompletionsEnabled: true,
+      },
+    });
+    enabledPort = started.port;
+    enabledServer = started.server;
+  });
+
+  afterAll(async () => {
+    await enabledServer?.close({ reason: "openai http enabled suite done" });
+  });
+
   registerOpenAiHttpUploadTests({
     getPort: () => enabledPort,
     postChatCompletions,
@@ -411,40 +415,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(agentCommandMock).not.toHaveBeenCalled();
     },
   );
-
-  it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
-    const started = await startGatewayServerWithRetries({
-      port: await getGatewayTestPort(),
-      opts: {
-        host: "127.0.0.1",
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        openAiChatCompletionsEnabled: true,
-      },
-    });
-    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
-    try {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
-        const admittedRunContext = {};
-        const onAdmittedRunContext = (opts as FirstAgentCommandOptions).onAdmittedRunContext;
-        expect(onAdmittedRunContext).toBeTypeOf("function");
-        await onAdmittedRunContext?.(admittedRunContext);
-        resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
-        return { payloads: [{ text: "hello" }] } as never;
-      });
-
-      const res = await postChatCompletions(started.port);
-
-      expect(res.status).toBe(200);
-      await res.text();
-      const context = resolveGatewayContext?.();
-      expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
-    } finally {
-      await started.server.close({ reason: "chat-completion resolver lifecycle test done" });
-    }
-    expect(resolveGatewayContext?.()).toBeUndefined();
-  });
 
   it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
     try {
@@ -1847,48 +1817,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
-    testState.gatewayAuth = {
-      mode: "token",
-      token: "secret",
-      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-    };
-    await withGatewayServer(
-      async ({ port }) => {
-        const headers = {
-          "content-type": "application/json",
-          authorization: "Bearer wrong",
-        };
-        const body = {
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        };
-
-        const first = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
-        expect(first.status).toBe(401);
-
-        const second = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        });
-        expect(second.status).toBe(429);
-        expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
-      },
-      {
-        serverOptions: {
-          host: "127.0.0.1",
-          controlUiEnabled: false,
-          openAiChatCompletionsEnabled: true,
-        },
-      },
-    );
-  });
-
   it.each([
     {
       name: "a split custom XML opener",
@@ -2130,6 +2058,25 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
     },
   );
+
+  it("keeps embedded late commentary append-only while the final answer streams", async () => {
+    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
+    const stream = await createOpenAiHttpTestClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Inspect the workspace and summarize it." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        content.push(choice.delta.content ?? "");
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
+    expect(finishReasons.at(-1)).toBe("stop");
+  });
 
   it.each(
     incompatibleReplacementCases.toSpliced(6, 0, {
@@ -3094,64 +3041,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(allContent).toBe("final answer");
   });
 
-  it.each([
-    {
-      name: "includes aggregate usage in the final stream chunk",
-      usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
-      lastCallUsage: undefined,
-      expected: {
-        prompt_tokens: 15,
-        completion_tokens: 5,
-        total_tokens: 20,
-        prompt_tokens_details: { cached_tokens: 3 },
-      },
-    },
-    {
-      name: "uses last-call usage when the aggregate is zero",
-      usage: { input: 0, output: 0, total: 0 },
-      lastCallUsage: { input: 55, output: 7, total: 62 },
-      expected: {
-        prompt_tokens: 55,
-        completion_tokens: 7,
-        total_tokens: 62,
-      },
-    },
-  ])("$name", async ({ usage, lastCallUsage, expected }) => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-      return {
-        payloads: [{ text: "hello" }],
-        meta: {
-          agentMeta: {
-            usage,
-            ...(lastCallUsage ? { lastCallUsage } : {}),
-          },
-        },
-      };
-    }) as never);
-
-    const res = await postChatCompletions(
-      port,
-      chatRequest({ stream: true, stream_options: { include_usage: true } }),
-    );
-    expect(res.status).toBe(200);
-
-    const text = await res.text();
-    const data = parseSseDataLines(text);
-    expect(data[data.length - 1]).toBe("[DONE]");
-    const jsonChunks = data
-      .filter((d) => d !== "[DONE]")
-      .map((d) => JSON.parse(d) as Record<string, unknown>);
-
-    const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual(expected);
-    expect(usageChunk?.choices).toStrictEqual([]);
-  });
-
   it("keeps aggregate-only usage total in final stream usage chunk", async () => {
     const port = enabledPort;
     agentCommandMock.mockClear();
@@ -3327,6 +3216,196 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
   });
 
+  it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
+    const port = enabledPort;
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const agentAborted = createDeferred();
+    const finishAgentCleanup = createDeferred();
+    const cleanupAdmissionClosed = createDeferred<boolean>();
+    let serverAbortSignal: AbortSignal | undefined;
+
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+      const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      serverAbortSignal = signal;
+      if (signal?.aborted) {
+        agentAborted.resolve();
+      } else {
+        signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
+      }
+      await agentAborted.promise;
+      cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
+      await finishAgentCleanup.promise;
+      return undefined;
+    });
+
+    const clientReq = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: "/v1/chat/completions",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+    clientReq.on("error", () => {});
+    clientReq.end(
+      JSON.stringify({
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    });
+
+    try {
+      clientReq.destroy();
+
+      await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
+        timeout: 5_000,
+        interval: 50,
+      });
+      expect(await cleanupAdmissionClosed.promise).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
+    } finally {
+      finishAgentCleanup.resolve();
+    }
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
+      timeout: 5_000,
+      interval: 50,
+    });
+  });
+
+  it(
+    "aborts agent command when non-streaming client disconnects",
+    { timeout: 15_000 },
+    async () => {
+      const port = enabledPort;
+      let serverAbortSignal: AbortSignal | undefined;
+
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(
+        (opts: unknown) =>
+          new Promise<undefined>((resolve) => {
+            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+            serverAbortSignal = signal;
+            if (signal?.aborted) {
+              resolve(undefined);
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          }),
+      );
+
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: "/v1/chat/completions",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer secret",
+        },
+      });
+      clientReq.on("error", () => {});
+      clientReq.end(
+        JSON.stringify({
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      });
+
+      clientReq.destroy();
+
+      await vi.waitFor(
+        () => {
+          expect(serverAbortSignal?.aborted).toBe(true);
+        },
+        { timeout: 5_000, interval: 50 },
+      );
+    },
+  );
+  // Keep this last: it verifies shutdown of the shared server.
+  it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+        const admittedRunContext = {};
+        const onAdmittedRunContext = (opts as FirstAgentCommandOptions).onAdmittedRunContext;
+        expect(onAdmittedRunContext).toBeTypeOf("function");
+        await onAdmittedRunContext?.(admittedRunContext);
+        resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+        return { payloads: [{ text: "hello" }] } as never;
+      });
+
+      const res = await postChatCompletions(enabledPort);
+
+      expect(res.status).toBe(200);
+      await res.text();
+      const context = resolveGatewayContext?.();
+      expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+    } finally {
+      await enabledServer.close({ reason: "chat-completion resolver lifecycle test done" });
+    }
+    expect(resolveGatewayContext?.()).toBeUndefined();
+  });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+// These configurations own their Gateway after the shared server has closed.
+describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
+  it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+    };
+    await withGatewayServer(
+      async ({ port }) => {
+        const headers = {
+          "content-type": "application/json",
+          authorization: "Bearer wrong",
+        };
+        const body = {
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        };
+
+        const first = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        expect(first.status).toBe(401);
+
+        const second = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        expect(second.status).toBe(429);
+        expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
+      },
+      {
+        serverOptions: {
+          host: "127.0.0.1",
+          controlUiEnabled: false,
+          openAiChatCompletionsEnabled: true,
+        },
+      },
+    );
+  });
+
   it.each(["trusted-proxy", "token"] as const)(
     "preserves %s authority when mutating another operator session",
     async (authMethod) => {
@@ -3491,124 +3570,4 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     },
   );
-
-  it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
-    const port = enabledPort;
-    const idleRootCount = getActiveGatewayRootWorkCount();
-    const agentAborted = createDeferred();
-    const finishAgentCleanup = createDeferred();
-    const cleanupAdmissionClosed = createDeferred<boolean>();
-    let serverAbortSignal: AbortSignal | undefined;
-
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
-      const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-      serverAbortSignal = signal;
-      if (signal?.aborted) {
-        agentAborted.resolve();
-      } else {
-        signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
-      }
-      await agentAborted.promise;
-      cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
-      await finishAgentCleanup.promise;
-      return undefined;
-    });
-
-    const clientReq = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: "/v1/chat/completions",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer secret",
-      },
-    });
-    clientReq.on("error", () => {});
-    clientReq.end(
-      JSON.stringify({
-        stream: true,
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      }),
-    );
-
-    await vi.waitFor(() => {
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    });
-
-    try {
-      clientReq.destroy();
-
-      await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
-        timeout: 5_000,
-        interval: 50,
-      });
-      expect(await cleanupAdmissionClosed.promise).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-    } finally {
-      finishAgentCleanup.resolve();
-    }
-
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
-      timeout: 5_000,
-      interval: 50,
-    });
-  });
-
-  it(
-    "aborts agent command when non-streaming client disconnects",
-    { timeout: 15_000 },
-    async () => {
-      const port = enabledPort;
-      let serverAbortSignal: AbortSignal | undefined;
-
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(
-        (opts: unknown) =>
-          new Promise<undefined>((resolve) => {
-            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-            serverAbortSignal = signal;
-            if (signal?.aborted) {
-              resolve(undefined);
-              return;
-            }
-            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-          }),
-      );
-
-      const clientReq = http.request({
-        hostname: "127.0.0.1",
-        port,
-        path: "/v1/chat/completions",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer secret",
-        },
-      });
-      clientReq.on("error", () => {});
-      clientReq.end(
-        JSON.stringify({
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        }),
-      );
-
-      await vi.waitFor(() => {
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      });
-
-      clientReq.destroy();
-
-      await vi.waitFor(
-        () => {
-          expect(serverAbortSignal?.aborted).toBe(true);
-        },
-        { timeout: 5_000, interval: 50 },
-      );
-    },
-  );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

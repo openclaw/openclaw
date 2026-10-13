@@ -1,8 +1,8 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { ensureOpenDmPolicyAllowFromWildcard } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
+import { iterateDoctorChannelAccounts } from "./allowlist.js";
 
 export function collectOpenPolicyAllowFromWarnings(params: {
   changes: string[];
@@ -39,32 +39,18 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     if (capabilities.openDmRequiresAllowFromWildcard === false) {
       continue;
     }
-    const mode = capabilities.dmAllowFromMode;
-    ensureOpenDmPolicyAllowFromWildcard({
-      entry: channelConfig,
-      mode,
-      pathPrefix: `channels.${channelName}`,
-      changes,
-    });
-
-    const accounts = asNullableRecord(channelConfig.accounts);
-    if (!accounts) {
-      continue;
-    }
-    for (const [accountName, accountConfig] of Object.entries(accounts)) {
-      if (accountConfig && typeof accountConfig === "object") {
-        ensureOpenDmPolicyAllowFromWildcard({
-          entry: accountConfig as Record<string, unknown>,
-          mode,
-          pathPrefix: `channels.${channelName}.accounts.${accountName}`,
-          changes,
-        });
-      }
+    for (const { account, prefix } of iterateDoctorChannelAccounts(
+      channelConfig,
+      `channels.${channelName}`,
+    )) {
+      ensureOpenDmPolicyAllowFromWildcard({
+        entry: account,
+        mode: capabilities.dmAllowFromMode,
+        pathPrefix: prefix,
+        changes,
+      });
     }
   }
 
-  if (changes.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-  return { config: next, changes };
+  return { config: changes.length > 0 ? next : cfg, changes };
 }

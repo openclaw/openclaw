@@ -286,7 +286,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // these as relative LPT weights, not whole-parent admission.
   ["src/agents/worktrees/service.gc.test.ts", 41],
   ["src/agents/worktrees/service.test.ts", 43],
-  ["src/agents/worktrees/service.configured-root.test.ts", 24],
   ["src/agents/worktrees/service.input-files.test.ts", 21],
   ["src/agents/worktrees/service.canonical-paths.test.ts", 17],
   ["src/agents/worktrees/service.remove-lease.test.ts", 16],
@@ -303,7 +302,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],
   ["src/agents/worktrees/service.capacity.test.ts", 19],
   ["src/agents/worktrees/service.diagnostics.test.ts", 18],
-  ["src/agents/worktrees/service.naming.test.ts", 10],
   ["src/agents/worktrees/service.provisioned.test.ts", 24],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
@@ -312,6 +310,13 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/infra/sqlite-snapshot.test.ts", 24],
   ["src/infra/session-cost-usage.test.ts", 10],
   ["src/infra/state-migrations.audit-logs.test.ts", 7],
+  // Serial case-cost sums from PR run 37678385185, rounded up. These process
+  // suites were packed together at the default weight; imports/setup remain separate.
+  ["src/cli/local-state-owner.process.test.ts", 296],
+  ["src/cli/update-cli.candidate-activation.test.ts", 149],
+  ["src/cli/update-cli.git-service.test.ts", 116],
+  ["src/cli/update-cli.target-schema.test.ts", 186],
+  ["test/scripts/pr-worktree-provision.test.ts", 206],
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],

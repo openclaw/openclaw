@@ -11,6 +11,11 @@ import {
   type CodexCatalogDecodeRoute,
 } from "./client-message-frames.js";
 import { isJsonObject, isRpcResponse } from "./protocol.js";
+import type { CodexRequestAttempt } from "./request-attempt.js";
+
+export type CodexClientRequestAttempt = CodexRequestAttempt & {
+  catalogProjection?: { preview?: CodexCatalogPreviewCache; remainingRows?: number };
+};
 
 export type CodexCatalogDecodeInput = {
   bytes: Uint8Array<ArrayBuffer>;

@@ -1,8 +1,12 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import {
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { isJsonObject } from "./app-server/protocol.js";
 import {
@@ -76,9 +80,14 @@ export async function handleCodexDiagnosticsFeedback(
   if (parsed.action === "cancel") {
     return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
   }
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return { text: targets };
+  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
+    return {
+      text: "Cannot send Codex diagnostics because this command did not include a stable session identity.",
+    };
+  }
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  if (targets.length === 0) {
+    return { text: NO_DIAGNOSTICS_THREAD };
   }
   if (ctx.diagnosticsUploadApproved === true) {
     return {
@@ -201,7 +210,16 @@ async function confirmCodexDiagnosticsFeedback(
     return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
   }
   const currentTargets = pending.privateRouted
-    ? resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
+    ? (
+        await Promise.all(
+          pending.targets.map(async (target) => {
+            const binding = await deps.bindingStore.readAsync(target.identity);
+            return binding?.threadId
+              ? [await resolveCodexDiagnosticsTarget(target, binding, ctx.config)]
+              : [];
+          }),
+        )
+      ).flat()
     : await resolveCodexDiagnosticsTargets(deps, ctx);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
@@ -339,17 +357,6 @@ function consumeCodexDiagnosticsConfirmation(
   return pending;
 }
 
-async function requireCodexDiagnosticsTargets(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-): Promise<CodexDiagnosticsTarget[] | string> {
-  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
-    return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
-  }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
-  return targets.length > 0 ? targets : NO_DIAGNOSTICS_THREAD;
-}
-
 async function hasAnyCodexDiagnosticsIdentity(ctx: PluginCommandContext): Promise<boolean> {
   if (await resolveControlTarget(ctx)) {
     return true;
@@ -410,12 +417,12 @@ async function resolveCodexDiagnosticsTargets(
       continue;
     }
     seenBindingKeys.add(key);
-    const binding = deps.bindingStore.read(candidate.identity);
+    const binding = await deps.bindingStore.readAsync(candidate.identity);
     if (!binding?.threadId || seenThreadIds.has(binding.threadId)) {
       continue;
     }
     seenThreadIds.add(binding.threadId);
-    targets.push(resolveCodexDiagnosticsTarget(candidate, binding, ctx.config));
+    targets.push(await resolveCodexDiagnosticsTarget(candidate, binding, ctx.config));
   }
   return targets;
 }
@@ -425,18 +432,32 @@ function resolvePendingCodexDiagnosticsTargets(
   targets: readonly CodexDiagnosticsTarget[],
   config?: PluginCommandContext["config"],
 ): CodexDiagnosticsTarget[] {
-  const resolved: CodexDiagnosticsTarget[] = [];
-  for (const target of targets) {
+  return targets.flatMap((target) => {
     const binding = deps.bindingStore.read(target.identity);
     if (!binding?.threadId) {
-      continue;
+      return [];
     }
-    resolved.push(resolveCodexDiagnosticsTarget(target, binding, config));
-  }
-  return resolved;
+    // Diagnostics upload is an external disclosure; resolve current auth at its effect boundary.
+    const authProfileId =
+      binding.connectionScope === "supervision"
+        ? undefined
+        : binding.authProfileId?.trim() ||
+          resolveCodexAppServerAuthProfileId({
+            authProfileId: binding.authProfileId,
+            config,
+            store: ensureAuthProfileStore(target.agentDir, {
+              profileId: binding.authProfileId,
+              allowKeychainPrompt: false,
+              config,
+              externalCliProviderIds: ["openai"],
+              ...(binding.authProfileId ? { externalCliProfileIds: [binding.authProfileId] } : {}),
+            }),
+          });
+    return [createCodexDiagnosticsTarget(target, binding, authProfileId)];
+  });
 }
 
-function resolveCodexDiagnosticsTarget(
+async function resolveCodexDiagnosticsTarget(
   target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
   binding: Pick<
     CodexAppServerThreadBinding,
@@ -447,6 +468,22 @@ function resolveCodexDiagnosticsTarget(
     | "authProfileId"
   >,
   config?: PluginCommandContext["config"],
+): Promise<CodexDiagnosticsTarget> {
+  const authProfileId =
+    binding.connectionScope === "supervision"
+      ? undefined
+      : await resolveCodexAppServerAuthProfileIdForAgent({
+          authProfileId: binding.authProfileId,
+          agentDir: target.agentDir,
+          config,
+        });
+  return createCodexDiagnosticsTarget(target, binding, authProfileId);
+}
+
+function createCodexDiagnosticsTarget(
+  target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
+  binding: Parameters<typeof resolveCodexDiagnosticsTarget>[1],
+  authProfileId: string | undefined,
 ): CodexDiagnosticsTarget {
   // Confirmation re-resolution receives the previous target. Rebuild the candidate so a
   // stale private connection scope or auth profile can never survive a binding change.
@@ -470,11 +507,6 @@ function resolveCodexDiagnosticsTarget(
       pendingSupervisionBranch: binding.pendingSupervisionBranch,
     };
   }
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-    authProfileId: binding.authProfileId,
-    agentDir: target.agentDir,
-    config,
-  });
   return {
     ...candidate,
     threadId: binding.threadId,

@@ -22,12 +22,10 @@ import { getBrowserStateRuntime } from "../browser-runtime-state.js";
 import type { closeTrackedCdpTarget } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
 import { readColdNativeActivity } from "./session-tab-process-state.js";
 import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
-import {
-  browserSessionTabNativeIdentity,
-  ensureBrowserSessionTabStoreReady,
-} from "./session-tab-store.js";
+import { ensureBrowserSessionTabStoreReady } from "./session-tab-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cdpMocks = vi.hoisted(() => ({

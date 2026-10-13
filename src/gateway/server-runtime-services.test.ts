@@ -3,6 +3,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { notifyOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
+import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   hasGatewayContextOwner,
@@ -55,6 +61,7 @@ describe("server-runtime-services", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
+    clearRuntimeConfigSnapshot();
   });
 
   it("starts channel health without activating scheduled services", () => {
@@ -114,15 +121,13 @@ describe("server-runtime-services", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
   });
 
-  it("reports cron-disabled automatic skill collection reviews", () => {
+  it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
     const warn = activateCronOff({
       agents: { defaults: { heartbeat: { every: "0m" } } },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     });
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("scheduled skill collection reviews are disabled"),
-    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
@@ -205,43 +210,52 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("waits for active startup recovery before its stop handle settles", async () => {
-    vi.useFakeTimers();
-    let resolveRecovery: (() => void) | undefined;
-    hoisted.recoverPendingDeliveries.mockImplementationOnce(async () => {
-      await new Promise<void>((resolve) => {
-        resolveRecovery = resolve;
+  it.each(["neither", "legacy", "recovery"] as const)(
+    "joins legacy diagnostics and current recovery before stop when %s fails",
+    async (failing) => {
+      vi.useFakeTimers();
+      const legacy = createDeferredCore<number>();
+      const recovery = createDeferredCore();
+      hoisted.countPendingDeliveryQueueEntries.mockReturnValueOnce(legacy.promise);
+      hoisted.recoverPendingDeliveries.mockImplementationOnce(async () => {
+        await recovery.promise;
+        return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
       });
-      return {
-        recovered: 0,
-        failed: 0,
-        skippedMaxRetries: 0,
-        deferredBackoff: 0,
-      };
-    });
-
-    const { services } = activateScheduledServicesForTest();
-    await vi.dynamicImportSettled();
-    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
-    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
-
-    let stopped = false;
-    const stopPromise = services.stopDeliveryRecovery().then(() => {
-      stopped = true;
-    });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    if (!resolveRecovery) {
-      throw new Error("Expected outbound startup recovery resolver to be initialized");
-    }
-    resolveRecovery();
-    await stopPromise;
-    expect(stopped).toBe(true);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    services.heartbeatRunner.stop();
-  });
+      const { services, log } = activateScheduledServicesForTest();
+      let stopPromise: Promise<void> | undefined;
+      try {
+        await vi.dynamicImportSettled();
+        expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+        expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+        const failure = new Error(`${failing} failed`);
+        if (failing === "legacy") {
+          legacy.reject(failure);
+        } else if (failing === "recovery") {
+          recovery.reject(failure);
+        }
+        let stopped = false;
+        stopPromise = services.stopDeliveryRecovery().then(() => {
+          stopped = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        legacy.resolve(0);
+        recovery.resolve();
+        await stopPromise;
+        expect(stopped).toBe(true);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (failing !== "neither") {
+          expect(log.error).toHaveBeenCalledWith(`Delivery recovery failed: ${String(failure)}`);
+        }
+      } finally {
+        legacy.resolve(0);
+        recovery.resolve();
+        await (stopPromise ?? services.stopDeliveryRecovery());
+        services.heartbeatRunner.stop();
+      }
+    },
+  );
 
   it("warns but holds shutdown until outbound recovery settles", async () => {
     vi.useFakeTimers();
@@ -254,6 +268,8 @@ describe("server-runtime-services", () => {
     );
     const log = createLog();
     const { services } = activateScheduledServicesForTest({ log });
+    await vi.dynamicImportSettled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
@@ -463,7 +479,7 @@ describe("server-runtime-services", () => {
       new Error("database busy"),
     );
     const log = createLog();
-    activateScheduledServicesForTest({ log });
+    const { services } = activateScheduledServicesForTest({ log });
 
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
@@ -474,14 +490,15 @@ describe("server-runtime-services", () => {
         "Session delivery recovery failed: Error: database busy",
       ),
     );
+    services.heartbeatRunner.stop();
   });
 
-  it("diagnoses legacy state once while keeping current delivery recovery running", async () => {
+  it("diagnoses legacy state once and leaves an empty outbound queue idle until enqueue", async () => {
     vi.useFakeTimers();
     const log = createLog();
     const recoveryLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     log.child.mockReturnValue(recoveryLog);
-    hoisted.countPendingDeliveryQueueEntries.mockReturnValue(2);
+    hoisted.countPendingDeliveryQueueEntries.mockResolvedValue(2);
     const { services } = activateScheduledServicesForTest({ log });
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
@@ -489,8 +506,19 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(hoisted.countPendingDeliveryQueueEntries).toHaveBeenCalledOnce();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
-    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+    notifyOutboundDeliveryEnqueued(`${captureDeliveryQueueStateContext().stateDir}/other-state`);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     await services.stopDeliveryRecovery();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     services.heartbeatRunner.stop();
   });
 
@@ -503,11 +531,11 @@ describe("server-runtime-services", () => {
       throw new Error("Expected outbound recovery to start");
     }
     hoisted.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
-      await params.onDeliveryAttempt?.();
+      await params.withDirectAdapterHandoff?.(async () => []);
       return [];
     });
     const denial = new Error("conversation route reassigned");
-    hoisted.assertQueuedConversationDeliveryAttemptAuthorized.mockImplementationOnce(() => {
+    hoisted.withAuthorizedQueuedConversationDelivery.mockImplementationOnce(() => {
       throw denial;
     });
 
@@ -526,13 +554,14 @@ describe("server-runtime-services", () => {
       }),
     ).rejects.toBe(denial);
 
-    expect(hoisted.assertQueuedConversationDeliveryAttemptAuthorized).toHaveBeenCalledWith(
+    expect(hoisted.withAuthorizedQueuedConversationDelivery).toHaveBeenCalledWith(
       expect.objectContaining({
         readCurrentConfig: expect.any(Function),
         operationId: "operation-recovery",
         routeFingerprint: "route-recovery",
       }),
       expect.objectContaining({ agentId: "main", storePath: "/tmp/agent.sqlite" }),
+      expect.any(Function),
     );
     services.heartbeatRunner.stop();
   });
@@ -549,6 +578,8 @@ describe("server-runtime-services", () => {
     });
 
     try {
+      await vi.dynamicImportSettled();
+      notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledWith(
@@ -578,6 +609,8 @@ describe("server-runtime-services", () => {
         }),
     );
     const { services } = activateScheduledServicesForTest();
+    await vi.dynamicImportSettled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
 
     await vi.advanceTimersByTimeAsync(1_250);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -585,6 +618,9 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(3_750);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
+    }
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
@@ -599,16 +635,23 @@ describe("server-runtime-services", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+    await services.stopDeliveryRecovery();
     services.heartbeatRunner.stop();
   });
 
   it("coalesces late outbound recovery and stops retries with the gateway lifecycle", async () => {
     vi.useFakeTimers();
+    hoisted.drainPendingDeliveries.mockImplementation(async (options) => {
+      options.onPending?.();
+    });
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const { services } = activateScheduledServicesForTest({ scheduler });
     try {
       await vi.dynamicImportSettled();
+      notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
       await clock.advanceBy(5_000);
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
 
@@ -632,6 +675,8 @@ describe("server-runtime-services", () => {
   it("skips outbound retry ticks while gateway work admission is suspended", async () => {
     vi.useFakeTimers();
     const { services } = activateScheduledServicesForTest();
+    await vi.dynamicImportSettled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
     await vi.advanceTimersByTimeAsync(1_250);
 
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -683,37 +728,6 @@ describe("server-runtime-services", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(activeRootCounts).toEqual([1]);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
-  it("rechecks request work after joining the admitted root set", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const run = vi.fn(async () => undefined);
-    const isBusy = vi
-      .fn()
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
-
-    scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 25,
-      retryDelayMs: 50,
-      isClosing: () => false,
-      isBusy,
-      run,
-      log: createLog(),
-      errorMessage: "idle task failed",
-    });
-
-    await clock.advanceBy(25);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(49);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(1);
-    expect(run).toHaveBeenCalledOnce();
-    expect(isBusy).toHaveBeenCalledTimes(4);
   });
 
   it.each(["stopPeriodicTasks", "skillUsageCleanup"] as const)(
@@ -780,6 +794,7 @@ function activateScheduledServicesForTest(
 ) {
   const log = overrides.log ?? createLog();
   const cfgAtStart = overrides.cfgAtStart ?? ({} as never);
+  setRuntimeConfigSnapshot(cfgAtStart, cfgAtStart);
   const services = activateGatewayScheduledServices({
     scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     minimalTestGateway: false,

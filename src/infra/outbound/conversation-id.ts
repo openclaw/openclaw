@@ -20,13 +20,9 @@ export function resolveConversationIdFromTargets(params: {
     if (!target) {
       continue;
     }
-    const lowered = target.toLowerCase();
-    const prefix = ["channel:", "conversation:", "group:", "room:", "dm:"].find((candidate) =>
-      lowered.startsWith(candidate),
+    const explicitConversationId = normalizeOptionalString(
+      /^(?:channel|conversation|group|room|dm):(.*)$/is.exec(target)?.[1],
     );
-    const explicitConversationId = prefix
-      ? normalizeOptionalString(target.slice(prefix.length))
-      : undefined;
     if (explicitConversationId) {
       return explicitConversationId;
     }
@@ -35,12 +31,9 @@ export function resolveConversationIdFromTargets(params: {
       // prefixes above are safe to collapse into a portable conversation id.
       continue;
     }
-    const mentionMatch = target.match(/^<#(\d+)>$/);
-    if (mentionMatch?.[1]) {
-      return mentionMatch[1];
-    }
-    if (/^\d{6,}$/.test(target)) {
-      return target;
+    const numericIdMatch = /^(?:<#(\d+)>|(\d{6,}))$/.exec(target);
+    if (numericIdMatch) {
+      return numericIdMatch[1] ?? numericIdMatch[2];
     }
   }
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -33,50 +34,45 @@ export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
 
 async function retainWorktreeTemplate(
   env: NodeJS.ProcessEnv,
-  record: WorktreeTemplateRecord,
+  selection:
+    | WorktreeTemplateRecord
+    | Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend">,
   assertCurrent: () => void,
   unpublish?: true,
-): Promise<PreparedWorktreeTemplate> {
+): Promise<PreparedWorktreeTemplate | undefined> {
   const context = captureOpenClawStateWorkerContext({ env });
   const key = randomUUID();
-  const retained: PreparedWorktreeTemplate = {
-    ...record,
-    release: async (outcome) => {
-      if (!hasWorktreeUnknownOutcome(outcome)) {
-        try {
-          await releaseTemplateReaderAsync(env, key, () => context.admission.assertCurrent());
-        } catch (cleanupError) {
-          if (outcome !== undefined) {
-            throw new AggregateError(
-              [outcome, cleanupError],
-              "Worktree template operation and reader release failed",
-              { cause: cleanupError },
-            );
-          }
-          throw cleanupError;
+  const owner = {
+    pid: process.pid,
+    host: hostname(),
+    startedAt: getFileLockProcessStartTime(process.pid, env),
+    processNamespace: readGatewayLockProcessNamespace(),
+  };
+  const release = async (outcome?: unknown) => {
+    if (!hasWorktreeUnknownOutcome(outcome)) {
+      try {
+        await releaseTemplateReaderAsync(env, key, () => context.admission.assertCurrent());
+      } catch (cleanupError) {
+        if (outcome !== undefined) {
+          throw new AggregateError(
+            [outcome, cleanupError],
+            "Worktree template operation and reader release failed",
+            { cause: cleanupError },
+          );
         }
+        throw cleanupError;
       }
-    },
+    }
   };
   try {
-    await retainTemplateReaderAsync(
+    const record = await retainTemplateReaderAsync(
       env,
-      {
-        id: record.id,
-        unpublish,
-        key,
-        owner: {
-          pid: process.pid,
-          host: hostname(),
-          startedAt: getFileLockProcessStartTime(process.pid, env),
-          processNamespace: readGatewayLockProcessNamespace(),
-        },
-      },
+      { key, owner, ...("id" in selection ? { id: selection.id, unpublish } : { selection }) },
       assertCurrent,
     );
-    return retained;
+    return record ? { ...record, release } : undefined;
   } catch (error) {
-    await retained.release(error);
+    await release(error);
     throw error;
   }
 }
@@ -86,12 +82,15 @@ async function retireWorktreeTemplate(
   env: NodeJS.ProcessEnv,
   record: WorktreeTemplateRecord,
   options: WorktreeFilesystemOptions,
-): Promise<void> {
+): Promise<boolean> {
   const assertCurrent = () => {
     options.signal?.throwIfAborted();
     options.commitGuard();
   };
   const retained = await retainWorktreeTemplate(env, record, assertCurrent, true);
+  if (!retained) {
+    return false;
+  }
   let outcome: unknown;
   try {
     assertCurrent();
@@ -120,6 +119,7 @@ async function retireWorktreeTemplate(
       await fs.rm(record.path, { recursive: true, force: true });
     }
     await deleteTemplateAsync(env, record.id, assertCurrent);
+    return true;
   } catch (error) {
     outcome = error;
     throw error;
@@ -190,6 +190,19 @@ export async function prepareWorktreeTemplate(params: {
 }): Promise<PreparedWorktreeTemplate | undefined> {
   let retained: PreparedWorktreeTemplate | undefined;
   try {
+    const assertCallerCurrent = () => {
+      params.options.signal?.throwIfAborted();
+      params.options.commitGuard();
+    };
+    retained = await retainWorktreeTemplate(
+      params.env,
+      { cacheKey: params.cacheKey, contentKey: params.contentKey, backend: params.backend },
+      assertCallerCurrent,
+    );
+    if (retained) {
+      setWorktreePreparationTemplate("warm", { reason: "ready" });
+      return retained;
+    }
     return await withWorktreeMutationLease(
       { env: params.env, ...params.options, id: `template:${params.cacheKey}` },
       async (options) => {
@@ -204,25 +217,47 @@ export async function prepareWorktreeTemplate(params: {
           existing.contentKey === params.contentKey &&
           existing.backend === params.backend
         ) {
-          retained = await retainWorktreeTemplate(params.env, existing, assertCurrent, true);
+          // A ready generation with readers is immutable until they settle. Reuse
+          // that admission instead of rescanning the same tree for every clone.
+          retained = await retainWorktreeTemplate(
+            params.env,
+            existing,
+            assertCurrent,
+            hasReaders ? undefined : true,
+          );
+          if (!retained) {
+            return undefined;
+          }
           if (
-            (await worktreePathExists(existing.path)) &&
-            (await params.validate(existing, options))
+            hasReaders ||
+            ((await worktreePathExists(existing.path)) &&
+              (await params.validate(existing, options)))
           ) {
-            setWorktreePreparationTemplate("warm");
-            await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            setWorktreePreparationTemplate("warm", { reason: "ready" });
+            if (!hasReaders) {
+              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            }
             return retained;
           }
           await retained.release();
           retained = undefined;
         }
         if (params.reuseOnly || hasReaders) {
+          setWorktreePreparationTemplate("unavailable", {
+            reason: hasReaders
+              ? existing?.status === "preparing"
+                ? "template-building"
+                : "stale-template-in-use"
+              : existing
+                ? "template-stale"
+                : "template-missing",
+          });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold");
+        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
         await params.requireSpace();
-        if (existing) {
-          await retireWorktreeTemplate(params.env, existing, options);
+        if (existing && !(await retireWorktreeTemplate(params.env, existing, options))) {
+          return undefined;
         }
         const id = randomUUID();
         const directory = path.join(params.worktreeRoot, WORKTREE_TEMPLATE_DIRECTORY);
@@ -242,15 +277,30 @@ export async function prepareWorktreeTemplate(params: {
         };
         await reserveTemplateAsync(params.env, record, assertCurrent);
         retained = await retainWorktreeTemplate(params.env, record, assertCurrent);
+        if (!retained) {
+          throw new Error("Worktree template builder lost its reader custody");
+        }
         assertCurrent();
         await fs.mkdir(directory, { recursive: true });
+        setWorktreePreparationTemplate("cold", { reason: "template-build" });
         await params.prepare(record, options);
         await markTemplateReadyAsync(params.env, id, params.now(), assertCurrent);
+        setWorktreePreparationTemplate("cold", { reason: "ready" });
         return { ...retained, status: "ready" };
       },
     );
   } catch (error) {
     await retained?.release(error);
+    if (
+      params.options.signal?.aborted &&
+      !(error instanceof OpenClawStateLeaseError) &&
+      !hasWorktreeUnknownOutcome(error)
+    ) {
+      throw new OpenClawStateLeaseError("managed worktree template operation was aborted", {
+        code: "OPENCLAW_STATE_LEASE_ABORTED",
+        cause: error,
+      });
+    }
     throw error;
   }
 }

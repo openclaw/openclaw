@@ -8,11 +8,7 @@ import {
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import {
-  appendSessionResults,
-  preserveCurrentSessionRow,
-  reconcileRosterPresentationMetadata,
-} from "./reconcile.ts";
+import { appendSessionResults, preserveCurrentSessionRow } from "./reconcile.ts";
 import type {
   SessionGateway,
   SessionListOptions,
@@ -122,12 +118,23 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       "key" | "agentId" | "controlOwnerSessionKey" | "parentSessionKey" | "spawnedBy"
     >,
     sourceListScope?: SessionListScope,
+    observedReadRevision?: number,
   ) => {
     const matches = sessionListEventMatcher({ agentId, session: row });
     const sourceKey = sourceListScope && sessionListQueryKey(sourceListScope);
     // Adopting a query's accepted row into the primary roster cannot make
     // that supplying query stale. Other membership projections still refresh.
-    scheduleManagedLists((entry) => matches(entry.query, entry.snapshot.result), sourceKey);
+    scheduleManagedLists(
+      (entry) =>
+        // A list already covers metadata requested before it; real events
+        // and later observations still retire its pages and schedule a fresh read.
+        !(
+          (entry.pending || entry.snapshot.readSucceeded === true) &&
+          observedReadRevision !== undefined &&
+          entry.readRevision >= observedReadRevision
+        ) && matches(entry.query, entry.snapshot.result),
+      sourceKey,
+    );
   };
 
   const refreshManagedList = createSessionManagedListRefresh(host, {
@@ -189,15 +196,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const mergeWithCurrent =
         !currentState.resultCached && append && typeof requestOptions.offset === "number";
       const currentResult = currentState.resultCached ? null : currentState.result;
-      const presented = reconcileRosterPresentationMetadata(result, currentResult);
-      observations.inherit(presented, result, currentResult, requestOptions.agentId);
-      const observed = observations.accept(
-        presented,
-        currentState.result,
-        null,
-        requestOptions.agentId,
-        currentState.agentId,
-      );
+      const observed = observations.accept(result, currentState, null, requestOptions.agentId);
       let nextResult =
         observed && mergeWithCurrent && currentResult
           ? appendSessionResults(currentResult, observed)
@@ -524,7 +523,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         scope,
         lists,
         affectsPrimary: matches({ agentId: lastListOptions.agentId }),
-        ...observations.captureEventDelivery(scope, revision),
+        ...observations.captureEventDelivery(scope),
       };
     },
     primaryList: () => primaryList,

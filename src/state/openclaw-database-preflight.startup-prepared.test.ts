@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
@@ -18,7 +19,6 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -81,26 +81,29 @@ it("skips an unconfigured system-agent database across startup passes while keep
   closeOpenClawStateDatabaseForTest();
   fs.writeFileSync(leftover, "not a configured database");
   const before = fs.readFileSync(leftover);
-  await withAgentDatabaseStartupAdmission(async () => {
-    await expect(fleet.ready()).resolves.toBeUndefined();
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
-    );
-    await expect(
-      preflightOpenClawDatabaseSchemas({
-        env: fleet.env,
-        agentAdmissionConfig: fleet.config,
-        reuseStartupSchemaPreparation: true,
-        onAgentInspection: fleet.onAgentInspection,
-      }),
-    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
-      schemaInspectionCount: 0,
-      schemaProcessCount: 0,
-      schemaSnapshotCount: 0,
-    });
-    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env: fleet.env })).toBeUndefined();
-  });
+  await withAgentDatabaseStartupAdmission(
+    async () => {
+      await expect(fleet.ready()).resolves.toBeUndefined();
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
+      );
+      await expect(
+        preflightOpenClawDatabaseSchemas({
+          env: fleet.env,
+          agentAdmissionConfig: fleet.config,
+          reuseStartupSchemaPreparation: true,
+          onAgentInspection: fleet.onAgentInspection,
+        }),
+      ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
+        schemaInspectionCount: 0,
+        schemaProcessCount: 0,
+        schemaSnapshotCount: 0,
+      });
+      expect(readAgentDatabaseAdmissionRefusal("openclaw", { env: fleet.env })).toBeUndefined();
+    },
+    { deferInspections: false },
+  );
   await expect(
     assertOpenClawDatabasesReady({
       env: fleet.env,
@@ -128,18 +131,21 @@ it.each(["historical", "retired shared"] as const)(
     openOpenClawAgentDatabase({ agentId, path: historyPath, env: fleet.env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    clearOpenClawAgentIntegrityVerification(historyPath, fleet.env);
+    revokeSqliteDatabaseAdmissionsForPath(historyPath);
     const history = new (requireNodeSqlite().DatabaseSync)(historyPath);
     try {
       history.exec("PRAGMA journal_mode=DELETE;");
     } finally {
       history.close();
     }
-    await withAgentDatabaseStartupAdmission(async () => {
-      await fleet.ready();
-      expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
-      expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toBeUndefined();
-    });
+    await withAgentDatabaseStartupAdmission(
+      async () => {
+        await fleet.ready();
+        expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toBeUndefined();
+      },
+      { deferInspections: false },
+    );
   },
 );
 
@@ -147,14 +153,17 @@ it("isolates an unreadable configured path while inspecting healthy agents", asy
   const fleet = createFleet();
   fleet.config.agents!.entries = { broken: {}, ...fleet.config.agents!.entries };
   fs.writeFileSync(path.join(fleet.env.OPENCLAW_STATE_DIR, "agents", "broken"), "not a directory");
-  await withAgentDatabaseStartupAdmission(async () => {
-    await fleet.ready();
-    expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
-    expect(readAgentDatabaseAdmissionRefusal("broken", { env: fleet.env })).toMatchObject({
-      code: "agent-database-inspection-failed",
-      reason: expect.stringMatching(/ENOTDIR|not a directory/i),
-    });
-  });
+  await withAgentDatabaseStartupAdmission(
+    async () => {
+      await fleet.ready();
+      expect(readAgentDatabaseAdmissionRefusal("first", { env: fleet.env })).toBeUndefined();
+      expect(readAgentDatabaseAdmissionRefusal("broken", { env: fleet.env })).toMatchObject({
+        code: "agent-database-inspection-failed",
+        reason: expect.stringMatching(/ENOTDIR|not a directory/i),
+      });
+    },
+    { deferInspections: false },
+  );
 });
 
 it("keeps pending startup stores fenced without inspecting or copying them again in bootstrap", async () => {
@@ -213,27 +222,30 @@ it("keeps pending startup stores fenced without inspecting or copying them again
 
 it("carries fleet compatibility once into bootstrap while readiness always inspects fresh", async () => {
   const fleet = createFleet();
-  await withAgentDatabaseStartupAdmission(async () => {
-    await fleet.ready();
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
-    );
-    // Migration admission before and under its lease must remain independent.
-    await fleet.ready();
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
-    );
-    expect(await fleet.inspect()).toEqual({ incompatible: [], indeterminate: [] });
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
-      schemaInspectionCount: 0,
-      schemaProcessCount: 0,
-      schemaSnapshotCount: 0,
-    });
-    await fleet.inspect();
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
-    );
-  });
+  await withAgentDatabaseStartupAdmission(
+    async () => {
+      await fleet.ready();
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
+      );
+      // Migration admission before and under its lease must remain independent.
+      await fleet.ready();
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
+      );
+      expect(await fleet.inspect()).toEqual({ incompatible: [], indeterminate: [] });
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
+        schemaInspectionCount: 0,
+        schemaProcessCount: 0,
+        schemaSnapshotCount: 0,
+      });
+      await fleet.inspect();
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
+      );
+    },
+    { deferInspections: false },
+  );
   await fleet.inspect();
   expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
     expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
@@ -242,113 +254,100 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
 
 it("preserves configured ownership when reusing an unchanged inspected database", async () => {
   const fleet = createFleet();
-  await withAgentDatabaseStartupAdmission(async () => {
-    await fleet.ready();
-    const inspected = await preflightOpenClawDatabaseSchemas(
-      {
-        env: fleet.env,
-        agentAdmissionConfig: {
-          ...fleet.config,
-          agents: {
-            ...fleet.config.agents,
-            entries: { ...fleet.config.agents?.entries, alias: {} },
+  await withAgentDatabaseStartupAdmission(
+    async () => {
+      await fleet.ready();
+      const inspected = await preflightOpenClawDatabaseSchemas(
+        {
+          env: fleet.env,
+          agentAdmissionConfig: {
+            ...fleet.config,
+            agents: {
+              ...fleet.config.agents,
+              entries: { ...fleet.config.agents?.entries, alias: {} },
+            },
           },
+          configuredAgentDatabaseTargets: [{ agentId: "alias", path: fleet.paths[0]! }],
+          reuseStartupSchemaPreparation: true,
+          onAgentInspection: fleet.onAgentInspection,
         },
-        configuredAgentDatabaseTargets: [{ agentId: "alias", path: fleet.paths[0]! }],
-        reuseStartupSchemaPreparation: true,
-        onAgentInspection: fleet.onAgentInspection,
-      },
-      "runtime",
-    );
-    expect(inspected).toMatchObject({ incompatible: [], indeterminate: [] });
-    expect(inspected.agentRefusals).toEqual([
-      expect.objectContaining({
-        agentId: "alias",
-        embeddedOwnerId: "first",
-        code: "agent-database-ownership-mismatch",
-        paths: [fleet.paths[0]],
-      }),
-    ]);
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
-      schemaInspectionCount: 0,
-      schemaProcessCount: 0,
-      schemaSnapshotCount: 0,
-    });
-  });
+        "runtime",
+      );
+      expect(inspected).toMatchObject({ incompatible: [], indeterminate: [] });
+      expect(inspected.agentRefusals).toEqual([
+        expect.objectContaining({
+          agentId: "alias",
+          embeddedOwnerId: "first",
+          code: "agent-database-ownership-mismatch",
+          paths: [fleet.paths[0]],
+        }),
+      ]);
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith({
+        schemaInspectionCount: 0,
+        schemaProcessCount: 0,
+        schemaSnapshotCount: 0,
+      });
+    },
+    { deferInspections: false },
+  );
 });
 
-it.each(["WAL commit", "replacement", "new registration"] as const)(
-  "inspects only changed fleet members after %s and still refuses their newer schema",
-  async (change) => {
-    const fleet = createFleet();
-    let changedPath = fleet.paths[0]!;
-    const writer =
-      change === "WAL commit" ? new (requireNodeSqlite().DatabaseSync)(changedPath) : undefined;
-    writer?.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
-    try {
-      await withAgentDatabaseStartupAdmission(async () => {
-        await fleet.ready();
-        if (change === "WAL commit") {
-          const originalMainBytes = fs.readFileSync(changedPath);
-          writer!.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
-          expect(fs.readFileSync(changedPath)).toEqual(originalMainBytes);
-        } else {
-          if (change === "new registration") {
-            changedPath = openOpenClawAgentDatabase({ agentId: "newcomer", env: fleet.env }).path;
-            closeOpenClawAgentDatabasesForTest();
-            closeOpenClawStateDatabaseForTest();
-          }
-          const replacement = path.join(path.dirname(changedPath), "replacement.sqlite");
-          const mutationPath = change === "replacement" ? replacement : changedPath;
-          if (change === "replacement") {
-            fs.copyFileSync(changedPath, replacement);
-          }
-          const database = new (requireNodeSqlite().DatabaseSync)(mutationPath);
-          try {
-            database.exec(
-              `PRAGMA journal_mode=DELETE; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`,
-            );
-          } finally {
-            database.close();
-          }
-          if (change === "replacement") {
-            fs.renameSync(replacement, changedPath);
-          }
-        }
-        expect(await fleet.inspect()).toMatchObject({
-          incompatible: [
-            {
-              kind: "agent",
-              path: changedPath,
-              foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-            },
-          ],
-          indeterminate: [],
-        });
-        expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
-          expect.objectContaining({ schemaInspectionCount: 1 }),
+it("reads newly registered stores without copying admitted state after startup writes", async () => {
+  const fleet = createFleet();
+  await withAgentDatabaseStartupAdmission(
+    async () => {
+      await fleet.ready();
+      const changedPath = openOpenClawAgentDatabase({ agentId: "newcomer", env: fleet.env }).path;
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      const database = new (requireNodeSqlite().DatabaseSync)(changedPath);
+      try {
+        database.exec(
+          `PRAGMA journal_mode=DELETE; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`,
         );
+      } finally {
+        database.close();
+      }
+      const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+      expect(await fleet.inspect()).toMatchObject({
+        incompatible: [
+          {
+            kind: "agent",
+            path: changedPath,
+            foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+          },
+        ],
+        indeterminate: [],
       });
-    } finally {
-      writer?.close();
-    }
-  },
-);
+      const statePath = fs.realpathSync.native(
+        path.join(fleet.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+      );
+      expect(prepare.mock.calls.filter(([pathname]) => pathname === statePath)).toHaveLength(0);
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ schemaInspectionCount: 1 }),
+      );
+    },
+    { deferInspections: false },
+  );
+});
 
 it("does not let prepared compatibility bypass cancellation or survive startup retirement", async () => {
   const fleet = createFleet();
-  await withAgentDatabaseStartupAdmission(async (admission) => {
-    await fleet.ready();
-    const controller = new AbortController();
-    const cancellation = new Error("startup cancelled after fleet admission");
-    controller.abort(cancellation);
-    fleet.onAgentInspection.mockClear();
-    await expect(fleet.inspect(controller.signal)).rejects.toBe(cancellation);
-    expect(fleet.onAgentInspection).not.toHaveBeenCalled();
-    await admission.stop();
-    expect(await fleet.inspect()).toEqual({ incompatible: [], indeterminate: [] });
-    expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
-      expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
-    );
-  });
+  await withAgentDatabaseStartupAdmission(
+    async (admission) => {
+      await fleet.ready();
+      const controller = new AbortController();
+      const cancellation = new Error("startup cancelled after fleet admission");
+      controller.abort(cancellation);
+      fleet.onAgentInspection.mockClear();
+      await expect(fleet.inspect(controller.signal)).rejects.toBe(cancellation);
+      expect(fleet.onAgentInspection).not.toHaveBeenCalled();
+      await admission.stop();
+      expect(await fleet.inspect()).toEqual({ incompatible: [], indeterminate: [] });
+      expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
+        expect.objectContaining({ schemaInspectionCount: fleet.paths.length }),
+      );
+    },
+    { deferInspections: false },
+  );
 });

@@ -27,8 +27,8 @@ export function assignSessionOwnerInWorker(
     scope,
     { type: "owner.assign", input: { scope, params: capturedParams } },
     (capturedScope) => assignSessionOwner(capturedScope, capturedParams),
-    (result, location, database) => {
-      if (result.value) {
+    (result, location, database, currentKeys) => {
+      if (result.value && (!currentKeys || currentKeys.has(location.sessionKey))) {
         if (!database) {
           sessionChanges.emit(
             result.facts
@@ -43,6 +43,7 @@ export function assignSessionOwnerInWorker(
         } else {
           sessionChanges.emit(
             bindSessionEntryPublicationSource({ ...location, factsInvalidated: true }, database),
+            database.db,
           );
         }
       }

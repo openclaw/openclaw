@@ -186,6 +186,37 @@ describe("managed worktree pending slots", () => {
     },
   );
 
+  it("keeps Git name discovery outside capacity admission", async ({ signal }) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "show-ref" || args[0] === "for-each-ref") {
+        entered.resolve();
+        await release.promise;
+      }
+      return execute(cwd, args, options);
+    });
+    const creating = service.create({ repoRoot, name: "name-discovery", baseRef: "HEAD" });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, creating, "Git name discovery did not start"),
+        signal,
+      );
+      await stateLease.withOpenClawStateLeaseAsync(
+        { scope: WORKTREE_CREATE_LEASE_SCOPE, key: "capacity", leaseMs: 60_000, waitMs: 0 },
+        captureWorktreeRunEndContext(env),
+        async () => {},
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([creating]);
+    }
+    const created = await creating;
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await readPendingWorktrees(env)).toEqual([]);
+  });
+
   it("overlaps materialization after releasing the allocation lease", async ({ signal }) => {
     const held = holdMaterialization();
     const creating = [service.create({ repoRoot, name: "first", baseRef: "HEAD" })];
@@ -226,6 +257,38 @@ describe("managed worktree pending slots", () => {
     );
     for (const record of records) {
       expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+    }
+  });
+
+  it("publishes a reserved checkout while another creator holds allocation", async ({ signal }) => {
+    config.worktreeMaxCount = 1;
+    const held = holdMaterialization();
+    const creating = service.create({ repoRoot, name: "publish-reserved", baseRef: "HEAD" });
+    let releaseAllocation: (() => Promise<void>) | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          held.entered[0]!.promise,
+          creating,
+          "Checkout did not materialize",
+        ),
+        signal,
+      );
+      expect(await readPendingWorktrees(env)).toHaveLength(1);
+      releaseAllocation = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
+      // An occupied allocation lane must not delay the count-neutral pending → live transaction.
+      vi.spyOn(backoff, "sleepWithAbort").mockRejectedValue(
+        new Error("Publication waited for the unrelated allocation holder"),
+      );
+      held.release.resolve();
+      const created = await withinTest(creating, signal);
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([created]);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      held.release.resolve();
+      await releaseAllocation?.();
+      await Promise.allSettled([creating]);
     }
   });
 

@@ -33,14 +33,12 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import * as agentDatabaseLifecycle from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
@@ -64,7 +62,10 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
-import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -209,12 +210,12 @@ describe("Gateway RPC fixture session writes", () => {
           ]),
         ).toBe("closing");
         expect(isOpenClawStateDatabaseOpen(identityPath)).toBe(true);
-        await expect(fs.access(dir)).resolves.toBeUndefined();
+        await fs.access(dir);
         if (outcome === "timeout") {
           await expect(removing).rejects.toThrow(
             `Timed out closing shared-state fixture database ${JSON.stringify(identityPath)}`,
           );
-          await expect(fs.access(dir)).resolves.toBeUndefined();
+          await fs.access(dir);
         } else {
           release.resolve();
           await removing;
@@ -379,9 +380,10 @@ describe("Gateway RPC fixture session writes", () => {
             },
           );
           await waitForSessionTranscriptIndexReconcile(options);
+          await settleGatewaySessionStoreFixture(releasedDir);
           const database = openOpenClawAgentDatabase(options);
           database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
 
           // Schedule after closing the handle: disposal must join work that has not reopened it yet.
           startSessionTranscriptIndexReconcile(options);

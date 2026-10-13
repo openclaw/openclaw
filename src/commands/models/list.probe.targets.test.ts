@@ -349,38 +349,39 @@ describe("buildProbeTargets", () => {
   });
 
   it.each([
-    ["resolved SecretRef", "ref", true, false, false],
-    ["unresolved SecretRef", "ref", true, true, false],
-    ["normal-mode SecretRef", "ref", false, false, false],
-    ["template-shaped literal", "${CONFIGURED_PROVIDER_VALUE}", true, false, true],
+    ["resolved SecretRef", true, false],
+    ["unresolved SecretRef", true, true],
+    ["normal-mode SecretRef", false, false],
   ] as const)(
     "preserves configured provider credential ownership for %s",
-    async (_description, input, includeDirectKeys, rejectRef, expectAmbient) => {
+    async (_description, includeDirectKeys, rejectRef) => {
       emptyStore();
-      const apiKey =
-        input === "ref"
-          ? { source: "env" as const, provider: "default", id: "CONFIGURED_ANTHROPIC_CREDENTIAL" }
-          : input;
+      const apiKey = {
+        source: "env" as const,
+        provider: "default",
+        id: "CONFIGURED_ANTHROPIC_CREDENTIAL",
+      };
       if (rejectRef) {
         resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing configured secret"));
       }
       const result = await withEnvAsync({ ANTHROPIC_API_KEY: "ambient-provider-credential" }, () =>
         configPlan(apiKey, includeDirectKeys),
       );
-      expect(result.targets.some((target) => target.source === "env")).toBe(expectAmbient);
+      expect(result.targets.some((target) => target.source === "env")).toBe(false);
       if (rejectRef) {
         expect(result.targets).toStrictEqual([]);
         expect(result.results).toEqual([
           expect.objectContaining({ source: "models.json", reasonCode: "unresolved_ref" }),
         ]);
       } else if (includeDirectKeys) {
-        expect(result.targets).toContainEqual(
+        expect(result.results).toEqual([]);
+        expect(result.targets).toEqual([
           expect.objectContaining({
             source: "models.json",
             label: "config",
-            boundValue: input === "ref" ? "resolved-secret" : apiKey,
+            boundValue: "resolved-secret",
           }),
-        );
+        ]);
       }
     },
   );

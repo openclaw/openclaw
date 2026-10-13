@@ -11,8 +11,10 @@ import {
 } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -25,6 +27,10 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -42,22 +48,17 @@ type Admission = Awaited<ReturnType<typeof admitReplyTurn>>;
 
 function observeNativeOpen(databasePath: string, agentId: string) {
   const entered = createDeferred();
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const observed = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        if (
-          request.stage === "open" &&
-          isRecord(request.facts) &&
-          request.facts.databasePath === databasePath &&
-          request.facts.agentId === agentId
-        ) {
-          entered.resolve();
-        }
-      }, attachment),
-    );
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === databasePath &&
+      request.facts.agentId === agentId
+    ) {
+      entered.resolve();
+    }
+  });
   return { entered: entered.promise, restore: () => observed.mockRestore() };
 }
 
@@ -77,6 +78,13 @@ it("creates a missing persistent store through reply admission without main-thre
     const sessionKey = "agent:main:first-worker-admission";
     openOpenClawStateDatabase({ env: state.env });
     expect(fs.existsSync(storePath)).toBe(false);
+    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+    const sharing = await prepareSessionMutationFacts({
+      cfg,
+      agentId: "main",
+      sessionKey,
+      allowMissing: true,
+    });
     const sql = observeMainThreadSql({ includeClose: true });
     sql.calibrate();
     const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
@@ -88,6 +96,7 @@ it("creates a missing persistent store through reply admission without main-thre
         sessionId: "first-worker-admission-session",
         kind: "visible",
         resetTriggered: false,
+        onDatabaseRegistration: sharing.followRegistration,
       }).then((admitted) => {
         result = admitted;
         return admitted;
@@ -99,6 +108,7 @@ it("creates a missing persistent store through reply admission without main-thre
       expect(result.sessionEntry).toBeUndefined();
       expect(result.databaseClaim.isCurrent()).toBe(true);
       expect(fs.existsSync(storePath)).toBe(true);
+      expect(sharing.readCurrent(cfg).target).toBeNull();
       await completeAdmission(result, sessionKey);
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
       sql.expectIdle();
@@ -109,12 +119,13 @@ it("creates a missing persistent store through reply admission without main-thre
       } finally {
         opened.mockRestore();
         sql.restore();
+        sharing.release();
       }
     }
   });
 });
 
-it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async ({
+it("retains one actor per cold/reopened reply admission and drains it without main-thread SQLite", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -157,6 +168,8 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
         },
       );
       let result: Admission | undefined;
+      const releaseActorPhase = createDeferred();
+      let actorPhase: Promise<void> | undefined;
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -183,15 +196,72 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
           expect(result.databaseClaim.incarnation).not.toBe(previousIncarnation);
         }
         previousIncarnation = result.databaseClaim.incarnation;
-        await completeAdmission(result, sessionKey);
+        const { operation, databaseClaim } = result;
+        const [actor, sibling] = await Promise.all([
+          acquireReplyOperationSessionActor(operation),
+          acquireReplyOperationSessionActor(operation),
+        ]);
+        if (!actor || !sibling) {
+          throw new Error("Persistent admission must acquire a session actor");
+        }
+        expect(sibling).toBe(actor);
+        const authority = {
+          assertCurrent: () => databaseClaim.assertCurrent(),
+          authorize() {},
+        };
+        const before = await actor.read(authority);
+        expect(before.entry).toMatchObject({
+          sessionId,
+          updatedAt: phase === "cold" ? 1 : 543,
+        });
+        const updatedAt = phase === "cold" ? 543 : 987;
+        const patched = await actor.patch(
+          {
+            commandId: `${phase}-activity`,
+            phaseId: "reply-admission",
+            expected: before.version,
+            reducers: [{ kind: "activity", updatedAt }],
+          },
+          authority,
+        );
+        expect(patched.kind).toBe("committed");
+        expect(sibling.snapshot(authority)?.entry).toMatchObject({ sessionId, updatedAt });
+
+        const phaseEntered = createDeferred();
+        actorPhase = actor.withPhase("retained-reply", authority, async () => {
+          phaseEntered.resolve();
+          await releaseActorPhase.promise;
+        });
+        await withinTest(phaseEntered.promise, signal);
+        operation.complete();
+        expect(() => actor.snapshot(authority)).toThrow();
+        expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
+        let successorSettled = false;
+        const successor = waitForReplyRunSuccessorAdmission(sessionKey, null).then((next) => {
+          successorSettled = true;
+          return next;
+        });
+        await setImmediate();
+        expect(successorSettled).toBe(false);
+        expect(databaseClaim.isCurrent()).toBe(true);
+        releaseActorPhase.resolve();
+        await withinTest(actorPhase, signal);
+        expect(await withinTest(successor, signal)).toMatchObject({ settled: true });
+        expect(databaseClaim.isCurrent()).toBe(false);
         expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
         sql.expectIdle();
         expect(opened).not.toHaveBeenCalled();
       } finally {
         try {
+          releaseActorPhase.resolve();
+          await Promise.allSettled([actorPhase]);
           controller.abort();
           await releaseWriter();
           result ??= await pending.catch(() => undefined);
+          if (result?.status === "owned") {
+            result.operation.complete();
+            await waitForReplyRunSuccessorAdmission(sessionKey, null);
+          }
           await completeAdmission(result, sessionKey);
           await settlement;
         } finally {
@@ -312,26 +382,32 @@ it("cancels a contended persistent admission without claiming the reply or poiso
 });
 
 it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
-  "keeps successors behind physical claim release after %s during executor drain",
+  "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
   async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const activePath = path.join(state.sessionsDir(), "agent.sqlite");
-      const idlePath = path.join(state.sessionsDir("other"), "agent.sqlite");
       const activeKey = "agent:main:completion-close";
-      const idleKey = "agent:other:completion-idle";
       const activeSessionId = "completion-active-session";
-      const idleSessionId = "completion-idle-session";
-      for (const [storePath, sessionKey, sessionId] of [
-        [activePath, activeKey, activeSessionId],
-        [idlePath, idleKey, idleSessionId],
-      ] as const) {
+      const idleTargets = Array.from({ length: 4 }, (_, index) => {
+        const agentId = `other-${index}`;
+        return {
+          agentId,
+          storePath: path.join(state.sessionsDir(agentId), "agent.sqlite"),
+          sessionKey: `agent:${agentId}:completion-idle`,
+          sessionId: `completion-idle-session-${index}`,
+        };
+      });
+      for (const { storePath, sessionKey, sessionId } of [
+        { storePath: activePath, sessionKey: activeKey, sessionId: activeSessionId },
+        ...idleTargets,
+      ]) {
         replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
       }
       const shared = openOpenClawStateDatabase({ env: state.env });
       const leases = shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
       let active: Admission | undefined;
-      let idle: Admission | undefined;
+      const idleAdmissions: Array<{ sessionKey: string; admission: Admission }> = [];
       const work = new AsyncWorkScope();
       try {
         active = await work.run(() =>
@@ -344,21 +420,24 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
             resetTriggered: false,
           }),
         );
-        idle = await admitReplyTurn({
-          storePath: idlePath,
-          sessionKey: idleKey,
-          agentId: "other",
-          sessionId: idleSessionId,
-          expectedSessionId: idleSessionId,
-          kind: "visible",
-          resetTriggered: false,
-        });
-        if (active.status !== "owned" || !active.databaseClaim || idle.status !== "owned") {
-          throw new Error("Fixture requires two admitted persistent reply owners");
+        if (active.status !== "owned" || !active.databaseClaim) {
+          throw new Error("Fixture requires an admitted persistent reply owner");
         }
-        await completeAdmission(idle, idleKey);
+        for (const target of idleTargets) {
+          const admission = await admitReplyTurn({
+            ...target,
+            expectedSessionId: target.sessionId,
+            kind: "visible",
+            resetTriggered: false,
+          });
+          idleAdmissions.push({ sessionKey: target.sessionKey, admission });
+          if (admission.status !== "owned") {
+            throw new Error("Fixture requires four admitted idle reply owners");
+          }
+          await completeAdmission(admission, target.sessionKey);
+          expect(leases.all(target.storePath)).toHaveLength(1);
+        }
         expect(leases.all(activePath)).toHaveLength(1);
-        expect(leases.all(idlePath)).toHaveLength(1);
 
         const holder = holdStateDatabaseWriteTransaction(shared.path, 10_000);
         await holder.ready;
@@ -371,7 +450,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
         const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
         let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
         try {
-          // Drain forces physical retirement even when both executors fit in the idle cache.
+          // Drain forces physical retirement of the active owner and the full idle cache.
           markGatewayRestartDraining();
           if (ending !== "complete") {
             active.operation.setPhase("running");
@@ -381,10 +460,13 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               cancel() {},
             });
             if (ending === "frozen-restart") {
-              active.operation.freezeAbort();
-              work.beginClose(createAgentRunRestartAbortError());
-              expect(active.operation.abortForRestart()).toBe(false);
-              expect(active.operation.abortSignal.aborted).toBe(false);
+              const operation = active.operation;
+              operation.freezeAbort();
+              const restartReason = createAgentRunRestartAbortError();
+              work.beginClose(restartReason);
+              expect(operation.abortForRestart()).toBe(false);
+              expect(operation.abortSignal.aborted).toBe(false);
+              expect(() => getReplyOperationSessionTarget(operation)).toThrow(restartReason);
             } else {
               expect(
                 ending === "restart-abort"
@@ -420,11 +502,15 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
           }
         }
         expect(leases.all(activePath)).toEqual([]);
-        await closeOpenClawAgentDatabaseByPathAsync(idlePath);
-        expect(leases.all(idlePath)).toEqual([]);
+        for (const target of idleTargets) {
+          await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+          expect(leases.all(target.storePath)).toEqual([]);
+        }
       } finally {
         await completeAdmission(active, activeKey);
-        await completeAdmission(idle, idleKey);
+        for (const { admission, sessionKey } of idleAdmissions) {
+          await completeAdmission(admission, sessionKey);
+        }
         await work.drain();
       }
     });

@@ -196,13 +196,9 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
-    if (isScopedBlockedHostExecEnvVarName(upper)) {
-      rejectedBlocked.push(upper);
-      continue;
-    }
     // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
     // request-scoped PATH overrides from agents/gateways.
-    if (blockPathOverrides && upper === "PATH") {
+    if (isScopedBlockedHostExecEnvVarName(upper) || (blockPathOverrides && upper === "PATH")) {
       rejectedBlocked.push(upper);
       continue;
     }

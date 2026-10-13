@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "windows"))]
 const MARKER: &str = "# OpenClaw-Tauri runtime v1 ";
+#[cfg(target_os = "windows")]
+const MARKER: &str = "@rem # OpenClaw-Tauri runtime v1 ";
 const CHANGED: &str = "The Gateway runtime or service definition changed. Its current selection was preserved; inspect it before retrying.";
 const PAUSED: &str = "The Gateway is paused. Start it before choosing Use bundled runtime.";
 const UPGRADE: &str = "Update the installed OpenClaw CLI before selecting the bundled runtime; this CLI cannot verify the current runtime pin and service definition.";
@@ -39,9 +43,11 @@ struct LauncherFile {
     path: PathBuf,
     bytes: Vec<u8>,
     entry: PathBuf,
+    #[cfg(target_os = "windows")]
+    runtime: BundledRuntime,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ExpectedPin {
     revision: String,
     definition: Option<String>,
@@ -81,10 +87,6 @@ impl Observation {
         })
     }
 
-    pub(crate) fn is_current(&self, runtime: &BundledRuntime) -> bool {
-        self.uses_runtime_path(&runtime.bun)
-    }
-
     pub(crate) fn paused(&self) -> bool {
         self.command().is_some()
             && (self.flag("/service/loaded") == Some(false)
@@ -114,18 +116,7 @@ impl Observation {
         if intent.get("status").and_then(Value::as_str) != Some("known") {
             return Err(UPGRADE.into());
         }
-        Ok(ExpectedPin {
-            revision: intent
-                .get("revision")
-                .and_then(Value::as_str)
-                .ok_or(UPGRADE)?
-                .into(),
-            definition: match intent.get("definition") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(value)) => Some(value.clone()),
-                _ => return Err(UPGRADE.into()),
-            },
-        })
+        serde_json::from_value(intent.clone()).map_err(|_| UPGRADE.into())
     }
 
     fn admit(&self, fresh: bool) -> Result<(), String> {
@@ -133,7 +124,10 @@ impl Observation {
         if self.paused() {
             return Err(PAUSED.into());
         }
-        if self.text("/service/definitionMutation") != Some("writable")
+        // Creation has no definition to replace; the CLI still owns platform permissions.
+        let mutation = self.text("/service/definitionMutation");
+        if mutation == Some("sealed")
+            || (!fresh && mutation != Some("writable"))
             || self.flag("/service/launcherOverridden") == Some(true)
             || self.flag("/config/mismatch") == Some(true)
             || self.text("/service/revision").is_none()
@@ -180,11 +174,16 @@ impl Observation {
         let Some(port) = self.number("/port/port").filter(|port| *port > 0) else {
             return false;
         };
-        self.is_current(runtime)
+        self.uses_runtime_path(&runtime.bun)
             && self.text("/service/runtimeIntent/pin/runtime") == Some("bun")
             && self
                 .text("/service/runtimeIntent/pin/path")
-                .is_some_and(|path| Path::new(path) == runtime.bun)
+                .is_some_and(|path| {
+                    Path::new(path) == runtime.bun
+                        || (cfg!(target_os = "windows")
+                            && fs::canonicalize(path).ok().as_deref()
+                                == Some(runtime.bun.as_path()))
+                })
             && self.flag("/service/loaded") == Some(true)
             && self.text("/service/targetRole") == Some("target")
             && self.text("/service/runtime/status") == Some("running")
@@ -205,15 +204,12 @@ impl Observation {
     }
 
     fn previous_runtime_command(&self) -> String {
-        let pin = self.0.pointer("/service/runtimeIntent/pin");
-        let path = pin
-            .and_then(|pin| pin.get("path"))
-            .and_then(Value::as_str)
+        let path = self
+            .text("/service/runtimeIntent/pin/path")
             .map(Path::new)
             .or_else(|| self.runtime_path());
-        let kind = pin
-            .and_then(|pin| pin.get("runtime"))
-            .and_then(Value::as_str)
+        let kind = self
+            .text("/service/runtimeIntent/pin/runtime")
             .unwrap_or_else(|| {
                 if path
                     .and_then(Path::file_name)
@@ -337,8 +333,12 @@ fn install(
             "--runtime-path",
         ])
         .map_err(|error| error.to_string())?;
+    // The Windows service owner writes this path into its cmd.exe launcher.
+    #[cfg(target_os = "windows")]
+    command.arg(windows_process_path(&runtime.bun)?);
+    #[cfg(not(target_os = "windows"))]
+    command.arg(&runtime.bun);
     command
-        .arg(&runtime.bun)
         .arg("--expected-runtime-pin")
         .arg(serde_json::to_string(&confirmed.expected_pin()?).map_err(|error| error.to_string())?)
         .env_remove("OPENCLAW_SQLITE_LIBRARY")
@@ -404,7 +404,7 @@ pub(crate) fn bind_runtime(
 ) -> Result<(), String> {
     validate_runtime(runtime)?;
     let launcher =
-        read_launcher(cli)?.ok_or("The CLI launcher is not a canonical managed installation.")?;
+        read_launcher(cli)?.ok_or("The CLI launcher is not a recognized managed installation.")?;
     publish_launcher(&launcher, runtime, purpose)
 }
 
@@ -412,6 +412,10 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
     let Some(path) = cli.managed_wrapper() else {
         return Ok(None);
     };
+    read_launcher_path(path)
+}
+
+fn read_launcher_path(path: PathBuf) -> Result<Option<LauncherFile>, String> {
     let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.len() > 65536 {
         return Ok(None);
@@ -420,7 +424,7 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
     let Ok(text) = std::str::from_utf8(&bytes) else {
         return Ok(None);
     };
-    let entry = if let Some(marker) = text
+    if let Some(marker) = text
         .lines()
         .nth(1)
         .and_then(|line| line.strip_prefix(MARKER))
@@ -431,8 +435,18 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
         if render(&launcher).ok().as_deref() != Some(bytes.as_slice()) {
             return Ok(None);
         }
-        launcher.entry
-    } else {
+        return Ok(Some(LauncherFile {
+            path,
+            bytes,
+            entry: launcher.entry,
+            #[cfg(target_os = "windows")]
+            runtime: launcher.runtime,
+        }));
+    }
+    #[cfg(target_os = "windows")]
+    return Ok(None);
+    #[cfg(not(target_os = "windows"))]
+    {
         let prefix = path.parent().and_then(Path::parent).ok_or(CHANGED)?;
         let start = format!(
             "#!/usr/bin/env bash\nset -euo pipefail\nexec \"{}/tools/node/bin/node\" \"",
@@ -451,9 +465,65 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
         if !entry.starts_with(fs::canonicalize(prefix).map_err(|error| error.to_string())?) {
             return Ok(None);
         }
-        entry
+        Ok(Some(LauncherFile { path, bytes, entry }))
+    }
+}
+
+/// The desktop invokes Bun directly so Windows shell parsing never sees user arguments.
+#[cfg(target_os = "windows")]
+pub(crate) fn managed_command(cli: &OpenClawCli) -> Result<Option<Command>, String> {
+    if cli.managed_wrapper().is_none() {
+        return Ok(None);
+    }
+    let launcher = read_launcher(cli)?.ok_or(
+        "The managed OpenClaw launcher is invalid. Reinstall the local CLI from the desktop app.",
+    )?;
+    validate_runtime(&launcher.runtime)?;
+    let mut command = Command::new(&launcher.runtime.bun);
+    command
+        .arg("--no-install")
+        .arg(&launcher.entry)
+        .env_remove("OPENCLAW_SQLITE_LIBRARY")
+        .env_remove("LD_LIBRARY_PATH");
+    if let Some(sqlite) = &launcher.runtime.sqlite {
+        command.env("OPENCLAW_SQLITE_LIBRARY", sqlite);
+    }
+    Ok(Some(command))
+}
+
+/// Publish the initial Windows launcher only after the bundled package has been installed.
+#[cfg(target_os = "windows")]
+pub(crate) fn install_launcher(
+    prefix: &Path,
+    runtime: &BundledRuntime,
+    entry: &Path,
+    purpose: Purpose,
+) -> Result<(), String> {
+    validate_runtime(runtime)?;
+    let entry = fs::canonicalize(entry).map_err(|error| error.to_string())?;
+    if !entry.starts_with(fs::canonicalize(prefix).map_err(|error| error.to_string())?) {
+        return Err("The CLI entry point must belong to its managed installation.".into());
+    }
+    let path = crate::cli::managed_launcher(prefix);
+    fs::create_dir_all(path.parent().ok_or(CHANGED)?).map_err(|error| error.to_string())?;
+    let bytes = match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        _ => {
+            read_launcher_path(path.clone())?
+                .ok_or("The existing CLI launcher is not a recognized managed installation.")?
+                .bytes
+        }
     };
-    Ok(Some(LauncherFile { path, bytes, entry }))
+    publish_launcher(
+        &LauncherFile {
+            path,
+            bytes,
+            entry,
+            runtime: runtime.clone(),
+        },
+        runtime,
+        purpose,
+    )
 }
 
 fn publish_launcher(
@@ -478,18 +548,24 @@ fn publish_launcher(
     let temporary =
         path.with_file_name(format!(".openclaw-tauri-launcher-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o700)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o700);
+        let mut file = options
             .open(&temporary)
             .map_err(|error| error.to_string())?;
         file.write_all(&replacement)
             .and_then(|()| file.sync_all())
             .map_err(|error| error.to_string())?;
-        if read_regular(path)? != original.bytes {
+        if original.bytes.is_empty() {
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(CHANGED.into());
+            }
+        } else if read_regular(path)? != original.bytes {
             return Err(CHANGED.into());
         }
+        drop(file);
         fs::rename(&temporary, path).map_err(|error| error.to_string())
     })();
     let _ = fs::remove_file(temporary);
@@ -508,6 +584,7 @@ fn validate_runtime(runtime: &BundledRuntime) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn quote(path: &Path) -> Result<String, String> {
     let value = path
         .to_str()
@@ -516,6 +593,7 @@ fn quote(path: &Path) -> Result<String, String> {
     Ok(format!("'{}'", value.replace('\'', "'\\''")))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
     let sqlite = launcher
         .runtime
@@ -527,6 +605,56 @@ fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
     Ok(format!("#!/bin/sh\n{MARKER}{}\nunset OPENCLAW_SQLITE_LIBRARY LD_LIBRARY_PATH\n{sqlite}exec {} --no-install {} \"$@\"\n",
         serde_json::to_string(launcher).map_err(|error| error.to_string())?,
         quote(&launcher.runtime.bun)?, quote(&launcher.entry)?).into_bytes())
+}
+
+#[cfg(target_os = "windows")]
+fn quote(path: &Path) -> Result<String, String> {
+    let value = path
+        .to_str()
+        .filter(|value| !value.contains(['\n', '\r', '\0']))
+        .ok_or("Runtime paths must be single-line UTF-8.")?;
+    Ok(format!("'{}'", value.replace('\'', "''")))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_process_path(path: &Path) -> Result<String, String> {
+    let value = path
+        .to_str()
+        .filter(|value| !value.contains(['\n', '\r', '\0', '"']))
+        .ok_or("Runtime paths must be single-line UTF-8 without quotes.")?;
+    // Windows command interpreters do not accept canonicalize's extended prefix.
+    Ok(if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        value.strip_prefix(r"\\?\").unwrap_or(value).to_string()
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn cmd_quote(path: &Path) -> Result<String, String> {
+    let value = windows_process_path(path)?;
+    Ok(format!("\"{}\"", value.replace('%', "%%")))
+}
+
+#[cfg(target_os = "windows")]
+fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
+    let sqlite = launcher
+        .runtime
+        .sqlite
+        .as_ref()
+        .map(|path| {
+            cmd_quote(path).map(|value| {
+                format!(
+                    "@set \"OPENCLAW_SQLITE_LIBRARY={}\"\r\n",
+                    &value[1..value.len() - 1]
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(format!("@setlocal DisableDelayedExpansion\r\n{MARKER}{}\r\n@chcp 65001 >nul\r\n@set OPENCLAW_SQLITE_LIBRARY=\r\n@set LD_LIBRARY_PATH=\r\n{sqlite}@{} --no-install {} %*\r\n@exit /b %errorlevel%\r\n",
+        serde_json::to_string(launcher).map_err(|error| error.to_string())?,
+        cmd_quote(&launcher.runtime.bun)?, cmd_quote(&launcher.entry)?).into_bytes())
 }
 
 fn read_regular(path: &Path) -> Result<Vec<u8>, String> {
@@ -545,6 +673,10 @@ fn check_current(is_current: &dyn Fn() -> bool) -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "runtime_action_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "runtime_action_windows_tests.rs"]
+mod windows_tests;

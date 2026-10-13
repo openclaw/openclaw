@@ -310,7 +310,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         if coreRepair == .reportFailure, let failure = manager.nodeMigrationFailure {
             guard self.markGatewayUpdateIncomplete(receipt: currentReceipt) else { return true }
             self.show()
-            self.fail(message: String(localized: "The Gateway runtime migration could not finish."), details: failure)
+            self.failRuntimeMigration(failure)
             return true
         }
         guard Self.allowsNodeMigration(
@@ -331,9 +331,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 currentReceipt = PostAppUpdateReceiptStore.pendingSetupRecovery() ??
                     PostAppUpdateReceiptStore.pending(currentVersion: receipt.toVersion) ?? currentReceipt
                 self.receipt = PostAppUpdateReceiptStore.recordMigrationFailure(receipt: currentReceipt)
-                self.fail(
-                    message: String(localized: "The Gateway runtime migration could not finish."),
-                    details: error.localizedDescription)
+                self.failRuntimeMigration(error.localizedDescription)
                 return true
             }
             currentReceipt = PostAppUpdateReceiptStore.pendingSetupRecovery() ??
@@ -342,9 +340,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         if let failure = GatewayProcessManager.shared.nodeMigrationFailure {
             self.receipt = PostAppUpdateReceiptStore.recordMigrationFailure(receipt: currentReceipt)
             self.show()
-            self.fail(
-                message: String(localized: "The Gateway runtime migration could not finish."),
-                details: failure)
+            self.failRuntimeMigration(failure)
             return true
         }
         if !manager.nodeMigrationCompleted, Self.shouldOfferRuntimeMigrationRetry(
@@ -356,9 +352,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             } == true)
         {
             self.show()
-            self.fail(
-                message: String(localized: "The Gateway runtime migration could not finish."),
-                details: "The restored Node Gateway is still running. Choose Retry to finish switching it to Bun.")
+            self.failRuntimeMigration(
+                "The restored Node Gateway is still running. Choose Retry to finish switching it to Bun.")
             return true
         }
         if GatewayProcessManager.shared.nodeMigrationVersionUpdated {
@@ -903,6 +898,10 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         self.model.message = message
         self.model.details = details
     }
+
+    private func failRuntimeMigration(_ details: String) {
+        self.fail(message: String(localized: "The Gateway runtime migration could not finish."), details: details)
+    }
 }
 
 extension PostUpdateController {
@@ -1017,8 +1016,10 @@ extension PostUpdateController {
         receipt: PostAppUpdateReceipt,
         managedStatus: () async -> CLIInstaller.Status) async -> PostUpdateGatewayResolution
     {
-        if receipt.coreUpdate == .legacyCanonical {
-            let action: PostUpdateGatewayAction
+        let legacyCanonical = receipt.coreUpdate == .legacyCanonical
+        let remote = context.connectionMode == .remote
+        let action: PostUpdateGatewayAction
+        if legacyCanonical {
             if let authority = try? CLIInstaller.captureCanonicalUpdateAuthority(
                 executable: CLIInstaller.managedExecutableLocation()), authority.currentError() == nil
             {
@@ -1028,16 +1029,7 @@ extension PostUpdateController {
             } else {
                 action = .ownershipFailure
             }
-            return PostUpdateGatewayResolution(
-                connectionMode: context.connectionMode,
-                action: action,
-                installedCLI: nil,
-                prepareLocalCompanion: false,
-                serviceInstalled: false)
-        }
-        let remote = context.connectionMode == .remote
-        let action: PostUpdateGatewayAction
-        if remote, !context.hasService {
+        } else if remote, !context.hasService {
             action = receipt.coreUpdatePending ? .ownershipFailure : .none
         } else if !remote, context.bundledApp, context.usesSeededGateway,
                   !context.hasService || context.ownsManagedRuntime
@@ -1062,10 +1054,10 @@ extension PostUpdateController {
         return PostUpdateGatewayResolution(
             connectionMode: context.connectionMode,
             action: action,
-            installedCLI: context.installedCLI,
-            prepareLocalCompanion: remote && context.bundledApp && context.usesSeededGateway &&
+            installedCLI: legacyCanonical ? nil : context.installedCLI,
+            prepareLocalCompanion: !legacyCanonical && remote && context.bundledApp && context.usesSeededGateway &&
                 !context.localCompanionVerified,
-            serviceInstalled: context.hasService)
+            serviceInstalled: !legacyCanonical && context.hasService)
     }
 
     private func verifyRuntimeUpdates(
@@ -1366,9 +1358,7 @@ extension PostUpdateController {
             } catch {
                 if error is CancellationError, AppStateStore.shared.isPaused { return .deferred }
                 self.receipt = PostAppUpdateReceiptStore.recordMigrationFailure(receipt: self.receipt ?? receipt)
-                self.fail(
-                    message: String(localized: "The Gateway runtime migration could not finish."),
-                    details: error.localizedDescription)
+                self.failRuntimeMigration(error.localizedDescription)
                 return .failed
             }
         } else {

@@ -22,12 +22,14 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { readPendingWorktrees } from "./pending-slots.js";
+import * as preparationTiming from "./preparation-timing.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import {
@@ -213,7 +215,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(repo, "status", "--porcelain")).toBe("");
   });
 
-  it.each(["small", "remote-restore", "invalid", "fallback"])(
+  it.each(["small", "remote-restore", "invalid"])(
     "admits only reusable source clones under disk pressure (%s)",
     async (mode) => {
       const sourceBytes = mode === "small" ? 32 * 1024 : 32 * 1024 ** 2;
@@ -244,9 +246,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
           path.join((await listTemplatesAsync(env))[0]!.path, "README.md"),
           "changed template",
         );
-      }
-      if (mode === "fallback") {
-        vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
       }
       const available = 4 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
       const stats = fsSync.statfsSync(repo);
@@ -282,9 +281,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         }
       } else {
         await expect(result).rejects.toThrow(/disk space/i);
-        if (mode === "fallback") {
-          expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
-        }
         expect(await git(repo, "branch", "--list", "openclaw/limited")).toBe("");
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/limited");
         expect(
@@ -486,21 +482,125 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     });
   });
 
-  it.each(["ignored", "HEAD"] as const)(
+  it.each(["source", "sibling"])(
+    "matches native checkout when the %s worktree is sparse",
+    async (sparseOwner) => {
+      for (const directory of ["included", "excluded"]) {
+        await fs.mkdir(path.join(repo, directory));
+        await fs.writeFile(path.join(repo, directory, "file.txt"), `${directory}\n`);
+      }
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "sparse fixture");
+      const sparse = sparseOwner === "source" ? repo : path.join(path.dirname(repo), "sparse");
+      if (sparse !== repo) {
+        await git(repo, "worktree", "add", "--detach", sparse, "HEAD");
+      }
+      await git(sparse, "sparse-checkout", "set", "--cone", "--sparse-index", "included");
+      expect(await git(repo, "config", "extensions.worktreeConfig")).toBe("true");
+      const fresh = path.join(path.dirname(repo), "fresh");
+      await git(repo, "worktree", "add", "--detach", fresh, "HEAD");
+
+      for (const name of ["first-full", "second-full"]) {
+        const created = await service.create({ repoRoot: repo, name, baseRef: "HEAD" });
+        expect(await git(created.path, "ls-files", "-t")).toBe(await git(fresh, "ls-files", "-t"));
+        for (const file of ["README.md", "included/file.txt"]) {
+          expect(await fs.readFile(path.join(created.path, file))).toEqual(
+            await fs.readFile(path.join(fresh, file)),
+          );
+        }
+        if (sparseOwner === "source") {
+          // Git carries the source's sparse settings into newly registered worktrees.
+          for (const checkout of [fresh, created.path]) {
+            await expect(fs.access(path.join(checkout, "excluded/file.txt"))).rejects.toMatchObject(
+              {
+                code: "ENOENT",
+              },
+            );
+          }
+        } else {
+          expect(await fs.readFile(path.join(created.path, "excluded/file.txt"), "utf8")).toBe(
+            "excluded\n",
+          );
+        }
+        expect(await git(created.path, "status", "--porcelain")).toBe("");
+      }
+      expect(backend.createTemplate).toHaveBeenCalledTimes(sparseOwner === "source" ? 0 : 1);
+      expect(backend.cloneTemplate).toHaveBeenCalledTimes(sparseOwner === "source" ? 0 : 2);
+    },
+  );
+
+  it("falls back to Git when the target worktree has sparse configuration", async () => {
+    await fs.writeFile(path.join(repo, "included.txt"), "included\n");
+    await git(repo, "add", "included.txt");
+    await git(repo, "commit", "-m", "sparse target fixture");
+    await git(repo, "config", "extensions.worktreeConfig", "true");
+    const destination = path.join(path.dirname(repo), "sparse-target");
+    const diagnostics = vi.spyOn(preparationTiming, "setWorktreePreparationTemplate");
+    const result = await addManagedWorktree({
+      env,
+      now: () => now,
+      enabled: true,
+      repoRoot: repo,
+      commonDir: path.join(repo, ".git"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: await git(repo, "rev-parse", "HEAD"),
+      prepareCommit: async () => {
+        await git(destination, "config", "--worktree", "core.sparseCheckout", "true");
+        const patterns = await git(destination, "rev-parse", "--git-path", "info/sparse-checkout");
+        await fs.mkdir(path.dirname(patterns), { recursive: true });
+        await fs.writeFile(patterns, "/*\n!README.md\n");
+        return 1024;
+      },
+      requireSpace: async () => {},
+      commitGuard: () => {},
+    });
+    expect(result.code).toBe(0);
+    expect(backend.cloneTemplate).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveBeenCalledWith("unavailable", { reason: "checkout-configuration" });
+    await expect(fs.access(path.join(destination, "README.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await fs.readFile(path.join(destination, "included.txt"), "utf8")).toBe("included\n");
+    expect(await git(destination, "status", "--porcelain")).toBe("");
+  });
+
+  it.each(["ignored", "HEAD", "worktree-config", "sparse", "source-only-sparse"] as const)(
     "rebuilds a template with %s contamination before creating another checkout",
     async (change) => {
+      const sparse = change === "sparse" || change === "source-only-sparse";
+      const provisionIgnoredFiles = change !== "source-only-sparse";
       await fs.writeFile(path.join(repo, ".gitignore"), "ignored-*\n");
-      await git(repo, "add", ".gitignore");
+      if (sparse) {
+        await fs.mkdir(path.join(repo, "included"));
+        await fs.writeFile(path.join(repo, "included", "file.txt"), "included\n");
+      }
+      await git(repo, "add", ".");
       await git(repo, "commit", "-m", "ignore template fixture");
       // The older commit has identical files, so HEAD validation cannot be
       // replaced by comparing the tree or accepting a clean inventory alone.
       await git(repo, "commit", "--allow-empty", "-m", "new template base");
-      await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
+      if (change === "worktree-config" || sparse) {
+        await git(repo, "config", "extensions.worktreeConfig", "true");
+      }
+      await service.create({
+        repoRoot: repo,
+        name: "seed",
+        baseRef: "HEAD",
+        provisionIgnoredFiles,
+      });
       const original = (await listTemplatesAsync(env))[0];
       assert(original);
       const unusualName = process.platform === "win32" ? "é space.txt" : "é space\nname.txt";
       if (change === "HEAD") {
         await git(original.path, "checkout", "--detach", "HEAD~1");
+      } else if (change === "worktree-config") {
+        await git(original.path, "config", "--worktree", "core.autocrlf", "true");
+      } else if (sparse) {
+        await git(original.path, "sparse-checkout", "set", "--cone", "missing-directory");
+        await expect(fs.access(path.join(original.path, "included"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
       } else {
         await fs.writeFile(
           path.join(original.path, `ignored-${unusualName}`),
@@ -512,6 +612,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         repoRoot: repo,
         name: "replacement",
         baseRef: "HEAD",
+        provisionIgnoredFiles,
       });
 
       const replacement = (await listTemplatesAsync(env))[0];
@@ -522,6 +623,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         ".git",
         ".gitignore",
         "README.md",
+        ...(sparse ? ["included"] : []),
       ]);
       expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
       expect(await git(created.path, "rev-parse", "HEAD")).toBe(original.sourceCommit);
@@ -734,11 +836,30 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   });
 
   it("fences revoked creation authority when snapshot and native fallback both fail", async () => {
+    const revokeCheckout = captureWorktreeMutationHeartbeat();
     vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("snapshot unavailable"));
+    const branch = "openclaw/failed-fallback";
+    const originalHead = await git(repo, "rev-parse", "HEAD");
+    const commonDir = await git(repo, "rev-parse", "--git-common-dir");
+    const held = createDeferredCore();
+    const release = createDeferredCore();
+    const queued = createDeferredCore();
+    const enqueue = gitExec.enqueueGitRefMutation;
+    let holder: Promise<void> | undefined;
     let failedDestination: string | undefined;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (argv[0] === "git" && argv.includes("read-tree") && argv.includes("-u")) {
         failedDestination = argv[argv.indexOf("-C") + 1];
+        // Registration is complete; hold only the failed checkout's branch cleanup.
+        holder = enqueue(repo, commonDir, async () => {
+          held.resolve();
+          await release.promise;
+        });
+        await held.promise;
+        vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+          queued.resolve();
+          return enqueue(...args);
+        });
         return {
           stdout: "",
           stderr: "native checkout failed",
@@ -751,22 +872,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       return await realRunCommand(argv, options);
     });
 
-    const branch = "openclaw/failed-fallback";
-    const originalHead = await git(repo, "rev-parse", "HEAD");
-    const commonDir = await git(repo, "rev-parse", "--git-common-dir");
-    const held = createDeferredCore();
-    const release = createDeferredCore();
-    const holder = gitExec.enqueueGitRefMutation(repo, commonDir, async () => {
-      held.resolve();
-      await release.promise;
-    });
-    await held.promise;
-    const queued = createDeferredCore();
-    const enqueue = gitExec.enqueueGitRefMutation;
-    vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
-      queued.resolve();
-      return enqueue(...args);
-    });
     const pending = service
       .create({
         repoRoot: repo,
@@ -786,22 +891,12 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(failedDestination).toBeDefined();
       expect(await git(repo, "rev-parse", branch)).toBe(originalHead);
       await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });
-      const [slot] = await readPendingWorktrees(env);
+      const slot = (await readPendingWorktrees(env)).find(
+        ({ record }) => record.path === failedDestination,
+      );
       assert(slot);
       expect(slot.record.path).toBe(failedDestination);
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const changed = executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-              .deleteFrom("state_leases")
-              .where("scope", "=", "core:managed-worktrees:mutation")
-              .where("lease_key", "=", slot.record.id),
-          );
-          expect(changed.numAffectedRows).toBe(1n);
-        },
-        { env },
-      );
+      await revokeCheckout(slot.record.id);
       release.resolve();
       await holder;
       const error = await pending;
@@ -820,40 +915,35 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     }
   });
 
-  it.each([false, true])(
-    "restores saved edits and retains the source template (clone failure=%s)",
-    async (cloneFails) => {
-      const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
-      const template = (await listTemplatesAsync(env))[0];
-      assert(template);
-      const originalCommit = await git(created.path, "rev-parse", "HEAD");
-      await fs.writeFile(path.join(created.path, "README.md"), "saved edit\n");
-      await fs.writeFile(path.join(created.path, "untracked.txt"), "saved new file\n");
-      await service.remove({ id: created.id, reason: "test" });
-      if (cloneFails) {
-        vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
-      }
-      const restored = await service.restore({ id: created.id });
-      expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
-      expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
-      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalCommit);
-      expect(await git(restored.path, "symbolic-ref", "--short", "HEAD")).toBe(created.branch);
-      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");
-      expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
-        "saved new file\n",
-      );
-      expect(await git(restored.path, "status", "--porcelain")).toContain("M README.md");
-      expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
-      expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("base\n");
-      expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
-      await expect(fs.access(path.join(template.path, "untracked.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      const next = await service.create({ repoRoot: repo, name: "after-restore", baseRef: "HEAD" });
-      expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
-      expect(await git(next.path, "status", "--porcelain")).toBe("");
-    },
-  );
+  it("restores saved edits after clone failure and retains the source template", async () => {
+    const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
+    const template = (await listTemplatesAsync(env))[0];
+    assert(template);
+    const originalCommit = await git(created.path, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(created.path, "README.md"), "saved edit\n");
+    await fs.writeFile(path.join(created.path, "untracked.txt"), "saved new file\n");
+    await service.remove({ id: created.id, reason: "test" });
+    vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
+    const restored = await service.restore({ id: created.id });
+    expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
+    expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
+    expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalCommit);
+    expect(await git(restored.path, "symbolic-ref", "--short", "HEAD")).toBe(created.branch);
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");
+    expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
+      "saved new file\n",
+    );
+    expect(await git(restored.path, "status", "--porcelain")).toContain("M README.md");
+    expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
+    expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("base\n");
+    expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
+    await expect(fs.access(path.join(template.path, "untracked.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const next = await service.create({ repoRoot: repo, name: "after-restore", baseRef: "HEAD" });
+    expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
+    expect(await git(next.path, "status", "--porcelain")).toBe("");
+  });
 
   it("applies saved checkout attributes to unchanged blobs without replacing the source template", async () => {
     await git(repo, "config", "core.autocrlf", "false");

@@ -9,6 +9,7 @@ import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
+import { createClientTestIdentity } from "../gateway/client.test-support.js";
 import { ChatLog } from "./components/chat-log.js";
 import { withGatewayChatConnection } from "./gateway-chat.test-support.js";
 import type { TuiEvent, TuiSessionDescription, TuiSessionList } from "./tui-backend.js";
@@ -342,6 +343,10 @@ describe("GatewayChatClient", () => {
 
   it("surfaces loopback block-mode start failures through disconnect handler", async () => {
     vi.useFakeTimers();
+    const identity = await import("../infra/device-identity-async.js");
+    vi.spyOn(identity, "loadOrCreateDeviceIdentityAsync").mockResolvedValue(
+      createClientTestIdentity("fixture-tui-proxy-device"),
+    );
     // The preceding mock test resets modules; keep client and proxy ownership together.
     const { GatewayChatClient: CurrentGatewayChatClient } = await import("./gateway-chat.js");
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");

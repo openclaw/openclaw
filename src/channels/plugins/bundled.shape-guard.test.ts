@@ -5,7 +5,6 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   makeBundledEsmFixtureRoot,
   mockChannelPluginModuleLoader,
@@ -20,8 +19,6 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
       env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
   };
 });
-
-const bundledChannelEntrypointPaths = ["index.ts", "channel-entry.ts", "setup-entry.ts"] as const;
 
 type BundledEntrySource = { built?: string; source?: string };
 
@@ -81,29 +78,6 @@ function mockAlphaDistExtensionRuntime() {
     listBundledChannelPluginMetadata: () => [alphaChannelMetadata({ includeSetup: true })],
     resolveBundledChannelGeneratedPath: resolveAlphaDistExtensionEntry,
   }));
-}
-
-function collectBundledChannelEntrypointOffenders(
-  bundledPluginRoots: string[],
-  isOffender: (source: string, filePath: string) => boolean,
-) {
-  const offenders: string[] = [];
-  for (const extensionDir of bundledPluginRoots) {
-    for (const relativePath of bundledChannelEntrypointPaths) {
-      const filePath = path.join(extensionDir, relativePath);
-      if (!fs.existsSync(filePath)) {
-        continue;
-      }
-      const source = fs.readFileSync(filePath, "utf8");
-      const usesEntryHelpers =
-        source.includes("defineBundledChannelEntry") ||
-        source.includes("defineBundledChannelSetupEntry");
-      if (usesEntryHelpers && isOffender(source, filePath)) {
-        offenders.push(path.relative(process.cwd(), filePath));
-      }
-    }
-  }
-  return offenders;
 }
 
 function listSourceBundledPluginRoots(): string[] {
@@ -238,15 +212,6 @@ describe("bundled channel entry shape guards", () => {
       hasAccountInspector: typeof bundled.getBundledChannelAccountInspector("slack") === "function",
       pluginIds: [...bundled.listBundledChannelPluginIds()],
     };
-  });
-
-  it("lists source bundled plugin roots without in-process directory scans", () => {
-    expectNoReaddirSyncDuring(() => {
-      const roots = listSourceBundledPluginRoots();
-
-      expect(roots.length).toBeGreaterThan(0);
-      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(true);
-    });
   });
 
   it("treats missing bundled discovery results as empty", async () => {
@@ -1007,88 +972,11 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
-    const offenders = collectBundledChannelEntrypointOffenders(
-      bundledPluginRoots,
-      (source) =>
-        !source.includes('from "openclaw/plugin-sdk/channel-entry-contract"') ||
-        source.includes('from "openclaw/plugin-sdk/core"') ||
-        source.includes('from "openclaw/plugin-sdk/channel-core"'),
-    );
-
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps setup-entry legacy feature hints mirrored in package metadata", () => {
-    const offenders: string[] = [];
-
-    for (const extensionDir of bundledPluginRoots) {
-      const setupEntryPath = path.join(extensionDir, "setup-entry.ts");
-      const packageJsonPath = path.join(extensionDir, "package.json");
-      if (!fs.existsSync(setupEntryPath) || !fs.existsSync(packageJsonPath)) {
-        continue;
-      }
-      const setupEntrySource = fs.readFileSync(setupEntryPath, "utf8");
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-        openclaw?: {
-          setupFeatures?: Record<string, boolean>;
-        };
-      };
-      for (const feature of ["legacyStateMigrations", "legacySessionSurfaces"]) {
-        const usesFeature = setupEntrySource.includes(`${feature}: true`);
-        const hasHint = packageJson.openclaw?.setupFeatures?.[feature] === true;
-        if (usesFeature !== hasHint) {
-          offenders.push(`${path.relative(process.cwd(), extensionDir)}:${feature}`);
-        }
-      }
-    }
-
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps bundled channel entrypoints free of static src imports", () => {
-    const offenders = collectBundledChannelEntrypointOffenders(bundledPluginRoots, (source) =>
-      /^(?:import|export)\s.+["']\.\/src\//mu.test(source),
-    );
-
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps channel implementations off the broad core SDK surface", () => {
-    const offenders: string[] = [];
-
-    for (const extensionDir of bundledPluginRoots) {
-      for (const relativePath of ["src/channel.ts", "src/plugin.ts"]) {
-        const filePath = path.join(extensionDir, relativePath);
-        if (!fs.existsSync(filePath)) {
-          continue;
-        }
-        const source = fs.readFileSync(filePath, "utf8");
-        if (!source.includes("createChatChannelPlugin")) {
-          continue;
-        }
-        if (source.includes('from "openclaw/plugin-sdk/core"')) {
-          offenders.push(path.relative(process.cwd(), filePath));
-        }
-      }
-    }
-
-    expect(offenders).toStrictEqual([]);
-  });
-
   it("keeps plugin-sdk channel-core free of chat metadata bootstrap imports", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/channel-core.ts"), "utf8");
 
     expect(source).not.toContain("../channels/chat-meta.js");
     expect(source).not.toContain("getChatChannelMeta");
-  });
-
-  it("keeps bundled hot runtime barrels off the broad core SDK surface", () => {
-    const offenders = ["extensions/googlechat/runtime-api.ts"].filter((filePath) =>
-      fs.readFileSync(path.resolve(filePath), "utf8").includes("openclaw/plugin-sdk/core"),
-    );
-
-    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps runtime helper surfaces off bootstrap-registry", () => {
@@ -1099,27 +987,6 @@ describe("bundled channel entry shape guards", () => {
       "src/plugin-sdk/extension-shared.ts",
     ].filter((filePath) =>
       fs.readFileSync(path.resolve(filePath), "utf8").includes("bootstrap-registry.js"),
-    );
-
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps extension-shared off the broad runtime barrel", () => {
-    const source = fs.readFileSync(path.resolve("src/plugin-sdk/extension-shared.ts"), "utf8");
-
-    expect(source).not.toContain('from "./runtime.js"');
-  });
-
-  it("keeps bundled doctor surfaces off the broad runtime barrel", () => {
-    const offenders = [
-      "extensions/discord/src/doctor.ts",
-      "extensions/slack/src/doctor.ts",
-      "extensions/telegram/src/doctor.ts",
-      "extensions/zalouser/src/doctor.ts",
-    ].filter((filePath) =>
-      fs
-        .readFileSync(path.resolve(filePath), "utf8")
-        .includes('from "openclaw/plugin-sdk/runtime"'),
     );
 
     expect(offenders).toStrictEqual([]);

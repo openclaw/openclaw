@@ -179,48 +179,24 @@ export function resolveWhatsAppOutboundMentions(params: {
   }
 
   const codeRanges = collectCodeRanges(params.text);
-  const replacements: Array<{ start: number; end: number; text: string }> = [];
   const mentionedJids = new Set<string>();
-
-  for (const match of params.text.matchAll(OUTBOUND_MENTION_RE)) {
-    const start = match.index;
-    const token = match[0];
-    if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
-      continue;
-    }
-    const rawDigits = match[1];
-    if (!rawDigits) {
-      continue;
-    }
-    const digits = rawDigits.replace(/\D/g, "");
-    const target = token.startsWith("@+")
-      ? (byPhone.get(digits) ?? byLid.get(digits))
-      : (byLid.get(digits) ?? byPhone.get(digits));
-    if (!target) {
-      continue;
-    }
-    mentionedJids.add(target.mentionJid);
-    if (target.replacementText && target.replacementText !== token) {
-      replacements.push({
-        start,
-        end: start + token.length,
-        text: target.replacementText,
-      });
-    }
-  }
-
-  if (replacements.length === 0) {
-    return { text: params.text, mentionedJids: [...mentionedJids] };
-  }
-
-  let text = "";
-  let cursor = 0;
-  for (const replacement of replacements) {
-    text += params.text.slice(cursor, replacement.start);
-    text += replacement.text;
-    cursor = replacement.end;
-  }
-  text += params.text.slice(cursor);
+  const text = params.text.replace(
+    OUTBOUND_MENTION_RE,
+    (token, rawDigits: string, start: number) => {
+      if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
+        return token;
+      }
+      const digits = rawDigits.replace(/\D/g, "");
+      const target = token.startsWith("@+")
+        ? (byPhone.get(digits) ?? byLid.get(digits))
+        : (byLid.get(digits) ?? byPhone.get(digits));
+      if (!target) {
+        return token;
+      }
+      mentionedJids.add(target.mentionJid);
+      return target.replacementText ?? token;
+    },
+  );
   return { text, mentionedJids: [...mentionedJids] };
 }
 

@@ -3,20 +3,23 @@ import type {
   UpdateCandidatePluginFileReply,
   UpdateCandidatePluginFileRequest,
 } from "./update-candidate-plugin-file.js";
-import {
-  createUpdateStateInspectionReporter,
-  formatUpdateStateInspectionError,
-} from "./update-candidate-state.diagnostics.js";
-import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  readUpdateCandidateStateInventoryInProcess,
-  readUpdateStateSchemaVersionsInProcess,
-  snapshotUpdateCandidateState,
-} from "./update-candidate-state.js";
+import type {
+  UpdateCandidatePluginHashReply,
+  UpdateCandidatePluginHashRequest,
+} from "./update-candidate-plugin-hash.js";
 
 // Internal one-shot subprocess: a hard process deadline can interrupt SQLite
 // integrity checks and backup/VACUUM, which expose no AbortSignal contract.
 async function snapshotCandidateState(): Promise<unknown> {
+  // File workers must not retain the subprocess's database/config inspection graph.
+  const { createUpdateStateInspectionReporter } =
+    await import("./update-candidate-state.diagnostics.js");
+  const {
+    discoverUpdateStateSchemaInspectionInProcess,
+    readUpdateCandidateStateInventoryInProcess,
+    readUpdateStateSchemaVersionsInProcess,
+    snapshotUpdateCandidateState,
+  } = await import("./update-candidate-state.js");
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -96,33 +99,47 @@ if (parentPort) {
   const { assertDirectoryIdentitySync } = await import("@openclaw/fs-safe/advanced");
   const { root } = await import("./fs-safe.js");
   const { copyUpdateCandidatePluginFile } = await import("./update-candidate-plugin-file.js");
+  const { hashFileMutationSnapshotSync } = await import("./file-descriptor.js");
   const { serveWorkerTasks } = await import("./worker-task-server.js");
   let destination: { path: string; root: Awaited<ReturnType<typeof root>> } | undefined;
-  serveWorkerTasks<UpdateCandidatePluginFileReply>(async (input, _channel, control) =>
-    control.runNativeSection(async (): Promise<UpdateCandidatePluginFileReply> => {
-      // SAFETY: The snapshot owner supplies its inventoried file and original root identity.
-      const request = input as UpdateCandidatePluginFileRequest;
-      try {
-        assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
-        if (destination?.path !== request.privateRoot) {
-          destination = { path: request.privateRoot, root: await root(request.privateRoot) };
-        }
-        assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
-        await copyUpdateCandidatePluginFile(request, destination.root);
-        return { type: "copied" };
-      } catch (error) {
-        return {
-          type: "failed",
-          error: error instanceof Error ? error : new Error(String(error)),
-          ...(error instanceof Error && "code" in error && typeof error.code === "string"
-            ? { code: error.code }
-            : {}),
-          ...(error instanceof Error && "details" in error ? { details: error.details } : {}),
-        };
-      }
-    }),
+  serveWorkerTasks<UpdateCandidatePluginFileReply | UpdateCandidatePluginHashReply>(
+    async (input, _channel, control) =>
+      control.runNativeSection(
+        async (): Promise<UpdateCandidatePluginFileReply | UpdateCandidatePluginHashReply> => {
+          // SAFETY: The snapshot owner supplies its inventoried file and original root identity.
+          const request = input as
+            | UpdateCandidatePluginFileRequest
+            | UpdateCandidatePluginHashRequest;
+          try {
+            if ("type" in request) {
+              return {
+                type: "hashed",
+                sha256: hashFileMutationSnapshotSync(request.filePath, request.expected),
+              };
+            }
+            assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
+            if (destination?.path !== request.privateRoot) {
+              destination = { path: request.privateRoot, root: await root(request.privateRoot) };
+            }
+            assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
+            await copyUpdateCandidatePluginFile(request, destination.root);
+            return { type: "copied" };
+          } catch (error) {
+            return {
+              type: "failed",
+              error: error instanceof Error ? error : new Error(String(error)),
+              ...(error instanceof Error && "code" in error && typeof error.code === "string"
+                ? { code: error.code }
+                : {}),
+              ...(error instanceof Error && "details" in error ? { details: error.details } : {}),
+            };
+          }
+        },
+      ),
   );
 } else {
+  const { formatUpdateStateInspectionError } =
+    await import("./update-candidate-state.diagnostics.js");
   void snapshotCandidateState()
     .then((value) => process.stdout.write(JSON.stringify(value)))
     .catch((error: unknown) => {

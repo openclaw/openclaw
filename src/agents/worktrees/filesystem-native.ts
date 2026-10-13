@@ -14,6 +14,7 @@ import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
+import { setWorktreePreparationTemplate } from "./preparation-timing.js";
 
 type ReadRuntime = {
   pool?: WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>;
@@ -59,14 +60,16 @@ async function read(
   }
   const pool = (runtime.pool ??= new WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>({
     workerUrl: workerUrl(),
-    maxWorkers: 1,
+    workerClass: "reader",
     idleTimeoutMs: 30_000,
   }));
   const reply = await pool.run(command, {
     inputBytes:
       command.type === "probe"
         ? Buffer.byteLength(command.parent)
-        : command.paths.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname), 0),
+        : command.type === "acl"
+          ? Buffer.byteLength(command.path)
+          : command.paths.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname), 0),
     signal: options.signal,
     timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
   });
@@ -110,7 +113,22 @@ export const nativeWorktreeFilesystem = {
     if (reply.type !== "probe") {
       throw new Error("Native worktree check returned an invalid reply");
     }
+    setWorktreePreparationTemplate("unavailable", {
+      backend: reply.backend ?? "none",
+      reason: reply.backend
+        ? "filesystem-supported"
+        : reply.nativeMode === "off"
+          ? "native-disabled"
+          : "filesystem-unsupported-or-native-unavailable",
+    });
     return reply.backend;
+  },
+  async readAcl(this: void, path: string, options: WorktreeFilesystemOptions) {
+    const reply = await read({ type: "acl", path }, options);
+    if (reply.type !== "acl") {
+      throw new Error("Native worktree ACL inspection returned an invalid reply");
+    }
+    return reply.acl;
   },
   async readMetadata(this: void, paths: string[], options: WorktreeFilesystemOptions) {
     const reply = await read({ type: "metadata", paths }, options);

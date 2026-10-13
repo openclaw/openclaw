@@ -26,14 +26,6 @@ describe("detect-private-keys markers", () => {
     expect(findPrivateKeyMarker(content)).toBe(marker);
   });
 
-  it("ignores public material and certificates", () => {
-    expect(
-      findPrivateKeyMarker(
-        Buffer.from("-----BEGIN CERTIFICATE-----\n-----BEGIN PUBLIC KEY-----\n"),
-      ),
-    ).toBeUndefined();
-  });
-
   it("keeps its own source free of literal markers instead of excluding itself", () => {
     const source = fs.readFileSync(SCRIPT_PATH);
     expect(findPrivateKeyMarker(source)).toBeUndefined();

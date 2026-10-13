@@ -29,6 +29,7 @@ import type {
   ImmutableInstallRecord,
   ImmutablePreparedGeneration,
 } from "./update-immutable-install-schema.js";
+import { projectImmutableInstall } from "./update-immutable-install.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sha = "a".repeat(40);
@@ -238,6 +239,182 @@ it("persists adoption and preparation without changing the selected generation",
   expect(fs.readlinkSync(path.join(root, "current"))).toBe(`releases/${sha}`);
   expect(fs.statSync(controlPath()).mode & 0o777).toBe(0o755);
   expect(fs.statSync(journalPath()).mode & 0o777).toBe(0o644);
+});
+
+it.each(["candidate-verification-pending", "private error: token=fixture-secret /private/state"])(
+  "projects retained recovery after a fresh record read without disclosing private state (%s)",
+  (failure) => {
+    const record = beginActivation();
+    const operation = record.activation!.operation!;
+    updateImmutableInstallRecord(
+      record,
+      {
+        ...record,
+        activation: { operation: { ...operation, failure } },
+      },
+      () => {},
+    );
+    const before = controlFiles();
+    const projection = projectImmutableInstall(read());
+    expect(projection.activation).toEqual({
+      operationId: operation.operationId,
+      phase: "publishing",
+      previousSha: sha,
+      candidateSha,
+      failure: failure === "candidate-verification-pending" ? failure : "details-withheld",
+      recoveryCommand: `${descriptor.runtime.path} ${operation.recovery.helperPath}`,
+    });
+    expect(projection.prepared).toEqual({
+      sha: candidateSha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: 1234,
+    });
+    expect(projection).not.toHaveProperty("lastActivation");
+    expect(JSON.stringify(projection)).not.toContain("fixture-secret");
+    expect(JSON.stringify(projection)).not.toContain("synthetic-state-key");
+    expect(controlFiles()).toEqual(before);
+  },
+);
+
+it.each([
+  {
+    outcome: "succeeded",
+    gateway: { pid: 4242, bootId: "fixture-boot", version: "2026.10.1", buildId: "fixture-build" },
+  },
+  {
+    outcome: "rolled-back",
+    gateway: {
+      pid: 4243,
+      bootId: "restored-boot",
+      version: "2026.10.1",
+      buildId: "restored-build",
+    },
+  },
+  { outcome: "succeeded", gateway: undefined },
+] as const)(
+  "projects a historical $outcome receipt from a fresh observer",
+  ({ outcome, gateway }) => {
+    const record = beginActivation();
+    const lastResult = {
+      operationId: record.activation!.operation!.operationId,
+      outcome,
+      selectedSha: sha,
+      verifiedAtMs: 1000,
+      ...(gateway ? { gateway } : {}),
+    };
+    updateImmutableInstallRecord(record, { ...record, activation: { lastResult } }, () => {});
+    const projection = projectImmutableInstall(read());
+    expect(projection.lastActivation).toEqual(lastResult);
+    expect(projection).not.toHaveProperty("activation");
+  },
+);
+it("retains publication provenance across preparations without backfilling older releases", () => {
+  const adopted = createImmutableInstallRecord(descriptor, () => {});
+  const legacy = recordImmutablePreparedGeneration(adopted, prepared, () => {});
+  const enabled = updateImmutableInstallRecord(
+    legacy,
+    {
+      ...legacy,
+      descriptor: {
+        ...descriptor,
+        version: 3,
+        activationEnabled: true,
+        releaseRetention: {
+          version: 1,
+          mode: "inspect",
+          keepVerifiedGenerations: 3,
+          pins: [{ sha, identity: descriptor.current.identity }],
+        },
+      },
+    },
+    () => {},
+  );
+  expect(enabled.releases).toEqual([]);
+  const publish = (previous: ImmutableInstallRecord, nextSha: string) => {
+    const nextPath = path.join(root, "releases", nextSha);
+    fs.mkdirSync(nextPath, { mode: 0o755 });
+    return recordImmutablePreparedGeneration(
+      previous,
+      {
+        ...prepared,
+        sha: nextSha,
+        path: nextPath,
+        identity: identity(nextPath),
+      },
+      () => {},
+    );
+  };
+  const first = publish(enabled, "c".repeat(40));
+  const second = publish(first, "d".repeat(40));
+  expect(
+    second.releases?.map((entry) => [entry.sha, entry.publishedRevision, entry.verifiedRevision]),
+  ).toEqual([
+    ["c".repeat(40), first.revision, null],
+    ["d".repeat(40), second.revision, null],
+  ]);
+  expect(read()).toEqual(second);
+  expect(fs.readdirSync(path.join(root, "releases")).toSorted()).toEqual([
+    sha,
+    candidateSha,
+    "c".repeat(40),
+    "d".repeat(40),
+  ]);
+  expect(fs.readlinkSync(path.join(root, "current"))).toBe(`releases/${sha}`);
+  expect(() => recordImmutablePreparedGeneration(first, prepared, () => {})).toThrow(
+    "no longer current",
+  );
+  expect(read()).toEqual(second);
+});
+
+it("rolls back inventory publication with a failed preparation receipt", () => {
+  const adopted = createImmutableInstallRecord(
+    {
+      ...descriptor,
+      version: 3,
+      activationEnabled: true,
+      releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+    },
+    () => {},
+  );
+  const db = new DatabaseSync(journalPath());
+  try {
+    db.exec(
+      "CREATE TRIGGER fail_receipt BEFORE UPDATE ON immutable_installation BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END",
+    );
+  } finally {
+    db.close();
+  }
+  expect(() => recordImmutablePreparedGeneration(adopted, prepared, () => {})).toThrow(
+    "synthetic receipt failure",
+  );
+  expect(read()).toEqual(adopted);
+  expect(read().releases).toEqual([]);
+  expect(fs.existsSync(prepared.path)).toBe(true);
+});
+
+it("refuses conflicting publication identities instead of rewriting owned provenance", () => {
+  const adopted = createImmutableInstallRecord(
+    {
+      ...descriptor,
+      version: 3,
+      activationEnabled: true,
+      releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+    },
+    () => {},
+  );
+  const published = recordImmutablePreparedGeneration(adopted, prepared, () => {});
+  expect(() =>
+    recordImmutablePreparedGeneration(
+      published,
+      {
+        ...prepared,
+        buildDigest: "9".repeat(64),
+      },
+      () => {},
+    ),
+  ).toThrow("conflicts with its retained identity");
+  expect(read()).toEqual(published);
 });
 
 it("rejects a stale preparation instead of replacing a newer receipt", () => {

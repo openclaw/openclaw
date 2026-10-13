@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -62,46 +63,36 @@ it("refuses a retired admitted run before creating or preparing its workspace", 
   }
 });
 
-it.each(["ro", "rw"] as const)(
-  "keeps writable policy with the %s placement without preparing its paths locally",
-  async (workspaceAccess) => {
-    await withOpenClawTestState({ label: "placement-workspace-policy" }, async (state) => {
-      const remoteWorkspace = state.path("remote-execution-only");
-      const preparation = resolveAttemptWorkspaceSandbox({
-        workspaceDir: state.workspaceDir,
-        sessionId: "remote-policy",
-        sessionKey: "agent:main:remote-policy",
-        agentId: "main",
-        requireWritableSandbox: true,
-        requireWorkspaceOnly: true,
-        config: {
-          agents: { defaults: { sandbox: { mode: "all", backend: "unavailable-fixture" } } },
+it("keeps writable placement policy without preparing its paths locally", async () => {
+  await withOpenClawTestState({ label: "placement-workspace-policy" }, async (state) => {
+    const remoteWorkspace = state.path("remote-execution-only");
+    const preparation = resolveAttemptWorkspaceSandbox({
+      workspaceDir: state.workspaceDir,
+      sessionId: "remote-policy",
+      sessionKey: "agent:main:remote-policy",
+      agentId: "main",
+      requireWorkspaceOnly: true,
+      config: {
+        agents: { defaults: { sandbox: { mode: "all", backend: "unavailable-fixture" } } },
+      },
+      placementSandbox: createSandboxTestContext({
+        overrides: {
+          workspaceDir: remoteWorkspace,
+          agentWorkspaceDir: remoteWorkspace,
+          containerWorkdir: "/native/guest",
+          workspaceAccess: "rw",
         },
-        placementSandbox: createSandboxTestContext({
-          overrides: {
-            workspaceDir: remoteWorkspace,
-            agentWorkspaceDir: remoteWorkspace,
-            containerWorkdir: "/native/guest",
-            workspaceAccess,
-          },
-        }),
-      });
-      if (workspaceAccess === "ro") {
-        await expect(preparation).rejects.toThrow(
-          "sandbox workspace is not read-write; collection review skipped",
-        );
-      } else {
-        await expect(preparation).resolves.toMatchObject({
-          effectiveWorkspace: state.workspaceDir,
-          effectiveCwd: state.workspaceDir,
-          effectiveFsWorkspaceOnly: true,
-          sandbox: null,
-        });
-      }
-      await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+      }),
     });
-  },
-);
+    await expect(preparation).resolves.toMatchObject({
+      effectiveWorkspace: state.workspaceDir,
+      effectiveCwd: state.workspaceDir,
+      effectiveFsWorkspaceOnly: true,
+      sandbox: null,
+    });
+    await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
 
 it.each(["realpath", "mkdir"] as const)(
   "rejects workspace preparation revoked during %s",
@@ -153,6 +144,7 @@ it.each(["realpath", "mkdir"] as const)(
 
 it("reports the selected sandbox policy without duplicate workspace creation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:optional";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -184,6 +176,7 @@ it("reports the selected sandbox policy without duplicate workspace creation", a
 
 it("enforces required sandboxing for an independent policy session even when mode is off", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:required";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },

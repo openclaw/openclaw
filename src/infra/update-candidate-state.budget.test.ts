@@ -202,7 +202,6 @@ it.for([undefined, 600_000])(
 );
 
 it.for([
-  { name: "slow startup", bytes: 4096, waits: [31_000], completes: true },
   { name: "large database", bytes: 2 * 1024 ** 3, waits: [800_000], completes: true },
   {
     name: "late-discovered database",

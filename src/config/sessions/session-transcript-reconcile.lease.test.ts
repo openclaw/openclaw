@@ -2,20 +2,23 @@ import { MessageChannel, type Worker, type MessagePort } from "node:worker_threa
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readSqliteDatabaseCleanClose } from "../../infra/sqlite-database-admission.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "./session-transcript-reconcile-pool.js";
 import {
@@ -40,6 +43,7 @@ const scope = { ...options, sessionId: "lease-failure", sessionKey: "agent:main:
 it("preserves verification until the writer closes after read-only reconciliation", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-reconcile-verification-") };
   await withEnvAsync(env, async () => {
+    setRuntimeConfigSnapshot({});
     try {
       await persistSessionTranscriptTurn(scope, {
         messages: [{ eventId: "seed", message: { role: "user", content: "lease fixture" } }],
@@ -47,14 +51,15 @@ it("preserves verification until the writer closes after read-only reconciliatio
       });
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
-      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+      expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
     } finally {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 });
@@ -72,26 +77,22 @@ it.each([
   async (fault) => {
     const stateDir = tempDirs.make("openclaw-reconcile-lease-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      setRuntimeConfigSnapshot({});
       const workers: Worker[] = [];
       const ports: MessagePort[] = [];
       const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
       let leaseId: string | undefined;
       let canonicalLeaseId: string | undefined;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const admissionSpy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (
-              request.stage === "open" &&
-              isRecord(request.facts) &&
-              typeof request.facts.leaseId === "string"
-            ) {
-              canonicalLeaseId = request.facts.leaseId;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admissionSpy = probe.admission(admission, (request, grant, admit) => {
+        if (
+          request.stage === "open" &&
+          isRecord(request.facts) &&
+          typeof request.facts.leaseId === "string"
+        ) {
+          canonicalLeaseId = request.facts.leaseId;
+        }
+        admit(request, grant);
+      });
       const rejectLeaseRelease = new Int32Array(new SharedArrayBuffer(4));
       try {
         await persistSessionTranscriptTurn(scope, {
@@ -99,6 +100,8 @@ it.each([
           touchSessionEntry: false,
         });
         await waitForSessionTranscriptIndexReconcile(options);
+        // Exercise cold publication admission independently of the seed writer.
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
         const state = openOpenClawStateDatabase();
@@ -310,6 +313,7 @@ it.each([
         await closeOpenClawStateDatabaseAsync();
 
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
       }
     });
   },

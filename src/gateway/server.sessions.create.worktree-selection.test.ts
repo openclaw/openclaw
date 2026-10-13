@@ -4,12 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import * as registryReads from "../agents/worktrees/registry-read.js";
+import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -49,7 +55,7 @@ function managedWorktreeFixture(params: {
   ownerId: string;
   path: string;
   repoRoot: string;
-}): NonNullable<ReturnType<typeof managedWorktrees.findLiveById>> {
+}): ManagedWorktreeRecord {
   return {
     ...params,
     baseRef: "HEAD",
@@ -61,7 +67,7 @@ function managedWorktreeFixture(params: {
   };
 }
 
-test.each([
+test.for([
   {
     name: "registered catalog target",
     request: { catalogId: "claude" },
@@ -107,8 +113,11 @@ test.each([
     },
   },
 ])(
-  "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
-  async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) =>
+  "sessions.create names its session during checkout preparation through the $name selection",
+  async (
+    { request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection },
+    { signal },
+  ) =>
     await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
       testState.agentConfig = {
@@ -153,6 +162,29 @@ test.each([
         });
       }
       let sessionKey: string | undefined;
+      const titlePersisted = createDeferredCore();
+      const preparingWorkspace = createDeferredCore();
+      const releaseWorkspace = createDeferredCore();
+      const createWorktree = captureMethodCall("createWithOutcome")(
+        ManagedWorktreeService.prototype,
+      );
+      const worktreeSpy = vi
+        .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+        .mockImplementation(async function (this: ManagedWorktreeService, params) {
+          preparingWorkspace.resolve();
+          await releaseWorkspace.promise;
+          return createWorktree(this, params);
+        });
+      const checkTitle = () => {
+        if (
+          sessionKey &&
+          loadSessionEntry({ agentId: "main", sessionKey, storePath })?.displayName ===
+            "Attachment Repair"
+        ) {
+          titlePersisted.resolve();
+        }
+      };
+      const stopTitleObserver = sessionChanges.subscribe(checkTitle);
       const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
       const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
       const message = "Review this rollout [[reply_to_current]]";
@@ -196,18 +228,28 @@ test.each([
           runStarted: true,
         });
         sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+        await withinTest(preparingWorkspace.promise, signal);
+        checkTitle();
+        await withinTest(titlePersisted.promise, signal);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCountBefore);
+        releaseWorkspace.resolve();
         expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
-        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+        const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+        expect(entry).toMatchObject({
           displayName: "Attachment Repair",
-          worktree: { branch: "openclaw/attachment-repair" },
         });
+        expect(entry?.worktree?.branch).toMatch(/^openclaw\/[a-z0-9-]+$/u);
+        expect(entry?.worktree?.branch).not.toBe("openclaw/attachment-repair");
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCountBefore + 1);
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
           expect.objectContaining(expectedTitleSelection),
         );
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
       } finally {
+        stopTitleObserver();
+        releaseWorkspace.resolve();
         await settleWorkspaceRuns(context, storePath, sessionKey, true);
+        worktreeSpy.mockRestore();
         await removeSessionWorktree(sessionKey);
         setActivePluginRegistry(createEmptyPluginRegistry());
         testState.agentConfig = undefined;
@@ -275,16 +317,18 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
   ]);
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
-  const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
-    record: managedWorktreeFixture({
-      id: "worktree-options",
-      name: "target-task",
-      ownerId: key,
-      path: worktreePath,
-      repoRoot,
-    }),
-    materialized: true,
-  });
+  const createSpy = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockResolvedValue({
+      record: managedWorktreeFixture({
+        id: "worktree-options",
+        name: "target-task",
+        ownerId: key,
+        path: worktreePath,
+        repoRoot,
+      }),
+      materialized: true,
+    });
   try {
     const created = await directSessionReq<{
       entry: {
@@ -369,9 +413,9 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   testState.agentConfig = { workspace: configuredWorkspace };
   await createSessionStoreDir();
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
     .mockResolvedValue({ record, materialized: true });
-  const findSpy = vi.spyOn(managedWorktrees, "findLiveById").mockReturnValue(record);
+  const findSpy = vi.spyOn(registryReads, "readSessionWorktreeBinding").mockResolvedValue(record);
   try {
     const created = await directSessionReq<{
       entry: {

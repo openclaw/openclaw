@@ -16,11 +16,8 @@ const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
 const MAX_REPORTED = 6;
 
 interface StalePluginRuntimeSymlink {
-  /** Package or scoped package name for the stale symlink. */
   readonly name: string;
-  /** Symlink path under the containing node_modules directory. */
   readonly path: string;
-  /** Target recorded by the symlink, for diagnostic output. */
   readonly target: string;
   readonly assertCurrent: () => void;
 }
@@ -62,23 +59,19 @@ async function collectStalePluginRuntimeSymlinks(
   return stale.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-function stalePluginRuntimeSymlinkToHealthFinding(item: StalePluginRuntimeSymlink): HealthFinding {
-  return {
-    checkId: "core/doctor/stale-plugin-runtime-symlinks",
-    severity: "warning",
-    message: `Stale plugin-runtime symlink ${item.name} points at ${item.target}.`,
-    path: item.path,
-    target: item.path,
-    requirement: "stale-plugin-runtime-symlink-removed",
-    fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
-  };
-}
-
 export async function collectStalePluginRuntimeSymlinkHealthFindings(
   params: { packageRoot?: string | null } = {},
 ): Promise<HealthFinding[]> {
   return (await collectStalePluginRuntimeSymlinks(params.packageRoot)).map(
-    stalePluginRuntimeSymlinkToHealthFinding,
+    (item): HealthFinding => ({
+      checkId: "core/doctor/stale-plugin-runtime-symlinks",
+      severity: "warning",
+      message: `Stale plugin-runtime symlink ${item.name} points at ${item.target}.`,
+      path: item.path,
+      target: item.path,
+      requirement: "stale-plugin-runtime-symlink-removed",
+      fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
+    }),
   );
 }
 

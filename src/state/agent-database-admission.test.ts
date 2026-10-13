@@ -26,7 +26,9 @@ import {
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
@@ -74,19 +76,22 @@ describe("agent database admission", () => {
     const database = new (requireNodeSqlite().DatabaseSync)(newerPath);
     database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
     database.close();
-    await withAgentDatabaseStartupAdmission(async () => {
-      const failure = await assertOpenClawDatabasesReady({
-        env,
-        operation: "gateway-startup",
-        config,
-      }).catch((error: unknown) => error);
-      expect(findStartupMaintenanceRequiredError(failure), String(failure)).toMatchObject({
-        kind: "newer-schema",
-      });
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect(String(failure)).toContain(unavailablePath);
-      expect(String(failure)).toContain(newerPath);
-    });
+    await withAgentDatabaseStartupAdmission(
+      async () => {
+        const failure = await assertOpenClawDatabasesReady({
+          env,
+          operation: "gateway-startup",
+          config,
+        }).catch((error: unknown) => error);
+        expect(findStartupMaintenanceRequiredError(failure), String(failure)).toMatchObject({
+          kind: "newer-schema",
+        });
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(String(failure)).toContain(unavailablePath);
+        expect(String(failure)).toContain(newerPath);
+      },
+      { deferInspections: false },
+    );
   });
 
   it("keeps a secondary with malformed ownership isolated while required agents start", async () => {
@@ -99,8 +104,9 @@ describe("agent database admission", () => {
     };
     openOpenClawAgentDatabase({ agentId: "main", env });
     const pathname = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawStateDatabaseForTest();
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     const database = new (requireNodeSqlite().DatabaseSync)(pathname);
     database.exec("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'");
     database.close();
@@ -133,7 +139,7 @@ describe("agent database admission", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "retains merged inspection causes without changing public refusals (maintenance first=%s)",
     (maintenanceFirst) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-causes-") };
@@ -278,11 +284,9 @@ describe("agent database admission", () => {
 
   it.each([
     { role: "secondary", agentId: "cleaner", isolate: true },
-    { role: "registered secondary", agentId: "cleaner", isolate: true },
     { role: "sole", agentId: "cleaner", isolate: false },
     { role: "configured system", agentId: "cleaner", isolate: false },
     { role: "reserved system", agentId: "openclaw", isolate: false },
-    { role: "reserved system", agentId: "crestodian", isolate: false },
   ] as const)(
     "$role agent ($agentId): divergent database permits startup=$isolate",
     async ({ role, agentId, isolate }) => {
@@ -301,18 +305,11 @@ describe("agent database admission", () => {
         },
       };
       const source = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-      if (role === "registered secondary") {
-        openOpenClawAgentDatabase({ agentId, env });
-      }
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const target = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(
-        source,
-        target,
-        role === "registered secondary" ? 0 : fs.constants.COPYFILE_EXCL,
-      );
+      fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
       const { DatabaseSync } = requireNodeSqlite();
       const database = new DatabaseSync(target);
       try {

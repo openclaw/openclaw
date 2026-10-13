@@ -15,10 +15,6 @@ type TelegramAutoSelectFamilyDecision = {
 
 let wsl2SyncCache: boolean | undefined;
 
-function isWSL2SyncCached(): boolean {
-  return (wsl2SyncCache ??= isWSL2Sync());
-}
-
 type TelegramDnsResultOrderDecision = {
   value: "ipv4first" | "verbatim";
   source: string;
@@ -40,7 +36,7 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
     return { value: params.network.autoSelectFamily, source: "config" };
   }
   // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to use IPv4 directly
-  if (isWSL2SyncCached()) {
+  if ((wsl2SyncCache ??= isWSL2Sync())) {
     return { value: false, source: "default-wsl2" };
   }
   return { value: true, source: "default-node22" };
@@ -50,20 +46,15 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
 }): TelegramDnsResultOrderDecision {
-  const envValue = normalizeOptionalLowercaseString(process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
-  if (envValue === "ipv4first" || envValue === "verbatim") {
-    return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
+  for (const [source, read] of [
+    [`env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`, () => process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]],
+    ["config", () => params?.network?.dnsResultOrder],
+    ["process-default", () => dns.getDefaultResultOrder()],
+  ] as const) {
+    const value = normalizeOptionalLowercaseString(read());
+    if (value === "ipv4first" || value === "verbatim") {
+      return { value, source };
+    }
   }
-
-  const configValue = normalizeOptionalLowercaseString(params?.network?.dnsResultOrder);
-  if (configValue === "ipv4first" || configValue === "verbatim") {
-    return { value: configValue, source: "config" };
-  }
-
-  const processDefaultValue = normalizeOptionalLowercaseString(dns.getDefaultResultOrder());
-  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
-    return { value: processDefaultValue, source: "process-default" };
-  }
-
   return { value: "ipv4first", source: "default-node22" };
 }

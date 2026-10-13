@@ -5,14 +5,101 @@ const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 
 import { getRuntimeConfig } from "../config/config.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 describe("worker placement session events", () => {
+  it("finishes background reconciliation after the notifying session request closes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const time = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(time.clock);
+      const placements = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase(),
+      });
+      let completed = createDeferredCore<boolean>();
+      const reconcileActive = vi.fn(async () => {
+        try {
+          await placements.readRecoveryCandidates();
+          completed.resolve(true);
+        } catch (error) {
+          completed.resolve(false);
+          throw error;
+        }
+      });
+      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+        read: vi.fn(),
+        version: () => 0,
+        sweep: vi.fn().mockResolvedValue(undefined),
+      });
+      runtimeFactoryMocks.createDispatch.mockReturnValue({
+        dispatch: vi.fn(),
+        forceDestroyEnvironment: vi.fn(),
+        reclaim: vi.fn(),
+        reconcile: vi.fn().mockResolvedValue(undefined),
+        reconcileActive,
+      });
+      const warn = vi.fn();
+      const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: [],
+        scheduler,
+        getCommittedRuntimeConfig: getRuntimeConfig,
+        cancelSessionWork: vi.fn(async () => {}),
+        placements: {
+          workspaceResultInstanceId: () => "gateway-test",
+          getAsync: async () => undefined,
+          getManyAsync: async () => new Map(),
+          listAsync: async () => [],
+          retireSessionPlacementAsync: vi.fn(async () => {}),
+          pruneOrphanedWorkspaceReconciliations: async () => [],
+          listWorkspaceReconciliationOwners: async () => [],
+          listPendingWorkspaceResultsAsync: async () => [],
+        } as never,
+        environments: {
+          subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
+          installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
+          start: vi.fn(),
+          stop: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        gatewayNamespace: "gateway-test",
+        revokeSessionAuthority: vi.fn(),
+        warn,
+      });
+      const sidecar = await runtime.startRuntime({
+        isClosePreludeStarted: () => false,
+        registerSidecar: vi.fn(),
+        unregisterSidecar: vi.fn(),
+      });
+      try {
+        await time.advanceBy(60_000);
+        reconcileActive.mockClear();
+        completed = createDeferredCore<boolean>();
+        const request = new AsyncWorkScope();
+        request.run(() =>
+          emitSessionIdentityMutation({
+            kind: "delete",
+            agentId: "main",
+            databaseIdentity: Symbol("session-database"),
+            previous: { sessionId: "retired-session", sessionKeys: ["agent:main:retired"] },
+          }),
+        );
+        await request.drain();
+        expect(await completed.promise).toBe(true);
+        expect(reconcileActive).toHaveBeenCalledOnce();
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        await sidecar?.stop();
+      }
+    });
+  });
+
   it("reports a failed reconciliation queued by a session change without leaking rejection", async () => {
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
@@ -35,14 +122,16 @@ describe("worker placement session events", () => {
     });
     const warn = vi.fn(() => failureReported.resolve());
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
-        get: () => undefined,
-        list: () => [],
-        retireSessionPlacement: vi.fn(),
+        getAsync: async () => undefined,
+        getManyAsync: async () => new Map(),
+        listAsync: async () => [],
+        retireSessionPlacementAsync: vi.fn(async () => {}),
         pruneOrphanedWorkspaceReconciliations: async () => [],
         listWorkspaceReconciliationOwners: async () => [],
         listPendingWorkspaceResultsAsync: async () => [],
@@ -65,6 +154,7 @@ describe("worker placement session events", () => {
     let scheduledWake: void | Promise<void> = undefined;
     try {
       await time.advanceBy(60_000);
+      expect(warn).not.toHaveBeenCalled();
       reconcileActive.mockClear();
       reconcileActive
         .mockImplementationOnce(() => {

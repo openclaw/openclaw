@@ -347,9 +347,6 @@ export class SelectPicker<
         this.openMenu(event.key === "ArrowUp");
         return;
       }
-      if (!printable) {
-        return;
-      }
       event.preventDefault();
       if (this.openMenu() === "search") {
         this.query = event.key;

@@ -1,5 +1,6 @@
 openclaw-board-view {
   display: block;
+  position: relative;
   min-width: 0;
   width: 100%;
 }
@@ -20,6 +21,11 @@ openclaw-board-view {
   color: var(--danger);
   font-size: 12px;
   padding: 9px 12px;
+}
+
+.board-view--loading {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .board-tabs {

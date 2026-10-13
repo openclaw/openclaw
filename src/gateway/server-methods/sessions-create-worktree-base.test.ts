@@ -128,12 +128,12 @@ test("sessions.create revalidates an unavailable remote base before retrying", a
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
       "pendingWorktree",
     );
-    expect(managedWorktrees.findLiveByOwner("session", sessionKey)?.baseRef).toBe(
+    expect((await managedWorktrees.findLiveByOwner("session", sessionKey))?.baseRef).toBe(
       "origin/missing-remote-base",
     );
   } finally {
     await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+    const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
     if (owned) {
       await managedWorktrees.remove({
         id: owned.id,
@@ -193,10 +193,10 @@ test("sessions.create accepts a fresh valid remote base without refreshing the c
   try {
     await settleWorkspaceRuns(context, storePath, sessionKey);
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    expect(managedWorktrees.findLiveByOwner("session", sessionKey)?.baseRef).toBe("main");
+    expect((await managedWorktrees.findLiveByOwner("session", sessionKey))?.baseRef).toBe("main");
   } finally {
     await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+    const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
     if (owned) {
       await managedWorktrees.remove({
         id: owned.id,
@@ -322,7 +322,7 @@ test.each(["local", "remote"] as const)(
         lastRunError: expect.stringContaining("23"),
         pendingWorktree: { baseRef: "accepted-base", baseCommit: acceptedCommit },
       });
-      expect(managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
+      expect(await managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
       await execFileAsync("git", ["-C", workspace, "commit", "--allow-empty", "-m", "move base"]);
       await execFileAsync("git", ["-C", workspace, "branch", "-f", "accepted-base", "HEAD"]);
       await fs.writeFile(setup, "#!/bin/sh\nexit 0\n");
@@ -339,7 +339,7 @@ test.each(["local", "remote"] as const)(
       expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
       await settleWorkspaceRuns(context, storePath, sessionKey);
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      const worktree = managedWorktrees.findLiveByOwner("session", sessionKey);
+      const worktree = await managedWorktrees.findLiveByOwner("session", sessionKey);
       if (!worktree) {
         throw new Error("expected a managed worktree");
       }
@@ -352,7 +352,7 @@ test.each(["local", "remote"] as const)(
       );
     } finally {
       await settleWorkspaceRuns(context, storePath, sessionKey, true);
-      const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+      const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
       if (owned) {
         await managedWorktrees.remove({
           id: owned.id,
@@ -438,7 +438,7 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(loadSessionEntry(target)?.sessionId).toBe(failed.sessionId);
   } finally {
     await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+    const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
     if (owned) {
       await managedWorktrees.remove({
         id: owned.id,

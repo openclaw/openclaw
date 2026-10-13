@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { readJson, write } from "../fixtures/common.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -435,8 +436,7 @@ function assertActivation() {
   process.kill(activation.processId, 0);
   const config = readJson(configPath);
   assert.equal(config.plugins.slots.contextEngine, pluginId);
-  const database = new DatabaseSync(activation.databasePath, { readOnly: true });
-  try {
+  readDatabase(activation.databasePath, (database) => {
     const read = database.prepare(
       "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
     );
@@ -454,9 +454,7 @@ function assertActivation() {
       activation.entries[2].value,
       "Activation changed another process",
     );
-  } finally {
-    database.close();
-  }
+  });
   const receipt = {
     processId: activation.processId,
     selectedEngine: pluginId,

@@ -48,7 +48,6 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
-  reason: "expired";
   resumedRuns: Set<object>;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;
@@ -61,7 +60,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<void> {
-  const { runId, entry, now, reason, resumedRuns } = params;
+  const { runId, entry, now, resumedRuns } = params;
   const stateContext = captureOpenClawStateWorkerContext();
   const generation = entry.generation;
   const resumeKey = getSubagentRunRuntimeKey(entry);
@@ -87,17 +86,22 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     skipRequesterSettleWake: true,
     stateContext,
     isCurrent,
-    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, reason),
+    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, "expired"),
   });
   assertCurrent();
   resumedRuns.delete(resumeKey);
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
   params.warn("subagent suspended delivery discarded", {
-    reason,
+    reason: "expired",
     runId: entry.runId,
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
+    suspendedAt: entry.delivery?.suspendedAt,
+    suspendedReason: entry.delivery?.suspendedReason,
+    lastError: entry.delivery?.lastError,
+    recovery:
+      "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
   });
   if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
     await safeRemoveAttachmentsDir(entry, isHookCurrent);

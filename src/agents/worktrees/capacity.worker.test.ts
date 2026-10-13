@@ -160,24 +160,30 @@ it.for(["parent", "child"] as const)(
           },
         }),
     );
-    await withWorktreeAllocationLease({ env: f.env, id: "nested-restore" }, async (guard) => {
-      const capacity = createWorktreeDiskAdmission({
-        env: f.env,
-        workerAuthority: guard.workerAuthority,
-        // Exercise the worker commit grant; native filesystem admission is covered separately.
-        assertCurrent: () => {},
-      });
-      try {
-        await expect(
-          capacity.requireDiskSpace([{ path: f.root, bytes: 1 }], "nested snapshot fixture", true),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        expect(restoreClock).toBeDefined();
-        expect(f.debts()).toEqual([]);
-      } finally {
-        restoreClock?.();
-        await capacity.release();
-      }
-    });
+    await expect(
+      withWorktreeAllocationLease({ env: f.env, id: "nested-restore" }, async (guard) => {
+        const capacity = createWorktreeDiskAdmission({
+          env: f.env,
+          workerAuthority: guard.workerAuthority,
+          // Exercise the worker commit grant; native filesystem admission is covered separately.
+          assertCurrent: () => {},
+        });
+        try {
+          await expect(
+            capacity.requireDiskSpace(
+              [{ path: f.root, bytes: 1 }],
+              "nested snapshot fixture",
+              true,
+            ),
+          ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+          expect(restoreClock).toBeDefined();
+          expect(f.debts()).toEqual([]);
+        } finally {
+          restoreClock?.();
+          await capacity.release();
+        }
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
   },
 );
 

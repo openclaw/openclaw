@@ -1,19 +1,20 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
+import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { resolveFollowupRunToolAuthorityFingerprintAsync } from "./reply-tool-authority.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { createTypingController } from "./typing.js";
 
@@ -123,25 +124,30 @@ function createAdmissionFixture() {
     baseBodyTrimmedRaw: body,
     effectiveResetTriggered: false,
     isBareSessionReset: false,
-    startupAction: "new",
-    startupContextPrelude: null,
-    softResetTail: "",
     shouldInjectGroupIntro: false,
     typingMode: "never",
     isMainSession: false,
-    inboundUserContextPromptJoiner: undefined,
     terminalReplyExpectation: "optional",
     sessionEntry: entry,
     traceRunPhase: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
-    baseBodyFinal: body,
     prefixedBodyBase: body,
     hasUserBody: true,
     workspaceDir: "/tmp/workspace",
     skillsWorkspaceDir: "/tmp/workspace",
     useFastReplyRuntime: false,
     thinkingRuntime: "embedded",
-    getInboundContext: () => ({ activeGoalContext: undefined, inboundUserContext: "" }),
-    refreshInboundContextAfterAdmissionWait: async () => {},
+    buildPromptBodies: (additions) =>
+      buildReplyPromptEnvelope({
+        ctx,
+        sessionCtx: ctx,
+        baseBody: body,
+        hasUserBody: true,
+        inboundUserContext: "",
+        isBareSessionReset: false,
+        startupAction: "new",
+        ...additions,
+      }),
+    refreshInboundContextAfterAdmissionWait: () => {},
   };
   return { context, entry, sessionKey, sessionId };
 }
@@ -149,6 +155,30 @@ function createAdmissionFixture() {
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
+  it("carries an inherited thinking request through admission to candidate selection", async () => {
+    const { context, entry } = createAdmissionFixture();
+    entry.thinkingLevel = "high";
+    const catalog = [{ provider: "fixture", id: "basic", name: "Basic", reasoning: false }];
+    const result = await prepareReplyRunAdmission({
+      ...context,
+      thinkingRuntime: "openclaw",
+      params: {
+        ...context.params,
+        provider: "fixture",
+        model: "basic",
+        resolvedThinkLevel: "high",
+        modelState: {
+          ...context.params.modelState,
+          allowedModelCatalog: catalog,
+          resolveThinkingCatalog: async () => catalog,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "ready", resolvedThinkLevel: "high" });
+    expect(entry.thinkingLevel).toBe("high");
+  });
+
   it.each([
     { sessionKey: "global", agentId: "research" },
     { sessionKey: undefined, agentId: "main" },
@@ -266,11 +296,12 @@ describe("prepared reply transcript identity", () => {
           ...incoming,
           run: {
             ...incoming.run,
-            sessionFile: resolveAdmittedRunSessionFile(incoming.run)!,
+            sessionFile:
+              normalizeOptionalString(incoming.run.sessionKey) ?? incoming.run.sessionFile,
           },
         };
-        expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(
-          resolveFollowupRunToolAuthorityFingerprint(queued),
+        expect(await resolveFollowupRunToolAuthorityFingerprintAsync(incoming)).toBe(
+          await resolveFollowupRunToolAuthorityFingerprintAsync(queued),
         );
         expect(prepared.preparedSessionState.sessionFile).toBe(sessionKey);
       } finally {

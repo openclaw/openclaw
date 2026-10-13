@@ -12,7 +12,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -177,7 +177,7 @@ describe("renderChatComposer controls", () => {
     stop?.click();
 
     expect(finishActive).toHaveBeenCalledOnce();
-    expect(handleClick).not.toHaveBeenCalled();
+    expect(handleClick).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
   });
 

@@ -51,10 +51,9 @@ export function projectProviderRoutes(
 }
 
 export function readProviderBaseUrl(config: JsonObject | undefined, provider: string): unknown {
-  if (provider === "openai") {
-    return config?.openai_base_url;
-  }
-  return readProviderField(config, provider, "base_url");
+  return provider === "openai"
+    ? config?.openai_base_url
+    : readProviderField(config, provider, "base_url");
 }
 
 export function readProviderField(

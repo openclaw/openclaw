@@ -16,8 +16,8 @@ type CapturedConfigFile = {
   sourcePath: string;
   canonicalPath: string;
   hash: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 };
 
 export type BackupConfigCapture = {
@@ -70,16 +70,17 @@ export async function resolveBackupConfigCapture(
   for (const [sourcePath, hash] of files) {
     try {
       const canonicalPath = await fs.realpath(sourcePath);
-      const linkStat = await fs.lstat(sourcePath);
+      const linkStat = await fs.lstat(sourcePath, { bigint: true });
       const rootAlias = sourcePath === snapshot.path && linkStat.isSymbolicLink();
       const includeAliasesAllowed =
         sourcePath !== snapshot.path && options.allowIncludeAliases === true;
-      const stat = rootAlias || includeAliasesAllowed ? await fs.stat(sourcePath) : linkStat;
+      const stat =
+        rootAlias || includeAliasesAllowed ? await fs.stat(sourcePath, { bigint: true }) : linkStat;
       if (rootAlias) {
         // Existing root links keep the archive's ordinary link
         // handling. Pin their payload and refuse a changed alias at publication.
         assertRootAlias = async () => {
-          const current = await fs.lstat(sourcePath);
+          const current = await fs.lstat(sourcePath, { bigint: true });
           if (
             current.dev !== linkStat.dev ||
             current.ino !== linkStat.ino ||
@@ -167,11 +168,11 @@ export async function readBackupConfigCaptureFile(file: CapturedConfigFile): Pro
       throw new Error("file identity changed");
     }
     const opened = await openLocalFileSafely({ filePath: file.canonicalPath });
-    const { handle, stat } = opened;
+    const { handle, exactIdentity } = opened;
     try {
       if (
-        stat.dev !== file.dev ||
-        stat.ino !== file.ino ||
+        exactIdentity.dev !== file.dev ||
+        exactIdentity.ino !== file.ino ||
         opened.realPath !== file.canonicalPath
       ) {
         throw new Error("file identity changed");
@@ -181,7 +182,7 @@ export async function readBackupConfigCaptureFile(file: CapturedConfigFile): Pro
       if (!bytes.equals(Buffer.from(raw)) || hashConfigIncludeRaw(raw) !== file.hash) {
         throw new Error("file contents changed");
       }
-      const current = await fs.lstat(file.canonicalPath);
+      const current = await fs.lstat(file.canonicalPath, { bigint: true });
       if (
         !current.isFile() ||
         current.dev !== file.dev ||

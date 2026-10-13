@@ -29,6 +29,7 @@ import {
 } from "./disk-budget-runtime.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import * as archivePruningDiagnostics from "./session-history-archive-pruning-diagnostics.js";
+import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -159,10 +160,12 @@ it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handof
         expect(result?.deferredReason).toBe(canonical ? "checkpoint-incomplete" : undefined);
         expect(result?.removedFiles).toBe(1);
         if (canonical) {
-          await expect(enforce()).resolves.toMatchObject({
-            deferredReason: "checkpoint-incomplete",
+          const retry = await enforce();
+          expect(retry).toMatchObject({
             removedFiles: 0,
+            overBudget: false,
           });
+          expect(retry?.deferredReason).toBeUndefined();
         } else {
           expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
         }
@@ -334,19 +337,11 @@ it.each(["transaction", "iterator"] as const)(
         },
       });
       for (let hour = 1; hour <= 3; hour++) {
-        kickSessionHistoryDiskBudgetMaintenance({
-          ...options,
-          storePath,
-          force: true,
-          now: Date.now() + hour * 3600_000,
-          maintenanceConfig: maintenance,
-        });
         await expect(enforce()).resolves.toMatchObject({
           deferredReason: "checkpoint-incomplete",
           removedFiles: 0,
         });
       }
-      expect(diagnostics).toHaveLength(1);
       expect((await measureSessionPhysicalDiskUsage(storePath)).databaseWalBytes).toBe(
         before.databaseWalBytes,
       );
@@ -371,17 +366,23 @@ it.each(["transaction", "iterator"] as const)(
         diskBudget: { deferredReason: "checkpoint-incomplete" },
       });
       release();
-      // Release alone is not an observed successful checkpoint.
-      await expect(enforce()).resolves.toMatchObject({ deferredReason: "checkpoint-incomplete" });
-      const checkpointClock = vi
-        .spyOn(Date, "now")
-        .mockReturnValue(blocked.checkpoint.observedAtMs - 1);
-      try {
-        expect(database.walMaintenance.checkpoint()).toBe(true);
-      } finally {
-        checkpointClock.mockRestore();
+      if (kind === "iterator") {
+        // Native autocheckpoints and other workers need not publish a host observation.
+        database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        expect(fs.statSync(`${database.path}-wal`).size).toBe(0);
+        await withSessionHistoryBudgetSweepsForTest(async () => {
+          kickSessionHistoryDiskBudgetMaintenance({
+            ...options,
+            storePath,
+            force: true,
+            now: Date.now() + 4 * 3600_000,
+            maintenanceConfig: maintenance,
+          });
+        });
+        expect((await measureSessionPhysicalDiskUsage(storePath)).totalBytes).toBeLessThanOrEqual(
+          maintenance.highWaterBytes!,
+        );
       }
-      expect(fs.statSync(`${database.path}-wal`).size).toBe(0);
       const recovered = await enforce();
       const lastPruning = diagnostics.at(-1);
       expect(

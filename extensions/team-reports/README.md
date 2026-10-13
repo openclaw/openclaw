@@ -29,7 +29,7 @@ reusing accepted closed days when retrying a partially failed run; manual genera
 still refreshes the requested day. Automatic collection waits at least five minutes
 after service start, and intraday runs keep their aligned UTC boundaries.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
-Model summary calls are optional; set `summaries.enabled: false` for deterministic text.
+Model summary calls are optional; set `summaries.enabled: false` for text without a model.
 
 Failed activity collection preserves the previous daily report, per-person
 counts, and overlapping weekly/monthly reports during that generation. If no
@@ -49,7 +49,7 @@ From a source checkout root, measure report collection without live API calls:
 node --expose-gc --import ./scripts/tsx.mjs extensions/team-reports/src/report-run.benchmark.test-support.ts --worker
 ```
 
-The probe uses 2,000 issues, 1,000 commits, and 1,500 messages. It reports
+The performance check uses 2,000 issues, 1,000 commits, and 1,500 messages. It reports
 main-thread heap growth and synchronous callback duration, including worker startup,
 and verifies report counts. Omit `--worker` to measure the streaming collector's
 calling isolate separately; SQLite aggregation still runs in its worker.

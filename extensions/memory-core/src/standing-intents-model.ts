@@ -61,8 +61,8 @@ function normalizeScopeAccountId(accountId: string | undefined): string {
 }
 
 export function normalizeCreatorSender(value: string): string {
-  const creatorSender = value.trim();
-  if (!creatorSender || creatorSender.toLowerCase() === "unknown") {
+  const creatorSender = readKnownCreatorSender(value);
+  if (!creatorSender) {
     throw new Error("creating sender is unavailable for this turn");
   }
   return creatorSender;
@@ -137,10 +137,6 @@ function parseStoredChannelScope(value: string | null): {
   return { scope: "anywhere", identity: null };
 }
 
-function parseStoredSenderScope(value: string | null): string | null {
-  return parseStoredScope(value, 4)?.[3] ?? null;
-}
-
 export function rowToIntent(row: StandingIntentRow): StandingIntent {
   const channelScope = parseStoredChannelScope(row.channel_scope);
   return {
@@ -150,7 +146,7 @@ export function rowToIntent(row: StandingIntentRow): StandingIntent {
     triggerEmbedding: row.trigger_embedding,
     scope: channelScope.scope,
     channelScope: channelScope.identity,
-    senderScope: parseStoredSenderScope(row.sender_scope),
+    senderScope: parseStoredScope(row.sender_scope, 4)?.[3] ?? null,
     creatorSender: readKnownCreatorSender(row.creator_sender),
     status: row.status,
     expiresAt: row.expires_at,
@@ -201,19 +197,15 @@ export function prepareStandingIntentMatch(params: {
   const channel = params.channel?.trim() || undefined;
   const provider = params.provider?.trim().toLowerCase() || undefined;
   const senderId = params.senderId?.trim() || undefined;
-  const channelScopes = new Set<string>();
+  const channelScopes: string[] = [];
   if (provider) {
-    channelScopes.add(
-      encodeStandingIntentChannelScope({
-        scope: "channel",
-        provider,
-        accountId: params.accountId,
-      }),
-    );
-    if (channel) {
-      channelScopes.add(
+    for (const scope of ["channel", "conversation"] as const) {
+      if (scope === "conversation" && !channel) {
+        continue;
+      }
+      channelScopes.push(
         encodeStandingIntentChannelScope({
-          scope: "conversation",
+          scope,
           provider,
           accountId: params.accountId,
           conversationId: channel,
@@ -232,7 +224,7 @@ export function prepareStandingIntentMatch(params: {
   return {
     promptTokens,
     ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
-    channelScopes: [...channelScopes],
+    channelScopes,
     senderScope: storedSenderScope,
     nowMs: params.nowMs,
   };
@@ -244,6 +236,15 @@ export type StandingIntentOperations = {
   sweep: { input: { nowMs?: number }; output: void };
   cancel: { input: { id: string }; output: StandingIntent | null };
   match: { input: StandingIntentMatchInput; output: StandingIntent[] };
+};
+
+export type StandingIntentWorkerOperations = {
+  [Key in keyof StandingIntentOperations]: {
+    input: StandingIntentOperations[Key]["input"];
+    output:
+      | { kind: "schema-prepared" }
+      | { kind: "result"; value: StandingIntentOperations[Key]["output"] };
+  };
 };
 
 function renderStandingIntentContext(intents: StandingIntent[]): string {

@@ -23,118 +23,84 @@ export function registerBrowserCookiesAndStorageCommands(
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
   const cookies = browser.command("cookies").description("Read/write cookies");
-
-  cookies.option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP).action(async (opts, cmd) => {
-    const parent = parentOpts(cmd);
-    const targetId = resolveTargetId(opts.targetId, cmd);
-    await runBrowserCliRequest<{ cookies?: unknown[] }>({
-      parent,
-      method: "GET",
-      path: "/cookies",
-      query: { targetId },
-      errorPolicy: "inline",
-      print: (result) => defaultRuntime.writeJson(result.cookies ?? []),
-    });
-  });
-
-  cookies
-    .command("set")
-    .description("Set a cookie (requires --url or domain+path)")
-    .argument("<name>", "Cookie name")
-    .argument("<value>", "Cookie value")
-    .option("--url <url>", "Cookie URL scope (recommended)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (name: string, value: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const targetId = resolveTargetId(opts.targetId, cmd);
-      const url = normalizeOptionalString(opts.url);
-      if (!url) {
-        defaultRuntime.error(danger("Missing required --url option for cookies set"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCliRequest({
-        parent,
-        path: "/cookies/set",
-        body: {
-          targetId,
-          cookie: { name, value, url },
-        },
-        errorPolicy: "inline",
-        successMessage: `cookie set: ${name}`,
-      });
-    });
-
-  cookies
-    .command("clear")
-    .description("Clear all cookies")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const targetId = resolveTargetId(opts.targetId, cmd);
-      await runBrowserCliRequest({
-        parent,
-        path: "/cookies/clear",
-        body: { targetId },
-        errorPolicy: "inline",
-        successMessage: "cookies cleared",
-      });
-    });
-
   const storage = browser.command("storage").description("Read/write localStorage/sessionStorage");
 
-  for (const kind of ["local", "session"] as const) {
-    const cmd = storage.command(kind).description(`${kind}Storage commands`);
-
-    cmd
-      .command("get")
-      .description(`Get ${kind}Storage (all keys or one key)`)
-      .argument("[key]", "Key (optional)")
-      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-      .action(async (key: string | undefined, opts, cmd2) => {
-        const parent = parentOpts(cmd2);
-        const targetId = resolveTargetId(opts.targetId, cmd2);
-        await runBrowserCliRequest<{ values?: Record<string, string> }>({
-          parent,
-          method: "GET",
-          path: `/storage/${kind}`,
-          query: { key: readNonBlankString(key), targetId },
-          errorPolicy: "inline",
-          print: (result) => defaultRuntime.writeJson(result.values ?? {}),
-        });
+  for (const kind of ["cookies", "local", "session"] as const) {
+    const isCookies = kind === "cookies";
+    const cmd = isCookies ? cookies : storage.command(kind).description(`${kind}Storage commands`);
+    const route = isCookies ? "/cookies" : `/storage/${kind}`;
+    const label = isCookies ? "cookie" : `${kind}Storage`;
+    const read = async (key: string | undefined, opts: { targetId?: string }, command: Command) => {
+      const parent = parentOpts(command);
+      const targetId = resolveTargetId(opts.targetId, command);
+      await runBrowserCliRequest<{ cookies?: unknown[]; values?: Record<string, string> }>({
+        parent,
+        method: "GET",
+        path: route,
+        query: isCookies ? { targetId } : { key: readNonBlankString(key), targetId },
+        errorPolicy: "inline",
+        print: (result) =>
+          defaultRuntime.writeJson(isCookies ? (result.cookies ?? []) : (result.values ?? {})),
       });
+    };
+    if (isCookies) {
+      cmd
+        .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+        .action((opts, command) => read(undefined, opts, command));
+    } else {
+      cmd
+        .command("get")
+        .description(`Get ${kind}Storage (all keys or one key)`)
+        .argument("[key]", "Key (optional)")
+        .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+        .action(read);
+    }
 
-    cmd
+    const set = cmd
       .command("set")
-      .description(`Set a ${kind}Storage key`)
-      .argument("<key>", "Key")
-      .argument("<value>", "Value")
+      .description(
+        isCookies ? "Set a cookie (requires --url or domain+path)" : `Set a ${kind}Storage key`,
+      )
+      .argument(isCookies ? "<name>" : "<key>", isCookies ? "Cookie name" : "Key")
+      .argument("<value>", isCookies ? "Cookie value" : "Value");
+    if (isCookies) {
+      set.option("--url <url>", "Cookie URL scope (recommended)");
+    }
+    set
       .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-      .action(async (key: string, value: string, opts, cmd2) => {
-        const parent = parentOpts(cmd2);
-        const targetId = resolveTargetId(opts.targetId, cmd2);
+      .action(async (key: string, value: string, opts, command) => {
+        const parent = parentOpts(command);
+        const targetId = resolveTargetId(opts.targetId, command);
+        const url = isCookies ? normalizeOptionalString(opts.url) : undefined;
+        if (isCookies && !url) {
+          defaultRuntime.error(danger("Missing required --url option for cookies set"));
+          defaultRuntime.exit(1);
+          return;
+        }
         await runBrowserCliRequest({
           parent,
-          path: `/storage/${kind}/set`,
-          body: { key, value, targetId },
+          path: `${route}/set`,
+          body: isCookies
+            ? { targetId, cookie: { name: key, value, url } }
+            : { key, value, targetId },
           errorPolicy: "inline",
-          successMessage: `${kind}Storage set: ${key}`,
+          successMessage: `${label} set: ${key}`,
         });
       });
 
     cmd
       .command("clear")
-      .description(`Clear all ${kind}Storage keys`)
+      .description(isCookies ? "Clear all cookies" : `Clear all ${kind}Storage keys`)
       .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-      .action(async (opts, cmd2) => {
-        const parent = parentOpts(cmd2);
-        const targetId = resolveTargetId(opts.targetId, cmd2);
+      .action(async (opts, command) => {
+        const parent = parentOpts(command);
+        const targetId = resolveTargetId(opts.targetId, command);
         await runBrowserCliRequest({
           parent,
-          path: `/storage/${kind}/clear`,
+          path: `${route}/clear`,
           body: { targetId },
           errorPolicy: "inline",
-          successMessage: `${kind}Storage cleared`,
+          successMessage: `${isCookies ? "cookies" : label} cleared`,
         });
       });
   }

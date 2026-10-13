@@ -97,7 +97,7 @@ export function readSessionStoreSummaryReadOnly(
                   }
                   continue;
                 }
-                // Raw updates clear entry_valid. Preserve listing's warm-row semantics:
+                // Uncertified rows retain entry_valid = 0. Preserve listing's warm-row semantics:
                 // skip unreadable JSON/retained placeholders, but include readable pending rows.
                 const stored = storedRows.get(sessionKey);
                 if (!stored) {

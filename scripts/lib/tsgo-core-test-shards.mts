@@ -119,6 +119,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
   },
+  {
+    name: "ui-e2e-chat",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
+  },
 ] as const;
 
 // Root tests remain one CI inventory graph; execution partitions its checker heap.
@@ -192,7 +197,7 @@ export function resolveChangedCiTsgoInputs(
   if (
     compilerPaths.length === 0 ||
     !compilerPaths.every(isChangedCiTsgoInput) ||
-    (exists && !paths.every(exists))
+    (exists && !compilerPaths.every(exists))
   ) {
     return undefined;
   }
@@ -374,4 +379,24 @@ export function selectChangedTsgoCoreTestShards(
       (graph) => graph.config === shard.config && paths.some((file) => graph.files.includes(file)),
     ),
   );
+}
+
+/** Prioritize declared changed test roots without changing the selected coverage. */
+export function orderChangedTsgoCoreTestShards(
+  shards: readonly { name: string; config: string }[],
+  paths: readonly string[],
+  graphs: readonly { config: string; roots: readonly string[] }[],
+): readonly { name: string; config: string }[] {
+  const changedTests = new Set(
+    paths.filter((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file)),
+  );
+  const owners = new Set(
+    graphs
+      .filter((graph) => graph.roots.some((root) => changedTests.has(root)))
+      .map((graph) => graph.config),
+  );
+  return [
+    ...shards.filter((shard) => owners.has(shard.config)),
+    ...shards.filter((shard) => !owners.has(shard.config)),
+  ];
 }

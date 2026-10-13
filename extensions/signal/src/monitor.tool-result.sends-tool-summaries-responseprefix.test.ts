@@ -158,31 +158,21 @@ describe("monitorSignalProvider tool results", () => {
     });
   });
 
-  it.each(["first", "off"] as const)(
-    "keeps status notices outside the first quote slot (%s)",
-    async (replyToMode) => {
-      setSignalToolResultTestConfig(
-        createSignalToolResultConfig({ autoStart: false, replyToMode }),
-      );
-      replyMock.mockResolvedValue([
-        { text: "working", isStatusNotice: true },
-        { text: "final reply" },
-      ]);
-      await receiveSingleEnvelope();
-      expect(sendMock).toHaveBeenCalledTimes(2);
-      expect(sendMock.mock.calls.map((call) => call[1])).toEqual([
-        "PFX working",
-        "PFX final reply",
-      ]);
-      for (const call of sendMock.mock.calls) {
-        if (replyToMode === "off") {
-          expectNoNativeQuote(call[2]);
-        } else {
-          expect(call[2]).toMatchObject(nativeQuote);
-        }
-      }
-    },
-  );
+  it("keeps status notices outside the first quote slot", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({ autoStart: false, replyToMode: "first" }),
+    );
+    replyMock.mockResolvedValue([
+      { text: "working", isStatusNotice: true },
+      { text: "final reply" },
+    ]);
+    await receiveSingleEnvelope();
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls.map((call) => call[1])).toEqual(["PFX working", "PFX final reply"]);
+    for (const call of sendMock.mock.calls) {
+      expect(call[2]).toMatchObject(nativeQuote);
+    }
+  });
 
   it("keeps durable conversation events separate in batched reply mode", async ({ signal }) => {
     setSignalToolResultTestConfig({

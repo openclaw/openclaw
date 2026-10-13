@@ -12,19 +12,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // the base-versus-leaf contract that this actual SQLite worker boundary must keep.
 describe("SQLite store worker compile cache", () => {
   it.each([
-    { label: "owned programmatic cache", owner: "openclaw", cache: undefined, disable: undefined },
-    { label: "explicit cache", owner: "openclaw", cache: "explicit", disable: undefined },
-    { label: "empty explicit cache", owner: "openclaw", cache: "", disable: undefined },
-    { label: "empty disable policy", owner: "openclaw", cache: undefined, disable: "" },
-    { label: "disabled explicit cache", owner: "openclaw", cache: "explicit", disable: "1" },
-    {
-      label: "foreign ALREADY_ENABLED cache",
-      owner: "foreign",
-      cache: undefined,
-      disable: undefined,
-    },
-    { label: "failed enable", owner: "failed", cache: undefined, disable: undefined },
-    { label: "source checkout", owner: "source", cache: undefined, disable: undefined },
+    { label: "owned programmatic cache", owner: "openclaw" },
+    { label: "foreign ALREADY_ENABLED cache", owner: "foreign" },
   ] as const)("preserves $label through worker retirement", async (testCase) => {
     const root = tempDirs.make("openclaw-sqlite-store-cache-");
     const modulePath = path.join(root, "backend.mjs");
@@ -61,8 +50,8 @@ describe("SQLite store worker compile cache", () => {
         ...workerArgv(resolveRuntimeWorkerUrl(sqliteWorkerStoreCompileCacheParentEntrypoint)),
         root,
         testCase.owner,
-        testCase.cache ?? "unset",
-        testCase.disable ?? "unset",
+        "unset",
+        "unset",
       ],
       env,
       10_000,

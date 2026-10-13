@@ -1064,9 +1064,21 @@ jobs:
           set -euo pipefail
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-artifacts.json"
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" |
-            jq -s '{artifacts: [.[].artifacts[]] | unique_by(.id)}' > "${artifacts_json}"
+          node --input-type=module <<'NODE' | jq '{artifacts: (.artifacts | unique_by(.id))}' > "${artifacts_json}"
+          import { runReleaseCiGh } from "./scripts/release-ci-summary.mjs";
+          const query = new URLSearchParams({ name: process.env.ARTIFACT_NAME, per_page: "100" });
+          const endpoint = `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.RUN_ID}/artifacts?${query}`;
+          const response = JSON.parse(runReleaseCiGh(["api", endpoint]));
+          if (
+            !Number.isSafeInteger(response?.total_count) ||
+            response.total_count < 0 ||
+            !Array.isArray(response.artifacts) ||
+            response.artifacts.length !== response.total_count
+          ) {
+            throw new Error("Package artifact enumeration is incomplete or invalid.");
+          }
+          process.stdout.write(JSON.stringify(response));
+          NODE
           artifact_count="$(
             jq --arg name "${ARTIFACT_NAME}" \
               '[.artifacts[] | select(.name == $name and .expired == false)] | length' \

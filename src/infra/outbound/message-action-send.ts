@@ -31,18 +31,19 @@ import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { throwIfAborted } from "./abort.js";
-import type {
-  MessageActionInput,
-  MessageActionResult,
-  ResolvedActionContext,
+import {
+  messageActionRequesterMediaContext,
+  type MessageActionInput,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import {
-  annotateSourceDelivery,
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
 import { stageGatewayWorkspaceMedia } from "./message-action-gateway-media.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
   applySendLocationToActionParams,
   applySendPayloadPartsToActionParams,
@@ -135,48 +136,31 @@ export async function buildMessagePayload(params: {
   });
   const topLevelFilename = readToolStringParam(actionParams, "filename");
   const topLevelMimeType = readToolStringParam(actionParams, "contentType");
+  const attachmentEntries = attachmentSources.map((source) => ({
+    url: source.value,
+    filename: source.filename,
+    mimeType: source.contentType,
+    type: resolveReplyMediaAttachmentType(source.attachment.type),
+  }));
   const attachmentByUrl = new Map(
-    attachmentSources.map((source) => [
-      normalizeOptionalString(source.value),
-      {
-        filename: source.filename,
-        mimeType: source.contentType,
-        type: resolveReplyMediaAttachmentType(source.attachment.type),
-      },
-    ]),
+    attachmentEntries.map(({ url, ...metadata }) => [normalizeOptionalString(url), metadata]),
   );
-  const mediaEntries: Array<{
-    url: string;
-    filename?: string;
-    mimeType?: string;
-    type?: ReplyMediaAttachment["type"];
-  }> = [];
-  const pushMedia = (
-    value?: string | null,
-    metadata?: { filename?: string; mimeType?: string; type?: ReplyMediaAttachment["type"] },
-  ) => {
-    const trimmed = normalizeOptionalString(value);
-    if (!trimmed) {
-      return;
-    }
-    mediaEntries.push({ url: trimmed, ...metadata });
-  };
   const primaryAttachment = attachmentByUrl.get(normalizeOptionalString(mediaHint));
-  pushMedia(mediaHint, {
-    ...primaryAttachment,
-    filename: topLevelFilename ?? primaryAttachment?.filename,
-    mimeType: topLevelMimeType ?? primaryAttachment?.mimeType,
+  const mediaEntries = [
+    {
+      url: mediaHint,
+      ...primaryAttachment,
+      filename: topLevelFilename ?? primaryAttachment?.filename,
+      mimeType: topLevelMimeType ?? primaryAttachment?.mimeType,
+    },
+    ...mediaUrlHints.map((url) =>
+      Object.assign({ url }, attachmentByUrl.get(normalizeOptionalString(url))),
+    ),
+    ...attachmentEntries,
+  ].flatMap((entry) => {
+    const url = normalizeOptionalString(entry.url);
+    return url ? [{ ...entry, url }] : [];
   });
-  for (const mediaUrlHint of mediaUrlHints) {
-    pushMedia(mediaUrlHint, attachmentByUrl.get(normalizeOptionalString(mediaUrlHint)));
-  }
-  for (const attachmentSource of attachmentSources) {
-    pushMedia(attachmentSource.value, {
-      filename: attachmentSource.filename,
-      mimeType: attachmentSource.contentType,
-      type: resolveReplyMediaAttachmentType(attachmentSource.attachment.type),
-    });
-  }
 
   const normalizedMedia = await Promise.all(
     mediaEntries.map(async (entry) => {
@@ -202,11 +186,14 @@ export async function buildMessagePayload(params: {
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text), {
     resolveProtectedRanges: findCodeRegions,
   });
-  if (message || !hasPresentation) {
-    actionParams.message = message;
-  } else {
-    delete actionParams.message;
-  }
+  const updateActionMessage = () => {
+    if (message || !hasPresentation) {
+      actionParams.message = message;
+    } else {
+      delete actionParams.message;
+    }
+  };
+  updateActionMessage();
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
   }
@@ -275,11 +262,7 @@ export async function buildMessagePayload(params: {
   ) {
     throw new Error("send requires text or media or location");
   }
-  if (message || !hasPresentation) {
-    actionParams.message = message;
-  } else {
-    delete actionParams.message;
-  }
+  updateActionMessage();
   const gifPlayback = readBooleanParam(actionParams, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(actionParams, "forceDocument") ??
@@ -501,14 +484,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       cfg,
       agentId,
       mediaSources: sendPayload.mediaUrls,
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
+      ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : channel,
       accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
     });
 
   // Required queue persistence is itself an ownership decision: neither the

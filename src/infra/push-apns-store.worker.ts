@@ -6,14 +6,11 @@ import {
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { resolveNodePairingGeneration } from "./device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordFromDatabase } from "./device-pairing-store.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   clearApnsRegistrationFromDatabase,
   nextApnsRegistrationVersion,
+  readApnsRegistrationVersions,
 } from "./push-apns-store-transaction.js";
 import {
   readApnsRegistrationFromDatabase,
@@ -78,25 +75,9 @@ function registerApnsRegistrationInDatabase(
       }
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("apns_registrations")
-          .select("updated_at_ms")
-          .where("node_id", "=", nodeId),
-      );
-      const tombstone = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("apns_registration_tombstones")
-          .select("deleted_at_ms")
-          .where("node_id", "=", nodeId),
-      );
       // The tombstone carries the deleted row's successor version. Advancing past
       // both rows keeps stale compare-and-delete callers harmless after re-registration.
-      const previousVersions = [current?.updated_at_ms, tombstone?.deleted_at_ms].filter(
-        (version): version is number => version !== undefined,
-      );
+      const { previousVersions } = readApnsRegistrationVersions(db, nodeId);
       const next: ApnsRegistration = {
         ...candidate,
         updatedAtMs: nextApnsRegistrationVersion(nodeId, previousVersions, input.nowMs),

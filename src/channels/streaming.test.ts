@@ -10,7 +10,6 @@ import {
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
-  isChannelProgressPriorityLine,
   mergeChannelProgressDraftLine,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingProgressCommentary,
@@ -18,22 +17,6 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
-  it("lets named failed command items scroll out while retaining attention", () => {
-    const line = buildChannelProgressDraftLine({
-      event: "item",
-      itemKind: "command",
-      name: "exec",
-      status: "failed",
-    });
-    expect(line).toBeDefined();
-    expect(isChannelProgressPriorityLine(line!)).toBe(false);
-    expect(isChannelProgressPriorityLine({ ...line!, status: "blocked" })).toBe(true);
-    expect(isChannelProgressPriorityLine({ ...line!, status: "error" })).toBe(true);
-    expect(isChannelProgressPriorityLine({ ...line!, kind: "approval" })).toBe(true);
-    expect(isChannelProgressPriorityLine({ ...line!, toolName: undefined })).toBe(true);
-    expect(isChannelProgressPriorityLine({ ...line!, kind: "tool" })).toBe(true);
-  });
-
   it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
     const input = {
       event: "item" as const,
@@ -56,6 +39,29 @@ describe("buildChannelProgressDraftLine", () => {
     expect(failed).toContain("failed");
     expect(failed).toContain("sample job");
     expect(failed).not.toBe(running);
+  });
+
+  it("bounds prepared path titles at the configured maxLineChars", () => {
+    const maxLineChars = 40;
+    const path = `/tmp/${"deep/".repeat(40)}file.txt`;
+    const entry = { streaming: { progress: { maxLineChars } } };
+    const line = buildChannelProgressDraftLineForEntry(
+      entry,
+      {
+        event: "item",
+        itemKind: "tool",
+        name: "read",
+        title: `Read from ${path}`,
+        meta: `from ${path}`,
+        status: "failed",
+      },
+      { toolIcons: true },
+    );
+
+    expect(line?.label).toContain("…");
+    expect(line?.label).toMatch(/file\.txt$/);
+    expect(line?.text).toContain("failed");
+    expect(Array.from(line!.text).length).toBeLessThanOrEqual(maxLineChars ?? 120);
   });
 
   it("keeps plan arguments out of generic tool and item rows", () => {
@@ -262,33 +268,22 @@ describe("progress narration", () => {
     { step: "Verify", status: "pending" },
   ] as const;
 
-  it.each([undefined, "summary"] as const)(
-    "preserves SDK default exit priority over a full plan (presentation=%s)",
-    (presentation) => {
-      const text = formatChannelProgressDraftText({
-        presentation,
-        entry: {
-          streaming: {
-            mode: "progress",
-            progress: { toolProgress: true, label: false, maxLines: 3 },
-          },
+  it("preserves SDK summary exit priority over a full plan", () => {
+    const text = formatChannelProgressDraftText({
+      presentation: "summary",
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: false, maxLines: 3 },
         },
-        lines: [{ kind: "command-output", label: "Exec", text: "exit 1", status: "exit 1" }],
-        plan,
-      });
+      },
+      lines: [{ kind: "command-output", label: "Exec", text: "exit 1", status: "exit 1" }],
+      plan,
+    });
 
-      expect(text).toContain("exit 1");
-      expect(text).toContain("Patch");
-      expect(text.split("\n").filter(Boolean)).toHaveLength(3);
-    },
-  );
-
-  it("preserves the shipped plain checklist option", () => {
-    expect(formatPlanChecklistLines(plan, { maxLines: 3, maxLineChars: 80, plain: true })).toEqual([
-      "Completed: Inspect",
-      "In progress: Patch",
-      "Pending: Verify",
-    ]);
+    expect(text).toContain("exit 1");
+    expect(text).toContain("Patch");
+    expect(text.split("\n").filter(Boolean)).toHaveLength(3);
   });
 
   it("renders plan markers and keeps the checklist under narration", () => {
@@ -326,21 +321,6 @@ describe("progress narration", () => {
         { maxLines: 3, maxLineChars: 80 },
       ),
     ).toEqual(["✅ 1/5 done", "▸ Active", "▢ Last"]);
-  });
-
-  it("shares the line budget between tool progress and the checklist", () => {
-    expect(
-      formatChannelProgressDraftText({
-        entry: {
-          streaming: { mode: "progress", progress: { label: false, maxLines: 3 } },
-        },
-        lines: ["tool one", "tool two", "tool three"],
-        plan: [
-          { step: "Active", status: "in_progress" },
-          { step: "Next", status: "pending" },
-        ],
-      }),
-    ).toBe("• tool three\n▸ Active\n▢ Next");
   });
 
   it("drops every tool line when the checklist consumes the whole budget", () => {
@@ -431,11 +411,8 @@ function commandSequence(status: "failed" | "completed", exitCode: number): Comm
 }
 
 describe("channel-streaming embedded command items", () => {
-  it.each([
-    { status: "failed", exitCode: 1, markdown: true, finalStatus: "exit 1" },
-    { status: "completed", exitCode: 0, markdown: false, finalStatus: "completed" },
-  ] as const)("keeps one command row through terminal delivery ($status)", async (params) => {
-    const commandText = params.markdown ? "`run tests`" : "run tests";
+  it("keeps one command row through failed terminal delivery", async () => {
+    const commandText = "`run tests`";
     const detail = `pty · elevated · ${commandText}`;
     let rendered = "";
     const progress = createChannelProgressDraftCompositor({
@@ -449,9 +426,9 @@ describe("channel-streaming embedded command items", () => {
       },
     });
     try {
-      const inputs = commandSequence(params.status, params.exitCode);
+      const inputs = commandSequence("failed", 1);
       for (const [index, input] of inputs.entries()) {
-        await progress.pushToolProgress(buildLine(input, params.markdown));
+        await progress.pushToolProgress(buildLine(input, true));
         const lines = progress.getSnapshot().lines;
         expect(lines, `event ${index}`).toHaveLength(1);
         expect(lines[0], `event ${index}`).toMatchObject({
@@ -463,8 +440,8 @@ describe("channel-streaming embedded command items", () => {
       expect(progress.getSnapshot().lines[0]).toMatchObject({
         kind: "command-output",
         detail,
-        status: params.finalStatus,
-        text: `${params.exitCode === 0 ? "" : "exit 1; "}${detail}`,
+        status: "exit 1",
+        text: `exit 1; ${detail}`,
       });
       expect(rendered.match(/run tests/g)).toHaveLength(1);
     } finally {

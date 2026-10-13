@@ -68,7 +68,7 @@ type OpenClawPluginNodeHostCommandBase = {
   onDisconnect?: () => Promise<void> | void;
   /** Return false only when retained work and cleanup are idle; an absent hook defers auto-update. */
   hasActiveWork?: () => boolean;
-  /** Optional Computer Use declaration published with this command's node manifest. */
+  /** Synchronous Computer Use declaration; must not acquire a driver or probe native availability. */
   computerUse?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => unknown;
   agentTool?: {
     name: string;

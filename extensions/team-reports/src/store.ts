@@ -112,11 +112,14 @@ export async function createTeamReportsStore(options: {
       "team-reports",
       "team-reports.sqlite",
     );
-  const { openSqliteWorkerStore } = await import("openclaw/plugin-sdk/sqlite-runtime");
-  const worker = await openSqliteWorkerStore<TeamReportsOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
-  });
+  const { openEngineWorkerStore } = await import("openclaw/plugin-sdk/database-engine-runtime");
+  const worker = await openEngineWorkerStore<TeamReportsOperations>(
+    {
+      moduleUrl: options.workerModuleUrl,
+      databasePath,
+      input: undefined,
+    },
+    undefined,
+  );
   return new TeamReportsStore(worker);
 }

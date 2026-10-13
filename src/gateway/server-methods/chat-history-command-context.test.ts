@@ -2,11 +2,15 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -21,6 +25,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await closeOpenClawAgentDatabasesAsync(directory);
       closeOpenClawAgentDatabasesForTest(directory);
     }
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -49,6 +54,7 @@ it.each([
     paired: false,
   },
 ])("preserves command outcome pairing across $name", async ({ markers, paired }) => {
+  setRuntimeConfigSnapshot({});
   const sessionKey = "agent:main:command-context";
   const sessionId = "command-context-session";
   const entry = { sessionId, updatedAt: 42 };

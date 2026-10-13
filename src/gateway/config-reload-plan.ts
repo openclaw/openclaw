@@ -174,6 +174,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
       "gateway.controlUi.experimental.customPlugins",
+      "gateway.controlUi.experimental.chatBubbles",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "gateway.nodes.browser",
@@ -232,11 +233,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     prefixes: ["agents.defaults.sessionStore", "agents.ownership"],
     kind: "hot",
     actions: ["refreshHooksPolicy"],
-  },
-  {
-    prefixes: ["skills.workshop.autonomous.mode"],
-    kind: "hot",
-    actions: ["reconcileSystemJobs"],
   },
   {
     prefixes: ["agents.defaults.decisionModel"],

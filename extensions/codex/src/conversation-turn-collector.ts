@@ -34,7 +34,10 @@ export function createCodexConversationTurnCollector(threadId: string) {
   };
   const completeItem = (item: JsonObject, itemId: string) => {
     assistantTextByItem.delete(itemId);
-    const text = readAssistantReplyText(item);
+    const text =
+      item.phase === "commentary" || item.delivery === "async"
+        ? undefined
+        : readNonEmptyStringPreservingWhitespace(item.text);
     if (text?.trim()) {
       assistantTextByItem.set(itemId, text);
     }
@@ -138,10 +141,4 @@ export function createCodexConversationTurnCollector(threadId: string) {
       });
     },
   };
-}
-
-function readAssistantReplyText(item: JsonObject): string | undefined {
-  return item.phase === "commentary" || item.delivery === "async"
-    ? undefined
-    : readNonEmptyStringPreservingWhitespace(item.text);
 }

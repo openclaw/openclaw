@@ -77,11 +77,7 @@ type SpanBase = {
 
 const ROOT_SPAN_BASE: SpanBase = {};
 
-type CommandTopologyBucket = {
-  context: CommandContext;
-  parentCommandId?: string;
-  commands: RecordedCommandStep[];
-};
+type CommandTopologyBucket = [RecordedCommandStep, ...RecordedCommandStep[]];
 
 type OperatorSource = {
   context: CommandContext;
@@ -121,15 +117,10 @@ function advancePosition(
   let column = position.column;
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
-    if (ch === "\r") {
-      if (text[index + 1] === "\n") {
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text[index + 1] === "\n") {
         index += 1;
       }
-      row += 1;
-      column = 0;
-      continue;
-    }
-    if (ch === "\n") {
       row += 1;
       column = 0;
       continue;
@@ -190,13 +181,13 @@ function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): numbe
       decoded = identityDecodedShellText(node.text.slice(1, -1), 1);
       break;
     case "string":
-      decoded = decodeDoubleQuotedTextWithOffsets(node.text);
+      decoded = decodeShellTextWithOffsets(node.text, "double");
       break;
     case "ansi_c_string":
-      decoded = decodeAnsiCStringWithOffsets(node.text);
+      decoded = decodeShellTextWithOffsets(node.text, "ansi-c");
       break;
     default:
-      decoded = decodeUnquotedShellTextWithOffsets(node.text);
+      decoded = decodeShellTextWithOffsets(node.text);
       break;
   }
   if (decoded.value === value && decoded.sourceOffsets.length === value.length + 1) {
@@ -262,61 +253,6 @@ function hasUnescapedDynamicPattern(text: string): boolean {
   return false;
 }
 
-function decodeUnquotedShellTextWithOffsets(text: string): DecodedShellText {
-  const decoded: DecodedShellText = { value: "", sourceOffsets: [0] };
-  for (let index = 0; index < text.length; index += 1) {
-    const ch = text.charAt(index);
-    const next = text[index + 1];
-    if (ch === "\\" && next !== undefined) {
-      if (next === "\r" && text[index + 2] === "\n") {
-        decoded.sourceOffsets[decoded.value.length] = index + 3;
-        index += 2;
-        continue;
-      }
-      if (next === "\n" || next === "\r") {
-        decoded.sourceOffsets[decoded.value.length] = index + 2;
-        index += 1;
-        continue;
-      }
-      appendDecodedText(decoded, next, index + 2);
-      index += 1;
-      continue;
-    }
-    appendDecodedText(decoded, ch, index + 1);
-  }
-  return decoded;
-}
-
-function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
-  const hasQuotes = text.startsWith('"') && text.endsWith('"');
-  const bodyStart = hasQuotes ? 1 : 0;
-  const body = hasQuotes ? text.slice(1, -1) : text;
-  const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
-  for (let index = 0; index < body.length; index += 1) {
-    const ch = body.charAt(index);
-    const next = body[index + 1];
-    const sourceOffset = bodyStart + index;
-    if (ch === "\\" && next !== undefined) {
-      if (next === "\r" && body[index + 2] === "\n") {
-        decoded.sourceOffsets[decoded.value.length] = sourceOffset + 3;
-        index += 2;
-        continue;
-      }
-      if (["\\", '"', "$", "`", "\n", "\r"].includes(next)) {
-        if (next !== "\n" && next !== "\r") {
-          appendDecodedText(decoded, next, sourceOffset + 2);
-        } else {
-          decoded.sourceOffsets[decoded.value.length] = sourceOffset + 2;
-        }
-        index += 1;
-        continue;
-      }
-    }
-    appendDecodedText(decoded, ch, sourceOffset + 1);
-  }
-  return decoded;
-}
-
 const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
   "'": "'",
   '"': '"',
@@ -333,42 +269,46 @@ const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
   v: "\v",
 };
 
-function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
-  const hasQuotes = text.startsWith("$'") && text.endsWith("'");
-  const bodyStart = hasQuotes ? 2 : 0;
-  const body = hasQuotes ? text.slice(2, -1) : text;
+function decodeShellTextWithOffsets(
+  text: string,
+  quoting: "unquoted" | "double" | "ansi-c" = "unquoted",
+): DecodedShellText {
+  const prefix = quoting === "double" ? '"' : quoting === "ansi-c" ? "$'" : "";
+  const hasQuotes = prefix && text.startsWith(prefix) && text.endsWith(prefix.slice(-1));
+  const bodyStart = hasQuotes ? prefix.length : 0;
+  const body = hasQuotes ? text.slice(bodyStart, -1) : text;
   const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
   for (let index = 0; index < body.length; index += 1) {
     const ch = body.charAt(index);
+    const next = body[index + 1];
     const sourceOffset = bodyStart + index;
-    if (ch !== "\\") {
+    if (
+      ch !== "\\" ||
+      next === undefined ||
+      (quoting === "double" && !["\\", '"', "$", "`", "\n", "\r"].includes(next))
+    ) {
       appendDecodedText(decoded, ch, sourceOffset + 1);
       continue;
     }
-
-    const next = body[index + 1];
-    if (next === undefined) {
-      appendDecodedText(decoded, "\\", sourceOffset + 1);
-      continue;
-    }
-
-    const simple = ANSI_C_SIMPLE_ESCAPES[next];
-    if (simple !== undefined) {
-      appendDecodedText(decoded, simple, sourceOffset + 2);
-      index += 1;
+    if (quoting !== "ansi-c" && (next === "\n" || next === "\r")) {
+      const width = next === "\r" && body[index + 2] === "\n" ? 3 : 2;
+      decoded.sourceOffsets[decoded.value.length] = sourceOffset + width;
+      index += width - 1;
       continue;
     }
 
     let digits: string | undefined;
     let radix = 16;
     let prefixLength = 2;
-    if (next === "x" || next === "u" || next === "U") {
-      const maxLength = next === "x" ? 2 : next === "u" ? 4 : 8;
-      digits = body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0];
-    } else if (/^[0-7]$/.test(next)) {
-      digits = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
-      radix = 8;
-      prefixLength = 1;
+    if (quoting === "ansi-c") {
+      if (next === "x" || next === "u" || next === "U") {
+        const maxLength = next === "x" ? 2 : next === "u" ? 4 : 8;
+        digits = body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0];
+      } else if (/^[0-7]$/.test(next)) {
+        digits = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
+        radix = 8;
+        prefixLength = 1;
+      }
     }
     if (digits) {
       const endOffset = sourceOffset + prefixLength + digits.length;
@@ -381,7 +321,8 @@ function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
       continue;
     }
 
-    appendDecodedText(decoded, next, sourceOffset + 2);
+    const value = quoting === "ansi-c" ? (ANSI_C_SIMPLE_ESCAPES[next] ?? next) : next;
+    appendDecodedText(decoded, value, sourceOffset + 2);
     index += 1;
   }
   return decoded;
@@ -412,61 +353,53 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
     return {
       kind: "dynamic",
       value:
-        node.type === "string" ? decodeDoubleQuotedTextWithOffsets(node.text).value : node.text,
+        node.type === "string" ? decodeShellTextWithOffsets(node.text, "double").value : node.text,
     };
   }
 
   switch (node.type) {
-    case "command_name": {
+    case "command_name":
+    case "concatenation": {
       const parts = node.namedChildren;
-      if (parts.length === 0) {
+      if (
+        node.type === "command_name" ? parts.length === 0 : hasUnescapedDynamicPattern(node.text)
+      ) {
         return {
           kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-          value: decodeUnquotedShellTextWithOffsets(node.text).value,
+          value: decodeShellTextWithOffsets(node.text).value,
         };
       }
       let value = "";
+      let dynamic = false;
       for (const part of parts) {
         const partValue = shellWordValue(part);
         value += partValue.value;
         if (partValue.kind !== "literal") {
-          return { kind: "dynamic", value };
-        }
-      }
-      return { kind: "literal", value };
-    }
-    case "word":
-      return {
-        kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-        value: decodeUnquotedShellTextWithOffsets(node.text).value,
-      };
-    case "raw_string":
-      return { kind: "literal", value: node.text.slice(1, -1) };
-    case "string":
-      return { kind: "literal", value: decodeDoubleQuotedTextWithOffsets(node.text).value };
-    case "ansi_c_string":
-      return { kind: "literal", value: decodeAnsiCStringWithOffsets(node.text).value };
-    case "concatenation": {
-      if (hasUnescapedDynamicPattern(node.text)) {
-        return { kind: "dynamic", value: decodeUnquotedShellTextWithOffsets(node.text).value };
-      }
-      let value = "";
-      let dynamic = false;
-      for (const child of node.namedChildren) {
-        const childValue = shellWordValue(child);
-        value += childValue.value;
-        if (childValue.kind !== "literal") {
           dynamic = true;
+          if (node.type === "command_name") {
+            break;
+          }
         }
       }
       return { kind: dynamic ? "dynamic" : "literal", value };
     }
+    case "word":
+      return {
+        kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
+        value: decodeShellTextWithOffsets(node.text).value,
+      };
+    case "raw_string":
+      return { kind: "literal", value: node.text.slice(1, -1) };
+    case "string":
+      return { kind: "literal", value: decodeShellTextWithOffsets(node.text, "double").value };
+    case "ansi_c_string":
+      return { kind: "literal", value: decodeShellTextWithOffsets(node.text, "ansi-c").value };
     default:
       return {
         kind: node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
           ? "dynamic"
           : "literal",
-        value: decodeUnquotedShellTextWithOffsets(node.text).value,
+        value: decodeShellTextWithOffsets(node.text).value,
       };
   }
 }
@@ -596,6 +529,13 @@ function shellCommandFlag(
   startIndex: number,
 ): { flag: string; index: number } | null {
   const shell = normalizeExecutableToken(argv[startIndex - 1] ?? argv[0] ?? "");
+  const isPosix = shell !== "cmd" && shell !== "powershell" && shell !== "pwsh";
+  const flags =
+    shell === "cmd"
+      ? ["/c", "/k"]
+      : isPosix
+        ? ["-c", "--command"]
+        : ["-c", "-command", "--command", "-encodedcommand", "-enc", "-e", "-f", "-file"];
   for (let index = startIndex; index < argv.length; index += 1) {
     const token = argv[index]?.trim();
     if (!token) {
@@ -605,31 +545,10 @@ function shellCommandFlag(
       break;
     }
     const lower = token.toLowerCase();
-    if (shell === "cmd") {
-      if (lower === "/c" || lower === "/k") {
-        return { flag: token, index };
-      }
-      continue;
-    }
-    if (shell === "powershell" || shell === "pwsh") {
-      if (
-        lower === "-c" ||
-        lower === "-command" ||
-        lower === "--command" ||
-        lower === "-encodedcommand" ||
-        lower === "-enc" ||
-        lower === "-e" ||
-        lower === "-f" ||
-        lower === "-file"
-      ) {
-        return { flag: token, index };
-      }
-      continue;
-    }
-    if (lower === "-c" || lower === "--command") {
-      return { flag: token, index };
-    }
-    if (token.startsWith("-") && !token.startsWith("--") && lower.slice(1).includes("c")) {
+    if (
+      flags.includes(lower) ||
+      (isPosix && token.startsWith("-") && !token.startsWith("--") && lower.slice(1).includes("c"))
+    ) {
       return { flag: token, index };
     }
   }
@@ -686,42 +605,16 @@ function payloadBaseFromArguments(
   return null;
 }
 
-function shellWrapperPayloadForParsing(
-  argv: string[],
-  argumentsList: CommandArgument[],
-  dynamicArguments: CommandArgument[],
-): { command: string; spanBase: SpanBase } | null {
-  const shellWrapper = extractShellWrapperCommand(argv);
-  const payload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
-  if (
-    !shellWrapper.isWrapper ||
-    !payload ||
-    dynamicArguments.some((argument) => argument.value === payload)
-  ) {
-    return null;
-  }
-  const spanBase = payloadBaseFromArguments(payload, argumentsList);
-  if (!spanBase) {
-    return null;
-  }
-  const transportArgv = resolveShellWrapperTransportArgv(argv) ?? argv;
-  const commandFlag = shellCommandFlag(transportArgv, 1) ?? shellCommandFlag(argv, 1);
-  if (!canParseShellWrapperPayload(transportArgv, commandFlag?.flag ?? null)) {
-    return null;
-  }
-  return { command: payload, spanBase };
-}
-
 function recordCommandRisks(
-  argv: string[],
-  dynamicArguments: CommandArgument[],
+  parsed: CommandArgv,
   text: string,
   span: SourceSpan,
   output: MutableExplanation,
-): void {
+): { command: string; spanBase: SpanBase } | null {
+  const { argv, dynamicArguments } = parsed;
   const executable = argv[0];
   if (!executable) {
-    return;
+    return null;
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
   for (const argument of dynamicArguments) {
@@ -746,10 +639,20 @@ function recordCommandRisks(
 
   const shellWrapper = extractShellWrapperCommand(argv);
   const shellWrapperPayload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  let wrapperPayload: { command: string; spanBase: SpanBase } | null = null;
   if (shellWrapper.isWrapper && shellWrapperPayload) {
     const transportArgv = resolveShellWrapperTransportArgv(argv) ?? argv;
     const shellExecutable = transportArgv[0] ?? executable;
     const commandFlag = shellCommandFlag(transportArgv, 1) ?? shellCommandFlag(argv, 1);
+    if (
+      !dynamicArguments.some((argument) => argument.value === shellWrapperPayload) &&
+      canParseShellWrapperPayload(transportArgv, commandFlag?.flag ?? null)
+    ) {
+      const spanBase = payloadBaseFromArguments(shellWrapperPayload, parsed.arguments);
+      if (spanBase) {
+        wrapperPayload = { command: shellWrapperPayload, spanBase };
+      }
+    }
     if (isShellWrapperExecutable(executable)) {
       output.risks.push({
         kind: "shell-wrapper",
@@ -810,6 +713,7 @@ function recordCommandRisks(
       span,
     });
   }
+  return wrapperPayload;
 }
 
 async function visitNode(
@@ -887,12 +791,7 @@ async function visitNode(
       }
       if (step.executable) {
         output.commands.push(step);
-        recordCommandRisks(parsed.argv, parsed.dynamicArguments, node.text, span, output);
-        const wrapperPayload = shellWrapperPayloadForParsing(
-          parsed.argv,
-          parsed.arguments,
-          parsed.dynamicArguments,
-        );
+        const wrapperPayload = recordCommandRisks(parsed, node.text, span, output);
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
           const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
           const wrapperSpanBase = wrapperPayload.spanBase;
@@ -959,21 +858,14 @@ function commandTopologyBuckets(commands: RecordedCommandStep[]): CommandTopolog
     const key = `${command.context}\0${command.parentCommandId ?? ""}`;
     const bucket = buckets.get(key);
     if (bucket) {
-      bucket.commands.push(command);
-      continue;
+      bucket.push(command);
+    } else {
+      buckets.set(key, [command]);
     }
-    const newBucket: CommandTopologyBucket = {
-      context: command.context,
-      commands: [command],
-    };
-    if (command.parentCommandId) {
-      newBucket.parentCommandId = command.parentCommandId;
-    }
-    buckets.set(key, newBucket);
   }
 
   for (const bucket of buckets.values()) {
-    bucket.commands.sort((left, right) => left.span.startIndex - right.span.startIndex);
+    bucket.sort((left, right) => left.span.startIndex - right.span.startIndex);
   }
   return Array.from(buckets.values());
 }
@@ -1036,15 +928,16 @@ function resolveOperators(
   const operators: CommandOperator[] = [];
 
   for (const bucket of commandTopologyBuckets(commands)) {
+    const context = bucket[0].context;
+    const parentCommandId = bucket[0].parentCommandId || undefined;
     const bucketOperatorSource = operatorSources.find(
-      (entry) =>
-        entry.context === bucket.context && entry.parentCommandId === bucket.parentCommandId,
+      (entry) => entry.context === context && entry.parentCommandId === parentCommandId,
     );
     const bucketRanges = bucketOperatorSource
-      ? commandSourceRanges(bucketOperatorSource.source, bucket.commands)
+      ? commandSourceRanges(bucketOperatorSource.source, bucket)
       : null;
-    for (const [index, fromCommand] of bucket.commands.entries()) {
-      const toCommand = bucket.commands[index + 1];
+    for (const [index, fromCommand] of bucket.entries()) {
+      const toCommand = bucket[index + 1];
       if (!toCommand) {
         break;
       }
@@ -1083,8 +976,8 @@ function resolveOperators(
         fromCommandId: fromCommand.id,
         toCommandId: toCommand.id,
       };
-      if (bucket.parentCommandId) {
-        topologyOperator.parentCommandId = bucket.parentCommandId;
+      if (parentCommandId) {
+        topologyOperator.parentCommandId = parentCommandId;
       }
       operators.push(topologyOperator);
     }

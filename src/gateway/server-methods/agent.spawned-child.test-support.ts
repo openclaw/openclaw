@@ -1,7 +1,6 @@
 import path from "node:path";
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -10,10 +9,13 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { resolveAgentTestConfig } from "./agent.mocks.test-utils.js";
 import {
   type AgentHandlerArgs,
   getAgentTestMocks,
@@ -21,7 +23,7 @@ import {
   requireValue,
 } from "./agent.test-harness.js";
 
-export const confirmedAcpMeta: NonNullable<ReturnType<typeof readAcpSessionMeta>> = {
+export const confirmedAcpMeta: SessionAcpMeta = {
   backend: "acpx",
   agent: "codex",
   runtimeSessionName: "runtime-1",
@@ -29,6 +31,15 @@ export const confirmedAcpMeta: NonNullable<ReturnType<typeof readAcpSessionMeta>
   state: "idle",
   lastActivityAt: Date.now(),
 };
+
+export function mockGlobalSessionAgentRoster() {
+  const mocks = getAgentTestMocks();
+  mocks.listAgentIds.mockReturnValue(["main", "work"]);
+  mocks.loadConfigReturn = {
+    agents: { entries: { main: {}, work: {} } },
+    session: { scope: "global" },
+  };
+}
 
 export function nativeSubagentClient(): AgentHandlerArgs["client"] {
   const baseClient = requireValue(backendGatewayClient(), "expected backend client");
@@ -106,6 +117,7 @@ export async function withPluginSubagentTestState(
 ): Promise<void> {
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
   try {
+    setRuntimeConfigSnapshot(resolveAgentTestConfig());
     await resetSubagentRegistryForTests({ persist: false });
     await run(state);
   } finally {

@@ -9,6 +9,8 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -24,7 +26,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -33,20 +34,22 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  appendTranscriptEvent,
-  replaceTranscriptEvents,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
   restoreSessionColdTranscript,
@@ -58,9 +61,9 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
@@ -336,7 +339,7 @@ describe("cold transcript storage workers", () => {
     process.on("worker", observeWorker);
     try {
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
         archivedTranscripts: 2,
         externalizedTranscripts: 0,
@@ -347,11 +350,11 @@ describe("cold transcript storage workers", () => {
       ).toBeDefined();
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await restoreSessionColdTranscript(fixture.scope);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
@@ -590,7 +593,26 @@ describe("cold transcript storage workers", () => {
       historicalId,
     );
     const events = loadTranscriptEventsSync(fixture.scope);
+    assertSessionTranscriptHot(fixture.database(), historicalId);
+    const hotPlan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(fixture.scope.storePath),
+      archiveTranscript: false,
+      database: openOpenClawAgentDatabase(fixture.options),
+      referencedSessionIds: new Set(),
+      sessionId: historicalId,
+    });
+    expect(hotPlan).not.toBeNull();
+    const preparedDeletion = await archiveWorkers.materializeSessionStateDeletePlans([hotPlan!]);
     await archiveFixture(fixture);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => deleteMaterializedSessionStatePlans(database, preparedDeletion),
+        fixture.options,
+      ),
+    ).toEqual([]);
+    expect(() => assertSessionTranscriptHot(fixture.database(), historicalId)).toThrow(
+      expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
+    );
     expect(readTranscriptStatsSync(fixture.scope)).toEqual(stats);
     expect(
       readTranscriptContextVersionInTransaction({ db: fixture.database() }, historicalId),
@@ -617,6 +639,7 @@ describe("cold transcript storage workers", () => {
     } finally {
       hostSql.restore();
     }
+    assertSessionTranscriptHot(fixture.database(), historicalId);
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
 
@@ -646,7 +669,10 @@ describe("cold transcript storage workers", () => {
           db.insertInto("transcript_events").values({
             session_id: sessionId,
             seq: 0,
-            event_json: JSON.stringify({ type: "session", id: sessionId }),
+            ...prepareTranscriptPayload(
+              database,
+              JSON.stringify({ type: "session", id: sessionId }),
+            ),
             created_at: 0,
           }),
         );
@@ -694,35 +720,55 @@ describe("cold transcript storage workers", () => {
       }
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      const changes = vi.fn(() =>
-        Boolean(readSessionColdTranscript(fixture.database(), historicalId)),
-      );
+      let inspection: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+      // The committed notification must not re-register a writable database while observing it.
+      const readOnly = () =>
+        (inspection ??= openNodeSqliteDatabase(fixture.options.path, { readOnly: true }));
+      const changes = vi.fn(() => Boolean(readSessionColdTranscript(readOnly(), historicalId)));
       const unsubscribe = sessionChanges.subscribe(changes);
       try {
         await restoreSessionColdTranscript(fixture.scope);
-        expect(fixture.snapshot()).toEqual(fixture.original);
+        expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
         expect(
-          fixture
-            .database()
+          readOnly()
+            .prepare(`SELECT navigation_type, navigation_custom_type, navigation_display,
+              message_role, navigation_last_type, navigation_last_custom_type, navigation_valid
+              FROM transcript_events WHERE session_id = ? ORDER BY seq`)
+            .all(historicalId),
+        ).toEqual(
+          [null, "user", "assistant"].map((role) => ({
+            navigation_type: role === null ? "session" : "message",
+            navigation_custom_type: null,
+            navigation_display: 0,
+            message_role: role,
+            navigation_last_type: role === null ? "session" : "message",
+            navigation_last_custom_type: null,
+            navigation_valid: 1,
+          })),
+        );
+        expect(
+          readOnly()
             .prepare(`SELECT f.message_id FROM session_transcript_fts_rows m
             JOIN session_transcript_fts f ON f.rowid=m.id AND f.session_id=m.session_id
             WHERE m.session_id=? ORDER BY f.message_id`)
             .all(historicalId),
         ).toEqual([{ message_id: "history-assistant" }, { message_id: "history-user" }]);
-        expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
-        expect(fixture.database().prepare("PRAGMA quick_check").get()).toEqual({
+        expect(readSessionColdTranscript(readOnly(), historicalId)).toBeUndefined();
+        expect(readOnly().prepare("PRAGMA quick_check").get()).toEqual({
           quick_check: "ok",
         });
-        expect(fixture.database().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(readOnly().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         await restoreSessionColdTranscript(fixture.scope);
-        expect(fixture.snapshot()).toEqual(fixture.original);
+        expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: fixture.scope.storePath,
           sessionKey: fixture.scope.sessionKey,
+          scope: "transcript",
         });
         expect(changes.mock.results[0]?.value).toBe(false);
       } finally {
         unsubscribe();
+        inspection?.close();
       }
     },
   );

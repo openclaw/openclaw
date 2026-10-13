@@ -9,30 +9,27 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createPluginRuntimeCapabilityLease,
-  type PluginRuntimeCapabilityLease,
-} from "./capability-lease.js";
+import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
-import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
+import type { OwnedPluginService, PluginServicesOwner } from "./service-lifecycle.types.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
-import {
-  createPluginServiceScheduler,
-  type PluginServiceSchedulerOwner,
-} from "./service-scheduler.js";
+import { createPluginServiceScheduler } from "./service-scheduler.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, OpenClawPluginServiceContextV2 } from "./types.js";
 
@@ -82,35 +79,6 @@ export type PluginServicesHandle = {
   }) => Promise<void | PluginServiceStopResult>;
 };
 
-type OwnedPluginService = {
-  owner: PluginServicesOwner;
-  id: string;
-  pluginId: string;
-  registration: PluginServiceRegistration;
-  registry: PluginRegistry;
-  diagnosticsExporter: boolean;
-  stop?: () => unknown;
-  startup?: Promise<void>;
-  startupConsumer?: PluginInstanceConsumer;
-  stopping?: Promise<unknown>;
-  reloading?: Promise<void>;
-  cleaned: boolean;
-  cleanupErrors: unknown[];
-  cleanupReporting?: Promise<unknown>;
-  stopRequested: boolean;
-  stopNodeInvocations?: () => void;
-  health: NonNullable<OpenClawPluginServiceContext["serviceHealth"]>;
-  lease: PluginRuntimeCapabilityLease;
-  scheduling: PluginServiceSchedulerOwner;
-};
-
-type PluginServicesOwner = {
-  services: OwnedPluginService[];
-  attempts: WeakMap<PluginServiceRegistration, OwnedPluginService>;
-  registrations: Set<PluginServiceRegistration>;
-  stopped: Set<PluginServiceRegistration>;
-  closed: boolean;
-};
 const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
 
 type StartPluginServicesParams = {
@@ -123,6 +91,7 @@ type StartPluginServicesParams = {
   getCronService?: () => PluginServiceCronHost | null | undefined;
   oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
   previous?: PluginServicesHandle | null;
+  deferStartForPluginIds?: ReadonlySet<string>;
 } & (
   | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
   | { throwOnStartError?: false; onHandle?: (handle: PluginServicesHandle) => void }
@@ -190,6 +159,7 @@ async function startPreparedPluginServices({
   broadcastPluginEvent,
   getCronService,
   oneShotStopTimeouts,
+  deferStartForPluginIds,
   throwOnStartError,
   owner,
   publication,
@@ -240,6 +210,7 @@ async function startPreparedPluginServices({
     entry.stopRequested = true;
     entry.scheduling.scheduler.beginClose();
     entry.stopNodeInvocations?.();
+    void entry.stopControlUiIngress?.();
     const recordFailure = (error: unknown) => {
       if (!failures) {
         return;
@@ -275,17 +246,19 @@ async function startPreparedPluginServices({
           ? getPluginRecordRegistry(entry.registry, record)
           : entry.registry;
         const scheduled = entry.scheduling.close();
+        const ingress = entry.stopControlUiIngress?.();
         const cleanup = () =>
           withPluginHttpRouteRegistry(stopRegistry, () => entry.stop?.(), entry.lease);
         // Cleanup releases transports needed by scheduled callbacks, so invoke it before joining.
         // The scheduler records callback failures; its join only observes physical settlement.
         // An idle scope must preserve the hook's raw result for zero-budget deadlines.
-        return scheduled
+        return scheduled || ingress
           ? Promise.resolve().then(async () => {
               try {
                 return await cleanup();
               } finally {
                 await scheduled;
+                await ingress;
               }
             })
           : cleanup();
@@ -426,6 +399,7 @@ async function startPreparedPluginServices({
           entry.stopRequested = true;
           entry.scheduling.scheduler.beginClose();
           entry.stopNodeInvocations?.();
+          void entry.stopControlUiIngress?.();
         }
         try {
           await stopServices(
@@ -467,6 +441,7 @@ async function startPreparedPluginServices({
         entry.stopRequested = true;
         entry.scheduling.scheduler.beginClose();
         entry.stopNodeInvocations?.();
+        void entry.stopControlUiIngress?.();
       }
       const strict = options?.strict === true;
       const deadline = strict ? options.deadlineAtMs : undefined;
@@ -531,6 +506,14 @@ async function startPreparedPluginServices({
         })
       : undefined;
     const internalDiagnostics = createPluginServiceDiagnostics(entry, lease);
+    const controlUiIngress = record
+      ? createPluginServiceControlUiIngress({
+          registry,
+          record,
+          lease,
+          isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
+        })
+      : undefined;
 
     const scopeTraceName = (name: string) =>
       `${traceName}.${name.split(".").map(encodeStartupTraceSegment).join(".")}`;
@@ -551,6 +534,7 @@ async function startPreparedPluginServices({
         ? { invokeNode: nodeInvoker.invoke, openNodeDuplex: nodeInvoker.openDuplex }
         : {}),
       ...(gatewayEvents ? { gatewayEvents } : {}),
+      ...(controlUiIngress ? { controlUiIngress: controlUiIngress.factory } : {}),
       ...(startupTrace
         ? {
             startupTrace: {
@@ -582,6 +566,7 @@ async function startPreparedPluginServices({
       registry,
       stopRequested: false,
       stopNodeInvocations: nodeInvoker?.stop,
+      stopControlUiIngress: controlUiIngress?.stop,
       diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
       stop: service.stop
         ? () =>
@@ -629,14 +614,20 @@ async function startPreparedPluginServices({
           const start = () =>
             withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext));
           // Reload may originate in an RPC or tool; background work captures
-          // service-owned Gateway/worker context, never that caller's authority.
+          // service-owned Gateway/worker context, never that caller's authority or generation.
           await runOutsideOperatorToolGatewayAuthority(() =>
-            runServiceStart(async () =>
-              withPluginHttpRouteRegistry(
-                registry,
-                () =>
-                  ownedService.startupConsumer ? ownedService.startupConsumer.run(start) : start(),
-                lease,
+            runOutsidePluginRuntimeGenerationScope(() =>
+              pluginInstanceInvocation.exit(() =>
+                runServiceStart(async () =>
+                  withPluginHttpRouteRegistry(
+                    registry,
+                    () =>
+                      ownedService.startupConsumer
+                        ? ownedService.startupConsumer.run(start)
+                        : start(),
+                    lease,
+                  ),
+                ),
               ),
             ),
           );
@@ -688,6 +679,9 @@ async function startPreparedPluginServices({
     for (const entry of registry.services) {
       if (owner.closed) {
         break;
+      }
+      if (deferStartForPluginIds?.has(entry.pluginId)) {
+        continue;
       }
       if (!canStart(entry)) {
         if (throwOnStartError && owner.stopped.has(entry)) {

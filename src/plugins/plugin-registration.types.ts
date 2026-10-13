@@ -368,6 +368,8 @@ export type OpenClawPluginServiceContext = {
   serviceHealth?: OpenClawPluginServiceHealth;
   /** Gateway-owned timed work; required by the version 2 service contract. */
   scheduler?: PluginServiceSchedulerV1;
+  /** Remote device-only Control UI ingress, available only to admitted trusted services. */
+  controlUiIngress?: import("./gateway-ingress.types.js").GatewayControlUiIngressFactoryV2;
   /** Gateway-owned scheduler access, revoked when this service stops. */
   getCron?: () =>
     | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {
@@ -400,6 +402,12 @@ export type OpenClawPluginServiceContext = {
   internalDiagnostics?: {
     /** Identity of the hosting process, available only while this service is active. */
     getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
+    /** Current owner-projected work; undefined while the Gateway projection is unavailable. */
+    onGatewayWorkMetrics?: (
+      listener: (
+        snapshot: import("../infra/gateway-work-metrics.js").GatewayWorkMetricsSnapshot | undefined,
+      ) => void,
+    ) => () => void;
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (

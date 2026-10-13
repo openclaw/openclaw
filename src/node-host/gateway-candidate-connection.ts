@@ -10,6 +10,7 @@ import {
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
 type GatewayCandidateEvent = Parameters<NonNullable<GatewayClientOptions["onEvent"]>>[0];
@@ -56,10 +57,6 @@ export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): strin
       : `/${gateway.contextPath}`
     : "";
   return `${scheme}://${urlHost}:${port}${contextPath}`;
-}
-
-function canTryNextGatewayCandidate(info: GatewayClientCloseInfo | undefined): boolean {
-  return info?.phase === "pre-hello" && info.connectRequestSent === false;
 }
 
 export function createNodeHostGatewayCandidateConnection(params: GatewayCandidateConnectionParams) {
@@ -128,7 +125,8 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           // endpoint. Its own reconnect path owns durable device auth from here.
           winnerSelected ||
           nextCandidateIndex >= params.candidates.length ||
-          !canTryNextGatewayCandidate(info)
+          info?.phase !== "pre-hello" ||
+          info.connectRequestSent !== false
         ) {
           return;
         }
@@ -167,12 +165,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node host gateway cleanup failed");
-        }
+        throwNodeHostCleanupErrors(failures, "node host gateway cleanup failed");
       });
       return stopPromise;
     },

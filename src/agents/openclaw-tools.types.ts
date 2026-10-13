@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
@@ -18,17 +17,19 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
-import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
+import type {
+  SessionsYieldCallback,
+  SessionsYieldRuntimeClaim,
+} from "./tools/sessions-yield-tool.js";
+import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   /**
-   * How this run shows a blocking question tool's prompt. Harnesses that run tools
-   * through the embedded tool lifecycle reserve the prompt themselves and leave this
-   * unset; harnesses that dispatch tools directly pass it so the question still
-   * reaches the person being asked.
+   * Overrides the originating-channel sender for blocking questions. An actual
+   * harness prompt reservation retains delivery ownership.
    */
   questionPrompt?: QuestionPromptDelivery;
   toolBindings?: Readonly<Record<string, unknown>>;
@@ -70,7 +71,7 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Internal review-run restrictions and proposal provenance. */
+  /** Run-owned Workshop authority: review guard and personal library access. */
   skillWorkshop?: SkillWorkshopRunOptions;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
@@ -90,6 +91,7 @@ export type OpenClawSharedToolsOptions = {
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  computerExecutionId?: string;
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   inboundEventKind?: InboundEventKind;
@@ -102,7 +104,7 @@ export type OpenClawSharedToolsOptions = {
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
-  claimYieldCompletion?: () => boolean | Promise<boolean>;
+  claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;
 };

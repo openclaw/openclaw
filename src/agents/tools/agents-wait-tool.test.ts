@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { applyCodeModeCatalog } from "../code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   createCodeModeHarness,
   resetCodeModeTestState,
@@ -64,9 +64,7 @@ function persistCollectorReadFixture(
   runIds: readonly string[],
 ) {
   saveSubagentRegistryChangesToSqlite(rows, runIds);
-  const events: Array<() => void> = [];
-  state.publishSubagentRunsAfterAtomicStore(rows, runIds, events);
-  events.forEach((publish) => publish());
+  state.publishSubagentRunsAfterAtomicStore(rows, runIds)();
 }
 
 describe("agents_wait", () => {
@@ -94,7 +92,9 @@ describe("agents_wait", () => {
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
     const execTool = expectDefined(h.tools[0], "Code Mode exec");
     const waitTool = expectDefined(h.tools[1], "Code Mode wait");
-    expect(execTool.description).toContain("completed: Array<");
+    expect(buildCodeModeCatalogPrompt(h.ctx, h.catalogRef.current!.entries)).toContain(
+      "completed: Array<",
+    );
     const listed = await runUntilCompleted({
       execTool,
       waitTool,

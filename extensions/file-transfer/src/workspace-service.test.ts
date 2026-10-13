@@ -17,6 +17,10 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import {
   afterEach,
@@ -37,24 +41,6 @@ import { registerNodeWorkspaces } from "./workspace-service.js";
 import { createNodeWorkspaceTestTransport } from "./workspace-service.test-support.js";
 
 vi.mock("./shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
-
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("openclaw/plugin-sdk/agent-workspace-runtime")>();
-  const { fileURLToPath } = await import("node:url");
-  // Source children run outside the checkout. Keep ESM dependencies native and
-  // resolve source aliases with the repository tsconfig, as other source fixtures do.
-  const register = `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}; register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))} });`;
-  return {
-    ...original,
-    resolveWorkspaceWorkerArgv(kind: "memory" | "skills") {
-      const argv = original.resolveWorkspaceWorkerArgv(kind);
-      return argv[0] === "--import"
-        ? ["--import", `data:text/javascript,${encodeURIComponent(register)}`, ...argv.slice(2)]
-        : argv;
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let local: string;
@@ -125,6 +111,7 @@ function captureOutput() {
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   scheduler = createTestPluginServiceScheduler();
   openDuplex = undefined;
   const parent = await fs.realpath(tempDirs.make("node-workspace-test-"));
@@ -207,6 +194,7 @@ afterEach(async () => {
     await service.stop?.(context());
   } finally {
     await scheduler.stop();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
   }
 });
@@ -387,7 +375,7 @@ describe("registered node workspace service", () => {
       nodePolicy.denyPaths = [actual];
       output.length = 0;
       await expect(reader.resolveExplicitSkill(selection)).rejects.toThrow(
-        kind === "file" ? /file grant/ : /canonical location/,
+        kind === "file" ? /file grant/ : /resolved location/,
       );
       expect(output).toEqual([]);
     },

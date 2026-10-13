@@ -1,5 +1,5 @@
 ---
-summary: "Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output."
+summary: "Fish Audio hosted text-to-speech with streaming, voice notes, and telephony output."
 read_when:
   - You are installing, configuring, or auditing the fish-audio-speech plugin
 title: "Fish Audio Speech plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
+Fish Audio hosted text-to-speech with streaming, voice notes, and telephony output.
 
 ## Distribution
 

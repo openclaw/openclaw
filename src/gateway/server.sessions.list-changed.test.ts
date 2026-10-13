@@ -8,8 +8,6 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -19,7 +17,6 @@ import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.j
 import { setupPersistentSessionListTestHarness } from "./server.sessions.list-changed.fixture.test-support.js";
 import {
   requireRecord,
-  requireArray,
   expectFields,
   transcriptMessageContents,
   expectRespondPayload,
@@ -283,6 +280,19 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   expect(child?.model).toBe("test-model-without-catalog-context");
   expect(child?.modelSelectionLocked).toBe(true);
 
+  const gallery = await rpcReq<{ sessions: Array<Record<string, unknown>> }>(ws, "sessions.list", {
+    rowMode: "dashboard",
+  });
+  expect(gallery.ok).toBe(true);
+  const galleryChild = gallery.payload?.sessions.find((row) => row.key === child?.key);
+  expect(galleryChild).toMatchObject({
+    rowMode: "dashboard",
+    parentSessionKey: "agent:main:main",
+    sessionId: "sess-child",
+  });
+  expect(galleryChild).not.toHaveProperty("totalTokens");
+  expect(galleryChild).not.toHaveProperty("model");
+
   ws.close();
 });
 
@@ -333,83 +343,6 @@ test.each([["my-ngc:nvidia", "nvidia/nemotron-3-ultra-550b-a55b"]])(
       modelProvider: provider,
       model,
     });
-  },
-);
-
-test.each(["gpt-5.6-sol"])(
-  "sessions.patch returns authoritative native Codex Ultra metadata for %s",
-  async (model) => {
-    const registry = createEmptyPluginRegistry();
-    registry.providers.push({
-      pluginId: "openai",
-      source: "test",
-      provider: {
-        id: "openai",
-        label: "OpenAI",
-        auth: [],
-        resolveThinkingProfile: ({ compat }) => ({
-          levels: [
-            { id: "off" },
-            { id: "high" },
-            { id: "max" },
-            ...(compat?.supportedReasoningEfforts?.includes("ultra")
-              ? [{ id: "ultra" as const }]
-              : []),
-          ],
-          defaultLevel: "high",
-        }),
-      },
-    });
-    setActivePluginRegistry(registry);
-    testState.agentConfig = {
-      model: { primary: `openai/${model}` },
-      models: {
-        [`openai/${model}`]: { agentRuntime: { id: "codex" } },
-      },
-    };
-    await writeMainSessionStore({ modelProvider: "openai", model });
-    const loadGatewayModelCatalogSnapshot = vi.fn(async () =>
-      mutationCatalogSnapshot([
-        {
-          provider: "openai",
-          id: model,
-          name: model,
-          reasoning: true,
-          compat: {
-            supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-          },
-        },
-      ]),
-    );
-
-    const result = await invokeSessionMutation({
-      method: "sessions.patch",
-      params: { key: "main", thinkingLevel: "ultra" },
-      context: { loadGatewayModelCatalogSnapshot },
-    });
-
-    const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
-    expectFields(resolved, {
-      modelProvider: "openai",
-      model,
-      thinkingLevel: "ultra",
-    });
-    expect(requireRecord(resolved.agentRuntime, "resolved agent runtime").id).toBe("codex");
-    expect(
-      requireArray(resolved.thinkingLevels, "resolved thinking levels").map(
-        (level) => requireRecord(level, "thinking level").id,
-      ),
-    ).toContain("ultra");
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-
-    const event = expectChangedBroadcast(result.broadcastToConnIds, {
-      sessionKey: "agent:main:main",
-      reason: "patch",
-      thinkingLevel: "ultra",
-    });
-    expect(event).not.toHaveProperty("thinkingLevels");
-    expect(event).not.toHaveProperty("thinkingOptions");
-    expect(event).not.toHaveProperty("thinkingDefault");
   },
 );
 
@@ -528,30 +461,6 @@ test("sessions.changed publishes running status during ordinary startup", async 
   });
 });
 
-test("sessions.list leaves failed-first-turn dashboard sessions untitled instead of an id-prefix title", async () => {
-  const sessionKey = "agent:main:dashboard:fade729d-1111-2222-3333-444455556666";
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "dashboard:fade729d-1111-2222-3333-444455556666": sessionStoreEntry("sess-dash-untitled"),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId: "sess-dash-untitled",
-    sessionKey,
-    storePath,
-    messages: [{ role: "assistant", content: "The first turn failed before a user message." }],
-  });
-
-  const { respond } = await invokeSessionsList({
-    requestId: "req-sessions-list-untitled-dashboard",
-    params: { includeDerivedTitles: true },
-  });
-
-  const session = findSession(expectRespondPayload(respond), sessionKey);
-  expect(session.derivedTitle).toBeUndefined();
-});
-
 test("sessions.list yields for bulk metadata and later serves previews without repairing titles", async () => {
   const { storePath } = await createSessionStoreDir();
   const keys = await seedSessionListBackfillFixture(storePath, 11);
@@ -634,7 +543,8 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     label: "Renamed",
   });
 
-  expectMainPatchBroadcast(result, {
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
     totalTokens: 6_643,
     totalTokensFresh: true,
     contextTokens: 123_456,
@@ -642,24 +552,6 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     modelProvider: "openai",
     model: "test-unpriced-model",
   });
-});
-
-test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
-  // No explicit responseUsage and no configured default → the row builder resolves
-  // effectiveResponseUsage to "off". The event must carry that resolved value, not
-  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
-  await writeMainSessionStore({ verboseLevel: "on" });
-
-  const result = await invokeSessionsPatch({
-    key: "main",
-    verboseLevel: "on",
-  });
-
-  const payload = expectMainPatchBroadcast(result, {
-    effectiveResponseUsage: "off",
-  });
-  // Raw responseUsage is genuinely absent (no override), proving the event does not
-  // merely echo the raw field.
   expect(payload.responseUsage).toBeUndefined();
 });
 

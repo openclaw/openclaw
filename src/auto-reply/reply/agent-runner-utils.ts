@@ -4,7 +4,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import {
+  findModelInCatalog,
+  prepareModelRunCapabilities,
+  type PreparedModelThinkingCapability,
+} from "../../agents/model-catalog-lookup.js";
+import {
+  normalizeThinkingCatalogProviders,
+  resolveCandidateThinkingLevel,
+} from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -29,18 +37,28 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import {
+  buildReplyRunStateParams,
+  resolveModelFallbackOptions,
+  resolveRunModelHasVision,
+} from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 
-const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 type EmbeddedReplyRoute = Pick<
   FollowupRun,
   | "originatingChannel"
@@ -141,40 +159,31 @@ export function buildThreadingToolContext(params: {
   const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  if (!threading?.buildToolContext) {
-    return {
-      currentChannelId: normalizeOptionalString(originTo),
-      currentChannelProvider: provider ?? (rawProvider as ChannelId),
-      currentMessageId,
-      currentSourceTurnId,
-      replyToMode: sessionCtx.ReplyToMode,
-      hasRepliedRef,
-    };
-  }
-  const context =
-    threading.buildToolContext({
-      cfg: config,
-      accountId: sessionCtx.AccountId,
-      context: {
-        Channel: originProvider,
-        From: sessionCtx.From,
-        To: originTo,
-        ChatType: sessionCtx.ChatType,
-        CurrentMessageId: currentMessageId,
-        ReplyToMode: sessionCtx.ReplyToMode,
-        ReplyToId: sessionCtx.ReplyToId,
-        ReplyToIdFull: sessionCtx.ReplyToIdFull,
-        ThreadLabel: sessionCtx.ThreadLabel,
-        MessageThreadId: sessionCtx.MessageThreadId,
-        TransportThreadId: sessionCtx.TransportThreadId,
-        NativeChannelId: sessionCtx.NativeChannelId,
-      },
-      hasRepliedRef,
-    }) ?? {};
+  const context: InternalChannelThreadingToolContext = threading?.buildToolContext
+    ? (threading.buildToolContext({
+        cfg: config,
+        accountId: sessionCtx.AccountId,
+        context: {
+          Channel: originProvider,
+          From: sessionCtx.From,
+          To: originTo,
+          ChatType: sessionCtx.ChatType,
+          CurrentMessageId: currentMessageId,
+          ReplyToMode: sessionCtx.ReplyToMode,
+          ReplyToId: sessionCtx.ReplyToId,
+          ReplyToIdFull: sessionCtx.ReplyToIdFull,
+          ThreadLabel: sessionCtx.ThreadLabel,
+          MessageThreadId: sessionCtx.MessageThreadId,
+          TransportThreadId: sessionCtx.TransportThreadId,
+          NativeChannelId: sessionCtx.NativeChannelId,
+        },
+        hasRepliedRef,
+      }) ?? {})
+    : { currentChannelId: normalizeOptionalString(originTo), hasRepliedRef };
   const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
-    currentChannelProvider: provider!, // guaranteed non-null since threading exists
+    currentChannelProvider: provider ?? (rawProvider as ChannelId),
     // Some providers expose only thread resources as reply targets; explicit
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
@@ -183,11 +192,12 @@ export function buildThreadingToolContext(params: {
   };
 }
 
-export const isBunFetchSocketError = (message?: string) =>
-  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
-
-export const formatBunFetchSocketError = () =>
-  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+export function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
+  return queued.run.inputProvenance?.kind === "internal_system" &&
+    queued.run.inputProvenance.sourceTool === "restart-sentinel"
+    ? queued.originatingReplyToId
+    : queued.messageId;
+}
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(
@@ -312,6 +322,25 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
+/** Reuse the candidate's channel and sender projection for early model routing. */
+export function buildModelResolveContext(
+  params: Parameters<typeof buildEmbeddedContextFromTemplate>[0] & {
+    trigger: PluginHookAgentContext["trigger"];
+  },
+) {
+  const context = {
+    ...buildEmbeddedContextFromTemplate(params),
+    ...buildTemplateSenderContext(params.sessionCtx),
+    ...buildReplyRunStateParams(params.run),
+    trigger: params.trigger,
+  };
+  return {
+    trigger: context.trigger,
+    ...buildAgentHookContextChannelFields(context),
+    ...buildAgentHookContextIdentityFields(context),
+  };
+}
+
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
   turn: Pick<
@@ -320,13 +349,13 @@ export function mintReplyMessageActionTurnCapability(
   >,
   runId: string,
 ): string | undefined {
+  // An event's captured delivery route is not a new trusted channel turn.
+  if (turn.followupRun.run.internalEventExecution) {
+    return undefined;
+  }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (
-    turn.isHeartbeat ||
-    (!channelIngress &&
-      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
-  ) {
+  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -340,23 +369,34 @@ export function mintReplyMessageActionTurnCapability(
     return undefined;
   }
   if (!channelIngress) {
-    // Queue options may come from another input. Match the original admission,
-    // not opts.runId, which followup execution replaces with its own run ID.
-    if (
-      !dashboardAdmission ||
-      dashboardAdmission.agentId !== context.agentId ||
-      dashboardAdmission.sessionKey !== sessionKey ||
-      dashboardAdmission.sessionId !== context.sessionId
-    ) {
+    // Read permission stays tied to its original run. A queued prompt instead
+    // brings its own native source custody, bound below to this new execution.
+    const dashboard =
+      dashboardAdmission?.runId === runId &&
+      dashboardAdmission.agentId === context.agentId &&
+      dashboardAdmission.sessionKey === sessionKey &&
+      dashboardAdmission.sessionId === context.sessionId
+        ? dashboardAdmission
+        : undefined;
+    const recorder = turn.followupRun.userTurnTranscriptRecorder;
+    const source = readUserTurnPromptReactionSource(recorder);
+    const promptSource =
+      source && source.agentId === context.agentId && source.sessionKey === sessionKey
+        ? source
+        : undefined;
+    if (!dashboard && !promptSource) {
       return undefined;
     }
-    dashboardAdmission.assertCurrent();
+    dashboard?.assertCurrent();
+    promptSource?.assertCurrent();
     return mintMessageActionTurnCapability({
       agentId: context.agentId,
       runId,
       sessionKey,
       sessionId: context.sessionId,
-      assertDashboardReadCurrent: dashboardAdmission.assertCurrent,
+      assertDashboardReadCurrent: dashboard?.assertCurrent,
+      promptReactionSource:
+        promptSource && recorder ? { source: promptSource, recorder } : undefined,
       expiresWithRun: true,
     });
   }
@@ -407,13 +447,82 @@ export async function buildEmbeddedRunExecutionParams(params: {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
   const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
-  const runBaseParams = await buildEmbeddedRunBaseParams({
-    ...params,
-    authProfile,
-  });
+  // Retain the base-input snapshot across thinking and vision discovery.
+  const snapshot = { ...params };
+  const config = snapshot.run.config;
+  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
+    resolveModelFallbackOptions(snapshot.run);
+  let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
+  if (snapshot.agentRuntime) {
+    // Keep the lifecycle-owned catalog module lazy until this turn has a selected runtime.
+    const { loadProviderScopedThinkingCatalog } =
+      await import("../../agents/model-catalog.runtime.js");
+    const observedCatalog = normalizeThinkingCatalogProviders(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: snapshot.provider,
+        model: snapshot.model,
+        agentRuntime: snapshot.agentRuntime,
+        agentId: snapshot.run.agentId,
+        agentDir: snapshot.run.agentDir,
+        workspaceDir: snapshot.run.workspaceDir,
+      }),
+    );
+    const thinkingCatalog = findModelInCatalog(observedCatalog, snapshot.provider, snapshot.model)
+      ? observedCatalog
+      : snapshot.run.thinkingCatalog;
+    modelThinkingCapability = prepareModelRunCapabilities(
+      [thinkingCatalog, []],
+      [snapshot.provider, snapshot.model, snapshot.agentRuntime],
+    ).modelThinkingCapability;
+  }
+  const enforceFinalTag =
+    !snapshot.run.skipProviderRuntimeHints &&
+    (snapshot.run.enforceFinalTag ||
+      isReasoningTagProvider(snapshot.provider, {
+        config,
+        workspaceDir: snapshot.run.workspaceDir,
+        modelId: snapshot.model,
+      }));
+  // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
-    embeddedContext,
-    senderContext,
-    runBaseParams,
+    ...embeddedContext,
+    ...senderContext,
+    ...buildReplyRunStateParams(snapshot.run),
+    providerReviewAcknowledgment: snapshot.run.providerReviewAcknowledgment,
+    permissionMode: snapshot.run.permissionMode,
+    sessionRoot: snapshot.run.sessionRoot,
+    agentDir: snapshot.run.agentDir,
+    config,
+    trustedInternalHandoff: snapshot.run.trustedInternalHandoff,
+    scheduledToolPolicy: snapshot.run.scheduledToolPolicy,
+    runtimePluginToolGrant: snapshot.run.runtimePluginToolGrant,
+    enforceFinalTag,
+    silentExpected: snapshot.run.silentExpected,
+    silentReplyPromptMode: snapshot.run.silentReplyPromptMode,
+    sourceReplyDeliveryMode: snapshot.run.sourceReplyDeliveryMode,
+    toolBindings: snapshot.run.toolBindings,
+    skillLibraryAuthoring: snapshot.run.skillLibraryAuthoring,
+    provider: snapshot.provider,
+    model: snapshot.model,
+    modelHasVision: await resolveRunModelHasVision(snapshot),
+    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
+    requestedRouteResolution: "resolved" as const,
+    modelSelectionLocked: snapshot.run.modelSelectionLocked,
+    modelFallbackAvailability,
+    modelFallbacksOverride,
+    ...authProfile,
+    thinkLevel: snapshot.run.thinkLevel,
+    fastMode: snapshot.run.fastMode,
+    fastModeAutoOnSeconds: snapshot.run.fastModeAutoOnSeconds,
+    verboseLevel: snapshot.run.verboseLevel,
+    reasoningLevel: snapshot.run.reasoningLevel,
+    execOverrides: snapshot.run.execOverrides,
+    bashElevated: snapshot.run.bashElevated,
+    timeoutMs: snapshot.run.timeoutMs,
+    runTimeoutOverrideMs: snapshot.run.runTimeoutOverrideMs,
+    runId: snapshot.runId,
+    promptCacheKey: snapshot.promptCacheKey,
+    allowTransientCooldownProbe: snapshot.allowTransientCooldownProbe,
   };
 }

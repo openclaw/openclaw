@@ -4,8 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import {
-  createControlUiPublicSessionRoute,
+  serveControlUiPublicSession,
   isControlUiPublicSessionPath,
 } from "./control-ui-public-session.js";
 import { controlUiSessionEntryPath } from "./control-ui-session-entry-path.js";
@@ -27,12 +28,13 @@ export function createControlUiSessionRoutes(options: {
 }) {
   const basePath = normalizeControlUiBasePath(options.controlUiBasePath);
   let gate: ReturnType<typeof createControlUiPublicSessionRequestGate> | undefined;
-  let legacy: ReturnType<typeof createControlUiPublicSessionRoute> | undefined;
+  let renderer: Promise<PublicSessionCardRenderer> | undefined;
   const publicGate = () => (gate ??= createControlUiPublicSessionRequestGate());
   return {
     matches(pathname: string, rawUrl?: string) {
       if (
         isControlUiPublicSessionPath(pathname, basePath) ||
+        pathname === `${basePath}/share/session/media` ||
         pathname === controlUiSessionEntryPath(basePath)
       ) {
         return true;
@@ -56,6 +58,7 @@ export function createControlUiSessionRoutes(options: {
     },
     dispose() {
       gate?.dispose();
+      void renderer?.then((current) => current.dispose());
     },
     async serve(
       params: GatewayHttpRequestAuthOptions & {
@@ -68,9 +71,71 @@ export function createControlUiSessionRoutes(options: {
       const { req, res, config } = params;
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
       const projection = getSessionRowProjection(options.getGatewayRequestContext?.());
+      const serveApp = async (path: string, isCurrent?: () => boolean) => {
+        // Select only the SPA document and preloads, never another HTTP handler.
+        // Authenticated handoffs additionally recheck their live authority.
+        const originalUrl = req.url;
+        req.url = path;
+        try {
+          return await (
+            await getControlUiModule()
+          ).handleControlUiHttpRequest(req, res, {
+            ...params,
+            basePath,
+            root: options.controlUiRoot,
+            terminalEnabled: options.isTerminalEnabled?.() ?? isTerminalConfigEnabled(config),
+            agentId: resolveAssistantAgentId(config),
+            sessionEntryPath: path,
+            isSessionEntryCurrent: isCurrent,
+          });
+        } finally {
+          req.url = originalUrl;
+        }
+      };
+      if (pathname === `${basePath}/share/session/media`) {
+        return (
+          await import("./control-ui-public-session-media.js")
+        ).serveControlUiPublicSessionMedia({
+          ...params,
+          basePath,
+          projection,
+          gate: publicGate(),
+        });
+      }
       if (isControlUiPublicSessionPath(pathname, basePath)) {
-        legacy ??= createControlUiPublicSessionRoute(publicGate());
-        return legacy.serve({ ...params, basePath, projection });
+        return serveControlUiPublicSession({
+          ...params,
+          basePath,
+          projection,
+          gate: publicGate(),
+          card: {
+            pullRequests: options.getGatewayRequestContext?.()?.controlUiSessionPullRequests,
+            render: async (card) => {
+              renderer ??= import("./control-ui-public-session-card.js").then((module) =>
+                module.createPublicSessionCardRenderer(),
+              );
+              return (await renderer).render(card);
+            },
+            fallback: async () => {
+              res.setHeader("Cache-Control", "no-store");
+              const { readControlUiRootAsset } = await import("./server-control-ui-root.js");
+              const root = options.controlUiRoot;
+              const asset =
+                root && (root.kind === "bundled" || root.kind === "resolved")
+                  ? await readControlUiRootAsset(root, "social-card.png", true)
+                  : undefined;
+              const body = asset?.file.body;
+              if (!body) {
+                respondNotFound(res);
+                return;
+              }
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "image/png");
+              res.setHeader("Content-Length", body.byteLength);
+              res.end(req.method === "HEAD" ? undefined : body);
+            },
+          },
+        });
       }
       if (pathname !== controlUiSessionEntryPath(basePath)) {
         return (await import("./control-ui-public-chat.js")).serveControlUiPublicChat({
@@ -78,33 +143,14 @@ export function createControlUiSessionRoutes(options: {
           basePath,
           projection,
           gate: publicGate(),
+          serveApp,
         });
       }
       return (await import("./control-ui-session-entry.js")).serveControlUiSessionEntry({
         ...params,
         basePath,
         projection,
-        serveApp: async (path, isCurrent) => {
-          // The protected request supplies authority; the path selects only the
-          // existing SPA document and preloads, never another HTTP handler.
-          const originalUrl = req.url;
-          req.url = path;
-          try {
-            return await (
-              await getControlUiModule()
-            ).handleControlUiHttpRequest(req, res, {
-              ...params,
-              basePath,
-              root: options.controlUiRoot,
-              terminalEnabled: options.isTerminalEnabled?.() ?? isTerminalConfigEnabled(config),
-              agentId: resolveAssistantAgentId(config),
-              sessionEntryPath: path,
-              isSessionEntryCurrent: isCurrent,
-            });
-          } finally {
-            req.url = originalUrl;
-          }
-        },
+        serveApp,
       });
     },
   };

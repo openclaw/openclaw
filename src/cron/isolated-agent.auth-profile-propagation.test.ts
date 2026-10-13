@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { resolveCronAgentLane } from "../agents/lanes.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -21,6 +22,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
+  resolveCronAgentLaneMock,
   resolveSessionAuthSelectionMock,
   runCliAgentMock,
   runEmbeddedAgentMock,
@@ -89,18 +91,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     closeOpenClawAgentDatabasesForTest(agentDir);
   });
 
-  it("uses transient-local auth cooldown policy for cron throttling failures", async () => {
-    mockRunCronFallbackPassthrough();
-
-    await runWithConfig();
-
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      authProfileFailurePolicy: "local_transient",
-    });
-  });
-
   it("passes authProfileId to runEmbeddedAgent when auth profiles exist", async () => {
+    resolveCronAgentLaneMock.mockImplementation(resolveCronAgentLane);
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "openrouter",
       model: "moonshotai/kimi-k2.5",
@@ -128,41 +120,12 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       authProfileId: "openrouter:default",
+      authProfileFailurePolicy: "local_transient",
+      lane: "cron-nested",
     });
-  });
-
-  it("passes resolved authProfileId to runCliAgent when CLI execution provider is active (#144047)", async () => {
-    isCliProviderMock.mockReturnValue(true);
-    mockRunCronFallbackPassthrough();
-    runCliAgentMock.mockResolvedValue({
-      payloads: [{ text: "cli done" }],
-      meta: { agentMeta: {} },
-    });
-    setupClaudeCliBackend();
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-    });
-    resolveSessionAuthSelectionMock.mockResolvedValue({
-      profileId: "claude-cli:personal",
-      source: "auto",
-    });
-    saveProfiles({
-      "claude-cli:personal": cliProfile(),
-    });
-
-    const result = await runWithConfig({
-      auth: {
-        order: { "claude-cli": ["claude-cli:personal"] },
-      },
-    });
-
-    expect(result.status).toBe("ok");
-    expect(runCliAgentMock).toHaveBeenCalledOnce();
-    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      provider: "claude-cli",
-      authProfileId: "claude-cli:personal",
-    });
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openrouter", isNewSession: false }),
+    );
   });
 
   it("resolves and forwards ordered CLI auth profile on fallback to Claude CLI (#144047)", async () => {

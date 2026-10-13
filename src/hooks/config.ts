@@ -29,7 +29,6 @@ export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): bo
   return Boolean(process.env[envName]?.trim() || hookConfig?.env?.[envName]?.trim());
 }
 
-/** Return true when a hook passes enable policy and runtime requirements. */
 export function shouldIncludeHook(params: {
   entry: HookPolicyEntry;
   config?: OpenClawConfig;

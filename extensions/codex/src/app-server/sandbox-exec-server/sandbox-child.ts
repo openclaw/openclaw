@@ -185,10 +185,8 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
       })()),
   };
   params.owners.add(owner);
-  void settled.then(
-    () => params.owners.delete(owner),
-    () => params.owners.delete(owner),
-  );
+  const releaseOwner = () => params.owners.delete(owner);
+  void settled.then(releaseOwner, releaseOwner);
   const interrupt = async () => {
     await ready.promise;
     const interruptRemote = params.interruptRemote;

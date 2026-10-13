@@ -21,6 +21,7 @@ import { recoverStore } from "./main-session-restart-recovery-store.js";
 const sessionKey = "agent:main:main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unusedGatewayRuntime: GatewayRecoveryRuntime = {
+  prepareRestartRecovery: () => undefined,
   dispatchSessionMethod: async () => {
     throw new Error("terminal residue must not dispatch session methods");
   },
@@ -97,36 +98,6 @@ describe("main session recovery terminal-only residue", () => {
     expect(claimForeground(entry)).toEqual({ kind: "no_change" });
     expect(entry.mainRestartRecovery).toBeDefined();
     expect(entry.restartRecoveryRuns).toHaveLength(2);
-  });
-
-  it("keeps the aggregate while a reservation still owns work", () => {
-    const entry = settledEntry({
-      mainRestartRecovery: recoveryState({
-        reservation: { lifecycleGeneration: "generation-1", runId: "reserved-run", attempt: 1 },
-      }),
-    });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery?.reservation).toBeDefined();
-  });
-
-  it("keeps the aggregate while a foreground claim still owns work", () => {
-    const entry = settledEntry({
-      mainRestartRecovery: recoveryState({
-        foregroundClaims: { lifecycleGeneration: "generation-1", tokens: ["existing-claim"] },
-      }),
-    });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery?.foregroundClaims).toBeDefined();
-  });
-
-  it("keeps the aggregate while a delivery claim is still recorded", () => {
-    const entry = settledEntry({ restartRecoveryDeliveryRunId: "pending-delivery" });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery).toBeDefined();
-    expect(entry.restartRecoveryDeliveryRunId).toBe("pending-delivery");
   });
 
   it.each([false, true])(

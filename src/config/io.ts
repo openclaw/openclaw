@@ -12,6 +12,7 @@ export type {
   ParseConfigJson5Result,
 } from "./io.read.types.js";
 export {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   getRuntimeConfig,
   loadConfig,
@@ -48,6 +49,7 @@ export {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
+  readRuntimeConfig,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,

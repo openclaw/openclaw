@@ -160,11 +160,7 @@ export class ChatMediaSourceController {
   }
 
   handleEnded(media: HTMLMediaElement): boolean {
-    if (!this.pendingSource) {
-      return false;
-    }
-    this.applySource(media, this.pendingSource, this.pendingIdentity, null);
-    return true;
+    return this.applyPendingSource(media, false);
   }
 
   handleError(media: HTMLMediaElement): boolean {
@@ -177,14 +173,18 @@ export class ChatMediaSourceController {
     return false;
   }
 
-  applyPendingSource(media: HTMLMediaElement): boolean {
+  applyPendingSource(media: HTMLMediaElement, restorePlayback = true): boolean {
     if (!this.pendingSource) {
       return false;
     }
-    this.applySource(media, this.pendingSource, this.pendingIdentity, {
-      currentTime: finiteMediaTime(media.currentTime),
-      paused: media.paused,
-    });
+    this.applySource(
+      media,
+      this.pendingSource,
+      this.pendingIdentity,
+      restorePlayback
+        ? { currentTime: finiteMediaTime(media.currentTime), paused: media.paused }
+        : null,
+    );
     return true;
   }
 

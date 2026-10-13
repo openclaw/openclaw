@@ -172,26 +172,25 @@ extension VoiceWakeOverlayController {
         self.presentation.animateDismiss(self, reason, outcome) { completion in
             switch completion {
             case .disabledUI:
-                self.model.isVisible = false
-                self.model.level = 0
-                self.lastLevelUpdate = 0
-                self.activeToken = nil
+                self.clearDismissedSession()
             case .missingWindow:
                 if ProcessInfo.processInfo.isRunningTests {
-                    self.model.isVisible = false
-                    self.model.level = 0
-                    self.activeToken = nil
+                    self.clearDismissedSession(resetLevelUpdate: false)
                 }
             case let .animated(finishWindow):
                 guard self.guardToken(dismissedToken, context: "dismissCompletion") else { return }
                 finishWindow()
-                self.model.isVisible = false
-                self.model.level = 0
-                self.lastLevelUpdate = 0
-                self.activeToken = nil
+                self.clearDismissedSession()
                 actions?.didDismiss(dismissedToken, outcome)
             }
         }
+    }
+
+    private func clearDismissedSession(resetLevelUpdate: Bool = true) {
+        self.model.isVisible = false
+        self.model.level = 0
+        if resetLevelUpdate { self.lastLevelUpdate = 0 }
+        self.activeToken = nil
     }
 
     func updateLevel(token: UUID, _ level: Double) {

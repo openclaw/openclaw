@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js";
+import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   claimAgentRunApprovalAuthority,
@@ -131,6 +132,59 @@ describe("session computer transport", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it.each(["snapshot", "type"] as const)(
+    "preserves native permission details for attached %s commands",
+    async (action) => {
+      const h = createHarness(true);
+      const { transport } = await h.prepare();
+      const details = { capabilities: ["screenRecording"], state: "restart-required" };
+      h.publicInvoke.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "PERMISSION_MISSING", message: "Relaunch OpenClaw", details },
+      });
+      const events: AgentEventPayload[] = [];
+      const stop = onAgentEvent((event) => {
+        if (event.data.kind === "permission_missing") {
+          events.push(event);
+        }
+      });
+      try {
+        await expect(transport.invoke(request(action))).rejects.toMatchObject({
+          details: {
+            permissionMissing: {
+              nodeId: "desktop-node",
+              command: action === "snapshot" ? "screen.snapshot" : "computer.act",
+              ...details,
+            },
+          },
+        });
+        expect(events).toEqual([
+          expect.objectContaining({
+            sessionKey: "agent:main:session-1",
+            stream: "notice",
+            data: expect.objectContaining({ kind: "permission_missing" }),
+          }),
+        ]);
+      } finally {
+        stop();
+      }
+    },
+  );
+
+  it("refuses computer preparation when the turn closes during its placement read", async () => {
+    const h = createHarness();
+    const placement = structuredClone(h.state.placement);
+    h.options.placements.getAsync = async () => {
+      h.releaseClaim();
+      return placement;
+    };
+    await expect(createWorkerComputerService(h.options).prepare(h.claim)).rejects.toThrow(
+      "Session desktop placement is no longer active",
+    );
+    expect(h.privateInvoke).not.toHaveBeenCalled();
+    expect(h.publicInvoke).not.toHaveBeenCalled();
+  });
+
   it("controls an attached environment without moving the conversation and fences attachment revocation", async () => {
     const h = createHarness();
     h.releaseClaim();
@@ -213,7 +267,7 @@ describe("session computer transport", () => {
     await desktopRegistry.stopAll();
   });
 
-  it("preserves bounded redacted native close causes in the worker RPC error", async () => {
+  it("preserves bounded native close causes in the worker RPC error", async () => {
     const h = createHarness();
     const service = createWorkerComputerService(h.options);
     const prepared = await service.prepare(h.claim);
@@ -249,7 +303,7 @@ describe("session computer transport", () => {
         reason: "gateway-unavailable",
         message: expect.stringContaining("desktop cleanup failed | native close failed"),
       });
-      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(JSON.stringify(result)).toContain(secret);
       if ("message" in result) {
         expect(result.message?.length).toBeLessThanOrEqual(256);
       }

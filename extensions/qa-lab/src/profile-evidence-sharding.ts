@@ -1,7 +1,6 @@
 // QA Lab owns bounded profile partitioning and canonical shard evidence aggregation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
@@ -14,18 +13,15 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
+import { resolveQaChannelDriverSelection } from "./profile-channel-selection.runtime.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
 } from "./profile-planning.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
-import {
-  qaTransportSupportsModuleFlows,
-  type QaTransportAdapterFactory,
-} from "./qa-transport-registry.js";
+import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
@@ -55,29 +51,16 @@ function resolveQaProfileEvidenceSelection(profile: string) {
     profile === "smoke-ci" ? "mock-openai" : DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const primaryModel = defaultQaModelForMode(providerMode);
-  const liveAdapterFactories =
-    membership.profile.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const { liveAdapterFactories, defaultChannel, supportsChannel, resolveModuleFlowSupport } =
+    resolveQaChannelDriverSelection(membership.profile.channelDriver);
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: membership.selectedScenarios,
     providerMode,
     primaryModel,
     channelDriver: membership.profile.channelDriver,
-    defaultChannel:
-      membership.profile.channelDriver === "crabline"
-        ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
-        : undefined,
-    supportsChannel:
-      membership.profile.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
-    resolveModuleFlowSupport:
-      membership.profile.channelDriver === "live"
-        ? (channel) =>
-            channel
-              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
-                  channelId: channel,
-                  driver: "live",
-                })
-              : false
-        : undefined,
+    defaultChannel,
+    supportsChannel,
+    resolveModuleFlowSupport,
   });
   if (executionSelection.selectedScenarios.length === 0) {
     throw new Error(`QA profile ${profile} does not select any executable scenarios.`);

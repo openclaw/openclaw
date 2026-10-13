@@ -1,5 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  dispatchChannelInboundTurn,
   hasVisibleInboundReplyDispatch,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -11,13 +12,9 @@ import {
   type PluginCommandCatalogDecision,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type {
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose, type createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
@@ -27,22 +24,15 @@ import {
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import type { DiscordConfig, DiscordDispatchReplyFromConfig } from "./native-command.types.js";
-
-type NativeCommandEffectiveRoute = {
-  accountId: string;
-  agentId: string;
-  sessionKey: string;
-};
 
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  interaction: CommandInteraction | BaseComponentInteraction;
   ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
-  effectiveRoute: NativeCommandEffectiveRoute;
+  effectiveRoute: Pick<ResolvedAgentRoute, "accountId" | "agentId" | "sessionKey">;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;
   preferFollowUp: boolean;
@@ -57,7 +47,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   let didReply = false;
   let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
   let hiddenFinalReply: ReplyPayload | undefined;
-  const turnResult = await nativeCommandRuntime.dispatchChannelInboundTurn({
+  const turnResult = await dispatchChannelInboundTurn({
     cfg: params.cfg,
     channel: "discord",
     accountId: params.effectiveRoute.accountId,
@@ -155,21 +145,16 @@ export async function dispatchDiscordNativeAgentReply(params: {
 
   if (!didReply && shouldSettleWithoutVisibleReply) {
     await settleDiscordInteractionWithoutVisibleReply(params.interaction);
-    return dispatchResult;
-  }
-  if (
-    didReply ||
-    (turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
+  } else if (
+    !didReply &&
+    !(turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
   ) {
-    return dispatchResult;
+    await safeDiscordInteractionCall("interaction empty fallback", () =>
+      params.interaction[params.preferFollowUp ? "followUp" : "reply"]({
+        content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
+        ephemeral: true,
+      }),
+    );
   }
-
-  await safeDiscordInteractionCall("interaction empty fallback", async () => {
-    const payload = {
-      content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
-      ephemeral: true,
-    };
-    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
-  });
   return dispatchResult;
 }

@@ -2,7 +2,10 @@ import {
   hasVerifiedRequesterCompletionHandoff,
   MAX_DELEGATION_LINEAGE_DEPTH,
 } from "../agents/requester-tool-policy.js";
-import type { SessionCapabilityLookup } from "../agents/subagents/spawn/subagent-session-store.js";
+import {
+  createMemorySessionCapabilityStore,
+  type SessionCapabilityLookup,
+} from "../agents/subagents/spawn/subagent-session-store.js";
 import { evaluateGatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-context.js";
 import type { GatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-receipt.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -56,7 +59,8 @@ function isCompletionGrantLineageCurrent(params: CompletionGrantLineageParams): 
       modelId: context.modelId,
       inputProvenance: context.inputProvenance,
       trustedInternalHandoff: context.trustedInternalHandoff,
-      preparedSessionCapabilityStore: params.preparedSessionCapabilityStore,
+      preparedSessionCapabilityStore:
+        params.preparedSessionCapabilityStore ?? createMemorySessionCapabilityStore(),
     })
   );
 }
@@ -73,6 +77,35 @@ class CompletionLineageReadRequired extends Error {
 export function createCompletionGrantLineageAdmission(params: CompletionGrantLineageParams) {
   if (!params.context.trustedInternalHandoff) {
     return { isCurrent: () => true, admission: undefined };
+  }
+  const memoryStore = createMemorySessionCapabilityStore();
+  if (memoryStore) {
+    const isCurrent = () => {
+      try {
+        return isCompletionGrantLineageCurrent({
+          ...params,
+          preparedSessionCapabilityStore: memoryStore,
+        });
+      } catch {
+        return false;
+      }
+    };
+    const admission: GatewayToolCallerReceiptAdmission = {
+      async prepare() {
+        return {
+          isCurrent,
+          current: {
+            sources: [],
+            assertCurrent() {
+              if (!isCurrent()) {
+                throw new Error("CLI completion tool grant no longer matches its requester policy");
+              }
+            },
+          },
+        };
+      },
+    };
+    return { admission, isCurrent };
   }
   const topology = captureIncognitoSessionTopology();
   const admission: GatewayToolCallerReceiptAdmission = {
@@ -235,10 +268,15 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
   };
   return {
     admission,
-    isCurrent: () =>
-      evaluateGatewayToolCallerReceiptAdmission(admission, () =>
-        isCompletionGrantLineageCurrent(params),
-      ),
+    isCurrent: () => {
+      try {
+        return evaluateGatewayToolCallerReceiptAdmission(admission, () =>
+          isCompletionGrantLineageCurrent(params),
+        );
+      } catch {
+        return false;
+      }
+    },
   };
 }
 

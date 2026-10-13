@@ -5,9 +5,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configIo from "../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
@@ -76,7 +80,10 @@ const REAL_PNG = Buffer.from(
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenAuth = { mode: "token", token: "test-token", allowTailscale: false } as const;
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   resolvePlaybackTranscodeMock.mockReset();
@@ -168,6 +175,9 @@ describe("handleControlUiHttpRequest", () => {
     url: string,
     { rootKind = "resolved", ...params }: Omit<ControlRequestParams, "url" | "rootPath"> = {},
   ) {
+    if (params.config) {
+      setRuntimeConfigSnapshot(params.config);
+    }
     return runRequest(
       handleControlUiHttpRequest,
       { ...params, url },
@@ -187,6 +197,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function runAvatarRequest(params: RequestParams & AuthParams & { config: OpenClawConfig }) {
+    setRuntimeConfigSnapshot(params.config);
     return runRequest(handleControlUiAvatarRequest, params, params);
   }
 
@@ -731,6 +742,26 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
+  it("embeds authorized display preferences without config credentials in the document", async () => {
+    const tmp = await createControlUiRoot("<html><head></head><body>Control UI</body></html>");
+    const config: OpenClawConfig = {
+      ui: { prefs: { locale: "de", themeMode: "light" } },
+      mcp: { servers: { fixture: { url: "https://example.test/mcp?api_key=synthetic-secret" } } },
+    };
+    const response = await runControlUiRequest(tmp, "/", {
+      config,
+      auth: tokenAuth,
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(response.res.statusCode).toBe(200);
+    const body = responseBody(response.end);
+    expect(body).toContain("data-openclaw-bootstrap-config=");
+    expect(body).toContain("&quot;locale&quot;:&quot;de&quot;");
+    expect(body).toContain("&quot;themeMode&quot;:&quot;light&quot;");
+    expect(body).not.toContain("synthetic-secret");
+    expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
+  });
+
   it("exposes only the environment identity on public HTML while bootstrap stays authenticated", async () => {
     const tmp = await createControlUiRoot("<html><head></head><body>Hello</body></html>\n");
 
@@ -866,7 +897,8 @@ describe("handleControlUiHttpRequest", () => {
     });
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(end).toHaveBeenCalledWith();
+    expect(end).toHaveBeenCalledOnce();
+    expect(responseBody(end)).toBe("");
     expect(readSync).not.toHaveBeenCalled();
   });
 

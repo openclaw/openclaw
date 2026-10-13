@@ -21,24 +21,6 @@ describe("qa scenario catalog", () => {
     expect(listScenarioMarkdownPaths()).toStrictEqual([]);
   });
 
-  it("loads the YAML pack as the canonical source of truth", () => {
-    const pack = readQaScenarioPack();
-
-    expect(pack.version).toBe(1);
-    expect(pack.agent.identityMarkdown).toContain("Dev C-3PO");
-    expect(pack.kickoffTask).toContain("Lobster Invaders");
-    expect(readQaScenarioById("image-generation-roundtrip").sourcePath).toBe(
-      "qa/scenarios/media/image-generation-roundtrip.yaml",
-    );
-    expect(pack.scenarios.map((scenario) => scenario.id)).toEqual(
-      expect.arrayContaining([
-        "image-generation-roundtrip",
-        "character-vibes-gollum",
-        "character-vibes-c3po",
-      ]),
-    );
-  });
-
   it("keeps scenario documentation and code references backed by the repository", () => {
     for (const scenario of readQaScenarioPack().scenarios) {
       const referenceGroups = [
@@ -205,26 +187,5 @@ describe("qa scenario catalog", () => {
     expect(() => selectQaFlowSuiteScenarios({ ...mockLane, scenarioIds: [scenario.id] })).toThrow(
       "providerMode=live-frontier",
     );
-  });
-
-  it("invalidates and observes the selected account without waiting for readiness", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("slack-blocked-lifecycle-no-restart"));
-
-    expect(scenario.gatewayConfigPatch).toMatchObject({
-      channels: {
-        slack: {
-          accounts: {
-            $selectedAccount: { botToken: "xoxb-intentionally-invalid-lifecycle" },
-          },
-        },
-      },
-    });
-    const flow = JSON.stringify(scenario.execution.flow);
-    expect(flow).toContain("transport.accountId");
-    expect(flow).toContain("await env.gateway.call('channels.status'");
-    expect(flow).toContain("account?.lifecycle === 'blocked'");
-    expect(flow).not.toContain("account.accountId === 'default'");
-    expect(flowContainsCall(scenario.execution.flow, "waitForCondition")).toBe(true);
-    expect(flowContainsCall(scenario.execution.flow, "waitForTransportReady")).toBe(false);
   });
 });

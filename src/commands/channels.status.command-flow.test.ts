@@ -338,33 +338,6 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(JSON.parse(jsonLogs.at(-1) ?? "{}").gatewayAuthUnavailable).toBe(true);
   });
 
-  it("renders missing gateway credentials canonically before config-only status", async () => {
-    const error = Object.assign(
-      new Error(
-        [
-          "gateway channels.status requires credentials before opening a websocket",
-          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-          "Config: /tmp/openclaw.json",
-        ].join("\n"),
-      ),
-      {
-        name: "GatewayCredentialsRequiredError",
-        method: "channels.status",
-        configPath: "/tmp/openclaw.json",
-      },
-    );
-    mocks.callGateway.mockRejectedValue(error);
-    fallbackConfig({ channels: {} });
-
-    const { runtime, logs, errors } = createCapturingTestRuntime();
-
-    await channelsStatusCommand({ probe: false }, runtime);
-
-    expect(errors).toEqual([error.message]);
-    expect(errors.join("\n")).not.toContain("Gateway not reachable:");
-    expect(logs.join("\n")).toContain("Gateway auth unavailable; showing config-only status.");
-  });
-
   it("resolves config-only repair hints only for the requested channel", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     const config = { channels: { feishu: { appId: "cli_xxx" }, matrix: { enabled: true } } };

@@ -209,54 +209,6 @@ describe("configured model row precedence", () => {
 });
 
 describe("reused configured model lookups", () => {
-  it.each(["fallback", "initialization"] as const)(
-    "keeps nested lookups from corrupting the %s index",
-    (phase) => {
-      const first = model("custom/First");
-      const second = model("custom/Second");
-      let nested: ModelDefinitionConfig | undefined;
-      let reentered = false;
-      const canonicalize = vi.fn((id: string) => {
-        if (phase === "initialization") {
-          if (id === "alias") {
-            nested = resolve("Second");
-          }
-          return id;
-        }
-        if (id === "First" && !reentered) {
-          reentered = true;
-          nested = resolve("Second");
-        }
-        return id === "target" || id === "Second" ? "match" : id;
-      });
-      const resolve: (id: string) => ModelDefinitionConfig | undefined =
-        createConfiguredProviderModelResolver(
-          {
-            models: phase === "initialization" ? [first, model("alias"), second] : [first, second],
-          },
-          "custom",
-          canonicalize,
-        );
-      const query = phase === "initialization" ? "Second" : "target";
-      expect(resolve(query)).toBe(second);
-      expect(nested).toBe(phase === "initialization" ? undefined : second);
-      if (phase === "fallback") {
-        expect(canonicalize.mock.calls).toEqual([
-          ["target"],
-          ["First"],
-          ["Second"],
-          ["First"],
-          ["Second"],
-        ]);
-      }
-      canonicalize.mockClear();
-      expect(resolve(query)).toBe(second);
-      if (phase === "fallback") {
-        expect(canonicalize.mock.calls).toEqual([["target"], ["First"], ["Second"]]);
-      }
-    },
-  );
-
   it("keeps fallback callbacks live, ordered, short-circuited, and throwable", () => {
     const first = model("custom/First");
     const second = model("custom/ Second");

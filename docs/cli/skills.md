@@ -67,16 +67,11 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
-openclaw skills curator status
-openclaw skills curator status --json
-openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
-openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 openclaw skills workshop list
-openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Not reusable"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop changes --limit 20
+openclaw skills workshop show <name>
+openclaw skills workshop archive <name> --reason "Superseded"
+openclaw skills workshop restore <name>
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
@@ -111,8 +106,7 @@ characters.
 
 `info` resolves an exact skill name before a metadata key. Key, case-insensitive,
 and separator-normalized matches must identify one skill; ambiguous selectors
-fail instead of choosing discovery order. Workshop reads and update targeting
-use the same lookup.
+fail instead of choosing discovery order.
 
 `check` separates **inventory**, **readiness**, and **visibility**:
 
@@ -132,10 +126,10 @@ in inventory but not currently eligible or visible to the agent; install or
 configure the reported prerequisite before expecting the model to use it
 successfully.
 
-Curator `status`, `pin`, `unpin`, and `restore`, plus Workshop `apply`, preserve
-the same target boundary. They never read or mutate client-local state after an
-explicitly selected Gateway fails; intentional offline behavior remains
-available only for an implicitly selected local Gateway.
+Workshop commands preserve the same target boundary. They never read or mutate
+client-local state after an explicitly selected Gateway fails; intentional
+offline behavior remains available only for an implicitly selected local
+Gateway.
 
 Git and local directory installs expect `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is valid, then
@@ -150,7 +144,7 @@ settings use the separate `skills.install` request path instead.
 When `security.installPolicy` returns `warn` in an interactive terminal,
 OpenClaw prints the reason and findings, then asks `type: '<skill>' to install
 anyway` (or `update anyway`). If the fully rendered review exceeds 4,000
-characters, OpenClaw fails closed before prompting; reduce or coalesce the
+characters, OpenClaw stops before prompting; reduce or coalesce the
 policy output first. A matching answer evaluates the staged skill
 again before continuing. Declined and non-interactive direct CLI commands stop
 before commit; after review, `--acknowledge-install-policy-warning` is the
@@ -185,24 +179,8 @@ Notes:
 | Skill Card fingerprint           | Installed ClawHub bundles can include a generated `skill-card.md`. OpenClaw treats verification as a ClawHub server decision and does not reject an installed skill just because that generated card changes the bundle fingerprint.                                                                                              |
 | `check --agent <id>`             | Checks the selected agent's workspace and reports which ready skills are actually visible to that agent's prompt or command surface.                                                                                                                                                                                              |
 | `workshop --agent <id>`          | Accepted before or after a Workshop leaf command, for example `workshop --agent <id> list` or `workshop list --agent <id>`. If both are provided, the leaf value wins.                                                                                                                                                            |
-| `curator --json`                 | Accepted before or after a Curator leaf command, for example `curator --json status` or `curator status --json`.                                                                                                                                                                                                                  |
 | `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                                                                    |
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                                                                                |
-| `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
-| `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
-
-### Workshop inventory and upgrades
-
-`openclaw skills curator status` requests current Workshop inventory from the
-selected Gateway. With a compatible Gateway, JSON includes
-`"inventory": "live-workshop"`. Local status uses the current configuration too.
-Missing usage displays as `not recorded`, not proof that a skill was never used.
-
-An older Gateway can return an unmarked legacy response. The CLI accepts it
-without switching to local state and prints a limited-coverage notice in text
-output. JSON preserves the absence of the marker. See
-[Workshop inventory and usage](/tools/skill-workshop/reference#workshop-inventory-and-usage)
-for membership, tracking limits, unknown dates, and upgrade behavior.
 
 On servers supporting full scanner reports, verification JSON includes `security.scannerReports.aig` (the full upstream SARIF report)
 and `security.scannerReports.skillspector` (the full upstream JSON report) when ClawHub
@@ -353,32 +331,32 @@ existing session. Removal preserves already selected revisions. See
 
 ## Skill Workshop
 
-`openclaw skills workshop` manages pending skill proposals for the selected
-agent. Proposals are not active skills until applied. For proposal
-storage, support-file safeguards, Gateway methods, and approval policy, see
+`openclaw skills workshop` inspects and manages the learned (Workshop) skills
+of the selected agent. Agents create and update these skills themselves; every
+change applies immediately and saves the previous version first. See
 [Skill Workshop](/tools/skill-workshop).
 
 ```bash
-openclaw skills workshop propose-create \
-  --name "qa-check" \
-  --description "Repeatable QA checklist" \
-  --proposal ./PROPOSAL.md
-openclaw skills workshop propose-create \
-  --name "qa-check" \
-  --description "Repeatable QA checklist" \
-  --proposal-dir ./qa-check-proposal
-openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 openclaw skills workshop list
-openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Duplicate"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop changes --limit 20
+openclaw skills workshop show release-notes
+openclaw skills workshop show release-notes --file references/checklist.md
+openclaw skills workshop show release-notes --version <version-id>
+openclaw skills workshop archive release-notes --reason "Superseded by deploy-notes"
+openclaw skills workshop restore release-notes
+openclaw skills workshop restore release-notes --version <version-id>
 ```
 
-`propose-create`, `propose-update`, and `revise` also accept `--goal <text>`
-and `--evidence <text>` to record the proposal's motivation and supporting
-notes alongside the `--proposal`/`--proposal-dir` content.
+| Command                                        | Description                                                                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `list`                                         | Lists live learned skills with usage counts, plus archived skills. Shows the autonomous mode and skills root.                   |
+| `changes [--limit <n>]`                        | Shows recent changes, newest first: who made them (`agent`, `review`, `curator`, `user`), the action, and the saved version id. |
+| `show <name> [--file <path>] [--version <id>]` | Prints `SKILL.md` or one support file, from the live skill or a saved version.                                                  |
+| `archive <name> [--reason <text>]`             | Hides the skill from its agent. The skill stays restorable.                                                                     |
+| `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.              |
+
+Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
+`restore` act as `user` in the change feed.
 
 ## Related
 

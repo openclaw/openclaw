@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../infra/boundary-path.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
+  resolveDatabasePath,
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqliteDir,
+  resolveOpenClawStateSqlitePath,
 } from "./openclaw-state-db.paths.js";
 
 vi.hoisted(() => {
@@ -25,6 +28,25 @@ beforeEach(() => {
   );
 });
 afterEach(() => vi.restoreAllMocks());
+
+describe("Windows shared-state database paths", () => {
+  it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
+    "uses one database identity for explicit and environment paths under %s",
+    (stateDir) => {
+      const plain = path.join(stateDir, "state", "openclaw.sqlite");
+      for (const root of [stateDir, path.toNamespacedPath(stateDir)]) {
+        expect(resolveOpenClawStateSqliteDir({ OPENCLAW_STATE_DIR: root })).toBe(
+          path.dirname(plain),
+        );
+        expect(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root })).toBe(plain);
+        expect(resolveDatabasePath({ env: { OPENCLAW_STATE_DIR: root } })).toBe(plain);
+      }
+      for (const pathname of [plain, path.toNamespacedPath(plain)]) {
+        expect(resolveDatabasePath({ path: pathname })).toBe(plain);
+      }
+    },
+  );
+});
 
 describe("Windows agent database inventory paths", () => {
   it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(

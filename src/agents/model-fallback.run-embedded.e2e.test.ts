@@ -1,6 +1,7 @@
 // Exercises model fallback through the embedded runner integration surface.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -130,6 +131,7 @@ async function runEmbeddedFallback(params: {
   // Runs the same embedded-agent entrypoint that production fallback uses while
   // keeping provider/model attempts deterministic through mocks.
   const cfg = params.config ?? makeModelFallbackConfig();
+  setRuntimeConfigSnapshot(cfg, cfg);
   const sessionId = params.sessionId ?? `session:${params.runId}`;
   return await runWithModelFallback({
     cfg,
@@ -173,6 +175,7 @@ async function runEmbeddedEntryFallback(params: {
   onFallbackStep?: (step: ModelFallbackStepFields) => void;
 }) {
   const cfg = params.config ?? makeModelFallbackConfig();
+  setRuntimeConfigSnapshot(cfg, cfg);
   const sessionId = `session:${params.runId}`;
   const preparedRunAdmission = createModelRoutingTestAdmission({
     cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
@@ -299,6 +302,61 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it.each([
+    { name: "prompt failure", phase: "prompt", fallback: true, promptFailure: true },
+    { name: "aborted assistant", phase: "prompt", fallback: true },
+    { name: "compaction", phase: "compaction", fallback: false },
+    { name: "tool execution", phase: "tool_execution", fallback: false },
+    { name: "external timeout", phase: "prompt", fallback: false, external: true },
+    { name: "committed tool effects", phase: "prompt", fallback: false, wrote: true },
+    { name: "invalid replay", phase: "prompt", fallback: false, replayInvalid: true },
+  ] as const)("preserves attempt timeout fallback eligibility after $name", async (scenario) => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackAuthStore(agentDir);
+      const promptFailure = "promptFailure" in scenario;
+      mockPrimaryFailureThenFallbackSuccess(() =>
+        makeEmbeddedRunnerAttempt({
+          terminal: {
+            kind: "timeout",
+            phase: scenario.phase,
+            source: "external" in scenario ? "external" : "run_budget",
+            aborted: true,
+            ...(promptFailure
+              ? { failure: { source: "prompt", error: new Error("attempt deadline reached") } }
+              : {}),
+          },
+          lastAssistant: promptFailure
+            ? undefined
+            : buildEmbeddedRunnerAssistant({
+                provider: "openai",
+                model: "mock-1",
+                stopReason: "aborted",
+                content: [],
+              }),
+          toolMetas: "wrote" in scenario ? [{ toolName: "write", replaySafe: false }] : [],
+          ...("replayInvalid" in scenario ? { promptTimeoutOutcome: { replayInvalid: true } } : {}),
+        }),
+      );
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:attempt-timeout",
+        runId: "run:attempt-timeout",
+      });
+
+      expectProviderAttemptCounts({ openai: 1, groq: scenario.fallback ? 1 : 0 });
+      if (scenario.fallback) {
+        expect(result.result.payloads?.[0]?.text).toBe("fallback ok");
+        expect(result.result.meta.error).toBeUndefined();
+        expect(
+          runEmbeddedAttemptMock.mock.calls.map(
+            ([params]) => (params as { timeoutMs: number }).timeoutMs,
+          ),
+        ).toEqual([5_000, 5_000]);
+      }
+    });
+  });
+
   it.each(["thrown", "assistant"] as const)(
     "does not replay %s transcript turn assertions through retries or model fallback",
     async (surface) => {
@@ -512,12 +570,14 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         }),
       );
 
+      const cfg = makeModelFallbackConfig();
+      setRuntimeConfigSnapshot(cfg, cfg);
       const result = await runEmbeddedAgent({
         sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
         workspaceDir,
         agentDir,
-        config: makeModelFallbackConfig(),
+        config: cfg,
         prompt: "write the file",
         provider: "openai",
         model: "mock-1",
@@ -685,6 +745,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           config: makeModelFallbackConfig(),
         };
         if (mode === "direct") {
+          setRuntimeConfigSnapshot(params.config, params.config);
           await expect(
             runEmbeddedAgent({
               ...params,

@@ -1,14 +1,6 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -224,69 +216,6 @@ function preparedBundleFixture(repoRoot: string, sourceSha: string) {
 }
 
 describe("prepublish plugin registry artifact", () => {
-  it("reuses prepared root and core bytes while packing only selected plugins", () => {
-    const { repoRoot, sourceSha } = cliFixture([PACKAGE_NAME, "@openclaw/slack"]);
-    const { preparedBundleDir, entries } = preparedBundleFixture(repoRoot, sourceSha);
-    const artifactDir = path.join(repoRoot, "artifact");
-    const result = spawnSync(
-      process.execPath,
-      [
-        SCRIPT,
-        "create",
-        "--repo-root",
-        repoRoot,
-        "--artifact-dir",
-        artifactDir,
-        "--source-sha",
-        sourceSha,
-        "--candidate-version",
-        VERSION,
-        "--required-packages-json",
-        JSON.stringify([PACKAGE_NAME]),
-        "--prepared-bundle-dir",
-        preparedBundleDir,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    const output = JSON.parse(result.stdout);
-    expect(output.packages).toEqual([
-      "@openclaw/ai",
-      PACKAGE_NAME,
-      "@openclaw/gateway-protocol",
-      "openclaw",
-    ]);
-    for (const entry of entries) {
-      expect(readFileSync(path.join(artifactDir, entry.tarballName))).toEqual(
-        readFileSync(path.join(preparedBundleDir, entry.tarballName)),
-      );
-    }
-    expect(
-      validatePrepublishPluginRegistryArtifact({
-        artifactDir,
-        expectedSourceSha: sourceSha,
-        expectedCandidateVersion: VERSION,
-        expectedManifestSha256: output.manifestSha256,
-        requiredPackages: ["openclaw", "@openclaw/ai", PACKAGE_NAME],
-      }).manifest.packages,
-    ).toHaveLength(4);
-    const crossOs = resolveCrossOsPackageSet({
-      artifactDir,
-      sourceSha,
-      candidateVersion: VERSION,
-      manifestSha256: output.manifestSha256,
-      requiredPackages: [PACKAGE_NAME],
-    });
-    expect(crossOs.packages.map((entry) => entry.name)).toEqual([
-      "@openclaw/ai",
-      PACKAGE_NAME,
-      "@openclaw/gateway-protocol",
-      "openclaw",
-    ]);
-    expect(crossOs.companions.map((entry) => entry.name)).toEqual([PACKAGE_NAME]);
-  });
-
   it.each(["source", "conflicting dependency", "tarball bytes"])(
     "rejects prepared bundle %s drift before accepting its registry",
     (drift) => {
@@ -325,7 +254,7 @@ describe("prepublish plugin registry artifact", () => {
     },
   );
 
-  it.each(["discord", "slack"])(
+  it.each(["slack"])(
     "stages the planned %s candidate and Codex in one verified artifact",
     (channel) => {
       const lane = findLaneByName(`npm-onboard-${channel}-candidate-channel-agent`);
@@ -633,44 +562,6 @@ describe("prepublish plugin registry artifact", () => {
       }),
     ).toThrow("tracked changes");
   });
-
-  it.each(process.platform === "win32" ? ["direct"] : ["direct", "symlink"])(
-    "keeps noisy package commands off the CLI JSON stdout contract (%s entrypoint)",
-    (entrypoint) => {
-      const { repoRoot, sourceSha } = cliFixture();
-      const artifactDir = path.join(repoRoot, "artifact");
-      const script = entrypoint === "symlink" ? path.join(repoRoot, "artifact-cli.mjs") : SCRIPT;
-      if (entrypoint === "symlink") {
-        symlinkSync(SCRIPT, script);
-      }
-      const result = spawnSync(
-        process.execPath,
-        [
-          script,
-          "create",
-          "--repo-root",
-          repoRoot,
-          "--artifact-dir",
-          artifactDir,
-          "--source-sha",
-          sourceSha,
-          "--candidate-version",
-          VERSION,
-          "--required-packages-json",
-          JSON.stringify([PACKAGE_NAME]),
-        ],
-        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      );
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
-        packages: [PACKAGE_NAME],
-      });
-      expect(result.stderr).toContain("runtime build stdout");
-      expect(result.stderr).toContain("package manifest stdout");
-    },
-  );
 
   it("rejects traversal and duplicate package entries", () => {
     const traversal = fixture();

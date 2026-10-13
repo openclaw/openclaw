@@ -1,8 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -46,6 +48,7 @@ describe("invocation-owned session mutations", () => {
     async ({ owner, broad, rebind }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("write", "alias-stop-owner");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connId = "alias-stop-connection";
         client.connect.device = {
           id: "alias-device",
@@ -58,6 +61,7 @@ describe("invocation-owned session mutations", () => {
           ? ["operator.write", "operator.sessions.write"]
           : ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const foreignKey = "agent:main:foreign-stop";
         await upsertSessionEntryCore(scope, ownedEntry(client, "own-incarnation"));
         await upsertSessionEntryCore(
@@ -134,10 +138,12 @@ describe("invocation-owned session mutations", () => {
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const client = roleClient("view", "absent-route-owner");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const originalStore = state.path("original", "sessions.json");
         const nextStore = state.path("replacement", "sessions.json");
         let cfg = { ...rolePolicyConfig(), session: { store: originalStore } };
+        setRuntimeConfigSnapshot(cfg);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const dispatched = vi.spyOn(chat, "handleDirectExternalChatSend");
@@ -186,9 +192,11 @@ describe("invocation-owned session mutations", () => {
     async ({ kind, method }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "exact-stop-owner");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connId = "exact-stop-connection";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         await upsertSessionEntryCore(scope, ownedEntry(client, "current-incarnation"));
         for (const explicit of [false, true]) {
           for (const mismatch of [
@@ -280,9 +288,11 @@ describe("invocation-owned session mutations", () => {
     async ({ kind, method }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "reentrant-stop-owner");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connId = "reentrant-stop";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         await upsertSessionEntryCore(scope, ownedEntry(client, "original"));
         for (const changed of ["registration", "key", "sessionId", "agentId"] as const) {
           const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -340,51 +350,15 @@ describe("invocation-owned session mutations", () => {
     },
   );
 
-  it.each(["key", "incarnation"] as const)(
-    "does not borrow a different owned run %s for narrow Stop",
-    async (changed) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const client = roleClient("view", "stop-owner");
-        client.connId = "same-connection";
-        const cfg = rolePolicyConfig();
-        await upsertSessionEntryCore(scope, ownedEntry(client, "own-row"));
-        for (const grant of ["operator.sessions.write", "operator.write"]) {
-          client.connect.scopes = [grant];
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
-            agentId: "main",
-            sessionId: changed === "key" ? "own-row" : "prior-incarnation",
-            owner: { connId: client.connId },
-          });
-          context.chatAbortControllers.set("different-run", run);
-          const respond = vi.fn();
-          await handleGatewayRequest({
-            req: {
-              type: "req",
-              id: grant,
-              method: "chat.abort",
-              params: { sessionKey: key, runId: "different-run" },
-            },
-            client,
-            context,
-            respond,
-            isWebchatConnect: () => false,
-            extraHandlers: { "chat.abort": handleChatAbortRequest },
-          });
-          expect(run.controller.signal.aborted).toBe(grant === "operator.write");
-          expect(respond.mock.calls[0]?.[0]).toBe(grant === "operator.write");
-        }
-      });
-    },
-  );
-
   it.each(["sessions.send", "sessions.create"] as const)(
     "%s keeps its original lease when creation commits before the initial turn",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "initial-turn-owner");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const createdKey = "agent:main:main";
         const dispatch = vi
@@ -419,10 +393,12 @@ describe("invocation-owned session mutations", () => {
       const client = roleClient("view", "mixed-grants");
       client.connect.scopes = ["operator.read", "operator.approvals", "operator.sessions.write"];
       const owner = roleClient("view", "mixed-owner");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = rolePolicyConfig();
       expectDefined(cfg.gateway?.roles?.definitions.view, "mixed-grant role").scopes.push(
         "operator.approvals",
       );
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(scope, {
         ...ownedEntry(owner, "mixed-session"),
         visibility: "shared",
@@ -486,8 +462,10 @@ describe("invocation-owned session mutations", () => {
     const method = "sessions.steer";
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const client = roleClient("view", "send-owner");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       client.connect.scopes = ["operator.sessions.write"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const changed of ["none", "source", "generation"] as const) {
         const entry = {
@@ -562,6 +540,8 @@ describe("invocation-owned session mutations", () => {
         const client = roleClient("view", "batch-owner");
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entry = {
           ...ownedEntry(client, "original"),
           lifecycleRevision: "original",

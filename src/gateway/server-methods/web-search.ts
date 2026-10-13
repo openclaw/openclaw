@@ -12,7 +12,7 @@ import {
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import { runWebSearch } from "../../web-search/runtime.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { prepareAuthenticatedProfile } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 import { prepareWebSearchStatus } from "./web-search-status.js";
@@ -48,6 +48,14 @@ function searchTestError(error: unknown): string {
   return "The search provider could not complete the request. Check its endpoint, connectivity, and provider status.";
 }
 
+function respondSearchError(
+  respond: RespondFn,
+  code: Parameters<typeof errorShape>[0],
+  message: string,
+) {
+  respond(false, undefined, errorShape(code, message));
+}
+
 export const webSearchHandlers: GatewayRequestHandlers = {
   "webSearch.status": async (options) => {
     const { params, respond, context } = options;
@@ -55,24 +63,18 @@ export const webSearchHandlers: GatewayRequestHandlers = {
       return;
     }
     if (Boolean(params.modelProvider) !== Boolean(params.modelId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "modelProvider and modelId must be supplied together.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "modelProvider and modelId must be supplied together.",
       );
       return;
     }
     if (!hasSearchAuthority(options, "read")) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Current read access is required to inspect search settings.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Current read access is required to inspect search settings.",
       );
       return;
     }
@@ -87,19 +89,19 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         !hasSearchAuthority(options, "read") ||
         context.getRuntimeConfig() !== prepared.config
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Search settings changed. Refresh and try again."),
+        respondSearchError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Search settings changed. Refresh and try again.",
         );
       } else {
         respond(true, prepared.status, undefined);
       }
     } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Search settings are not ready. Refresh and try again."),
+      respondSearchError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "Search settings are not ready. Refresh and try again.",
       );
     }
   },
@@ -110,24 +112,18 @@ export const webSearchHandlers: GatewayRequestHandlers = {
     }
     const query = params.query.trim();
     if (!query || Boolean(params.modelProvider) !== Boolean(params.modelId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Provide a search query and both model selection fields, or neither.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Provide a search query and both model selection fields, or neither.",
       );
       return;
     }
     if (!hasSearchAuthority(options, "admin")) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Current administrator access is required to test search.",
-        ),
+      respondSearchError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Current administrator access is required to test search.",
       );
       return;
     }
@@ -146,13 +142,10 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         return hasSearchAuthority(options, "admin") && context.getRuntimeConfig() === config;
       };
       if (!hasCurrentAuthority()) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Search settings or access changed. Refresh and try again.",
-          ),
+        respondSearchError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Search settings or access changed. Refresh and try again.",
         );
         return;
       }
@@ -162,13 +155,10 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         ? explicitProvider === status.testProvider?.id
         : status.route.kind === "managed" && status.route.testable;
       if (!canTest || !provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            status.route.reason ?? "Choose an available search provider before testing.",
-          ),
+        respondSearchError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          status.route.reason ?? "Choose an available search provider before testing.",
         );
         return;
       }
@@ -206,28 +196,26 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         });
         const normalized = normalizeWebSearchOutput({ ...executed, query });
         const latencyMs = Date.now() - startedAt;
-        if (normalized.kind === "results") {
+        if (normalized.kind === "results" || normalized.kind === "answer") {
           result = {
             provider: executed.provider,
             latencyMs,
             status: "ok",
-            results: normalized.results.map((row) => ({
-              title: unwrapWebSearchOutputText(row.title),
-              url: row.url,
-              ...(row.snippet ? { snippet: unwrapWebSearchOutputText(row.snippet) } : {}),
-            })),
-            cached: normalized.cached === true,
-          };
-        } else if (normalized.kind === "answer") {
-          result = {
-            provider: executed.provider,
-            latencyMs,
-            status: "ok",
-            content: unwrapWebSearchOutputText(normalized.content),
-            citations: normalized.citations?.map((row) => ({
-              url: row.url,
-              ...(row.title ? { title: unwrapWebSearchOutputText(row.title) } : {}),
-            })),
+            ...(normalized.kind === "results"
+              ? {
+                  results: normalized.results.map((row) => ({
+                    title: unwrapWebSearchOutputText(row.title),
+                    url: row.url,
+                    ...(row.snippet ? { snippet: unwrapWebSearchOutputText(row.snippet) } : {}),
+                  })),
+                }
+              : {
+                  content: unwrapWebSearchOutputText(normalized.content),
+                  citations: normalized.citations?.map((row) => ({
+                    url: row.url,
+                    ...(row.title ? { title: unwrapWebSearchOutputText(row.title) } : {}),
+                  })),
+                }),
             cached: normalized.cached === true,
           };
         } else {
@@ -250,22 +238,19 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         };
       }
       if (!hasCurrentAuthority()) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Search settings or access changed during the test. Refresh and try again.",
-          ),
+        respondSearchError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Search settings or access changed during the test. Refresh and try again.",
         );
         return;
       }
       respond(true, result, undefined);
     } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Search settings are not ready. Refresh and try again."),
+      respondSearchError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "Search settings are not ready. Refresh and try again.",
       );
     }
   },

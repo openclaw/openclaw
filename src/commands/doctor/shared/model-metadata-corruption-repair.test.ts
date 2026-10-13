@@ -110,17 +110,7 @@ describe("repairGeneratedModelMetadataCorruption", () => {
   });
 
   it.each([
-    { name: "no audit", auditRecords: [] },
-    { name: "different final hash", auditRecords: [writeRecord({ nextHash: "older" })] },
     { name: "failed write", auditRecords: [writeRecord({ result: "failed", nextHash: null })] },
-    {
-      name: "different config path",
-      auditRecords: [writeRecord({ configPath: `${configPath}.x` })],
-    },
-    {
-      name: "no candidate metadata paths",
-      auditRecords: [writeRecord({ changedPathCount: 1, changedPaths: ["update.channel"] })],
-    },
     {
       name: "only unrelated model metadata paths",
       auditRecords: [

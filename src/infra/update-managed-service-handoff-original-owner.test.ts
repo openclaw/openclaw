@@ -74,7 +74,7 @@ it("refuses cancellation through a replacement physical database", () => {
   expect(store.cancelUpdate(original)?.release()).toBe(true);
 });
 
-function nativeCommandFixture() {
+async function nativeCommandFixture() {
   const f = fixture();
   const retainedRoot = path.join(path.dirname(f.root), "retained");
   fs.mkdirSync(retainedRoot);
@@ -82,7 +82,7 @@ function nativeCommandFixture() {
   if (retained.kind !== "acquired") {
     throw new Error("Missing retained owner");
   }
-  const native = createManagedCommandProcessCustody({
+  const native = await createManagedCommandProcessCustody({
     roots: [f.root, retainedRoot],
     parents: [f.original, retained.lease],
     databasePath: f.databasePath,
@@ -91,8 +91,8 @@ function nativeCommandFixture() {
   return { ...f, retained: retained.lease, native };
 }
 
-it("refuses cancellation until a reserved command has confirmed its non-start", () => {
-  const f = nativeCommandFixture();
+it("refuses cancellation until a reserved command has confirmed its non-start", async () => {
+  const f = await nativeCommandFixture();
   const reservation = f.native.custody.reserve([process.execPath]);
   const commands = f.store.readCommandChildren([f.root, f.retained.key]);
   expect(commands).toHaveLength(2);
@@ -109,8 +109,8 @@ it("refuses cancellation until a reserved command has confirmed its non-start", 
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "retains native command custody through original cancellation (both roots=%s)",
-  (bothRoots) => {
-    const f = nativeCommandFixture();
+  async (bothRoots) => {
+    const f = await nativeCommandFixture();
     const reservation = f.native.custody.reserve([process.execPath, "--version"]);
     let groupAlive = true;
     const actualGroupAlive = processGroups.isChildProcessTreeAlive;
@@ -141,7 +141,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
         throw new Error("Missing retained command alias");
       }
       expect(f.store.current(peer)).toBe(false);
-      const descendant = createManagedCommandProcessCustody({
+      const descendant = await createManagedCommandProcessCustody({
         roots: [peer.key],
         parents: [peer],
         databasePath: f.databasePath,
@@ -181,8 +181,8 @@ it("refuses cancellation over a legacy receiver", () => {
 
 it.skipIf(process.platform === "win32").each(["unrecognized child", "foreign alias"] as const)(
   "refuses cancellation over a bound command with an %s",
-  (kind) => {
-    const f = nativeCommandFixture();
+  async (kind) => {
+    const f = await nativeCommandFixture();
     let commandKey: string;
     if (kind === "unrecognized child") {
       const child = f.store.acquire(`${f.root}/.openclaw-update-child-unknown`, "unknown", {

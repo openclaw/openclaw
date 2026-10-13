@@ -28,6 +28,22 @@ struct OpenClawUVCController {
     int interface_open;
 };
 
+static void OpenClawUVCReleaseInterfaces(
+    IOUSBDeviceInterface **device,
+    IOUSBInterfaceInterface220 **interface,
+    int interface_open
+) {
+    if (interface != NULL) {
+        if (interface_open) {
+            (*interface)->USBInterfaceClose(interface);
+        }
+        (*interface)->Release(interface);
+    }
+    if (device != NULL) {
+        (*device)->Release(device);
+    }
+}
+
 static void OpenClawUVCSetError(char **error_out, const char *format, ...) {
     if (error_out == NULL) {
         return;
@@ -262,10 +278,7 @@ int openclaw_uvc_open(
     );
     (*plugin)->Release(plugin);
     if (query_result != S_OK || interface == NULL) {
-        if (interface != NULL) {
-            (*interface)->Release(interface);
-        }
-        (*device)->Release(device);
+        OpenClawUVCReleaseInterfaces(device, interface, 0);
         OpenClawUVCSetError(error_out, "query VideoControl interface: 0x%08x", (unsigned int)query_result);
         return 0;
     }
@@ -273,8 +286,7 @@ int openclaw_uvc_open(
     uint8_t interface_number = 0;
     result = (*interface)->GetInterfaceNumber(interface, &interface_number);
     if (result != kIOReturnSuccess) {
-        (*interface)->Release(interface);
-        (*device)->Release(device);
+        OpenClawUVCReleaseInterfaces(device, interface, 0);
         OpenClawUVCSetError(error_out, "read VideoControl interface number: %s (0x%08x)", mach_error_string(result), result);
         return 0;
     }
@@ -284,8 +296,7 @@ int openclaw_uvc_open(
     if (result == kIOReturnSuccess) {
         interface_open = 1;
     } else if (result != kIOReturnExclusiveAccess) {
-        (*interface)->Release(interface);
-        (*device)->Release(device);
+        OpenClawUVCReleaseInterfaces(device, interface, 0);
         OpenClawUVCSetError(error_out, "open VideoControl interface: %s (0x%08x)", mach_error_string(result), result);
         return 0;
     }
@@ -294,11 +305,7 @@ int openclaw_uvc_open(
 
     OpenClawUVCController *controller = calloc(1, sizeof(OpenClawUVCController));
     if (controller == NULL) {
-        if (interface_open) {
-            (*interface)->USBInterfaceClose(interface);
-        }
-        (*interface)->Release(interface);
-        (*device)->Release(device);
+        OpenClawUVCReleaseInterfaces(device, interface, interface_open);
         OpenClawUVCSetError(error_out, "allocate UVC controller");
         return 0;
     }
@@ -364,14 +371,6 @@ void openclaw_uvc_close(OpenClawUVCController *controller) {
     if (controller == NULL) {
         return;
     }
-    if (controller->interface != NULL) {
-        if (controller->interface_open) {
-            (*controller->interface)->USBInterfaceClose(controller->interface);
-        }
-        (*controller->interface)->Release(controller->interface);
-    }
-    if (controller->device != NULL) {
-        (*controller->device)->Release(controller->device);
-    }
+    OpenClawUVCReleaseInterfaces(controller->device, controller->interface, controller->interface_open);
     free(controller);
 }

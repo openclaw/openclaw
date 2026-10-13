@@ -1,6 +1,7 @@
 // Covers doctor repair and writable cold open for databases missing first-use
 // additive columns while the STRICT migration rebuilds their tables.
 import { afterEach, describe, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
@@ -107,6 +108,45 @@ describe("first-use additive column definitions", () => {
 });
 
 describe("first-use additive column STRICT migration", () => {
+  it("opens fresh STRICT tables without legacy rebuild inspection and preserves later writes", () => {
+    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-state-fresh-strict-") } };
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const { db } = openOpenClawStateDatabase(options);
+      // Rebuild planning inspects every canonical column twice, even with no legacy rows.
+      expect(reads.queries.filter((sql) => /^PRAGMA table_xinfo\b/iu.test(sql))).toEqual([]);
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%' AND strict = 0",
+          )
+          .all(),
+      ).toEqual([]);
+      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+        "bootstrap-proof",
+        "1",
+        1,
+      );
+      db.prepare(
+        "UPDATE config_machine_state SET value_json = ?, updated_at_ms = ? WHERE state_key = ?",
+      ).run("2", 2, "bootstrap-proof");
+      closeOpenClawStateDatabaseForTest();
+      const reopened = openOpenClawStateDatabase(options);
+      expect(
+        reopened.db
+          .prepare("SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = ?")
+          .get("bootstrap-proof"),
+      ).toEqual({ value_json: "2", updated_at_ms: 2 });
+      expect(() =>
+        reopened.db
+          .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+          .run(Buffer.from("invalid-text"), "bootstrap-proof"),
+      ).toThrow(/BLOB.*TEXT/iu);
+    } finally {
+      reads.restore();
+    }
+  });
+
   it("repairs device_bootstrap_tokens without setup_id while migrating to STRICT", () => {
     const stateDir = tempDirs.make("openclaw-state-first-use-column-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -182,6 +222,13 @@ describe("first-use additive column STRICT migration", () => {
       tableName: "device_bootstrap_tokens",
       indexNames: ["idx_device_bootstrap_tokens_ts"],
       columnNames: ["setup_id"],
+      seed: (database) => {
+        database
+          .prepare(
+            "INSERT INTO device_bootstrap_tokens (token_key, token, ts, issued_at_ms) VALUES (?, ?, ?, ?)",
+          )
+          .run("bootstrap", "retained-token", 1_000, 1_000);
+      },
     });
 
     // The gateway upgrades the same database on a normal writable open, so that
@@ -200,5 +247,8 @@ describe("first-use additive column STRICT migration", () => {
       .all()
       .map((row) => (row as { name: string }).name);
     expect(columns).toContain("setup_id");
+    expect(
+      opened.db.prepare("SELECT token_key, token, setup_id FROM device_bootstrap_tokens").all(),
+    ).toEqual([{ token_key: "bootstrap", token: "retained-token", setup_id: null }]);
   });
 });

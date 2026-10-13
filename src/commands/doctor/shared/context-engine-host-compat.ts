@@ -332,73 +332,53 @@ function formatHostCapabilities(capabilities: readonly string[]): string {
   return capabilities.length > 0 ? capabilities.join(", ") : "(none)";
 }
 
-function formatCompatibilityWarnings(params: {
-  info: ContextEngineInfo;
-  issues: string[];
-  hostCount: number;
+type ContextEngineDoctorParams = {
+  cfg: OpenClawConfig;
   doctorFixCommand: string;
-}): string[] {
-  if (params.issues.length === 0) {
-    return [];
+  env?: NodeJS.ProcessEnv;
+};
+
+async function inspectContextEngineHostCompatibility(params: ContextEngineDoctorParams) {
+  const resolved = await resolveSelectedContextEngineInfo(params);
+  if (!resolved.info) {
+    return { ...resolved, compatibilityWarnings: [], incompatibleAllHosts: false };
   }
-  const lines = [...params.issues];
-  const incompatibleAllHosts = params.issues.length === params.hostCount;
-  lines.push(
-    incompatibleAllHosts
-      ? `- Run "${params.doctorFixCommand}" to remove the plugins.slots.contextEngine override and restore the default "legacy", or configure a compatible runtime/harness for agent runs.`
-      : `- Some configured runtimes support context engine "${params.info.id}" and others do not; doctor will not rewrite the global contextEngine slot automatically. Configure unsupported models to use a compatible runtime/harness or set plugins.slots.contextEngine to "legacy".`,
-  );
-  return [lines.join("\n")];
+  const hosts = collectConfiguredContextEngineAgentRunHosts(params.cfg);
+  const issues = collectHostCompatibilityWarnings(resolved.info, hosts);
+  const incompatibleAllHosts = issues.length > 0 && issues.length === hosts.length;
+  if (issues.length > 0) {
+    issues.push(
+      incompatibleAllHosts
+        ? `- Run "${params.doctorFixCommand}" to remove the plugins.slots.contextEngine override and restore the default "legacy", or configure a compatible runtime/harness for agent runs.`
+        : `- Some configured runtimes support context engine "${resolved.info.id}" and others do not; doctor will not rewrite the global contextEngine slot automatically. Configure unsupported models to use a compatible runtime/harness or set plugins.slots.contextEngine to "legacy".`,
+    );
+  }
+  return {
+    ...resolved,
+    compatibilityWarnings: issues.length ? [issues.join("\n")] : [],
+    incompatibleAllHosts,
+  };
 }
 
 /** Collect doctor warnings for context engines that cannot run under configured hosts. */
-export async function collectContextEngineHostCompatibilityWarnings(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
-  const resolved = await resolveSelectedContextEngineInfo(params);
-  if (!resolved.info) {
-    return resolved.warnings;
-  }
-  const hosts = collectConfiguredContextEngineAgentRunHosts(params.cfg);
-  const issues = collectHostCompatibilityWarnings(resolved.info, hosts);
-  return [
-    ...resolved.warnings,
-    ...formatCompatibilityWarnings({
-      info: resolved.info,
-      issues,
-      hostCount: hosts.length,
-      doctorFixCommand: params.doctorFixCommand,
-    }),
-  ];
+export async function collectContextEngineHostCompatibilityWarnings(
+  params: ContextEngineDoctorParams,
+): Promise<string[]> {
+  const resolved = await inspectContextEngineHostCompatibility(params);
+  return [...resolved.warnings, ...resolved.compatibilityWarnings];
 }
 
 /** Repair a globally incompatible context engine by falling back to legacy. */
-export async function maybeRepairContextEngineHostCompatibility(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ config: OpenClawConfig; changes: string[]; warnings?: string[] }> {
-  const resolved = await resolveSelectedContextEngineInfo(params);
-  if (!resolved.info) {
-    return { config: params.cfg, changes: [], warnings: resolved.warnings };
-  }
-
-  const hosts = collectConfiguredContextEngineAgentRunHosts(params.cfg);
-  const issues = collectHostCompatibilityWarnings(resolved.info, hosts);
-  if (issues.length === 0) {
-    return { config: params.cfg, changes: [], warnings: resolved.warnings };
-  }
-
-  const warnings = formatCompatibilityWarnings({
-    info: resolved.info,
-    issues,
-    hostCount: hosts.length,
-    doctorFixCommand: params.doctorFixCommand,
-  });
-  if (issues.length !== hosts.length) {
-    return { config: params.cfg, changes: [], warnings: [...resolved.warnings, ...warnings] };
+export async function maybeRepairContextEngineHostCompatibility(
+  params: ContextEngineDoctorParams,
+): Promise<{ config: OpenClawConfig; changes: string[]; warnings?: string[] }> {
+  const resolved = await inspectContextEngineHostCompatibility(params);
+  if (!resolved.info || !resolved.incompatibleAllHosts) {
+    return {
+      config: params.cfg,
+      changes: [],
+      warnings: [...resolved.warnings, ...resolved.compatibilityWarnings],
+    };
   }
 
   const next = structuredClone(params.cfg);

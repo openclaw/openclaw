@@ -383,6 +383,15 @@
           "remoteWorkspaceRoot": {
             "type": "string"
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "credentialDirectory"],
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "credentialDirectory": { "type": "string" }
+            }
+          },
           "codeModeOnly": {
             "type": "boolean",
             "default": false

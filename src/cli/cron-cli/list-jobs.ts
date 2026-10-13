@@ -171,9 +171,6 @@ export async function listCronJobsFromGateway(
     if (!snapshotChanged) {
       throw new Error("cron.list pagination exceeded maximum pages while looking up automation");
     }
-    if (restart === CRON_LIST_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly while reading automations");
-    }
   }
 
   throw new Error("cron.list inventory changed repeatedly while reading automations");

@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
@@ -19,16 +24,106 @@ import {
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 
 vi.mock("./subagent-registry-helpers.js", { spy: true });
+// mock-isolation: Resource dispatch tests do not create process-wide MCP runtimes.
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+  retireSessionMcpRuntime: vi.fn(async () => true),
 }));
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
   vi.mocked(persistSubagentSessionTiming).mockResolvedValue(undefined);
+  vi.mocked(retireSessionMcpRuntime).mockClear();
 });
+
+it("qualifies a completed child's raw session with its recorded agent", async () => {
+  const entry = createRunEntry({
+    childSessionKey: "global",
+    childAgentId: "alpha",
+    expectsCompletionMessage: false,
+  });
+  const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
+  const controller = createLifecycleControllerFixture(
+    { entry, cleanupBrowserSessionsForLifecycleEnd },
+    {
+      callGateway: async () => {
+        throw new Error("Unexpected Gateway call");
+      },
+      cleanupBrowserSessionsForLifecycleEnd,
+      ownersByEntry: new Map(),
+    },
+  );
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
+  vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
+  await controller.completeSubagentRun({
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: true,
+  });
+  expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionKeys: ["agent:alpha:global"],
+    }),
+  );
+});
+
+it.each(["keep", "delete"] as const)(
+  "announces an explicitly owned raw child and wakes its requester during %s cleanup",
+  async (cleanup) => {
+    const entry = createRunEntry({
+      childSessionKey: "global",
+      childAgentId: "worker",
+      expectsCompletionMessage: true,
+      cleanup,
+    });
+    const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
+    const wake = vi.fn(async () => false);
+    const controller = createLifecycleControllerFixture(
+      { entry, maybeWakeRequesterAfterAllChildrenSettled: wake },
+      { callGateway: vi.fn(), cleanupBrowserSessionsForLifecycleEnd, ownersByEntry: new Map() },
+    );
+    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
+    const settleRoots = observeRootWork();
+
+    try {
+      await controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      });
+    } finally {
+      await settleRoots();
+    }
+
+    expect(controller.options.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ childSessionKey: "global", childAgentId: "worker", cleanup }),
+    );
+    expect(wake).toHaveBeenCalledOnce();
+    expect(controller.options.notifyContextEngineSubagentEnded).toHaveBeenCalledOnce();
+    expect(retireSessionMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-id", reason: "subagent-run-complete" }),
+    );
+    expect(retireSessionMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-id", reason: "subagent-run-cleanup" }),
+    );
+    expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+    expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({ status: "pending" });
+    expect(readLifecycleRun(entry).requesterSettleWake?.retireAfterSettle).toBe(
+      cleanup === "delete" ? true : undefined,
+    );
+    expect(readLifecycleRun(entry).browserCleanupDispatchedAt).toBeTypeOf("number");
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+    expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKeys: ["agent:worker:global"] }),
+    );
+  },
+);
 
 it.for(["queued", "pre-commit"] as const)(
   "retires a superseded session while its browser cleanup claim waits (%s)",
@@ -66,6 +161,7 @@ it.for(["queued", "pre-commit"] as const)(
         ownersByEntry: new Map(),
       },
     );
+    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const retireSupersededRun = vi.spyOn(controller.options, "retireSupersededRun");
     const announce = vi
       .spyOn(controller, "startSubagentAnnounceCleanupFlow")
@@ -128,7 +224,10 @@ it.for(["queued", "pre-commit"] as const)(
     }
   },
 );
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each([
   {
@@ -166,6 +265,7 @@ it.each([
       ownersByEntry: new Map(),
     },
   );
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   try {
     await expect(
@@ -221,6 +321,7 @@ it("retires a browser cleanup queued behind a newer terminal publication", async
       ownersByEntry: new Map(),
     },
   );
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   const commit = lifecyclePersistence.commitSubagentLifecycleMutation;
   vi.spyOn(lifecyclePersistence, "commitSubagentLifecycleMutation").mockImplementation(

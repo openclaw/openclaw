@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "../src/agents/subagents/registry/subagent-control.test-support.js";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { assert, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import {
   apiThrottler,
   getOrCreateAccountThrottler,
@@ -16,7 +16,8 @@ import {
 } from "../src/agents/subagents/registry/subagent-progress-draft.test-support.js";
 import { stopSessionResetSubagents } from "../src/auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../src/config/config.js";
-import { abortControlledSubagents } from "../src/gateway/server-methods/chat-abort-runtime.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
+import { abortControlledSubagents } from "../src/gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../src/infra/agent-events.js";
 
 // Root-owned integration: the subagent registry retires the card Telegram retained.
@@ -24,6 +25,9 @@ import { emitAgentEvent } from "../src/infra/agent-events.js";
 const { createTelegramDispatchHttpFixture } = await loadTelegramDispatchHttpFixture();
 const http = createTelegramDispatchHttpFixture();
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const yieldCohort = useSubagentProgressCohort(fixture);
 
 const childTool = (name: string) =>

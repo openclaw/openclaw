@@ -116,43 +116,40 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
   hooks?: WhatsAppSocketOperationTimeoutHooks,
 ): WhatsAppSocketOperationAdapter {
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
-  return {
-    sendMessage: (jid, content, options) => {
-      const effect = captureEffectAuthority();
-      return runSerializedSocketSendMessage(sock, () => {
-        let active = true;
-        const send = effect.initiate(() => {
-          if (!active) {
-            throw new WhatsAppSocketOperationTimeoutError("sendMessage", operationTimeoutMs);
-          }
-          hooks?.assertCurrent?.();
-          return options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content);
-        });
-        return withWhatsAppSocketOperationTimeout("sendMessage", send, operationTimeoutMs, () => {
-          active = false;
-          hooks?.onSendMessageTimeout?.({ jid, promise: send });
-        });
-      });
-    },
-    sendPresenceUpdate: (presence, jid) => {
+  const runOperation = <T>(
+    operation: keyof WhatsAppSocketOperationAdapter,
+    send: () => Promise<T>,
+    onTimeout?: (promise: Promise<T>) => void,
+  ) => {
+    const effect = captureEffectAuthority();
+    const run = () => {
       let active = true;
-      const send = captureEffectAuthority().initiate(() => {
+      const promise = effect.initiate(() => {
         if (!active) {
-          throw new WhatsAppSocketOperationTimeoutError("sendPresenceUpdate", operationTimeoutMs);
+          throw new WhatsAppSocketOperationTimeoutError(operation, operationTimeoutMs);
         }
         hooks?.assertCurrent?.();
-        return jid === undefined
-          ? sock.sendPresenceUpdate(presence)
-          : sock.sendPresenceUpdate(presence, jid);
+        return send();
       });
-      return withWhatsAppSocketOperationTimeout(
-        "sendPresenceUpdate",
-        send,
-        operationTimeoutMs,
-        () => {
-          active = false;
-        },
-      );
-    },
+      return withWhatsAppSocketOperationTimeout(operation, promise, operationTimeoutMs, () => {
+        active = false;
+        onTimeout?.(promise);
+      });
+    };
+    return operation === "sendMessage" ? runSerializedSocketSendMessage(sock, run) : run();
+  };
+  return {
+    sendMessage: (jid, content, options) =>
+      runOperation(
+        "sendMessage",
+        () => (options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content)),
+        (promise) => hooks?.onSendMessageTimeout?.({ jid, promise }),
+      ),
+    sendPresenceUpdate: (presence, jid) =>
+      runOperation("sendPresenceUpdate", () =>
+        jid === undefined
+          ? sock.sendPresenceUpdate(presence)
+          : sock.sendPresenceUpdate(presence, jid),
+      ),
   };
 }

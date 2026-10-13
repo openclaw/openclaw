@@ -27,11 +27,9 @@ import {
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
-type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
-
 export async function runAdmittedUpdate(
   inputOpts: UpdateCommandOptions,
-  prepared: PreparedUpdate,
+  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
   executeUpdate: (
@@ -58,7 +56,7 @@ export async function runAdmittedUpdate(
     initializedFence = fence;
     assertInitializationCurrent = () => {
       fence.assertCurrent();
-      assertUpdatePackageActivationAdmission(root, { serviceRoot });
+      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
     };
   }
   const run = await admitUpdateCommandRun({
