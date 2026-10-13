@@ -113,7 +113,8 @@ describe("guarded model fetch logging", () => {
   it.each([
     { status: 200, elapsedMs: 999, level: "debug" },
     { status: 299, elapsedMs: 42, level: "debug" },
-    { status: 200, elapsedMs: 1_000, level: "info" },
+    { status: 200, elapsedMs: 1_000, level: "debug" },
+    { status: 200, elapsedMs: 30_000, level: "debug" },
     { status: 300, elapsedMs: 42, level: "info" },
     { status: 500, elapsedMs: 42, level: "info" },
   ] as const)(

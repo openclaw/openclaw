@@ -19,7 +19,6 @@ import {
 } from "../crypto-state-store.js";
 import { MatrixClient } from "../sdk.js";
 import { withMatrixCryptoStoreRecoveryLock } from "./crypto-store-ownership.js";
-import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 import { persistIdbToDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -227,19 +226,11 @@ describe("Matrix client custody at the real SQLite snapshot boundary", () => {
     ]);
     const beforeContender = snapshotOpens;
     const contender = makeClient();
-    const abort = new AbortController();
-    const contention = observeCryptoStoreContention(snapshotPath);
-    const waiting = contender.start({ abortSignal: abort.signal });
-    const rejection = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
-    try {
-      await contention.waitFor(waiting);
-    } finally {
-      contention.close();
-    }
+    await expect(contender.start()).rejects.toMatchObject({
+      code: "matrix_crypto_store_owner_active",
+    });
     expect(snapshotOpens).toBe(beforeContender);
     expect(sdk.init).toHaveBeenCalledTimes(1);
-    abort.abort();
-    await rejection;
     await contender.stopWithoutPersist();
 
     await owner.stopAndPersist();

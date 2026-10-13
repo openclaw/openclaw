@@ -43,6 +43,9 @@ export function buildGuardianNoticeItem(
     icon: "shieldCheck" as const,
     timestamp: notice.timestamp,
   };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
       ...item,

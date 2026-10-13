@@ -19,7 +19,6 @@ import type {
   MemorySearchWorkerOutput,
   MemoryVectorWorkerQuery,
 } from "./manager-search.worker.js";
-import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
 type MemoryTranscriptStatsScope = Omit<
@@ -166,13 +165,11 @@ export async function runMemoryIndexRead<Command extends MemoryIndexReadCommand>
   target: MemoryReadTarget,
   command: Command,
 ): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
-  const fileIdentity = readMemoryShadowIdentity(target.databasePath);
   const result = await runRetrieval(
-    { ...target, kind: "index-read", command, fileIdentity },
+    { ...target, kind: "index-read", command },
     { inputBytes: JSON.stringify(command).length * 2 },
     "index read",
   );
-  assertMemoryShadowIdentity(target.databasePath, fileIdentity);
   if (result.read.type !== command.type) {
     throw new Error("Memory index reader returned another operation");
   }

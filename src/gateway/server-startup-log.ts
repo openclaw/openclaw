@@ -149,14 +149,13 @@ export function formatAgentModelStartupDetails(params: {
     ) {
       thinking = "off";
     } else {
-      const resolvedThinking = resolveThinkingDefault({
+      thinking = resolveThinkingDefault({
         cfg: params.cfg,
         agentId: soleAgentId,
         provider: params.provider,
         model: params.model,
         catalog: configuredCatalog,
       });
-      thinking = resolvedThinking === "off" ? "medium" : resolvedThinking;
     }
   }
   const fast = resolveFastModeState({

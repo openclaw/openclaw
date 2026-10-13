@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { maybeRepairPluginRegistryState } from "../commands/doctor-plugin-registry.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -32,9 +36,13 @@ if (!agentMailIntegrity) {
 }
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  resetPluginLoaderTestStateForTest();
+  try {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    resetPluginLoaderTestStateForTest();
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -269,6 +277,7 @@ describe("recorded plugin trust diagnostics", () => {
             slots: { memory: "none" },
           },
         };
+        setRuntimeConfigSnapshot(config);
         const snapshot = buildPluginSnapshotReport({ config });
         const inspected = buildPluginInspectReport({
           id: plugin.id,

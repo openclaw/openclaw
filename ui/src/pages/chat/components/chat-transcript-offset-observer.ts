@@ -145,7 +145,7 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
-  const recordProgrammaticScroll = (before: number, after: number, maintenance: boolean) => {
+  const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
     nativeOffset = after;
     publish({
@@ -160,8 +160,6 @@ export function observeTranscriptOffset(
     if (before !== after) {
       owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
-    } else if (!maintenance && (owner.state.scrollCommand || owner.state.pendingScrollOffset)) {
-      owner.state.maintenanceScrollOffset = null;
     }
   };
   const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
@@ -170,7 +168,7 @@ export function observeTranscriptOffset(
     if (maintenance && before !== after) {
       owner.onLayoutCorrection(before, after);
     }
-    recordProgrammaticScroll(before, after, maintenance);
+    recordProgrammaticScroll(before, after);
   };
   owner.state.recordProgrammaticScroll = recordVirtualizerScroll;
   const stopCorrections = element
@@ -184,7 +182,7 @@ export function observeTranscriptOffset(
         }
         if (observation.type === "resize" && observation.scrollCorrection) {
           const { before, after } = observation.scrollCorrection;
-          recordProgrammaticScroll(before, after, true);
+          recordProgrammaticScroll(before, after);
         }
       })
     : undefined;

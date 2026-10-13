@@ -39,7 +39,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let peopleFilter = "everyone";
   let viewerProfileId: string | undefined;
   let gatewayId: string | undefined;
-  let identityLoad: Promise<void> | undefined;
+  let identityLoad: Promise<{ gatewayId?: string; viewerProfileId?: string }> | undefined;
   let restoredBoardId: string | undefined;
   const invalidate = () => {
     generation += 1;
@@ -58,29 +58,14 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     viewerProfileId = undefined;
     restoredBoardId = undefined;
   };
-  const loadIdentity = (): Promise<void> =>
-    (identityLoad ??= (async () => {
-      const receipt = generation;
-      const [gateway, viewer] = await Promise.allSettled([
-        host.request<{ deviceId: string }>("gateway.identity.get", {}),
-        host.request<UsersSelfResult>("users.self", {}),
-      ]);
-      if (receipt !== generation) {
-        // A newer activation or board owns the scope now; reload for it so a read that
-        // was already waiting (for example after switching boards) restores the right key.
-        identityLoad = undefined;
-        if (active) {
-          await loadIdentity();
-        }
-        return;
-      }
-      if (gateway.status === "fulfilled") {
-        gatewayId = gateway.value.deviceId;
-      }
-      if (viewer.status === "fulfilled") {
-        viewerProfileId = viewer.value.profile.id;
-      }
-    })());
+  const loadIdentity = () =>
+    (identityLoad ??= Promise.allSettled([
+      host.request<{ deviceId: string }>("gateway.identity.get", {}),
+      host.request<UsersSelfResult>("users.self", {}),
+    ]).then(([gateway, viewer]) => ({
+      gatewayId: gateway.status === "fulfilled" ? gateway.value.deviceId : undefined,
+      viewerProfileId: viewer.status === "fulfilled" ? viewer.value.profile.id : undefined,
+    })));
   const restoreFilter = (id: string) => {
     if (restoredBoardId === id) {
       return;
@@ -120,10 +105,12 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     attempted = true;
     const load = (async () => {
       try {
-        await loadIdentity();
+        const identity = await loadIdentity();
         if (!current(id, receipt)) {
           return false;
         }
+        gatewayId = identity.gatewayId;
+        viewerProfileId = identity.viewerProfileId;
         restoreFilter(id);
         const view: WorkboardSessionsBoardView = {
           includePeople: true,

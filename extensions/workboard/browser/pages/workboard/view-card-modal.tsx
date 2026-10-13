@@ -28,6 +28,7 @@ import {
   formatPriorityLabel,
   workboardErrorMessage,
   workboardMutationContext,
+  workboardViewState,
   renderPriorityIcon,
   formatStatusLabel,
   isWorkboardSessionChoice,
@@ -160,10 +161,7 @@ function CardModalContent(props: WorkboardProps) {
       ? initialActiveElement
       : undefined;
   const [draftRevision, setDraftRevision] = createSignal(0);
-  const state = () => {
-    void props.revision;
-    return getWorkboardState(props.host);
-  };
+  const state = workboardViewState(() => props);
   const draftTitle = () => {
     draftRevision();
     return state().draftTitle;

@@ -287,13 +287,6 @@ async function releaseRetainedThread(
   if (!retained) {
     return false;
   }
-  const olderThreadIds = new Set<string>();
-  for (const candidateThreadId of runtime.retainedThreads.keys()) {
-    if (candidateThreadId === threadId) {
-      break;
-    }
-    olderThreadIds.add(candidateThreadId);
-  }
   runtime.retainedThreads.delete(threadId);
   // Keep release ownership addressable until unsubscribe settles. Unrelated
   // conversations must stay reusable while only this thread transitions.
@@ -323,21 +316,12 @@ async function releaseRetainedThread(
       !runtime.retainedThreads.has(threadId) &&
       !runtime.claimedThreads.has(threadId)
     ) {
-      // A failed unsubscribe leaves the native subscription alive. Restore its
-      // exact callback and LRU position; renewing TTL prevents a zero-delay retry spin.
+      // A failed unsubscribe leaves the native subscription alive. Retain it as
+      // most recently used; renewing TTL prevents a zero-delay retry spin.
       if (retained.ephemeralPolicy === undefined) {
         retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
       }
-      const newerThreads = [...runtime.retainedThreads.entries()].filter(
-        ([candidateThreadId]) => !olderThreadIds.has(candidateThreadId),
-      );
-      for (const [candidateThreadId] of newerThreads) {
-        runtime.retainedThreads.delete(candidateThreadId);
-      }
       runtime.retainedThreads.set(threadId, retained);
-      for (const [candidateThreadId, newerThread] of newerThreads) {
-        runtime.retainedThreads.set(candidateThreadId, newerThread);
-      }
     }
     throw error;
   } finally {

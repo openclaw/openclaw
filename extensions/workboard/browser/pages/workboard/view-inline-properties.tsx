@@ -20,6 +20,7 @@ import {
   formatStatusLabel,
   PriorityIcon,
   workboardMutationContext,
+  workboardViewState,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { liveInputValue } from "./view-input-value.ts";
@@ -188,10 +189,7 @@ export function InlineStatus(input: {
   card: WorkboardCard;
   disabled: boolean;
 }) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+  const state = workboardViewState(() => input.workboard);
   const statuses = createMemo(() =>
     state().statuses.includes(input.card.status)
       ? state().statuses

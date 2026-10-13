@@ -39,7 +39,6 @@ process.stdin.on("data", (chunk) => {
   }
   const response =
     JSON.stringify({
-      id: mode === "fixture:wrong-id" ? input.id - 1 : input.id,
       status: "ok",
       value: { rows: [], fallbackScanRequired: false },
     }) + "\n";
