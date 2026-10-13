@@ -225,6 +225,8 @@ test("merges exporter headers with config and required protobuf precedence", asy
         "content-type": "application/json",
         "x-config-only": "config-value",
         "x-precedence": "config-value",
+        // A SecretRef the runtime snapshot could not resolve must never be sent.
+        "x-unresolved": { source: "env", provider: "default", id: "MISSING_OTEL_HEADER" },
       };
     },
   });
@@ -243,7 +245,8 @@ test("merges exporter headers with config and required protobuf precedence", asy
           request.headers["content-type"] === "application/x-protobuf" &&
           request.headers["x-config-only"] === "config-value" &&
           request.headers["x-env-only"] === "env-value" &&
-          request.headers["x-precedence"] === "config-value"
+          request.headers["x-precedence"] === "config-value" &&
+          !("x-unresolved" in request.headers)
         );
       }),
     ).toBe(true);

@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { LoggingLevelSchema } from "./zod-schema.root-support.js";
+import { SecretInputSchema } from "./zod-schema.secret-input.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 // OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
 // The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
@@ -21,7 +23,8 @@ export const DiagnosticsConfigSchema = z
         metricsEndpoint: z.string().optional(),
         logsEndpoint: z.string().optional(),
         protocol: z.literal("http/protobuf").optional(),
-        headers: z.record(z.string(), z.string()).optional(),
+        /** OTLP request headers. Values accept plain strings or SecretRefs. */
+        headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
         serviceName: z.string().optional(),
         /** Replacement prefix for OpenClaw-owned metric names. Empty removes the prefix; defaults to "openclaw.". */
         metricNamePrefix: MetricNamePrefixSchema.optional(),

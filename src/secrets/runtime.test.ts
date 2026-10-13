@@ -754,6 +754,52 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
+  it("resolves diagnostics OTEL header SecretRefs and isolates the exporter when one is missing", async () => {
+    const resolved = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        ...explicitMainRoster(),
+        diagnostics: {
+          otel: {
+            enabled: true,
+            headers: {
+              "X-Auth-Token": { source: "env", provider: "default", id: "OTEL_TEST_TOKEN" },
+              "X-Plain": "plain-value",
+            },
+          },
+        },
+      }),
+      env: { OTEL_TEST_TOKEN: "resolved-otel-token" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    expect(resolved.config.diagnostics?.otel?.headers).toEqual({
+      "X-Auth-Token": "resolved-otel-token",
+      "X-Plain": "plain-value",
+    });
+
+    const ref = { source: "env", provider: "default", id: "MISSING_OTEL_TOKEN" } as const;
+    const missing = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        ...explicitMainRoster(),
+        diagnostics: { otel: { enabled: true, headers: { "X-Auth-Token": ref } } },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    expect(missing.config.diagnostics?.otel?.headers?.["X-Auth-Token"]).toEqual(ref);
+    expect(missing.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "diagnostics-otel",
+        state: "unavailable",
+        paths: ["diagnostics.otel.headers.X-Auth-Token"],
+      },
+    ]);
+  });
+
   it("fails when an active exec ref id contains traversal segments", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
