@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
@@ -15,6 +20,11 @@ const { resolveSandboxContext } = vi.hoisted(() => ({
 }));
 // mock-isolation: Provisioning stays synthetic so this test never opens real sandbox state.
 vi.mock("../sandbox/context.js", () => ({ resolveSandboxContext }));
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const png = Buffer.from(
@@ -146,6 +156,7 @@ describe("generated media sandbox access", () => {
         ],
       };
       const config = { agents: { entries: { main: {}, work: {} } } };
+      setRuntimeConfigSnapshot(config);
       resolveSandboxContext.mockImplementation(async (selection) => {
         resolveSessionAgentIds({ ...selection, config });
         return createSandboxTestContext({
@@ -220,4 +231,121 @@ describe("generated media sandbox access", () => {
       expect(dispose).toHaveBeenCalledTimes(2);
     },
   );
+
+  it.each([
+    "read-only before completion",
+    "no-access before completion",
+    "workspace before completion",
+    "backend before completion",
+    "limit before completion",
+    "reload during acquisition",
+    "reload after gitignore",
+    "unrelated reload",
+  ])("revalidates foreground staging policy: %s", async (transition) => {
+    const { workspace, sandbox, params } = await fixture();
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+        entries: { main: { workspace }, work: { workspace } },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const context = resolveMediaGenerateToolContext(
+      "imageGenerationProviders",
+      {
+        config,
+        agentSessionKey: "agent:work:generated",
+        sandboxSessionKey: "agent:main:policy",
+        sandboxAgentId: "main",
+        requesterAgentId: "work",
+        spawnWorkspaceDir: workspace,
+        sandbox,
+      },
+      { warn: vi.fn(), error: vi.fn() },
+      true,
+    );
+    if (!context) {
+      throw new Error("Expected a media tool context");
+    }
+    const replacement: OpenClawConfig = structuredClone(config);
+    if (transition.startsWith("workspace")) {
+      replacement.agents!.entries!.work!.workspace = path.join(workspace, "replacement");
+    } else if (transition.startsWith("backend")) {
+      replacement.agents!.defaults!.sandbox!.backend = "podman";
+    } else if (transition.startsWith("limit")) {
+      replacement.agents!.defaults!.mediaMaxMb = 1;
+    } else if (transition === "unrelated reload") {
+      replacement.logging = { level: "debug" };
+    } else {
+      replacement.agents!.defaults!.sandbox!.workspaceAccess = transition.startsWith("no-access")
+        ? "none"
+        : "ro";
+    }
+    const dispose = vi.fn();
+    const write = sandbox.bridge.createFileExclusive!.bind(sandbox.bridge);
+    const written = vi
+      .spyOn(sandbox.bridge, "createFileExclusive")
+      .mockImplementation(async (args) => {
+        const result = await write(args);
+        if (transition === "reload after gitignore") {
+          setRuntimeConfigSnapshot(replacement);
+        }
+        return result;
+      });
+    resolveSandboxContext.mockImplementation(async () => {
+      if (transition === "reload during acquisition") {
+        setRuntimeConfigSnapshot(replacement);
+      }
+      return createSandboxTestContext({
+        overrides: {
+          workspaceDir: workspace,
+          fsBridge: sandbox.bridge,
+          [Symbol.dispose]: dispose,
+        },
+      });
+    });
+    if (transition.endsWith("before completion") || transition === "unrelated reload") {
+      setRuntimeConfigSnapshot(replacement);
+    }
+    const result = await buildMediaGenerateToolExecutionResult({
+      ...params,
+      sandbox: context.acquireOutputSandbox,
+    });
+    expect(result.attachments).toEqual(params.attachments);
+    expect(result.details.paths).toEqual(params.mediaUrls);
+    if (transition === "unrelated reload") {
+      expect(result.details.sandboxPaths).toHaveLength(1);
+      expect(resolveSandboxContext).toHaveBeenLastCalledWith(
+        expect.objectContaining({ config: replacement }),
+      );
+      expect(written).toHaveBeenCalledTimes(2);
+    } else {
+      expect(result.details.sandboxPaths).toBeUndefined();
+      expect(result.wakeResult).toContain(
+        "Sandbox copy unavailable: Error: The requesting sandbox configuration has changed",
+      );
+      expect(written).toHaveBeenCalledTimes(transition === "reload after gitignore" ? 1 : 0);
+    }
+    if (transition.startsWith("reload ") || transition === "unrelated reload") {
+      expect(dispose).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("refuses to reuse a captured bridge without a sandbox session", async () => {
+    const { workspace, sandbox, params } = await fixture();
+    setRuntimeConfigSnapshot({});
+    const context = resolveMediaGenerateToolContext(
+      "imageGenerationProviders",
+      { config: {}, sandbox },
+      { warn: vi.fn(), error: vi.fn() },
+      true,
+    );
+    const result = await buildMediaGenerateToolExecutionResult({
+      ...params,
+      sandbox: context?.acquireOutputSandbox,
+    });
+    expect(result.details.sandboxPaths).toBeUndefined();
+    expect(result.wakeResult).toContain("The requesting sandbox session is unavailable");
+    await expect(fs.readdir(workspace)).resolves.toEqual([]);
+  });
 });

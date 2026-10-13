@@ -27,6 +27,7 @@ import {
 } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { findDuplicateGuardImageGenerationTaskForSession } from "../media-generation-task-status.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import * as announceDelivery from "../subagents/announce/subagent-announce-delivery.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -36,9 +37,16 @@ import {
 } from "./media-generate-background-shared.js";
 import {
   imageGenerationTaskLifecycle,
+  resolveMediaGenerateToolContext,
   runMediaGenerationTask,
 } from "./media-generate-background.js";
 import { buildMediaGenerateToolExecutionResult } from "./media-generate-result-shared.js";
+
+const { resolveSandboxContext } = vi.hoisted(() => ({
+  resolveSandboxContext: vi.fn<typeof import("../sandbox/context.js").resolveSandboxContext>(),
+}));
+// mock-isolation: sandbox provisioning is synthetic; session ownership and writes are real.
+vi.mock("../sandbox/context.js", () => ({ resolveSandboxContext }));
 
 afterEach(() => {
   vi.useRealTimers();
@@ -446,6 +454,8 @@ describe("generated media sandbox lifecycle", () => {
     "reset-during-acquisition",
     "reset-after-gitignore",
     "reset-after-first-output",
+    "read-only-during-generation",
+    "workspace-during-generation",
   ] as const)("binds detached staging to the admitted session: %s", async (transition) => {
     await withOpenClawTestState({ prefix: "media-staging-lifecycle-" }, async (state) => {
       const workspace = state.workspaceDir;
@@ -467,8 +477,12 @@ describe("generated media sandbox lifecycle", () => {
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
       const scope = { agentId: "main", sessionKey, storePath };
       const entry = { sessionId: "original", lifecycleRevision: "original", updatedAt: 1 };
-      const config = {
-        agents: { ownership: "explicit" as const, entries: { main: { workspace } } },
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+          entries: { main: { workspace } },
+        },
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
@@ -482,8 +496,19 @@ describe("generated media sandbox lifecycle", () => {
       if (!handle?.detach) {
         throw new Error("Expected an admitted detached generation");
       }
+      const changesConfig =
+        transition === "read-only-during-generation" ||
+        transition === "workspace-during-generation";
       const invalidate = async () => {
-        if (transition === "recreate-during-generation") {
+        if (changesConfig) {
+          const replacement: OpenClawConfig = structuredClone(config);
+          if (transition === "read-only-during-generation") {
+            replacement.agents!.defaults!.sandbox!.workspaceAccess = "ro";
+          } else {
+            replacement.agents!.entries!.main!.workspace = state.path("successor-workspace");
+          }
+          setRuntimeConfigSnapshot(replacement);
+        } else if (transition === "recreate-during-generation") {
           await deleteSessionEntryLifecycle({
             storePath,
             agentId: "main",
@@ -521,7 +546,34 @@ describe("generated media sandbox lifecycle", () => {
           }
           return result;
         });
-      const acquire = vi.fn(async () => {
+      const context = resolveMediaGenerateToolContext(
+        "imageGenerationProviders",
+        {
+          config,
+          agentSessionKey: sessionKey,
+          sandboxAgentId: "main",
+          requesterAgentId: "main",
+          spawnWorkspaceDir: workspace,
+          sandbox,
+        },
+        { warn: vi.fn(), error: vi.fn() },
+        true,
+      );
+      if (!context?.acquireOutputSandbox) {
+        throw new Error("Expected a sandboxed media tool");
+      }
+      resolveSandboxContext.mockResolvedValue(
+        createSandboxTestContext({
+          overrides: {
+            workspaceDir: workspace,
+            fsBridge: sandbox.bridge,
+          },
+        }),
+      );
+      const acquire = vi.fn(async (assertCurrent: () => void) => {
+        if (changesConfig) {
+          return context.acquireOutputSandbox!(assertCurrent);
+        }
         if (transition === "reset-during-acquisition") {
           await invalidate();
         }
@@ -586,9 +638,15 @@ describe("generated media sandbox lifecycle", () => {
           );
         }
       } else {
-        expect(deliver).not.toHaveBeenCalled();
+        if (changesConfig) {
+          expect(deliver).toHaveBeenCalledOnce();
+        } else {
+          expect(deliver).not.toHaveBeenCalled();
+        }
         expect(result.wakeResult).toContain(
-          "Sandbox copy unavailable: Error: The requesting session is no longer current",
+          changesConfig
+            ? "Sandbox copy unavailable: Error: The requesting sandbox configuration has changed"
+            : "Sandbox copy unavailable: Error: The requesting session is no longer current",
         );
         const writesBeforeReset =
           transition === "reset-after-first-output"
@@ -603,7 +661,11 @@ describe("generated media sandbox lifecycle", () => {
           expect(result.details.sandboxPaths).toBeUndefined();
         }
         if (transition.endsWith("during-generation")) {
-          expect(acquire).not.toHaveBeenCalled();
+          if (changesConfig) {
+            expect(acquire).toHaveBeenCalledOnce();
+          } else {
+            expect(acquire).not.toHaveBeenCalled();
+          }
         }
         if (writesBeforeReset === 0) {
           await expect(fs.readdir(workspace)).resolves.toEqual([]);

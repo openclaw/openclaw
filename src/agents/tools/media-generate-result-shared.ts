@@ -31,7 +31,7 @@ export type MediaGenerateToolExecutionResult = MediaGenerationExecutionResult & 
 
 export type AcquireGeneratedMediaSandbox = (
   assertCurrent: () => void,
-) => Promise<(MediaToolSandbox & Disposable) | null>;
+) => Promise<(MediaToolSandbox & Disposable & { assertCurrent?: () => void }) | null>;
 
 export function buildSavedMediaAttachment<T extends "image" | "audio" | "video">(
   type: T,
@@ -75,6 +75,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
       throw new Error("Media generation task is no longer active");
     }
   };
+  let assertSandboxCurrent: (() => void) | undefined;
   const assertStagingCurrent = async () => {
     assertCurrent();
     const handle = params.taskHandle;
@@ -86,6 +87,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
       throw new Error("The requesting session is no longer current");
     }
     assertCurrent();
+    assertSandboxCurrent?.();
   };
   const reportStagingFailure = (error: unknown) => {
     stagingMessages.push(
@@ -103,6 +105,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
           })
       : undefined;
   if (sandbox) {
+    assertSandboxCurrent = sandbox.assertCurrent;
     const { root, bridge } = sandbox;
     const directory = stagedInputDirectory(randomUUID());
     let ready = false;

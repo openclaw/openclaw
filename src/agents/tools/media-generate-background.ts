@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../../config/config.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -6,6 +7,7 @@ import type { CapabilityProviderFor } from "../../plugins/capability-provider-ru
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -14,6 +16,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import { resolveSandboxConfigForAgent } from "../sandbox/config.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
@@ -112,32 +115,57 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
     });
   const outputSandbox = options?.sandbox;
   const sandboxSessionKey = options?.sandboxSessionKey ?? options?.agentSessionKey;
+  const readOutputPolicy = (config: OpenClawConfig) => ({
+    sandbox: resolveSandboxConfigForAgent(config, options?.sandboxAgentId),
+    workspaces: [options?.sandboxAgentId, options?.requesterAgentId].map((agentId) =>
+      agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined,
+    ),
+    sessionStore: config.session?.store,
+    mediaMaxMb: config.agents?.defaults?.mediaMaxMb,
+  });
+  const admittedOutputPolicy = outputSandbox ? readOutputPolicy(cfg) : undefined;
   const acquireOutputSandbox: AcquireGeneratedMediaSandbox | undefined = outputSandbox
     ? async (assertCurrent) => {
-        assertCurrent();
+        const assertSandboxCurrent = () => {
+          assertCurrent();
+          if (!isDeepStrictEqual(readOutputPolicy(getRuntimeConfig()), admittedOutputPolicy)) {
+            throw new Error("The requesting sandbox configuration has changed");
+          }
+        };
+        assertSandboxCurrent();
         if (!sandboxSessionKey) {
-          return { ...outputSandbox, [Symbol.dispose]() {} };
+          throw new Error("The requesting sandbox session is unavailable");
         }
         // Detached generation outlives the originating turn's workspace projection.
         const { resolveSandboxContext } = await import("../sandbox/context.js");
         const sandbox = await resolveSandboxContext({
-          config: cfg,
+          config: getRuntimeConfig(),
           sessionKey: sandboxSessionKey,
           agentId: options?.sandboxAgentId,
           workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir,
           skillsSnapshot: options?.skillsSnapshot,
           execOverrides: options?.execOverrides,
-          assertCurrent,
+          assertCurrent: assertSandboxCurrent,
         });
-        if (!sandbox?.fsBridge || sandbox.workspaceDir !== outputSandbox.root) {
+        try {
+          assertSandboxCurrent();
+          if (
+            !sandbox?.fsBridge ||
+            sandbox.workspaceDir !== outputSandbox.root ||
+            sandbox.backendId !== admittedOutputPolicy?.sandbox.backend
+          ) {
+            throw new Error("The requesting sandbox workspace is no longer available");
+          }
+          return {
+            root: sandbox.workspaceDir,
+            bridge: sandbox.fsBridge,
+            assertCurrent: assertSandboxCurrent,
+            [Symbol.dispose]: () => sandbox[Symbol.dispose]?.(),
+          };
+        } catch (error) {
           sandbox?.[Symbol.dispose]?.();
-          throw new Error("The requesting sandbox workspace is no longer available");
+          throw error;
         }
-        return {
-          root: sandbox.workspaceDir,
-          bridge: sandbox.fsBridge,
-          [Symbol.dispose]: () => sandbox[Symbol.dispose]?.(),
-        };
       }
     : undefined;
   return {
