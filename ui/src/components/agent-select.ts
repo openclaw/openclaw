@@ -44,4 +44,4 @@ export function renderAgentSelectCopy(option: AgentSelectOption) {
   `;
 }
 
-export type { AgentSelect, AgentSelectElement } from "./agent-select.tsx";
+export type { AgentSelectElement } from "./agent-select.tsx";

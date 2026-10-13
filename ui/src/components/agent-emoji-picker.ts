@@ -1,1 +1,1 @@
-export { AgentEmojiPicker } from "./agent-emoji-picker.tsx";
+import "./agent-emoji-picker.tsx";

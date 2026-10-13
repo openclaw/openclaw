@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { i18n } from "../../i18n/index.ts";
@@ -11,7 +11,7 @@ import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CronPageController } from "./cron-page-controller.ts";
 import { reserveCronEditorClearance } from "./editor-clearance.ts";
 import {
@@ -109,12 +109,8 @@ export function CronPageContent(props: { controller: CronPageController; revisio
         ? t("cron.list.sessionFilter")
         : subtitleForRoute("cron"),
       filtered: Boolean(controller.cron.cronSessionFilter),
-      actions: controller.cron.cronSessionFilter
-        ? undefined
-        : renderAgentScopeControl({
-            agents: controller.agentsList?.agents ?? [],
-            selection: controller.context.agentSelection,
-          }),
+      agents: controller.agentsList?.agents ?? [],
+      selectedAgentId: controller.context.agentSelection.state.scopeId,
     };
   });
   createEffect(revision, () => {
@@ -140,8 +136,12 @@ export function CronPageContent(props: { controller: CronPageController; revisio
             >
               {t("cron.list.showAll")}
             </a>
-          ) : header().actions === undefined ? undefined : (
-            <LitContent render={() => header().actions} />
+          ) : (
+            <AgentScopeControl
+              agents={header().agents}
+              selection={props.controller.context.agentSelection}
+              selectedId={header().selectedAgentId}
+            />
           )
         }
       />

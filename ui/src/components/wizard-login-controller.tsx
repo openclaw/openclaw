@@ -1,15 +1,14 @@
-import { html, nothing, render, type ReactiveControllerHost } from "lit";
-import { createRenderEffect, onCleanup } from "solid-js";
+import { createMemo } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { t } from "../i18n/index.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { initialWizardValue } from "../pages/model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
 } from "../pages/model-setup/wizard-runner.ts";
-import { renderModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view.ts";
+import { ModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view-solid.tsx";
 import "../styles/model-setup.css";
 registerSettingsEnglish();
 
@@ -22,7 +21,7 @@ export class WizardLoginController {
   private cancellationNotice: string | null = null;
 
   constructor(
-    private readonly host: Pick<ReactiveControllerHost, "requestUpdate">,
+    private readonly host: { requestUpdate(): void },
     private readonly options: {
       getClient: () => GatewayBrowserClient | null;
       getAgentId: () => string | null;
@@ -92,33 +91,6 @@ export class WizardLoginController {
     };
   }
 
-  render(options: Parameters<WizardLoginController["viewProps"]>[0] = {}) {
-    return html`<div @modal-cancel=${(event: Event) => event.preventDefault()}>
-      ${renderModelSetupWizard(this.viewProps(options))}
-    </div>`;
-  }
-
-  /** Own the retained wizard renderer until its shared controls move to Solid. */
-  renderSolid(
-    revision: () => number,
-    options: () => Parameters<WizardLoginController["render"]>[0],
-  ) {
-    const container = document.createElement("div");
-    createRenderEffect(
-      () => {
-        revision();
-        return this.render(options());
-      },
-      (template) => {
-        render(template, container);
-      },
-    );
-    onCleanup(() => {
-      render(nothing, container);
-    });
-    return container;
-  }
-
   private async cancel(): Promise<void> {
     if (this.cancelling || this.runner.state.phase === "done") {
       return;
@@ -149,4 +121,20 @@ export class WizardLoginController {
       }
     }
   }
+}
+
+export function WizardLogin(props: {
+  controller: WizardLoginController;
+  revision: () => number;
+  options?: Parameters<WizardLoginController["viewProps"]>[0];
+}) {
+  const view = createMemo(() => {
+    props.revision();
+    return props.controller.viewProps(props.options);
+  });
+  return (
+    <div onModal-cancel={(event: Event) => event.preventDefault()}>
+      <ModelSetupWizard {...view()} />
+    </div>
+  );
 }
