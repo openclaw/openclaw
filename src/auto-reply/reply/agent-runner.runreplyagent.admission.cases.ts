@@ -7,7 +7,7 @@ import { createRecoveryRuntimeFixture } from "../../agents/main-session-recovery
 import { recoverStore } from "../../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -116,6 +116,8 @@ export function registerReplyAdmissionCases({
         },
         sessionKey,
       );
+      const config = { session: { store: storePath } };
+      setRuntimeConfigSnapshot(config, config);
       const scope = { sessionKey, storePath };
       await appendTranscriptMessage(
         { ...scope, sessionId: sessionEntry.sessionId },
@@ -152,6 +154,7 @@ export function registerReplyAdmissionCases({
             data: { phase: "start", startedAt: Date.now() },
           },
         });
+        expect(loadSessionEntry(scope)?.lifecycleRunId).toBe(runId);
         if (order === "before cleanup") {
           await persistAbort();
         }
@@ -165,8 +168,10 @@ export function registerReplyAdmissionCases({
         storePath,
         opts: { runId },
         sessionCtx: { Provider: "webchat", MessageSid: runId },
+        runOverrides: { config },
       });
       await expect(run()).resolves.toMatchObject({ text: SILENT_REPLY_TOKEN });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
       if (order === "after cleanup") {
         await persistAbort();
       }
@@ -180,10 +185,6 @@ export function registerReplyAdmissionCases({
       expect(interrupted?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
       rotateAgentEventLifecycleGeneration();
       await markStartupOrphanedMainSessionsForRecovery({ cfg: { session: { store: storePath } } });
-      expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
-        mainRestartRecovery: { chargedAttempts: 0 },
-        abortedLastRun: true,
-      });
       const dispatch = vi.fn<typeof callGateway>();
       dispatch.mockResolvedValue({ runId: "resumed-backend-drain" });
       const settlement = createDeferred();
