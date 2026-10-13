@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
-import type { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
+import type { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
