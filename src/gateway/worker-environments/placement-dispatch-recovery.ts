@@ -24,6 +24,7 @@ import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
+import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -64,6 +65,10 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
     }),
   );
+  const isInterruptedTurn = (placement: WorkerSessionPlacementRecord) => {
+    const claim = projectWorkerSessionTurnClaim(placement);
+    return Boolean(claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim)));
+  };
   // Orphan Git refs carry no live authority. Scan them once in the tracked full
   // post-start sweep, never on readiness or targeted turn recovery.
   let orphanCleanupPending = false;
@@ -78,7 +83,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     // Retire the old turn, not its machine. The node stop acknowledgement fences the
     // physical worker; the replacement turn receives a fresh claim on the same workspace.
     const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
+    const interrupted = isInterruptedTurn(placement);
     if ((mode === "restart" || interrupted) && placement.turnClaim) {
       if (
         claim &&
@@ -399,5 +404,5 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
   };
 
-  return { reconcile, reconcileActive };
+  return { reconcile, reconcileActive, isInterruptedTurn };
 }

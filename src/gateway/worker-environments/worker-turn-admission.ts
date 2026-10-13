@@ -11,6 +11,7 @@ import { resolveSessionStorePathForScope } from "../../config/sessions/session-s
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -28,6 +29,42 @@ import {
 } from "./workspace-conflicts.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
+
+/**
+ * Startup recovery owns interrupted claims. Wait for the node, let that owner stop the
+ * old worker and settle its workspace, then admit from the recovered placement.
+ */
+export async function recoverInterruptedWorkerTurn(params: {
+  placement: WorkerSessionPlacementRecord;
+  placements: WorkerSessionPlacementStore;
+  turn: Pick<SessionPlacementTurnParams, "abortSignal" | "timeoutMs">;
+  assertCurrent: () => void;
+  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
+  reconcileActivePlacement: (environmentId: string) => Promise<void>;
+  waitForAdmissionNode: (params: {
+    placement: ActiveWorkerPlacement;
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<void>;
+}): Promise<WorkerSessionPlacementRecord> {
+  const { placement } = params;
+  if (placement.state !== "active" || !params.isInterruptedTurn?.(placement)) {
+    return placement;
+  }
+  const signal = AbortSignal.timeout(Math.min(WORKER_ADMISSION_DEADLINE_MS, params.turn.timeoutMs));
+  await params.waitForAdmissionNode({
+    placement,
+    signal: params.turn.abortSignal ? AbortSignal.any([params.turn.abortSignal, signal]) : signal,
+    assertCurrent: params.assertCurrent,
+  });
+  await params.reconcileActivePlacement(placement.environmentId);
+  params.assertCurrent();
+  const recovered = params.placements.get(placement.sessionId);
+  if (!recovered) {
+    throw new Error("Worker restart recovery lost placement");
+  }
+  return recovered;
+}
 
 /** Wait without a placement claim: a claim would fail the refresh's authority check. */
 export async function waitForWorkerRuntimeRefresh(params: {

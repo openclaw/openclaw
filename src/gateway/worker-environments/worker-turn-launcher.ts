@@ -33,6 +33,7 @@ import {
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
+  recoverInterruptedWorkerTurn,
   waitForPendingWorkerResult,
   waitForInitialWorkerPlacement,
   waitForWorkerRuntimeRefresh,
@@ -67,6 +68,7 @@ type WorkerTurnLauncherOptions = {
     identity: ReturnType<typeof resolvePlacementIdentity>,
   ) => Promise<WorkerSessionWorkspace>;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
+  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
   waitForAdmissionNode: (params: {
     placement: ActiveWorkerPlacement;
     signal: AbortSignal;
@@ -213,7 +215,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             (pending.runId !== runId || !options.placements.get(sessionId)?.turnClaim),
         );
       let identity = resolvePlacementIdentity(claim, current);
-      let routablePlacement = current;
       let assertInitialSetupCurrent: (() => void) | undefined;
       // Every admission wait retains the caller's authority, not only initial setup.
       const assertAdmissionCurrent = () => {
@@ -235,6 +236,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       let recoveredAdmission = false;
       let admissionReported = false;
       let userMessagePersisted = inputTurn.suppressNextUserMessagePersistence === true;
+      let routablePlacement = await recoverInterruptedWorkerTurn({
+        ...options,
+        placement: current,
+        turn: inputTurn,
+        assertCurrent: assertAdmissionCurrent,
+      });
       for (;;) {
         // Remote-exec temporarily updates the caller's prompt for attachments.
         let turn = inputTurn;

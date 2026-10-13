@@ -495,6 +495,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
+    isInterruptedTurn: recovery.isInterruptedTurn,
     resumeProvisioning: startup.resumeProvisioning,
   };
 }
