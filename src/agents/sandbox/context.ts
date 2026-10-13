@@ -501,6 +501,7 @@ async function resolveProvisionedSandboxContext(
         : {}),
       backendId: backend.id,
       sessionKey: rawSessionKey,
+      agentId: runtime.agentId,
       workspaceDir,
       agentWorkspaceDir,
       skillsWorkspaceDir,

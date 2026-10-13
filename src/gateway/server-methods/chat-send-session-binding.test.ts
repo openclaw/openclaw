@@ -21,10 +21,8 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  listSessionReactions,
-  setSessionReactionAsync,
-} from "../../config/sessions/session-reaction-store.js";
+import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
+import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -672,7 +670,7 @@ it.each(
           identityLabel: "Human",
           expectedSessionId: sessionId,
         });
-        const before = await listSessionReactions(scope, { sessionId });
+        const before = listSessionReactions(scope, { sessionId });
         expect(before[messageId]).toEqual([
           { emoji: "👍", count: 1, identities: [{ id: profile.id, label: "Human" }] },
         ]);
@@ -699,7 +697,7 @@ it.each(
         if (outcome === "allowed") {
           expect((await react()).details).toMatchObject({ messageId, changed: true });
           expect(commitRequests).toBeGreaterThan(0);
-          expect((await listSessionReactions(scope, { sessionId }))[messageId]).toEqual([
+          expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
             {
               emoji: "👍",
               count: 2,
@@ -731,7 +729,7 @@ it.each(
           } else {
             expect(preparationRevoked).toBe(true);
           }
-          expect(await listSessionReactions(scope, { sessionId })).toEqual(before);
+          expect(listSessionReactions(scope, { sessionId })).toEqual(before);
           expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual(
             [],
           );
@@ -739,7 +737,7 @@ it.each(
         probe.mockRestore();
         if (outcome === "allowed") {
           await react({ remove: true });
-          expect(await listSessionReactions(scope, { sessionId })).toEqual(before);
+          expect(listSessionReactions(scope, { sessionId })).toEqual(before);
         }
         expect(external).not.toHaveBeenCalled();
       } finally {

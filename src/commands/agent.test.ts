@@ -45,14 +45,16 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  readSessionMembersInWorker,
+} from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -82,6 +84,7 @@ import {
   expectOwnedCommandSession,
   readSessionStore,
   useRealCommandSessionPersistence,
+  withAgentCommandTestHome as withTempHome,
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
@@ -269,12 +272,6 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
 const attemptExecutionMocks = getAgentAttemptExecutionMocks();
 
 const runtime = createThrowingTestRuntime();
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, {
-    prefix: "openclaw-agent-",
-  });
-}
 
 function mockConfig(
   home: string,
@@ -504,7 +501,7 @@ describe("agentCommand", () => {
           expect(vi.mocked(runEmbeddedAgent).mock.calls).toHaveLength(restart + 1);
           expect(loadSessionEntry(priorScope)).toEqual(priorEntry);
           expect(await loadTranscriptEvents(priorScope)).toEqual(transcript);
-          expect(listSessionMembers(priorScope)).toEqual([member]);
+          expect((await readSessionMembersInWorker(priorScope)).members).toEqual([member]);
           expect(listSessionEntriesCore({ storePath }).map(({ sessionKey }) => sessionKey)).toEqual(
             [priorScope.sessionKey],
           );

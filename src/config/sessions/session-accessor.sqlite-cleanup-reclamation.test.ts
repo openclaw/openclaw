@@ -1,18 +1,15 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as logging from "../../logging/logger.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -23,7 +20,6 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { readArtifactPreparationLogs } from "./session-accessor.sqlite-diagnostics.test-support.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type {
   SqliteSessionReclamationPlan,
@@ -64,8 +60,6 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     hook.after = undefined;
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
-    await logging.flushLogger();
-    logging.resetLogger();
     closeOpenClawAgentDatabasesForTest();
     vi.restoreAllMocks();
     tempDirs.cleanup();
@@ -248,123 +242,6 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     expect(loadSessionEntry(current)).toEqual(replacement);
     await expect(loadTranscriptEvents(current)).resolves.toEqual(events);
   });
-
-  it.each([false, true])(
-    "preserves native incognito marker phases and late read failure=%s",
-    async (fail) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("incognito-cleanup-"));
-      storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-      const history = scope("marker-scan-history");
-      const events = [
-        { type: "metadata", runId: fail ? "cleanup-race-marker" : "ordinary-row" },
-        { type: "metadata", runId: "failing-tail" },
-      ];
-      await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(history, events);
-      await replaceSessionEntry(history, {
-        sessionId: "marker-scan-current",
-        updatedAt: Date.now(),
-        skillsSnapshot: { prompt: "unrelated saved prompt".repeat(1024), skills: [] },
-      });
-      const before = structuredClone(loadSessionEntry(history));
-      await closeOpenClawStateDatabaseAsync();
-      const db = database();
-      const failure = new Error("late native transcript read failure");
-      const observed: unknown[] = [];
-      let snapshotReads = 0;
-      db.db.function("cleanup_snapshot_value", (valueJson) => {
-        snapshotReads += 1;
-        return valueJson;
-      });
-      db.db.exec(`CREATE TEMP VIEW session_entry_snapshots AS
-        SELECT session_key, field, cleanup_snapshot_value(value_json) AS value_json
-        FROM main.session_entry_snapshots`);
-      let clock = 0;
-      let advanceClock = true;
-      vi.spyOn(performance, "now").mockImplementation(() => clock);
-      db.db.function("cleanup_marker_event", (eventJson) => {
-        observed.push(eventJson);
-        if (advanceClock) {
-          clock += 600;
-        }
-        if (fail && eventJson === JSON.stringify(events[1])) {
-          throw failure;
-        }
-        return eventJson;
-      });
-      db.db.function("cleanup_event_age", (createdAt) => {
-        if (advanceClock) {
-          clock += 20;
-        }
-        return createdAt;
-      });
-      // Native age/payload reads advance the clock, independently of timer call counts.
-      db.db.exec(`CREATE TEMP VIEW transcript_events AS
-        SELECT session_id, seq, cleanup_marker_event(event_json) AS event_json,
-          event_zstd, event_utf8_bytes, navigation_json, cleanup_event_age(created_at) AS created_at
-        FROM main.transcript_events`);
-      const logPath = path.join(tempDirs.make("cleanup-diagnostics-log-"), "writer.log");
-      vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
-      logging.setLoggerOverride({ level: "warn", file: logPath });
-      const run = () =>
-        cleanup(Date.now(), {
-          archiveRemovedEntryTranscripts: false,
-          sessionKeySegmentPrefix: "unrelated-prefix-",
-          transcriptContentMarker: "cleanup-race-marker",
-          orphanTranscriptMinAgeMs: 0,
-        });
-      const empty = { removedEntries: 0, archivedTranscriptArtifacts: 0 };
-      let workersStarted = 0;
-      const onWorker = () => {
-        workersStarted += 1;
-      };
-      channel("worker_threads").subscribe(onWorker);
-      try {
-        if (fail) {
-          await expect(run()).rejects.toBe(failure);
-        } else {
-          await expect(run()).resolves.toEqual(empty);
-        }
-        expect(workersStarted).toBe(0);
-        expect(snapshotReads).toBe(0);
-        const records = await readArtifactPreparationLogs(logPath);
-        expect(records).toHaveLength(1);
-        expect(records[0]?.message).toBe(
-          fail ? "SQLite session write failed" : "slow SQLite session write",
-        );
-        expect(records[0]?.details.artifactPreparation).toEqual({
-          admissionMode: "cached",
-          admissionMs: 0,
-          nodeInventoryMs: 0,
-          referencePlanningMs: 0,
-          orphanPlanningMs: 40,
-          markerScanMs: 1200,
-          nodeRows: 1,
-          windowRows: 1,
-          referenceIds: 1,
-          selectedEntries: 0,
-          markerWindows: 1,
-          markerRows: fail ? 1 : 2,
-          ...(fail ? {} : { deletePlans: 0 }),
-          completed: !fail,
-        });
-        expect(observed).toEqual(events.map((event) => JSON.stringify(event)));
-        if (!fail) {
-          advanceClock = false;
-          await expect(run()).resolves.toEqual(empty);
-          expect(await readArtifactPreparationLogs(logPath)).toEqual(records);
-          expect(snapshotReads).toBe(0);
-        }
-      } finally {
-        channel("worker_threads").unsubscribe(onWorker);
-        db.db.exec("DROP VIEW temp.transcript_events");
-        db.db.exec("DROP VIEW temp.session_entry_snapshots");
-      }
-      expect(workersStarted).toBe(0);
-      expect(loadSessionEntry(history)).toEqual(before);
-      await expect(loadTranscriptEvents(history)).resolves.toEqual(events);
-    },
-  );
 
   it("reclaims cold orphan-only history and republishes pending archives on a cold empty pass", async () => {
     const now = Date.now();

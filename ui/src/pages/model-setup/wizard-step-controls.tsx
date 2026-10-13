@@ -2,10 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../../api/types.ts";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import type { PickerOption, PickerParams } from "../../components/select-picker.ts";
+import { Picker, type PickerOption, type PickerParams } from "../../components/select-picker.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import "../../components/select-picker.ts";
 import "../../styles/wizard-step-controls.css";
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
@@ -189,16 +188,7 @@ function SingleChoice(props: StepProps & { options: WizardStepOption[] }) {
     };
   });
   return (
-    <Show
-      when={props.options.length <= 2}
-      fallback={
-        <openclaw-select-picker
-          class="settings-select picker-select"
-          style={{ width: "100%", "min-width": "min(138px,100%)" }}
-          prop:params={params()}
-        />
-      }
-    >
+    <Show when={props.options.length <= 2} fallback={<Picker params={params()} />}>
       <div
         class="wizard-step__actions"
         role="group"

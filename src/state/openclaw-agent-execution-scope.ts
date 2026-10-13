@@ -26,7 +26,6 @@ import type {
   AgentDatabaseFileExecutionOwner,
   AgentDatabaseExecutionFileIdentity,
 } from "./openclaw-agent-execution-contract.js";
-import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceWorkerAccess,
@@ -52,14 +51,14 @@ export type AgentDatabaseExecutionPreparedTarget = {
 
 /** A read can borrow an already-selected file owner only within its current storage scope. */
 export function borrowExistingAgentDatabaseExecution(
-  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>,
+  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner>,
   options: { path: string; env?: NodeJS.ProcessEnv },
   capture?: (target: OpenClawAgentDatabaseOptions) => OpenClawAgentDatabaseExecution,
 ): OpenClawAgentDatabaseExecution | undefined {
   const pathname = path.resolve(options.path);
   const owner =
     owners.get(pathname) ?? owners.get(readDatabasePathIdentitySync(pathname).canonicalPath);
-  if (!owner || owner.kind !== "file") {
+  if (!owner) {
     return undefined;
   }
   const target = { ...options, agentId: owner.agentId, path: pathname };
@@ -103,7 +102,7 @@ export function supportsAgentDatabaseExecutionScope(
   );
 }
 
-/** These native-only scopes still need their complete owning caller cutover. */
+/** Memory sessions have no database; maintenance scopes retain their local durable owner. */
 export function supportsOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
 ): boolean {
@@ -135,9 +134,6 @@ export function captureNativeAgentDatabaseExecutionIdentity(
     }
   };
   assertCurrent();
-  if (typeof native.identity !== "string") {
-    throw new Error("Agent execution requires an admitted native file");
-  }
   const fileIdentity: AgentDatabaseExecutionFileIdentity = {
     kind: "file",
     physicalIdentity: native.identity,

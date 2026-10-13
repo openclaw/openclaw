@@ -132,7 +132,7 @@ describe("sidebar projection memo", () => {
     const ownerPicker = sidebar
       .querySelector("#sidebar-session-owner-title")!
       .closest<SelectPicker>("openclaw-select-picker")!;
-    const renderOwnerPicker = vi.spyOn(ownerPicker, "render");
+    const ownerPickerParams = ownerPicker.params;
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     expect(projectHome).toHaveBeenCalled();
     projectHome.mockClear();
@@ -159,7 +159,7 @@ describe("sidebar projection memo", () => {
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
     expect(projectHome).not.toHaveBeenCalled();
-    expect(renderOwnerPicker).not.toHaveBeenCalled();
+    expect(ownerPicker.params).toBe(ownerPickerParams);
 
     await expectRowRefresh(sidebar, () =>
       publish([
@@ -169,7 +169,7 @@ describe("sidebar projection memo", () => {
       ]),
     );
     expect(row(key("first"))?.textContent).toContain("Renamed first");
-    expect(renderOwnerPicker).not.toHaveBeenCalled();
+    expect(ownerPicker.params).toBe(ownerPickerParams);
     expect(projectHome).toHaveBeenCalled();
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
     await expectRowRefresh(sidebar, () => {

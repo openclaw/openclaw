@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
@@ -98,6 +99,7 @@ describe("showInputDialog", () => {
     expect(submit).not.toHaveBeenCalled();
 
     await type("  Client work  ");
+    expect(dialogInput().value).toBe("  Client work  ");
     expect(findButton("Create group").disabled).toBe(false);
     submitForm();
 
@@ -145,6 +147,7 @@ describe("showInputDialog", () => {
     submitForm();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
+    flush();
     expect(dialogInput().disabled).toBe(true);
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });

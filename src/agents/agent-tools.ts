@@ -477,6 +477,7 @@ function* assembleOpenClawCodingTools(
             agentGroupSpace: options?.groupSpace ?? null,
             agentMemberRoleIds: options?.memberRoleIds,
             sandboxRoot,
+            sandboxAgentId: sandbox?.agentId,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
             sandboxReadOnlyResourceMounts: sandbox?.readOnlyResourceMounts,

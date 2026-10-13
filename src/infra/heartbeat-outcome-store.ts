@@ -8,29 +8,19 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseRuntime,
-} from "../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
+import { withOpenClawAgentDatabaseRuntime } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import {
-  claimHeartbeatOutcomeRowInDatabase,
-  persistHeartbeatOutcomeInDatabase,
-  type HeartbeatOutcomeInput,
-  type HeartbeatOutcomeRow,
+import type {
+  HeartbeatOutcomeInput,
+  HeartbeatOutcomeRow,
 } from "./heartbeat-outcome-store.kernel.js";
 import type { HeartbeatOutcomeWorkerOperations } from "./heartbeat-outcome-store.worker.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
@@ -115,7 +105,6 @@ export async function persistHeartbeatOutcome(params: {
   wakeReason?: string;
   occurredAt: number;
   env?: NodeJS.ProcessEnv;
-  incognito?: SessionCollaborationScope["incognito"];
   sessionActor?: SessionActorStorageBinding;
 }): Promise<void> {
   if (params.response.notify || params.response.outcome === "no_change") {
@@ -153,119 +142,55 @@ export async function claimHeartbeatOutcomeForRun(params: {
   runId: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-  incognito?: SessionCollaborationScope["incognito"];
   sessionActor?: SessionActorStorageBinding;
 }): Promise<PersistedHeartbeatOutcome | undefined> {
   const { assertCurrent } = params;
-  const memory = getSessionActorStorageBinding(params);
-  const incognito = memory
-    ? undefined
-    : (params.incognito ?? captureIncognitoSessionOperation(params));
   const row = await runHeartbeatOutcomeOperation(
-    { ...params, incognito },
-    {
-      type: "claim",
-      input: { sessionKey: params.sessionKey, runId: params.runId },
-    },
+    params,
+    { type: "claim", input: { sessionKey: params.sessionKey, runId: params.runId } },
     assertCurrent,
   );
-  if (incognito) {
-    assertCurrent?.();
-    incognito.authority.assertCurrent();
-    incognito.actor.assertReadable();
-  }
   return row ? rowToOutcome(row) : undefined;
 }
 
 async function runHeartbeatOutcomeOperation(
   params: Parameters<typeof resolveSqliteScope>[0] & {
-    incognito?: SessionCollaborationScope["incognito"];
     sessionActor?: SessionActorStorageBinding;
   },
   command: SqliteWorkerCommand<HeartbeatOutcomeWorkerOperations>,
   assertCurrent: () => void = () => undefined,
 ): Promise<HeartbeatOutcomeRow | undefined> {
-  const memory = getSessionActorStorageBinding(params);
+  const authority = { assertCurrent, authorize() {} };
+  const memory = captureSessionActorStorageOwner(params, authority);
   if (memory) {
-    const authority = {
-      ...memory.authority,
-      assertCurrent() {
-        assertCurrent();
-        memory.authority.assertCurrent();
+    return withSessionActorStorage(
+      params,
+      {
+        authority,
+        lifetime: { assertCurrent, assertReadable: assertCurrent },
       },
-    };
-    const result =
-      command.type === "persist"
-        ? await memory.actor.storage!.mutate(
-            { type: "session.heartbeat.persist", input: command.input },
-            authority,
-          )
-        : await memory.actor.storage!.mutate(
-            { type: "session.heartbeat.claim", input: command.input },
-            authority,
-          );
-    if (result.kind === "rolled-back") {
-      throw new Error(result.error.message);
-    }
-    return result.value;
+      async ({ actor, authority: selectedAuthority }) => {
+        const result =
+          command.type === "persist"
+            ? await actor.storage.mutate(
+                { type: "session.heartbeat.persist", input: command.input },
+                selectedAuthority,
+              )
+            : await actor.storage.mutate(
+                { type: "session.heartbeat.claim", input: command.input },
+                selectedAuthority,
+              );
+        if (result.kind === "rolled-back") {
+          throw new Error(result.error.message);
+        }
+        return result.value;
+      },
+    );
   }
   const resolved = toDatabaseOptions(resolveSqliteScope(params));
   const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = { ...resolved, env, path: resolveOpenClawAgentSqlitePath({ ...resolved, env }) };
-  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
-  if (incognito) {
-    const { actor, authority } = incognito;
-    if (actor.agentId !== options.agentId || actor.path !== options.path) {
-      throw new Error("Heartbeat outcome target differs from its captured incognito actor");
-    }
-    const claim = actor.sessions.captureCurrent(params.sessionKey);
-    const expected = actor.sessions.readSharing(params.sessionKey)?.entry;
-    const current: IncognitoSessionAuthority = {
-      assertCurrent() {
-        assertCurrent();
-        authority.assertCurrent();
-        actor.assertCurrent();
-      },
-      authorize(stage, facts) {
-        if (
-          facts.sharing?.entry?.sessionId !== expected?.sessionId ||
-          facts.sharing?.entry?.lifecycleRevision !== expected?.lifecycleRevision
-        ) {
-          throw new Error("Heartbeat outcome session changed; retry");
-        }
-        return authority.authorize?.(stage, facts);
-      },
-    };
-    current.assertCurrent();
-    return actor.sessions.withSharedState(async () => {
-      const result = await actor.sessions.sideData(current, {
-        type: `session.heartbeat.${command.type}`,
-        input: command.input,
-      });
-      current.assertCurrent();
-      claim.assertCurrent();
-      return result;
-    });
-  }
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
-    return runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        runOpenClawAgentWriteTransaction(
-          ({ db }) => {
-            assertCurrent();
-            return command.type === "persist"
-              ? persistHeartbeatOutcomeInDatabase(db, command.input)
-              : claimHeartbeatOutcomeRowInDatabase(db, command.input);
-          },
-          options,
-          { operationLabel: `heartbeat.outcome.${command.type}` },
-        ),
-      true,
-    );
-  }
   // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const assertQueuedCurrent = () => {
@@ -346,10 +271,6 @@ export async function claimHeartbeatContextForUserRun(
     return undefined;
   }
   const { assertCurrent } = params;
-  const memory = getSessionActorStorageBinding(params);
-  const incognito = memory
-    ? undefined
-    : (params.incognito ?? captureIncognitoSessionOperation(params));
   if (!assertCurrent) {
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }
@@ -357,10 +278,7 @@ export async function claimHeartbeatContextForUserRun(
   const outcome = await claimHeartbeatOutcomeForRun({
     ...params,
     sessionKey: params.sessionKey,
-    incognito,
   });
   assertCurrent();
-  incognito?.authority.assertCurrent();
-  incognito?.actor.assertReadable();
   return buildHeartbeatOutcomeContext(outcome);
 }

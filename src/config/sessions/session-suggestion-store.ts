@@ -26,7 +26,7 @@ export function addSessionSuggestion(
   const options = toDatabaseOptions(resolved);
   const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
-    (database) => addSessionSuggestionInDatabase(database, sessionKey, params, options),
+    (database) => addSessionSuggestionInDatabase(database, sessionKey, params),
     options,
     { operationLabel: "session.suggestion.add" },
   );
@@ -40,7 +40,7 @@ export function claimSessionSuggestionDispatch(
   const options = toDatabaseOptions(resolved);
   const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
-    (database) => claimSessionSuggestionDispatchInDatabase(database, sessionKey, params, options),
+    (database) => claimSessionSuggestionDispatchInDatabase(database, sessionKey, params),
     options,
     { operationLabel: "session.suggestion.claim" },
   );
@@ -54,7 +54,7 @@ export function releaseSessionSuggestionDispatch(
   const options = toDatabaseOptions(resolved);
   const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
-    (database) => releaseSessionSuggestionDispatchInDatabase(database, sessionKey, params, options),
+    (database) => releaseSessionSuggestionDispatchInDatabase(database, sessionKey, params),
     options,
     { operationLabel: "session.suggestion.release" },
   );
@@ -68,7 +68,7 @@ export function finalizeSessionSuggestionClaim(
   const options = toDatabaseOptions(resolved);
   const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
-    (database) => finalizeSessionSuggestionClaimInDatabase(database, sessionKey, params, options),
+    (database) => finalizeSessionSuggestionClaimInDatabase(database, sessionKey, params),
     options,
     { operationLabel: "session.suggestion.finalize" },
   );
