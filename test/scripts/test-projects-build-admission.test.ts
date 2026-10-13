@@ -26,6 +26,7 @@ const commands = vi.hoisted(() => ({
   uiAssets: vi.fn(),
   sourceLoader: vi.fn(),
   runtimeBuildId: "fixture-runtime",
+  runtimeBuildInfoPresent: true,
 }));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mts")>()),
@@ -85,11 +86,12 @@ beforeEach(() => {
   commands.uiAssets.mockReset().mockReturnValue({ kind: "ready", indexPath: "fixture-index" });
   commands.sourceLoader.mockReset().mockResolvedValue(undefined);
   commands.runtimeBuildId = "fixture-runtime";
+  commands.runtimeBuildInfoPresent = true;
   const readFileSync = fs.readFileSync;
   const existsSync = fs.existsSync;
   const buildInfoPath = path.resolve(import.meta.dirname, "../../dist/build-info.json");
   vi.spyOn(fs, "existsSync").mockImplementation((file) =>
-    file === buildInfoPath ? true : existsSync(file),
+    file === buildInfoPath ? commands.runtimeBuildInfoPresent : existsSync(file),
   );
   vi.spyOn(fs, "readFileSync").mockImplementation(
     (file, options?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
@@ -1303,10 +1305,7 @@ describe("test-projects build admission", () => {
     "handles prebuilt Doctor UI with no runtime build-info: %s",
     async (state) => {
       const target = "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts";
-      const existsSync = fs.existsSync;
-      vi.spyOn(fs, "existsSync").mockImplementation((file) =>
-        file === path.resolve("dist/build-info.json") ? false : existsSync(file),
-      );
+      commands.runtimeBuildInfoPresent = false;
       commands.prepareE2e.mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
       if (state === "skip") {
         vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "1");
