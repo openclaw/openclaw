@@ -147,6 +147,19 @@ suite.define(() => {
         });
         const page = await context.newPage();
         const wire = observeBackgroundWorkRpc(page, signal);
+        // The scenario aborts before closing the page, including native test timeouts.
+        const logFailure = () =>
+          console.error(
+            "[background-work-real-gateway] failure",
+            JSON.stringify({
+              stage: proof.stage,
+              gatewayRpc: wire.completed.slice(-32).map(({ request, response }) => ({
+                method: request.method,
+                outcome: response.ok ? "ok" : "error",
+              })),
+            }),
+          );
+        signal.addEventListener("abort", logFailure, { once: true });
         proof.stage = "create parent and pair browser";
         await runCli([
           "gateway",
@@ -193,6 +206,7 @@ suite.define(() => {
           await provider.wait(gate, signal);
         }
         await composer.fill(fixture.draft);
+        proof.stage = "persist parent draft";
         await waitForCommittedComposerDraft(
           page,
           "chat:v3:" + fixture.key + "\u0000agent:main",
@@ -215,11 +229,13 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         const subagents = parent.locator("openclaw-chat-subagents-panel");
         const childOpen = subagents.getByRole("button", { name: fixture.childLabel, exact: true });
+        proof.stage = "wait for child row";
         await childOpen.waitFor();
         const childKey = await childOpen
           .locator("xpath=ancestor::*[@data-session-key]")
           .getAttribute("data-session-key");
         expect(childKey).toMatch(/^agent:main:subagent:/);
+        proof.stage = "wait for child roster response";
         const roster = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -239,7 +255,9 @@ suite.define(() => {
         await capture(page, "desktop-subagents-list", childOpen);
         await childOpen.click();
         const detail = subagents.locator(".chat-subagent-detail");
+        proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
+        proof.stage = "wait for child in-flight history";
         const history = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -253,6 +271,7 @@ suite.define(() => {
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);
         provider.writeChildProgress();
+        proof.stage = "wait for child progress";
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
         const childStop = detail.getByRole("button", { name: "Stop generating", exact: true });
         await childStop.waitFor();
@@ -263,6 +282,7 @@ suite.define(() => {
         proof.stage = "independent process list and retained output";
         await openChatSidePanelType(page, "Processes");
         const processes = parent.locator("openclaw-chat-processes-panel");
+        proof.stage = "wait for process list with retained output";
         const processList = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -450,6 +470,7 @@ suite.define(() => {
         proof.stage = "complete";
         proof.complete = true;
         await saveProof();
+        signal.removeEventListener("abort", logFailure);
       },
     });
   }, 120_000);

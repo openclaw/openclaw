@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -13,10 +12,8 @@ import { PluginInstallAction } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCapabilitySection,
-  renderPluginDeclaredCapabilities,
+  renderPluginContentCapabilities,
   renderPluginMetadata,
-  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
@@ -85,25 +82,13 @@ function CatalogDetailContent(props: {
         <PluginArtTile
           slug={plugin().id}
           name={plugin().catalog.name}
-          options={{
-            get iconUrl() {
-              return packageIcon();
-            },
-            get authorIconUrl() {
-              return authorIcon();
-            },
-            get whiteBackground() {
-              return plugin().catalog.official && Boolean(packageIcon());
-            },
-            get loading() {
-              return Boolean(
-                (plugin().catalog.imageUrl &&
-                  props.state.iconLoading?.(plugin().catalog.imageUrl!)) ||
-                (detail().author?.imageUrl &&
-                  props.state.iconLoading?.(detail().author!.imageUrl!)),
-              );
-            },
-          }}
+          iconUrl={packageIcon()}
+          authorIconUrl={authorIcon()}
+          whiteBackground={plugin().catalog.official && Boolean(packageIcon())}
+          loading={Boolean(
+            (plugin().catalog.imageUrl && props.state.iconLoading?.(plugin().catalog.imageUrl!)) ||
+            (detail().author?.imageUrl && props.state.iconLoading?.(detail().author!.imageUrl!)),
+          )}
         />
       }
       titleAction={
@@ -134,21 +119,15 @@ function CatalogDetailContent(props: {
             busy: props.state.busy,
             onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
           })}
-          {renderPluginDeclaredCapabilities(detail().contracts, detail().uiCapabilities)}
-          {props.state.skillsSection ??
-            renderPluginCapabilitySection(
-              t("pluginsPage.detailTabs.skills"),
-              detail().skills,
-              () => <Icon name="bookOpenText" />,
-            )}
-          {renderPluginCapabilitySection(
-            t("pluginsPage.detailTools"),
-            (detail().contracts?.tools ?? []).map((name) => ({ name })),
-            () => (
-              <Icon name="wrench" />
-            ),
-          )}
-          {renderPluginMcpServers(detail().mcpServers, detail().mcpServerDetails)}
+          {renderPluginContentCapabilities({
+            contracts: detail().contracts,
+            uiCapabilities: detail().uiCapabilities,
+            skillsSection: props.state.skillsSection,
+            skills: detail().skills,
+            tools: (detail().contracts?.tools ?? []).map((name) => ({ name })),
+            mcpServers: detail().mcpServers,
+            mcpServerDetails: detail().mcpServerDetails,
+          })}
         </>
       }
       readme={detail().readme ? renderPluginReadme(detail().readme) : undefined}

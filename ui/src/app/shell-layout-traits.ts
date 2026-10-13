@@ -1,9 +1,9 @@
-import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import {
-  ShellLayoutOwner,
   shellLayoutOwnerForHost,
+  type ShellLayoutOwner,
   type ShellLayoutTraits,
 } from "./shell-layout-owner.ts";
 
@@ -52,10 +52,3 @@ class ShellLayoutTraitsDirective extends AsyncDirective {
 }
 
 export const shellLayoutTraits = directive(ShellLayoutTraitsDirective);
-
-export class ShellLayoutController extends ShellLayoutOwner implements ReactiveController {
-  constructor(host: ReactiveControllerHost) {
-    super(() => host.requestUpdate());
-    host.addController(this);
-  }
-}

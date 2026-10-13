@@ -166,7 +166,6 @@ async function runEntryMain(): Promise<void> {
     !isNodeHostLauncherChild() &&
     (await respawnWithoutOpenClawCompileCacheIfNeeded({
       currentFile: entryFile,
-      installRoot,
       env: startupEnv,
       prepareWriteError: async () => {
         // The child environment was already snapshotted. Load dotenv only to format
@@ -177,6 +176,7 @@ async function runEntryMain(): Promise<void> {
     }));
   if (!waitingForCompileCacheRespawn) {
     enableOpenClawCompileCache({
+      currentFile: entryFile,
       installRoot,
     });
 

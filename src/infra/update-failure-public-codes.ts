@@ -44,6 +44,7 @@ const PUBLIC_CODES = new Set<string>([
   "agent-database-lease-active",
   "global-install-failed",
   "unexpected-error",
+  "host-owned-plugin-link",
   "update-failed",
   "repair-failed",
   "update-recovery-pending",

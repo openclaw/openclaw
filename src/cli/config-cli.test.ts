@@ -1628,7 +1628,7 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       // The real writer's roster-loss guard is exercised by config-cli.integration.test.ts.
       expect(written.agents?.entries).toEqual({ "agent-a": {}, "agent-c": {} });
-      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
+      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli", observe: false });
     });
   });
 

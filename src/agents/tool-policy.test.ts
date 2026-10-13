@@ -23,6 +23,14 @@ import {
 } from "./tool-policy.js";
 
 describe("tool-policy", () => {
+  it("keeps shipped dispatcher policies effective in runtime and sandbox matching", () => {
+    expect(isToolAllowedByPolicyName("dispatch_action", { deny: ["tool_call"] })).toBe(false);
+    expect(isToolAllowedByPolicyName("dispatch_action", { allow: ["tool_call"] })).toBe(true);
+    expect(isRuntimeToolAllowed("dispatch_action", ["tool_call"])).toBe(true);
+    expect(isRuntimeToolAllowed("exec", ["tool_call"])).toBe(false);
+    expect(isToolAllowedByPolicyName("dispatch_action", { deny: ["tool_*"] })).toBe(false);
+    expect(isToolAllowedByPolicyName("dispatch_action", { allow: ["tool_*"] })).toBe(true);
+  });
   it.each([
     { deny: "bundle-mcp", expected: [] },
     { deny: "group:plugins", expected: [] },

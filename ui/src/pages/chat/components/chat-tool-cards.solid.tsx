@@ -1,7 +1,7 @@
 import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { iconData } from "../../../components/icon-data.ts";
@@ -417,6 +417,8 @@ function ToolCardView(props: ToolCardProps) {
     }
   };
   const linkedRow = () => (workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : null);
+  const Row = dynamic(() => (linkedRow() ? "div" : "button"));
+  const toggle = () => props.options.onToggleExpanded(card().id);
   const rowContent = () => (
     <>
       <span
@@ -470,32 +472,22 @@ function ToolCardView(props: ToolCardProps) {
             { "is-open": props.options.expanded },
           ]}
         >
-          <Show
-            when={linkedRow()}
-            fallback={
-              <button
-                class={[
-                  "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
-                  { "chat-tool-row--running": running() },
-                ]}
-                type="button"
-                aria-expanded={props.options.expanded ? "true" : "false"}
-                onPointerEnter={syncToolDisclosureOverflow}
-                onFocus={syncToolDisclosureOverflow}
-                onClick={() => props.options.onToggleExpanded(card().id)}
-              >
-                {rowContent()}
-              </button>
-            }
+          <Row
+            class={[
+              "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
+              {
+                "chat-tool-row--running": running(),
+                [`chat-tool-row--${linkedRow()}`]: Boolean(linkedRow()),
+              },
+            ]}
+            type={linkedRow() ? undefined : "button"}
+            aria-expanded={linkedRow() ? undefined : props.options.expanded ? "true" : "false"}
+            onPointerEnter={syncToolDisclosureOverflow}
+            onFocus={linkedRow() ? undefined : syncToolDisclosureOverflow}
+            onFocusIn={linkedRow() ? syncToolDisclosureOverflow : undefined}
+            onClick={linkedRow() ? undefined : toggle}
           >
-            <div
-              class={[
-                `chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--${linkedRow()}`,
-                { "chat-tool-row--running": running() },
-              ]}
-              onPointerEnter={syncToolDisclosureOverflow}
-              onFocusIn={syncToolDisclosureOverflow}
-            >
+            <Show when={linkedRow()}>
               <button
                 class="chat-tool-row__toggle"
                 type="button"
@@ -505,11 +497,11 @@ function ToolCardView(props: ToolCardProps) {
                     ? `${display().label} ${subagent()!.label}`
                     : resolveToolRowText(card(), view(), outcome())
                 }
-                onClick={() => props.options.onToggleExpanded(card().id)}
+                onClick={toggle}
               />
-              {rowContent()}
-            </div>
-          </Show>
+            </Show>
+            {rowContent()}
+          </Row>
           <Show when={props.options.expanded}>
             <Show
               when={props.hasChildren}

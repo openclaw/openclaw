@@ -32,6 +32,7 @@ import type {
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
   SessionTranscriptWorkerRequest,
+  SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -238,7 +239,11 @@ export function retainSessionHistoryWorkerDatabase(
             ) {
               knownSource = true;
             }
-            const value = receive(received);
+            // SAFETY: The pool pairs this reply with the exact prepared request above.
+            const paired = received as SessionTranscriptWorkerValues[ReturnType<
+              typeof prepare
+            >["kind"]];
+            const value = receive(paired);
             if (reply.ok && reply.closedHistoryDatabase) {
               await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
             }

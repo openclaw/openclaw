@@ -1108,7 +1108,8 @@ openclaw-settings-save-indicator:empty {
   height: 20px;
 }
 
-.sidebar-shell__content {
+.sidebar-shell__content,
+.sidebar-shell__body {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -1123,10 +1124,6 @@ openclaw-settings-save-indicator:empty {
     black calc(100% - 32px), rgb(0 0 0 / 88%) calc(100% - 24px), rgb(0 0 0 / 50%) calc(100% - 16px),
     rgb(0 0 0 / 12%) calc(100% - 8px), transparent calc(100% - 2px);
 
-  min-height: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
   /* Keep the pre-unification horizontal clip: with only overflow-y set,
      overflow-x would compute to auto and overwide rows would mint a
      horizontal scrollbar beside the divider. */
@@ -1728,7 +1725,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-catalog-host__label,
-.session-menu__text {
+.session-menu__text,
+.sidebar-session-catalog-project__label {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -1803,11 +1801,6 @@ openclaw-settings-save-indicator:empty {
    just another session. Type carries the whole split because the head color
    stays near `--text` for readability; case stays as authored (project names). */
 .sidebar-session-catalog-project__label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: calc(12px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.03em;
@@ -3620,19 +3613,17 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 /* One lifecycle label is shared by the identity subtitle, Settings, and collapsed navigation. */
-.gateway-status-tooltip {
+.gateway-status-tooltip,
+.gateway-status {
   display: inline-flex;
   min-width: 0;
   max-width: 100%;
 }
 
 .gateway-status {
-  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px 7px;
-  min-width: 0;
-  max-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;

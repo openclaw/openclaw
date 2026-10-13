@@ -356,8 +356,8 @@ it("eventually fills legacy titles and previews without waiting during startup o
       );
       expect(replacement).toMatchObject({
         sessionId: "replacement",
-        lastMessagePreview: undefined,
       });
+      expect(replacement?.lastMessagePreview).toBeUndefined();
     } finally {
       releaseRepaired();
       repairedProjection.dispose();
