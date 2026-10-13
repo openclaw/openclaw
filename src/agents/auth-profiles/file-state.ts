@@ -23,11 +23,13 @@ type FileChange = {
   directory: string;
   identityChanged: boolean;
   sourcesChanged: boolean;
+  contentsChanged: boolean;
   createdPaths: readonly string[];
 };
 type DirectoryState = {
   identities: Map<string, DatabasePathIdentity | undefined>;
   presence: Map<string, boolean>;
+  sourceVersions: Map<string, string | undefined>;
   observation: { close(): void };
   refresh?: Promise<void>;
   dirty: boolean;
@@ -37,6 +39,38 @@ const directories = new Map<string, DirectoryState>();
 type FileChangeListener = (change: FileChange) => void | Promise<void>;
 const listeners = new Set<FileChangeListener>();
 const legacyNames = new Set(["auth-profiles.json", "auth-state.json", "auth.json", "oauth.json"]);
+
+function fileVersion(file: fs.BigIntStats | null | undefined): string | undefined {
+  return file === null
+    ? "missing"
+    : file && `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;
+}
+
+function sourceVersion(
+  database: fs.BigIntStats | null | undefined,
+  wal: fs.BigIntStats | null | undefined,
+): string | undefined {
+  const databaseVersion = fileVersion(database);
+  const walVersion = fileVersion(wal);
+  return databaseVersion !== undefined && walVersion !== undefined
+    ? `${databaseVersion}/${walVersion}`
+    : undefined;
+}
+
+function missingFile(error: unknown): null | undefined {
+  return hasErrnoCode(error, "ENOENT") ? null : undefined;
+}
+
+function initialSourceVersion(databasePath: string, canonicalPath: string): string | undefined {
+  const inspect = (pathname: string) => {
+    try {
+      return fs.statSync(pathname, { bigint: true });
+    } catch (error) {
+      return missingFile(error);
+    }
+  };
+  return sourceVersion(inspect(databasePath), inspect(`${canonicalPath}-wal`));
+}
 
 function retireDirectory(directory: string, state: DirectoryState): void {
   state.observation.close();
@@ -54,6 +88,7 @@ registerAgentDatabaseReaderCloser((candidates, retainedPaths) => {
         )
       ) {
         state.identities.delete(databasePath);
+        state.sourceVersions.delete(databasePath);
       }
     }
     if (
@@ -86,18 +121,22 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
         let identityChanged = false;
         const createdPaths: string[] = [];
         let sourcesChanged = false;
+        let contentsChanged = false;
         for (const [databasePath, previous] of state.identities) {
-          const current = await stat(databasePath, { bigint: true })
-            .then((file) =>
-              file.isFile() &&
-              previous?.key === `file:${databaseFileIdentityKey(file)}` &&
-              previous.birthtime === readDatabaseIdentityBirthtime(file)
+          const [file, wal] = await Promise.all([
+            stat(databasePath, { bigint: true }).catch(missingFile),
+            stat(`${previous?.canonicalPath ?? databasePath}-wal`, { bigint: true }).catch(
+              missingFile,
+            ),
+          ]);
+          const current =
+            file === undefined
+              ? undefined
+              : file?.isFile() &&
+                  previous?.key === `file:${databaseFileIdentityKey(file)}` &&
+                  previous.birthtime === readDatabaseIdentityBirthtime(file)
                 ? previous
-                : readDatabasePathIdentity(databasePath),
-            )
-            .catch((error: unknown) =>
-              hasErrnoCode(error, "ENOENT") ? readDatabasePathIdentity(databasePath) : undefined,
-            );
+                : await readDatabasePathIdentity(databasePath).catch(() => undefined);
           if (directories.get(directory) !== state) {
             return;
           }
@@ -105,6 +144,10 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
             state.dirty = true;
             continue;
           }
+          const version = sourceVersion(file, wal);
+          contentsChanged ||=
+            version === undefined || state.sourceVersions.get(databasePath) !== version;
+          state.sourceVersions.set(databasePath, version);
           if (current?.key !== previous?.key || current?.birthtime !== previous?.birthtime) {
             if (previous?.key.startsWith("path:") && current?.key.startsWith("file:")) {
               createdPaths.push(databasePath);
@@ -131,7 +174,13 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
           await Promise.all(
             Array.from(listeners, (listener) =>
               Promise.resolve(
-                listener({ directory, identityChanged, sourcesChanged, createdPaths }),
+                listener({
+                  directory,
+                  identityChanged,
+                  sourcesChanged,
+                  contentsChanged,
+                  createdPaths,
+                }),
               ),
             ),
           );
@@ -153,6 +202,7 @@ function directoryState(directory: string): DirectoryState {
   const state: DirectoryState = {
     identities,
     presence: new Map(),
+    sourceVersions: new Map(),
     dirty: false,
     observation: observeOwnedDirectory(directory, (filename) => {
       if (
@@ -178,7 +228,12 @@ export function readAuthProfileDatabaseIdentity(
 ): DatabasePathIdentity | undefined {
   const state = directoryState(path.dirname(databasePath));
   if (!state.identities.has(databasePath)) {
-    state.identities.set(databasePath, inspectDatabasePathIdentitySync(databasePath));
+    const identity = inspectDatabasePathIdentitySync(databasePath);
+    state.identities.set(databasePath, identity);
+    state.sourceVersions.set(
+      databasePath,
+      initialSourceVersion(databasePath, identity?.canonicalPath ?? databasePath),
+    );
   }
   return state.identities.get(databasePath);
 }

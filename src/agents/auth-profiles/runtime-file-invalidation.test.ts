@@ -15,6 +15,7 @@ const observation = vi.hoisted(() => ({
       directory: string;
       identityChanged: boolean;
       sourcesChanged: boolean;
+      contentsChanged: boolean;
       createdPaths: readonly string[];
     }) => void | Promise<void>
   >(),
@@ -33,6 +34,7 @@ vi.mock("./file-state.js", () => ({
       directory: string;
       identityChanged: boolean;
       sourcesChanged: boolean;
+      contentsChanged: boolean;
       createdPaths: readonly string[];
     }) => void | Promise<void>,
   ) => {
@@ -63,6 +65,7 @@ function observeSharedReplacement(): void {
       directory: path.dirname(sharedDatabase),
       identityChanged: true,
       sourcesChanged: false,
+      contentsChanged: true,
       createdPaths: [],
     });
   }
@@ -92,6 +95,7 @@ function observeSharedRowChange(): Promise<void[]> {
           directory: path.dirname(sharedDatabase),
           identityChanged: false,
           sourcesChanged: false,
+          contentsChanged: true,
           createdPaths: [],
         }),
       ),
@@ -233,6 +237,7 @@ it.each([false, true])(
             directory: path.dirname(sharedDatabase),
             identityChanged: false,
             sourcesChanged: false,
+            contentsChanged: true,
             createdPaths: [sharedDatabase],
           }),
         ),

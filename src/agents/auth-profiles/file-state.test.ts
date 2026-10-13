@@ -16,13 +16,47 @@ import {
   refreshAuthProfileFileState,
   registerAuthProfileFileChangeListener,
 } from "./file-state.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  runtimeAuthProfileRowsCache,
+} from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  runtimeAuthProfileRowsCache.clear();
   closeAuthProfileFileState();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("keeps unchanged fallback observations off row workers and detects WAL-only writes", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.spyOn(fs, "watch").mockImplementation(() => {
+    throw new Error("synthetic unavailable watcher");
+  });
+  const directory = temporary.make("auth-file-unchanged-source-");
+  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  fs.writeFileSync(databasePath, "synthetic database");
+  const captured = captureAuthProfileFileIdentity(databasePath);
+  const refresh = vi.fn(async () => ({
+    store: { status: "missing" as const, reason: "row" as const },
+    state: { status: "missing" as const, reason: "row" as const },
+    cacheable: false,
+  }));
+  runtimeAuthProfileRowsCache.recordSource(databasePath, "fixture", null, refresh);
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  await refreshAuthProfileFileState();
+  expect(refresh).not.toHaveBeenCalled();
+
+  fs.writeFileSync(`${databasePath}-wal`, "externally committed synthetic rows");
+  await refreshAuthProfileFileState();
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(() => captured.assertCurrent()).not.toThrow();
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  await refreshAuthProfileFileState();
+  expect(refresh).toHaveBeenCalledOnce();
 });
 
 it("rejects a swapped database before a privileged write even before observation runs", async () => {

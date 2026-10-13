@@ -115,8 +115,12 @@ export function createRuntimeAuthProfileFileObservation({
   }
 
   registerAuthProfileFileChangeListener(
-    ({ directory, identityChanged, sourcesChanged, createdPaths }) => {
+    ({ directory, identityChanged, sourcesChanged, contentsChanged, createdPaths }) => {
       const unprovenCreation = createdPaths.some((pathname) => !rowsCache.hasSource(pathname));
+      // Coarse observation checks file facts without reopening unchanged auth sources.
+      if (!identityChanged && !sourcesChanged && !contentsChanged && !unprovenCreation) {
+        return;
+      }
       if (identityChanged || sourcesChanged || unprovenCreation) {
         const paths = [...snapshots].flatMap(([key, entry]) => {
           const candidates = entry.legacyCandidates;
