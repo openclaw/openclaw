@@ -17,7 +17,7 @@ import type {
 } from "./service-child-protocol.js";
 
 describe.skipIf(process.platform === "win32")("POSIX anchor input lifetime", () => {
-  it.each(["host-loss", "end-before-eof", "end-after-eof", "default-eof"] as const)(
+  it.for(["host-loss", "end-before-eof", "end-after-eof", "default-eof"] as const)(
     "%s distinguishes protocol EOF from host loss",
     async (mode, context) => {
       const generation = randomUUID();

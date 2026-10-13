@@ -92,7 +92,10 @@ export async function createClaudeCliTransport(params: {
       // Force the owned tree while its root exists and await taskkill's completion.
       forcedExit = true;
       child.kill("SIGKILL");
-      child.stdin?.end();
+      void child.waitForExtinction?.().then(
+        () => child.stdin?.end(),
+        () => {},
+      );
     } else {
       // On POSIX the private process group survives root exit. Let native flush on EOF first.
       child.stdin?.end();
