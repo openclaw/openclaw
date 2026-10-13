@@ -240,7 +240,7 @@ export function readOwnedSessionTranscriptEntry(
   const target = binding.actor.target;
   const entry =
     target.database.kind === "file"
-      ? readSessionActorEntryFacts({ ...target, database: target.database })?.entry
+      ? readSessionActorEntryFacts({ ...target, database: target.database }, [])?.entry
       : binding.actor.snapshot({ assertCurrent, authorize: assertCurrent })?.entry;
   return (
     entry && {
