@@ -113,6 +113,13 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Agent read-only opens reuse the physical owner's admitted schema and ownership
+proof. Tracked DDL or file replacement requires fresh admission; the durable
+quarantine guard still runs before opening. Lease admission marks the integrity
+receipt dirty once. A healthy close without a completed checkpoint leaves that
+receipt dirty, while failed disposal revokes it and the final checkpointed closer
+can certify it. These changes do not alter database formats or update behavior.
+
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader
 and its prepared statements, with committed-write invalidation and physical-file
@@ -3993,9 +4000,8 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
-Memory source-state reads, cache pruning, standing-intent operations, and session
-collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy. Small
+Memory cache pruning, standing-intent operations, and session collaboration
+writes without a preparation callback use that single-command path. Memory bindings reuse the canonical connection's installed policy. Small
 source replacements and embedding-cache writes carry a bounded inline batch in
 one request through the same tombstone, capacity, and commit checks.
 Larger inputs retain bounded fragment messages and stage one publication in worker
@@ -4151,9 +4157,11 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, checking that
-its handle is open at admission. Source snapshots use that same publication owner;
-read-only diagnostics use the retrieval worker. Shadow session publication prepares
+Published source hashes, chunks, embedding-cache rows, session tombstones, and
+index/source snapshots use the existing retrieval worker's read-only connection.
+They retain their physical source and caller lifetime without reserving the agent
+writer FIFO. Private shadow databases keep their publication worker and private
+queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
 inside its committing transaction. The shadow's empty tombstone table never grants
@@ -5189,6 +5197,17 @@ private rows retain facts only for the request's synchronous publication frame.
 Schemas, stored values, permissions, retention, and update behavior are unchanged.
 
 ## Migrate a caller
+
+Session node-artifact copies merge participant aggregates in their existing write
+transaction. Each upsert consumes the current destination row without a separate
+read: aliases in one store add their contributions, while retried cross-store
+repairs retain the largest count. Unknown first-input times remain unknown and
+the latest known input time survives. Ordinary durable entry creation,
+replacement, and reclamation use the existing entry or reclamation worker;
+shared kernels retain native receivers for incognito, exclusive maintenance,
+and released synchronous entry APIs. Opaque deletion callbacks are adapted to
+worker commit finalizers and do not force durable artifact SQL onto the host.
+This changes no schema, stored format, retention, or update behavior.
 
 Manual `sessions.compact` requests with `maxLines` retain their selected physical
 store and prepared caller and sharing authority through cold restoration. The

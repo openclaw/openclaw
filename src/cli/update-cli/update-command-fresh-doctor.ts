@@ -12,7 +12,10 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
@@ -604,6 +607,26 @@ export async function completePostCorePluginUpdate(
             status: "warning",
             reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
             warnings: [...(pluginUpdate.warnings ?? []), warning],
+          };
+        }
+        const pending = await readDeferredPluginMigrationsAsync();
+        assertCurrent();
+        if (pending.length > 0) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            warnings: [
+              ...(pluginUpdate.warnings ?? []),
+              ...pending.map((migration) => ({
+                pluginId: migration.pluginId,
+                reason: "doctor-advisory",
+                // This is the final outcome, so do not tell operators to wait for this update.
+                message: formatDeferredPluginMigration(migration, {}),
+                guidance: [
+                  `Run "${migration.command}" to finish the plugin data/settings upgrade.`,
+                ],
+              })),
+            ],
           };
         }
       }

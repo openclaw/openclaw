@@ -16,6 +16,21 @@ prompt caches to reuse that prefix across equivalent subagent spawns while
 preserving earlier message bytes on follow-up turns. Cache reuse still depends
 on the model template, available cache slots, and unchanged instructions/tools.
 
+### Cloud quota in `/status`
+
+Ollama 0.40.1 and later can proxy `GET /api/balance` through a signed-in local
+server. When the `ollama` provider has a configured local `apiKey: "ollama-local"`,
+OpenClaw includes its balance in chat `/status` and `openclaw status --usage`. Legacy
+plans show session and weekly usage with reset times; current plans show the
+included balance and its period reset. Purchased credits appear separately.
+
+The local server must be signed in to Ollama Cloud. Local-only models have no
+cloud quota. Unsigned-in servers and servers without the balance endpoint are
+quietly omitted from usage reports. OpenClaw fetches the balance only during the
+existing usage refresh; it does not poll separately or need your Ollama web
+session cookie. If `plugins.allow` is set, include `ollama` so its usage hook can load.
+Other balance failures include guidance for checking the server or its access permissions.
+
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">
     <Warning>

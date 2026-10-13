@@ -203,15 +203,13 @@ describe("memory preparation shutdown", () => {
     try {
       await Promise.race([entered.promise, searching]);
       expect(acquisitions).toBe(2);
-      expect(events).toEqual(["retained", "publication", "publication-closed", "lock-released-1"]);
+      expect(events).toEqual(["retained", "lock-released-1"]);
       resume.resolve();
       expect(await searching).toEqual(
         expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
       );
       expect(events).toEqual([
         "retained",
-        "publication",
-        "publication-closed",
         "lock-released-1",
         "publication",
         "publication-closed",

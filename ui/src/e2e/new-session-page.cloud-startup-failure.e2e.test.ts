@@ -325,11 +325,13 @@ suite.define(() => {
               const composerDisabled = await page
                 .locator(".agent-chat__composer-combobox textarea")
                 .isDisabled();
-              const send = pane.locator(".chat-send-btn--send");
-              await expect
-                .poll(() => send.getAttribute("aria-label"))
-                .toBe("Finishing connection recovery. Try sending again when it is ready.");
-              expect(await send.isDisabled()).toBe(true);
+              const recoveringSend = pane.getByRole("button", {
+                name: "Finishing connection recovery. Try sending again when it is ready.",
+                exact: true,
+              });
+              await recoveringSend.waitFor();
+              expect(await recoveringSend.isDisabled()).toBe(true);
+              expect(await recoveringSend.getAttribute("aria-busy")).toBe("true");
               expect(await pane.locator(".agent-chat__composer-status-band").count()).toBe(0);
               await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
               expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);

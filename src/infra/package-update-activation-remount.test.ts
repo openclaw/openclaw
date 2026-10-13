@@ -211,6 +211,22 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow(
         "does not match its installation",
       );
+      const identities: [string, string, string][] = [
+        ["parent", f.historical.parentIdentity, path.dirname(f.anchor)],
+        [
+          "control dir",
+          f.historical.journalParentIdentity,
+          resolvePackageActivationControl(f.anchor),
+        ],
+        ["journal", f.historical.journalIdentity, f.journalPath],
+      ];
+      const bindings = identities.map(([name, recorded, file]) => {
+        const current = fs.lstatSync(file, { bigint: true });
+        return `${name} (recorded ${recorded}; current ${current.dev}:${current.ino}; device number changed only)`;
+      });
+      expect(() => readPackageActivationReceipt(f.packageRoot)).toThrow(
+        `Package publication journal does not match its installation: ${bindings.join("; ")}. Run openclaw update repair.`,
+      );
       await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow(
         "does not match its installation",
       );
