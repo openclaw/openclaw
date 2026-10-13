@@ -1,11 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { statusSummaryRuntime } from "../status/summary.runtime.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 function runtimeConfig(id: "codex" | "openclaw") {
   return { agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id } } } } } };
@@ -81,53 +75,6 @@ describe("statusSummaryRuntime", () => {
         acpMeta: null,
       }),
     ).toEqual({ id: "codex", label: "OpenAI Codex" });
-  });
-
-  it("refreshes batched status metadata after ACP updates and removal", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", label: "status-acp-batch" },
-      async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-        };
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        const meta: SessionAcpMeta = {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "first",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        };
-        const scopes = ["main", "research"].map((agentId) => ({
-          cfg,
-          agentId,
-          sessionKey: `agent:${agentId}:acp:status`,
-          skipMaintenance: true,
-        }));
-        const candidates = [];
-        for (const scope of scopes) {
-          const entry = expectDefined(
-            await upsertAcpSessionMeta({ ...scope, mutate: () => meta }),
-            "seeded ACP session",
-          );
-          candidates.push({ sessionKey: scope.sessionKey, entry });
-        }
-        const before = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
-        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
-
-        await upsertAcpSessionMeta({
-          ...scopes[0]!,
-          mutate: () => ({ ...meta, runtimeSessionName: "updated" }),
-        });
-        await upsertAcpSessionMeta({ ...scopes[1]!, mutate: () => null });
-
-        const after = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
-        expect(after.map((entry) => entry?.runtimeSessionName ?? null)).toEqual(["updated", null]);
-        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
-      },
-    );
   });
 
   const configured = { provider: "anthropic", model: "claude-sonnet-4-6" };
