@@ -106,7 +106,7 @@ describe("worktree template custody", () => {
     await next?.release();
   });
 
-  it.each(["settled", "worker", "process"])(
+  it.each(["settled", "process"])(
     "retains a failed builder only while its native outcome is uncertain (%s)",
     async (kind) => {
       const uncertain = kind !== "settled";

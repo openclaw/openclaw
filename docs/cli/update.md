@@ -812,6 +812,9 @@ print progress steps or run the progress observer. Progress observes committed
 ledger rows through a reusable read-only worker connection instead of repeatedly
 copying shared state. This applies to updates launched by the fixed updater; a
 published older updater keeps its own progress reader until it is replaced.
+State inspection and snapshot progress is advisory: a temporarily full progress
+pipe can omit an update without interrupting the underlying work. Other output
+errors still fail the affected operation and retain its diagnostic report.
 
 When no update is active, `openclaw update status` labels the saved outcome
 `Last recorded update` with the recorded start time, so historical results are

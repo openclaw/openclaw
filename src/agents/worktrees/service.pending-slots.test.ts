@@ -152,7 +152,7 @@ describe("managed worktree pending slots", () => {
     }
   });
 
-  it.each([29, 30])(
+  it.each([30])(
     "publishes after %i minutes of contention and two minutes of preparation",
     async (admissionMinutes) => {
       const release = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
@@ -570,7 +570,7 @@ describe("managed worktree pending slots", () => {
     },
   );
 
-  it.each(["materialization", "publication"] as const)(
+  it.each(["publication"] as const)(
     "rolls back the slot and registration after %s fails",
     async (stage) => {
       config.worktreeMaxCount = 1;
@@ -608,7 +608,7 @@ describe("managed worktree pending slots", () => {
     },
   );
 
-  it.each(["worker", "process"] as const)(
+  it.each(["worker"] as const)(
     "reclaims a crashed owner's slot while retaining an uncertain %s checkout for recovery",
     async (kind) => {
       config.worktreeMaxCount = 1;

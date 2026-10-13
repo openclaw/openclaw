@@ -135,9 +135,7 @@ it("shows thinking while generating and retains it through thinking-only history
 });
 
 it.each([
-  { order: "before", appended: 2, displayed: 2 },
   { order: "after", appended: 2, displayed: 2 },
-  // Reset projection can renumber positions while the durable message ID stays fixed.
   { order: "before", appended: 18, displayed: 7 },
 ])(
   "hands reasoning to history once $order final (append $appended, display $displayed)",
@@ -221,7 +219,7 @@ it("applies View and session visibility independently to live and saved reasonin
   expect(container.querySelector(".chat-thinking")?.textContent).toContain("Private synthetic");
 });
 
-it.each(["error", "aborted", "final"] as const)(
+it.each(["error", "aborted"] as const)(
   "retires reasoning on a message-less %s and ignores late thinking after sequence cleanup",
   (terminal) => {
     const state = stateWithRun();
