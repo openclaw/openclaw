@@ -19,11 +19,11 @@ import {
   captureSecretStoreExpiryCutoffs,
   purgeExpiredSecretStoreEntriesInDatabase,
 } from "./secret-store-expiry.kernel.js";
+import { listHiddenGitHubSecretRecords } from "./secret-store-hidden-github.js";
 import {
   consumeGitHubSetupHandoff,
   deleteHiddenGitHubSecretRecord,
   deleteSecretStoreEntry,
-  listHiddenGitHubSecretRecords,
   listSecretStoreEntries,
   purgeExpiredSecretStoreEntries as purgeStoredSecrets,
   readHiddenGitHubSecretRecord,
