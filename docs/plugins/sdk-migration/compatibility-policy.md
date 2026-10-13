@@ -77,8 +77,8 @@ targets with their original transaction ordering. One deprecation warning is
 emitted per plugin for this family. Incognito and actor-bound targets reject the
 old form with an actionable replacement error. The old exports and fields remain
 available to compile existing plugins and will be removed at the **next Plugin SDK
-major**. This target-specific deprecation does not activate actor routing for
-ordinary incognito sessions or change stored data, schema, retention, or updates.
+major**. Incognito targets use the memory actor. Durable stored data, schema,
+retention, and update behavior are unchanged.
 
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
 They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
@@ -166,7 +166,7 @@ worker-environment creation contract shipped in OpenClaw 2026.9.5. When
 `context.workerEnvironmentService` is available, its `create` method accepts
 positional arguments in this order: `profileId`, `idempotencyKey`, `machineClass?`,
 `executionMode?`, `projectPath?`, `signal?`, `os?`, and `runSetupScript?`.
-Idempotent retries and caller cancellation keep their existing behavior across
+Retries that avoid duplicate effects and caller cancellation keep their existing behavior across
 host upgrades. Changing this contract requires an explicitly approved SDK
 migration.
 
@@ -237,7 +237,7 @@ The async API and bundled channel callers read current allowlist rows in the
 shared-state worker. Account normalization, entry ordering, and ingress policy
 gates are unchanged. A missing store returns an empty allowlist without creating
 storage; boot and Doctor own initialization and migrations. Read failures
-propagate to the caller, and ingress retains its fail-closed handling. Prepared
+propagate to the caller, and ingress still blocks requests on read failure. Prepared
 entries do not replace current message or channel authority. No schema, retention,
 or update migration is required, and no runtime warning is emitted.
 
@@ -358,7 +358,7 @@ are unchanged.
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
-`openclaw/plugin-sdk/agent-harness-runtime` requires the canonical `terminal`
+`openclaw/plugin-sdk/agent-harness-runtime` requires the current `terminal`
 field. Source written against the 2026.7 direct alias must migrate when it
 constructs results with legacy fields such as `aborted`, `timedOut`, and
 `promptError`; retaining the alias name does not make those old constructors
@@ -366,7 +366,7 @@ source-compatible.
 
 Use `AgentHarnessAttemptResult` from the same subpath while migrating a
 legacy result producer. That union accepts both the legacy fields and the
-canonical result, and the host lifecycle normalizes legacy results before
+current-format result, and the host lifecycle normalizes legacy results before
 core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
@@ -442,9 +442,10 @@ one warning per plugin and session-persistence family per process.
 Use the [awaited session persistence migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
 for the complete method mapping, extension calls, and versioned provider replay
 types. Bundled code uses the awaited contracts. File-backed writes reuse the
-canonical worker writer; incognito retains its process-local owner until its
-separate cutover. Schemas, persisted bytes, and supported update paths are
-unchanged. Removal still requires explicit breaking-release approval.
+shared worker writer; incognito uses the session actor's memory backend.
+Synchronous incognito persistence refuses access and names its awaited
+replacement. Schemas, persisted bytes, and supported update paths are unchanged.
+Removal still requires explicit breaking-release approval.
 
 ### Reply run-start transcript facts
 
@@ -622,21 +623,21 @@ October 1, 2026. Await `loadArchivedSessionsAsync` and
 `resolveMemorySessionTargetsAsync` from the same subpath. The replacements
 run durable archive and selector reads in the retained session worker and
 preserve selection, ordering, missing-store behavior, and result shapes.
-Process-held incognito stores keep their native owner.
+Incognito reads use committed facts from the session actor's memory backend.
 
 Bundled memory search and memory-forget use the awaited readers. The synchronous
-exports retain their signatures and behavior for existing consumers until removal
+exports retain their durable signatures and behavior for existing consumers until removal
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
 compatibility registry, and a runtime warning once per plugin and reader family.
 The retained synchronous selector can still query participant rows on the calling
 thread; its awaited replacement keeps that work in the session worker.
 
-The prepared incognito actor adapters remain inactive for ordinary unbound
-calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and
-selector reads retain that actor; a selected missing actor returns the normal
-missing result, while a retained ended actor rejects. Archive discovery returns
-no durable artifacts for that actor. Private transcripts are not added to the
-durable Memory ingestion corpus.
+Memory entry, reset-cutoff, corpus, and selector reads capture the incognito
+memory namespace, including calls without an explicit actor binding. Missing
+state returns the normal missing result without creating a session; a closed
+handle cannot reopen it. Archive discovery returns no durable artifacts for
+incognito. Private transcripts are not added to the durable Memory ingestion
+corpus.
 
 The synchronous `loadMemorySessionMetadata` helper is deprecated. Await
 `loadMemorySessionMetadataAsync` and `loadMemorySessionMetadataBatchAsync`
@@ -651,13 +652,13 @@ on main-thread use. Worker-local statistics kernels remain synchronous.
 Use `statSessionEntry` for awaited file or transcript metadata. The deprecated
 `statSessionEntrySync` warns when it reads SQLite on the host; supplying prepared
 transcript statistics remains a synchronous projection without database access.
-Synchronous archive and selector readers retain their native/offline contracts. Explicitly
-bound actor calls refuse synchronous database access with
+Synchronous archive and selector readers retain their durable/offline contracts.
+Incognito targets refuse synchronous storage access with
 `IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
 `loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
-Worker snapshot kernels and supplied transcript statistics remain synchronous;
-this preparation does not change production incognito selection or the
-released synchronous full-row session getter.
+Worker snapshot kernels and supplied transcript statistics remain synchronous.
+The released durable synchronous full-row session getter retains its separate
+compatibility contract.
 
 ### Memory read missing results
 
@@ -746,7 +747,7 @@ owner-specific step beyond Doctor. Its `assertSupportedState(input, sources?)` o
 the same check at runtime admission; a caller with an already selected file may
 pass that path explicitly. Keep account and workspace discovery with the plugin.
 
-Use `phase: "after-session-repair"` when a migration needs canonical session
+Use `phase: "after-session-repair"` when a migration needs repaired session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
 them after session repair under SQLite maintenance ownership. The context
 provides bounded `readPluginStateEntriesInKeyRange` and
@@ -784,7 +785,7 @@ reader sweep finds no remaining users.
 
 ### AuthStorage SQLite migration
 
-`AuthStorage.forAgent(agentDir)` is the canonical constructor for host session
+`AuthStorage.forAgent(agentDir)` is the standard constructor for host session
 storage. It persists provider-default credentials through the agent's
 `openclaw-agent.sqlite` auth-profile rows and never creates `auth.json`.
 Harness plugins receive the prepared storage instance as `params.authStorage`.
@@ -822,7 +823,7 @@ while those migrations remain unverified; their original dates are unchanged.
 | `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation    | Every enumerated alias has zero bundled and published readers.                                                       |
 | `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`         | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
 | `official-plugin-export-aliases`                  | Presentation renderers and host-owned Discord timeout behavior    | Minimum supported official plugin packages no longer import the aliases.                                             |
-| `memory-host-compatibility-aliases`               | Canonical memory cache/FTS tables                                 | Supported artifacts no longer pass table overrides, and legacy table data remains preserved.                         |
+| `memory-host-compatibility-aliases`               | Current memory cache/FTS tables                                   | Supported artifacts no longer pass table overrides, and legacy table data remains preserved.                         |
 | `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                | All enumerated flat API/runtime aliases have no readers.                                                             |
 | `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
 | `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                        | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
@@ -990,7 +991,7 @@ clean published-plugin artifact sweep. The record is now `removal-pending`
 with the original date preserved until that proof is complete.
 
 The unused `buildChannelTurnMediaPayload` alias has been removed from
-`openclaw/plugin-sdk/channel-inbound`. Its canonical
+`openclaw/plugin-sdk/channel-inbound`. Its primary
 `buildChannelInboundMediaPayload` export remains available for the compatibility
 window above. New ingress code should pass ordered media facts directly.
 

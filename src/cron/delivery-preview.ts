@@ -155,7 +155,7 @@ async function resolvePreparedCronDeliveryPreview(
     const detail =
       plan.mode === "none"
         ? `message tool target unresolved: ${resolved.error.message}`
-        : `${requestedChannel === "last" ? "last -> no route, will fail-closed: " : ""}${resolved.error.message}`;
+        : `${requestedChannel === "last" ? "last -> no route, will be blocked: " : ""}${resolved.error.message}`;
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:

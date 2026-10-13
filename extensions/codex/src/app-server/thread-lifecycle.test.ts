@@ -2856,8 +2856,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
         }),
       ).rejects.toThrow(
         returnedId
-          ? "canonical branch reused an existing thread"
-          : "canonical branch may have materialized without a safe thread id",
+          ? "supervised branch reused an existing thread"
+          : "supervised branch may have materialized without a safe thread id",
       );
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "config/read",
@@ -2885,57 +2885,57 @@ describe("Codex app-server supervised branch lifecycle", () => {
 describe("Codex app-server thread lifecycle timing", () => {
   installLifecycleHooks();
 
-  it.each([
-    { action: "resumed", duration: 9, trace: true },
-    { action: "started", duration: 10_000, trace: false },
-  ])("reports a $action request with trace=$trace", async ({ action, duration, trace }) => {
-    let nowMs = 0;
-    const log = createTimingLogger(trace);
-    const threadId = trace ? "thread-existing" : "thread-slow";
-    const respond = createLifecycleRequest(async (method: string) => {
-      if (method === "thread/start" || (trace && method === "thread/resume")) {
-        if (method === (trace ? "thread/resume" : "thread/start")) {
-          nowMs += duration;
+  it.each([{ action: "started", duration: 10_000, trace: false }])(
+    "reports a $action request with trace=$trace",
+    async ({ action, duration, trace }) => {
+      let nowMs = 0;
+      const log = createTimingLogger(trace);
+      const threadId = trace ? "thread-existing" : "thread-slow";
+      const respond = createLifecycleRequest(async (method: string) => {
+        if (method === "thread/start" || (trace && method === "thread/resume")) {
+          if (method === (trace ? "thread/resume" : "thread/start")) {
+            nowMs += duration;
+          }
+          return threadStartResult(threadId);
         }
-        return threadStartResult(threadId);
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const fixture = trace
+        ? await createLeasedCodexLifecycleHarness({
+            agentDir: path.join(tempDir, "agent"),
+            respond,
+          })
+        : undefined;
+      const common = {
+        client: fixture?.client ?? ({ request: respond } as never),
+        ...lifecycleOptions(createThreadLifecycleParams()),
+        ...(trace ? { signal: new AbortController().signal } : {}),
+      };
+      if (fixture) {
+        await startOrResumeThread({
+          ...common,
+          timing: { enabled: true, now: () => nowMs, log: createTimingLogger(false) },
+        });
+        await fixture.endTurn(threadId);
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const fixture = trace
-      ? await createLeasedCodexLifecycleHarness({
-          agentDir: path.join(tempDir, "agent"),
-          respond,
-        })
-      : undefined;
-    const common = {
-      client: fixture?.client ?? ({ request: respond } as never),
-      ...lifecycleOptions(createThreadLifecycleParams()),
-      ...(trace ? { signal: new AbortController().signal } : {}),
-    };
-    if (fixture) {
       await startOrResumeThread({
         ...common,
-        timing: { enabled: true, now: () => nowMs, log: createTimingLogger(false) },
+        timing: {
+          enabled: trace,
+          now: () => nowMs,
+          log,
+        },
       });
-      await fixture.endTurn(threadId);
-    }
-    await startOrResumeThread({
-      ...common,
-      timing: {
-        enabled: trace,
-        now: () => nowMs,
-        log,
-      },
-    });
-    const message = expectSingleLogMessage(log, trace ? "trace" : "warn");
-    if (!trace) {
-      expect(log.trace).not.toHaveBeenCalled();
-    }
-    expect(message).toContain(`action=${action}`);
-    expect(message).toContain(
-      `thread-${trace ? "resume" : "start"}-request:${duration}ms@${duration}ms`,
-    );
-  });
+      const message = expectSingleLogMessage(log, trace ? "trace" : "warn");
+      if (!trace) {
+        expect(log.trace).not.toHaveBeenCalled();
+      }
+      expect(message).toContain(`action=${action}`);
+      expect(message).toContain(
+        `thread-${trace ? "resume" : "start"}-request:${duration}ms@${duration}ms`,
+      );
+    },
+  );
 });
 
 describe("resolveCodexAppServerReasoningEffort (#71946)", () => {

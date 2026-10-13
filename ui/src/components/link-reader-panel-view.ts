@@ -1,11 +1,11 @@
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
-import { dockPanelStyles } from "./dock-panel-styles.ts";
 import { icons } from "./icons.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
-import { panelTabStripStyles } from "./panel-tab-strip.ts";
+import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
+import dockPanelStyles from "./dock-panel.css?inline";
 import linkReaderContentStyles from "./link-reader-content.css?inline";
 import linkReaderPanelStyles from "./link-reader-panel.css?inline";
 
@@ -20,8 +20,8 @@ export const linkReaderPanelLayout = createDockPanelLayout({
 });
 
 export const linkReaderViewStyles = [
-  panelTabStripStyles.cssText,
-  dockPanelStyles.cssText,
+  panelTabStripCss,
+  dockPanelStyles,
   linkReaderPanelStyles,
   linkReaderContentStyles,
 ];

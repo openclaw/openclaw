@@ -3,10 +3,8 @@ import { createComponent } from "solid-js";
 import { brandIcons } from "../components/brand-icons.ts";
 import { renderCopyButton } from "../components/copy-button.ts";
 import { icons } from "../components/icons.ts";
-import { kbdStyles } from "../components/kbd-styles.ts";
 import { renderKbd, renderKeyboardShortcut } from "../components/kbd.ts";
 import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
-import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import {
   renderPanelLoadingSkeleton,
@@ -20,8 +18,8 @@ import {
 } from "../components/provider-icon.ts";
 import * as settings from "../components/settings-ui.ts";
 import { Icon } from "../components/solid/icon.tsx";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { PanelIconButton } from "../components/solid/panel-icon-button.tsx";
-import "../components/solid/panel-empty-state.tsx";
 import {
   SettingsLoadingSkeleton,
   SettingsRow,
@@ -29,12 +27,14 @@ import {
   SettingsStatus,
   SettingsSummary,
 } from "../components/solid/settings-ui.tsx";
+import "../components/solid/panel-empty-state.tsx";
 import { solidContent } from "../lit/solid-content.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
 import { renderSettingsWorkspace } from "./settings-workspace-lit.ts";
+import kbdStyles from "../components/kbd.css?inline";
 
 const keyboardStyles = document.createElement("style");
-keyboardStyles.textContent = kbdStyles.cssText;
+keyboardStyles.textContent = kbdStyles;
 document.head.append(keyboardStyles);
 let checked = false;
 let segment = "balanced";
@@ -346,7 +346,11 @@ function draw() {
             : group === "loading"
               ? [
                   card("Loading route", renderLoadingState(), "loading"),
-                  card("Connecting", renderConnectingSplash("Connecting to Gateway"), "loading"),
+                  card(
+                    "Connecting",
+                    solidContent(ConnectingSplash, { status: "Connecting to Gateway" }),
+                    "loading",
+                  ),
                   card("Starting agent", renderAgentStartupState()),
                 ]
               : skeletons();

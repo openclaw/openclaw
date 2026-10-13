@@ -519,11 +519,11 @@ it.each([
         const db = openOpenClawStateDatabase().db;
         db.prepare(
           `INSERT INTO operator_approvals (
-             approval_id, resolution_ref, kind, status, presentation_json,
+             cursor_id, approval_id, resolution_ref, kind, status, presentation_json,
              reviewer_device_ids_json, audience_session_keys_json, runtime_epoch,
              created_at_ms, expires_at_ms, updated_at_ms, decision, terminal_reason,
              resolved_at_ms, resolver_kind
-           ) VALUES ('historical-approval', ?, 'exec', 'allowed', '{}', '[]', '[]',
+           ) VALUES (1, 'historical-approval', ?, 'exec', 'allowed', '{}', '[]', '[]',
                      'historical-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
         ).run("a".repeat(43));
         const historical = expectDefined(

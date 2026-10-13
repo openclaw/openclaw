@@ -643,11 +643,15 @@ metadata:
     - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
       digest, verified after download and before the file is installed or extracted),
       `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
-      archive detected), `stripComponents`, `targetDir` (default:
+      the recipe or URL identifies an archive), `stripComponents`, `targetDir` (default:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
       Archive extraction does not require a system `tar` command.
+      With `extract: true`, a valid `Content-Disposition` filename can identify
+      an archive served from an extensionless URL. Invalid or empty response
+      filenames fall back to the URL; response headers do not enable extraction
+      for recipes that omit `extract`.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -775,7 +779,8 @@ Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
 and starting or restarting the Gateway. A new eligible remote node also refreshes
 skill eligibility. Remote workspace discovery stays with the host that owns
-those files.
+those files. Configuration changes replace source plans and subscriptions on the
+healthy discovery worker; they do not wait for an unnecessary worker restart.
 
 The worker publishes a complete snapshot after discovery. Existing sessions
 pick up changed file-backed skills on their next agent turn. If the effective
@@ -859,7 +864,9 @@ and self-contained answers do not require discovery.
   and shortened descriptions, not instructions. `hasMore` indicates that additional
   matches exist.
 - `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
-  Search is not required when the name is already known. Instructions omitted
+  The response includes the skill's location and any host-specific guidance, so
+  relative resource paths can be resolved without a preceding search. The
+  instruction body is unchanged. Instructions omitted
   from the prompt directory are limited to 256 KiB and rejected if larger, not
   truncated. Prompt-listed instructions retain the existing whole-read contract,
   including Code Mode's separate program-data limits.
@@ -876,7 +883,8 @@ in-flight indexing started under the previous grant.
 
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
-policies. `await skills.list(offset)` returns up to 20 directory entries;
+policies. The read returns a string with the same location context and complete
+instructions. `await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget

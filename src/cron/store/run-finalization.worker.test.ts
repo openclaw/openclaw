@@ -44,9 +44,10 @@ it("commits execution, delivery, and history once despite an owner edit and a du
     // Finalization must protect its stored marker even after clearing the live job.
     const seedHistory = database.db.prepare(`
       INSERT INTO cron_run_receipts (
-        receipt_id, store_key, job_id, config_revision, agent_id, status,
+        receipt_id, cursor_id, store_key, job_id, config_revision, agent_id, status,
         owner_pid, owner_start_time, started_at_ms, finished_at_ms
-      ) SELECT ?, store_key, job_id, config_revision, agent_id, 'ok',
+      ) SELECT ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts),
+               store_key, job_id, config_revision, agent_id, 'ok',
                owner_pid, owner_start_time, ?, ?
         FROM cron_run_receipts WHERE receipt_id = ?
     `);
@@ -81,6 +82,25 @@ it("commits execution, delivery, and history once despite an owner edit and a du
             },
           }),
       );
+    database.db.exec(`
+      CREATE TEMP TRIGGER fail_cron_history BEFORE INSERT ON task_runs
+      BEGIN SELECT RAISE(ABORT, 'synthetic history failure'); END
+    `);
+    expect(() => finalize("ok")).toThrow("synthetic history failure");
+    expect(
+      database.db
+        .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ).toEqual({ status: "running" });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM task_runs WHERE source_id = ?")
+        .get(job.id),
+    ).toEqual({ count: 0 });
+    expect((await loadCronStore(storePath)).jobs[0]?.state.runningReceiptId).toBe(
+      receipt.receiptId,
+    );
+    database.db.exec("DROP TRIGGER fail_cron_history");
     expect(finalize("ok").outcome.eventPlans).toHaveLength(1);
     expect(finalize("error").outcome.eventPlans).toHaveLength(0);
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({

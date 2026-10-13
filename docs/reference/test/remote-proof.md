@@ -12,8 +12,9 @@ read_when:
 
 Use the canonical
 [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy)
-to decide whether remote proof is needed. The procedures below apply only to
-that exception. Never execute untrusted repository tooling locally; use
+to select a qualified proof route. Prefer bounded local proof on an available
+host; expensive checks and busy or unqualified local hosts can use remote proof.
+Never execute untrusted repository tooling locally; use
 secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 
 Acquire only when the command is ready; reuse task-owned leases and stop them
@@ -24,7 +25,32 @@ inherit the maintained spending limits. The wrapper overrides configured workflo
 refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
-workflow and job selection still support the high-memory profile.
+workflow and job selection support explicit focused, routine, and high-memory
+profiles. The default stays 16-class until real smaller-machine qualification
+passes; neither `--class` nor `--type` sizes delegated Testbox leases.
+
+| Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
+| -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4-class     | 60 minutes           | 60 minutes                |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8-class     | 60 minutes           | 120 minutes               |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16-class    | 60 minutes           | 240 minutes               |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32-class    | 240 minutes          | 240 minutes               |
+
+Deadlines include hydration. The larger maximum requires an explicit workflow
+`timeout_minutes` input; Crabbox does not forward that input, and `--ttl` does
+not extend a Testbox job. Runner classes are requested labels; verify actual
+CPU and RAM before selecting a workload. See the
+[observed runner capacity](/ci/runners#blacksmith-runner-capacity).
+
+Select with `--blacksmith-workflow .github/workflows/<workflow> --blacksmith-job check`
+on a fresh lease. Small profiles are opt-in qualification candidates, not proof
+that arbitrary compiler or lint graphs fit. Capture actual CPU affinity, cgroup
+limits, peak memory, OOM events, hydration and payload time before promoting a
+workload; runner labels alone do not establish usable RAM. All profiles retain
+the same 32-slot concurrency namespace; memory-heavy proof still shares four
+of those slots. Hash collisions can queue even when another slot is free.
+Stop only task-owned queued allocations; do not compensate with a larger box
+or force expensive work locally.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
@@ -86,6 +112,12 @@ Raw-byte differences can conservatively select additional changed paths. Git pat
 names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crabbox
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
+
+The synthetic transport commit can change between wrapper calls even when the
+source tree is unchanged. Build and consume artifacts whose freshness is bound
+to Git `HEAD` in one payload, as CI does within one checkout. Separate calls can
+trigger an unintended rebuild. Do not rewrite freshness stamps to bypass this
+check.
 
 See [local commands](/reference/test/local) for focused development proof.
 

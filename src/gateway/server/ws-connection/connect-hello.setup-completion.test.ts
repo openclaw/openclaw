@@ -98,6 +98,7 @@ function createFailedHelloContext(
       scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
     },
     configSnapshot: {},
+    sendHandshakeErrorResponse: vi.fn(),
     sendFrame: vi.fn(sendFrame),
     onHelloDelivered: vi.fn(),
     pendingNodePairingCleanup: {},
@@ -370,44 +371,64 @@ describe("sendGatewayHello setup completion ordering", () => {
     );
   });
 
-  it("restores an uncorrelated bootstrap token when hello delivery fails", async () => {
-    await withOpenClawTestState(
-      { label: "ws-generic-bootstrap-send-failure", layout: "state-only" },
-      async () => {
-        const paired: PairedDevice = {
-          deviceId: "device-generic-send-failure",
-          publicKey: "public-key-generic-send-failure",
-          createdAtMs: 1,
-          approvedAtMs: 2,
-        };
-        persistDevicePairingStoreState(
-          { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
-          undefined,
-          "paired",
-        );
-        const issued = await issueDeviceBootstrapToken({
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        });
-        const verifyParams = {
-          token: issued.token,
-          deviceId: paired.deviceId,
-          publicKey: paired.publicKey,
-          role: "operator",
-          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-        };
-        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+  it.each(["preparation", "transport"] as const)(
+    "restores an uncorrelated bootstrap token when hello %s fails",
+    async (failure) => {
+      await withOpenClawTestState(
+        { label: "ws-generic-bootstrap-send-failure", layout: "state-only" },
+        async () => {
+          const paired: PairedDevice = {
+            deviceId: "device-generic-send-failure",
+            publicKey: "public-key-generic-send-failure",
+            createdAtMs: 1,
+            approvedAtMs: 2,
+          };
+          persistDevicePairingStoreState(
+            { pendingById: {}, pairedByDeviceId: { [paired.deviceId]: paired } },
+            undefined,
+            "paired",
+          );
+          const issued = await issueDeviceBootstrapToken({
+            profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          });
+          const verifyParams = {
+            token: issued.token,
+            deviceId: paired.deviceId,
+            publicKey: paired.publicKey,
+            role: "operator",
+            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+          };
+          await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
 
-        const context = createFailedHelloContext("generic-send-failure", async () => {
-          throw new Error("socket closed");
-        });
-        const { close } = context.handler;
-        const state = createBootstrapState(paired, issued.token);
+          const context = createFailedHelloContext("generic-send-failure", async () => {
+            throw new Error("socket closed");
+          });
+          const { close } = context.handler;
+          const state = createBootstrapState(paired, issued.token);
 
-        await sendGatewayHello(context as never, state as never, {});
-
-        expect(close).toHaveBeenCalled();
-        await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
-      },
-    );
-  });
+          if (failure === "preparation") {
+            const identity = await import("../../control-ui-identity.js");
+            const preparationFailure = vi
+              .spyOn(identity, "resolveControlUiIdentity")
+              .mockImplementationOnce(() => {
+                throw new Error("synthetic identity preparation failure");
+              });
+            try {
+              await expect(sendGatewayHello(context as never, state as never, {})).rejects.toThrow(
+                "synthetic identity preparation failure",
+              );
+              expect(close).not.toHaveBeenCalled();
+              expect(context.sendFrame).not.toHaveBeenCalled();
+            } finally {
+              preparationFailure.mockRestore();
+            }
+          } else {
+            await sendGatewayHello(context as never, state as never, {});
+            expect(close).toHaveBeenCalledWith(1011, "gateway hello delivery failed");
+          }
+          await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+        },
+      );
+    },
+  );
 });

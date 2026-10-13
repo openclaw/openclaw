@@ -10,7 +10,6 @@ export type FixtureOperations = {
     input: { value: string };
     output: { before: unknown[]; after: unknown[]; threadId: number };
   };
-  cache: { input: undefined; output: unknown[] };
   escape: { input: undefined; output: boolean };
 };
 
@@ -34,14 +33,6 @@ export const execute: PluginStateOperationHandler<FixtureOperations> = (command,
         ]),
         threadId,
       };
-    }
-    case "cache": {
-      const first = tx.entries(0).map((entry) => entry.value);
-      tx.set(0, "new", "new");
-      const second = tx.entries(0).map((entry) => entry.value);
-      const evicted = tx.lookup(0, "old");
-      tx.delete(0, "new");
-      return [first, second, evicted, tx.entries(0)];
     }
     case "escape": {
       if (previous) {

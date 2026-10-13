@@ -85,6 +85,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
+  retryAt?: number;
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
@@ -185,6 +186,7 @@ function NonstreamPart(props: {
         subagentActivity: props.options.subagentActivity,
         onOpenSubagents: props.options.onOpenSubagents,
         startupLabel: props.options.startupLabel,
+        retryAt: props.options.retryAt,
         outputTokens: props.options.runOutputTokens,
         presentation: props.presentation,
       });

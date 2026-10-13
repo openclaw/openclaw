@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
 import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
 import { renderCopyButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
@@ -162,7 +163,7 @@ describe("Markdown clipboard operation lifetime", () => {
         configurable: true,
         value: { writeText, ...(available ? { write } : {}) },
       });
-      let copy: () => void;
+      let copy: () => void | Promise<void>;
       let widgetResult: Promise<unknown> | undefined;
       if (surface === "managed image") {
         vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -184,11 +185,16 @@ describe("Markdown clipboard operation lifetime", () => {
           ]),
           owner,
         );
-        await vi.waitFor(() => expect(owner.querySelector("wa-dropdown")).not.toBeNull());
-        copy = () =>
+        await waitForSolid(() => expect(owner.querySelector(".chat-image-action")).not.toBeNull());
+        owner.querySelector<HTMLButtonElement>(".chat-image-action")!.click();
+        const menu = owner.querySelector<HTMLElement>(".chat-image-actions .oc-menu")!;
+        await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
+        copy = async () => {
           owner
-            .querySelector("wa-dropdown")!
-            .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy" } } }));
+            .querySelector<HTMLButtonElement>('.chat-image-actions [data-value="copy"]')!
+            .click();
+          await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
+        };
       } else {
         const frame = document.body.appendChild(document.createElement("iframe"));
         owners.push(frame);
@@ -210,7 +216,7 @@ describe("Markdown clipboard operation lifetime", () => {
       }
       const code = await mountCopy("code");
       code.button.click();
-      copy();
+      await copy();
       // Binary ClipboardItem promises must be submitted during the click, before bytes arrive.
       expect(write).toHaveBeenCalledTimes(available ? 1 : 0);
       pendingText.reject(new Error("Synthetic clipboard rejection"));

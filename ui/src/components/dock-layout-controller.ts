@@ -1,14 +1,7 @@
-import {
-  html,
-  nothing,
-  type ReactiveController,
-  type ReactiveControllerHost,
-  type TemplateResult,
-} from "lit";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
-import "./resizable-divider.ts";
 
-type DockLayoutHost = ReactiveControllerHost & {
+type DockLayoutHost = Pick<SolidControllerHost, "addController" | "requestUpdate"> & {
   readonly isConnected: boolean;
   readonly embedded?: boolean;
   hasAttribute?(name: string): boolean;
@@ -23,7 +16,7 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   onResize?: () => void;
 };
 
-export class DockLayoutController<TDock extends DockPanelPlacement> implements ReactiveController {
+export class DockLayoutController<TDock extends DockPanelPlacement> implements SolidController {
   open = false;
   dock: TDock;
   height: number;
@@ -166,25 +159,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
 
   private size(): number {
     return this.dock === "bottom" ? window.innerHeight : window.innerWidth;
-  }
-
-  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
-    const resizer = this.resizer;
-    if (!resizer) {
-      return nothing;
-    }
-    return html`<resizable-divider
-      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      .orientation=${resizer.orientation}
-      .label=${label}
-      .splitRatio=${resizer.splitRatio}
-      .minRatio=${resizer.minRatio}
-      .maxRatio=${resizer.maxRatio}
-      .measureRatio=${resizer.measureRatio}
-      .measureSize=${resizer.measureSize}
-      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
-      @resize-end=${() => this.persist()}
-    ></resizable-divider>`;
   }
 
   get resizer() {

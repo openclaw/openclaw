@@ -5,7 +5,7 @@ import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/re
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -90,11 +90,7 @@ export async function prepareRestartRecoveryDeliveryCurrent(
   input: RestartRecoveryDeliveryScope,
 ): Promise<{ isCurrent: (cfg?: OpenClawConfig) => boolean; release: () => void }> {
   const params = { ...input, deliveryContext: { ...input.deliveryContext } };
-  const source = captureIncognitoSessionSource(params);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
+  const source = captureSessionEntryMetadataRead(params, () => {});
   let entry: SessionEntry | undefined;
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   if (!source) {
@@ -143,22 +139,7 @@ export async function prepareRestartRecoveryDeliveryCurrent(
     ) {
       return false;
     }
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return false;
-    }
-    source?.admissionSignal?.throwIfAborted();
-    claim?.assertCurrent();
-    const facts = source?.actor.sessions.readSteering(params.sessionKey);
-    const current = source
-      ? facts && {
-          ...facts,
-          restartRecoveryDeliveryContext:
-            facts.pendingFinalDeliveryContext ?? facts.restartRecoveryDeliveryContext,
-        }
-      : retained?.isCurrent()
-        ? entry
-        : undefined;
+    const current = source ? source.readCurrent() : retained?.isCurrent() ? entry : undefined;
     return (
       current?.sessionId === params.sessionId &&
       current.abortedLastRun !== true &&

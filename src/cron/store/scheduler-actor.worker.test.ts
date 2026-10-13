@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { BroadcastChannel } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -13,6 +14,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import type { CronJob } from "../types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
+import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { saveCronStoreInDatabase } from "./save.kernel.js";
 import type { CronSchedulerOperations, CronSchedulerSnapshot } from "./scheduler-actor.types.js";
@@ -35,7 +37,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.setSystemTime(now);
 });
 
 afterEach(() => {
@@ -156,6 +159,120 @@ it("requests one overdue occurrence per job in oldest-first order", () => {
   expect(scheduler.receipts()).toHaveLength(3);
   expect(scheduler.tick(now + 1, 1).accepted).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(3);
+});
+
+it("activates scheduled requests in FIFO capacity order and observes a queued edit on the next tick", () => {
+  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 2;
+  const scheduler = storedScheduler(
+    "scheduled-activation",
+    Array.from({ length: count }, (_, index) =>
+      job(`job-${index}`, now - (count - index) * minute),
+    ),
+  );
+  const started = scheduler.start(now, {
+    snapshot: { ...snapshot, config: { ...snapshot.config, maxMissedJobsPerRestart: count } },
+  });
+  expect(started.accepted).toHaveLength(count);
+  expect(started.launches.map(({ job: entry }) => entry.id)).toEqual(
+    Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) => `job-${index}`),
+  );
+  const queuedId = `job-${DEFAULT_CRON_MAX_CONCURRENT_RUNS}`;
+  const persisted = scheduler.read();
+  expect(persisted.filter((entry) => entry.state.runningAtMs === now)).toHaveLength(
+    DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+  );
+  expect(persisted.filter((entry) => entry.state.queuedAtMs === now)).toHaveLength(2);
+  const queued = persisted.find((entry) => entry.id === queuedId)!;
+  queued.payload = { kind: "command", argv: ["echo", "edited while queued"] };
+  queued.state.lastError = "preserve earlier failure";
+  withinWorker(() =>
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: persisted }),
+      { database, path: database.path, env: fixture.env },
+    ),
+  );
+  expect(scheduler.tick(now + 1, 1).launches).toEqual([]);
+  withinWorker(() =>
+    cancelCronRequestsInWorker(database, {
+      storeKey: scheduler.storeKey,
+      receiptIds: [started.launches[0]!.runReceipt.receiptId],
+      nowMs: now + 2,
+      reason: "test releases one slot",
+    }),
+  );
+  const resumed = scheduler.tick(now + 3, 3);
+  expect(resumed.accepted).toEqual([]);
+  expect(resumed.launches.map(({ job: entry }) => entry.id)).toEqual([queuedId]);
+  expect(resumed.launches[0]?.job.payload).toEqual({
+    kind: "command",
+    argv: ["echo", "edited while queued"],
+  });
+  expect(resumed.launches[0]?.job.state).toMatchObject({
+    runningAtMs: now + 3,
+    lastError: "preserve earlier failure",
+  });
+  expect(scheduler.read().find((entry) => entry.id === queuedId)?.state).toEqual(
+    resumed.launches[0]?.job.state,
+  );
+});
+
+it("keeps startup work pending while its subscriber is paused", () => {
+  const scheduler = storedScheduler("paused-start", [job("pending", now - minute)]);
+  const started = scheduler.start(now, { paused: true });
+  expect(started.accepted).toEqual([]);
+  expect(started.launches).toEqual([]);
+  const resumed = scheduler.tick(now + 1, 1, { channelName: scheduler.channelName, paused: false });
+  expect(resumed.launches.map(({ job: entry }) => entry.id)).toEqual(["pending"]);
+});
+
+it("settles a removed queued request even when no queued job remains", () => {
+  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1;
+  const scheduler = storedScheduler(
+    "removed-queued-request",
+    Array.from({ length: count }, (_, index) => job(`job-${index}`, now - minute)),
+  );
+  const started = scheduler.start(now, {
+    snapshot: { ...snapshot, config: { ...snapshot.config, maxMissedJobsPerRestart: count } },
+  });
+  const removed = started.accepted.at(-1)!;
+  withinWorker(() => {
+    cancelCronRequestsInWorker(database, {
+      storeKey: scheduler.storeKey,
+      receiptIds: [removed.runReceipt.receiptId],
+      nowMs: now + 1,
+      reason: "removed before launch",
+    });
+    const retained = scheduler.read().filter((entry) => entry.id !== removed.job.id);
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: retained }),
+      { database, path: database.path, env: fixture.env },
+    );
+  });
+  const result = scheduler.tick(now + 2, 2, {
+    requests: [{ receiptId: removed.runReceipt.receiptId, mode: "scheduled" }],
+  });
+  expect(result.launches).toEqual([]);
+  expect(result.skipped.map(({ runReceipt }) => runReceipt.receiptId)).toEqual([
+    removed.runReceipt.receiptId,
+  ]);
+});
+
+it("does not activate work for a paused caller when another subscriber is active", () => {
+  const scheduler = storedScheduler("paused-subscriber", [job("pending", now + minute)]);
+  scheduler.start();
+  const secondChannel = "cron-scheduler-test:unpaused-sibling";
+  scheduler.start(now, { channelName: secondChannel });
+  const paused = scheduler.tick(now + minute, minute, {
+    channelName: scheduler.channelName,
+    paused: true,
+  });
+  expect(paused.accepted).toHaveLength(1);
+  expect(paused.launches).toEqual([]);
+  const unpaused = scheduler.tick(now + minute + 1, minute + 1, {
+    channelName: secondChannel,
+    paused: false,
+  });
+  expect(unpaused.launches.map(({ job: entry }) => entry.id)).toEqual(["pending"]);
 });
 
 it("persists the five-immediate limit, overflow staggering, and pending requests across restart", async () => {
@@ -332,49 +449,90 @@ it("keeps scheduling for an active subscriber and resumes after every subscriber
   ]);
   expect(scheduler.receipts()).toHaveLength(1);
 });
-it("keeps an idle notification watchdog and repairs a resume whose refresh was lost", async () => {
-  const scheduler = storedScheduler("idle-watchdog", []);
+it("parks empty and disabled actors until an explicit row/config refresh", async () => {
+  const scheduler = storedScheduler("idle-parked", []);
   const receiver = new BroadcastChannel(scheduler.channelName);
   const posted = vi.spyOn(BroadcastChannel.prototype, "postMessage");
   try {
     expect(scheduler.start().nextWakeAtMs).toBeUndefined();
-    const notification = once(receiver, "message");
-    await vi.advanceTimersByTimeAsync(minute);
-    expect(posted).toHaveBeenCalledWith({
-      type: "cron.schedulerWake",
-      storeKey: scheduler.storeKey,
-    });
-    const [event] = await notification;
-    expect(event.data).toEqual({ type: "cron.schedulerWake", storeKey: scheduler.storeKey });
-
-    expect(
-      scheduler.refresh({ paused: true, nowMs: now + minute, monotonicMs: minute }).nextWakeAtMs,
-    ).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2 * minute);
+    expect(posted).not.toHaveBeenCalled();
     withinWorker(() =>
       runOpenClawStateWriteTransaction(
         () =>
           saveCronStoreInDatabase(database, scheduler.storeKey, {
             version: 1,
-            jobs: [job("resumed", now + minute)],
+            jobs: [job("added", now + 3 * minute)],
           }),
         { database, path: database.path, env: fixture.env },
       ),
     );
-    posted.mockClear();
-    const resumeNotification = once(receiver, "message");
+    const disabled = { version: 2, config: { ...snapshot.config, cronEnabled: false } };
+    expect(
+      scheduler.refresh({ snapshot: disabled, nowMs: now + 2 * minute }).nextWakeAtMs,
+    ).toBeUndefined();
     await vi.advanceTimersByTimeAsync(minute);
-    expect(posted).toHaveBeenCalledWith({
-      type: "cron.schedulerWake",
-      storeKey: scheduler.storeKey,
+    expect(posted).not.toHaveBeenCalled();
+    scheduler.refresh({
+      nowMs: now + 3 * minute,
+      snapshot: { version: 3, config: snapshot.config },
     });
-    await resumeNotification;
+    const notification = once(receiver, "message");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await notification;
     expect(
       scheduler
-        .tick(now + 2 * minute, 2 * minute, { channelName: scheduler.channelName, paused: false })
+        .tick(now + 3 * minute + 2_000, 3 * minute + 2_000)
         .accepted.map(({ job: entry }) => entry.id),
-    ).toEqual(["resumed"]);
+    ).toEqual(["added"]);
   } finally {
     posted.mockRestore();
     receiver.close();
   }
+});
+
+it("observes future deadlines without SQL wakes and retries an unacknowledged due wake", async () => {
+  const deadline = now + 10 * minute;
+  const scheduler = storedScheduler("future-deadline", [job("future", deadline)]);
+  const receiver = new BroadcastChannel(scheduler.channelName);
+  const posted = vi.spyOn(BroadcastChannel.prototype, "postMessage");
+  try {
+    expect(scheduler.start().nextWakeAtMs).toBe(deadline);
+    await vi.advanceTimersByTimeAsync(9 * minute);
+    expect(posted).not.toHaveBeenCalled();
+    const notification = once(receiver, "message");
+    await vi.advanceTimersByTimeAsync(minute);
+    await notification;
+    expect(posted).toHaveBeenCalledTimes(1);
+    const retry = once(receiver, "message");
+    await vi.advanceTimersByTimeAsync(minute);
+    await retry;
+    expect(posted).toHaveBeenCalledTimes(2);
+    expect(
+      scheduler.tick(deadline + minute, 11 * minute).accepted.map(({ job: entry }) => entry.id),
+    ).toEqual(["future"]);
+  } finally {
+    posted.mockRestore();
+    receiver.close();
+  }
+});
+
+it("does not mistake a normal long deadline for a clock jump", () => {
+  const deadline = now + 10 * minute;
+  const scheduler = storedScheduler(
+    "long-deadline",
+    Array.from({ length: 7 }, (_, index) => job(`job-${index}`, deadline)),
+  );
+  scheduler.start();
+  // A real catch-up is bounded to five; an on-time wake admits all seven.
+  expect(scheduler.tick(deadline, 10 * minute).accepted).toHaveLength(7);
+});
+
+it("bounds missed due work after sleep when both clocks advance together", () => {
+  const scheduler = storedScheduler(
+    "sleep",
+    Array.from({ length: 7 }, (_, index) => job(`sleep-${index}`, now + minute)),
+  );
+  scheduler.start();
+  expect(scheduler.tick(now + 60 * minute, 60 * minute).accepted).toHaveLength(5);
 });

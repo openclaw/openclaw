@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
@@ -7,9 +8,13 @@ import {
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -29,19 +34,31 @@ import {
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { registerQueuedChatTurn, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
+import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
+import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import {
+  createSubscriptionTestFixture,
+  registerSubscriptionChatRun,
+} from "./server-runtime-subscriptions.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { projectGatewaySessionActiveRun } from "./session-utils-display.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
+import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
@@ -56,6 +73,128 @@ beforeAll(async () => {
 afterAll(async () => {
   rotateAgentEventLifecycleGeneration();
   await state?.cleanup();
+});
+
+it.each([
+  "before planning",
+  "before commit",
+  "user abort",
+  "replacement",
+  "newer run",
+  "reset",
+  "non-main",
+  "completed",
+] as const)("revalidates collected shutdown recovery custody after %s", async (releaseAt) => {
+  const sessionKey = `agent:main:dashboard:released-${releaseAt}`;
+  const sessionId = `released-${releaseAt}`;
+  const runId = `${sessionId}-run`;
+  const target = { storePath, sessionKey };
+  await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
+  const resolveGatewayContext = () => undefined;
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [sessionKey, sessionId],
+    resolveGatewayContext,
+    assertAllowed: () => {},
+  });
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionKey,
+    sessionId,
+    timeoutMs: 60_000,
+  });
+  const shouldMark = releaseAt === "before planning" || releaseAt === "before commit";
+  if (releaseAt !== "user abort") {
+    registration.controller.abort(createAgentRunRestartAbortError());
+  }
+  const release = () => {
+    registration.cleanup();
+    admission.release();
+    expect(chatAbortControllers.has(runId)).toBe(false);
+    expect(admission.isActive()).toBe(false);
+  };
+  const apply = sessionAccessor.applySessionEntryReplacements;
+  const replacementSpy = vi.spyOn(sessionAccessor, "applySessionEntryReplacements");
+  if (releaseAt === "before commit") {
+    replacementSpy.mockImplementationOnce((params) =>
+      apply({
+        ...params,
+        update: async (entries) => {
+          const prepared = await params.update(entries);
+          release();
+          return prepared;
+        },
+      }),
+    );
+  }
+  const harness = createAgentEventTestHarness();
+  let replacement: ReturnType<typeof registerChatAbortController> | undefined;
+  try {
+    await prepareGatewayRunShutdown({
+      resolveGatewayContext,
+      restart: true,
+      timeoutMs: 0,
+      warnings: [],
+      getPendingReplyCount: () => 0,
+      chatAbortControllers,
+      chatQueuedTurns: new Map(),
+      chatRunState: harness.chatRunState,
+      agentRunSeq: harness.agentRunSeq,
+      removeChatRun: () => undefined,
+      broadcast: harness.broadcast,
+      nodeSendToSession: harness.nodeSendToSession,
+      markMainSessionsAbortedForRestart: async (params) => {
+        if (releaseAt === "user abort") {
+          registration.controller.abort(createAgentRunDirectAbortError());
+        }
+        if (releaseAt === "completed" && registration.registered) {
+          registration.entry.projectSessionTerminalPersisted = true;
+        }
+        if (releaseAt !== "before commit") {
+          release();
+        }
+        if (releaseAt === "replacement" || releaseAt === "newer run") {
+          replacement = registerChatAbortController({
+            chatAbortControllers,
+            runId: releaseAt === "newer run" ? "newer-run" : runId,
+            sessionKey,
+            sessionId,
+            timeoutMs: 60_000,
+          });
+        }
+        if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "non-main") {
+          await replaceSessionEntry(target, {
+            sessionId: releaseAt === "reset" ? "reset-session" : sessionId,
+            lifecycleRunId: releaseAt === "newer run" ? "newer-run" : runId,
+            restartRecoveryDeliveryRunId: runId,
+            updatedAt: Date.now(),
+            ...(releaseAt === "non-main" ? { spawnDepth: 1 } : {}),
+          });
+        }
+        await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+      },
+    });
+    const saved = loadSessionEntry(target);
+    if (shouldMark) {
+      expect(saved).toMatchObject({
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: expect.any(String) },
+        restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
+      });
+    } else {
+      expect(saved?.mainRestartRecovery).toBeUndefined();
+      expect(saved?.abortedLastRun).not.toBe(true);
+    }
+  } finally {
+    replacementSpy.mockRestore();
+    registration.cleanup();
+    replacement?.cleanup();
+    admission.release();
+    await harness.handler.dispose();
+  }
 });
 
 it.each(["admission", "queue", "delegated"] as const)(
@@ -188,6 +327,185 @@ it.each(["admission", "queue", "delegated"] as const)(
       reply?.complete();
       admission.release();
       recoveryLog.mockRestore();
+    }
+  },
+);
+
+it.each(
+  (
+    [
+      "interrupted",
+      "retired while persisting",
+      "completed",
+      "completed while retired",
+      "replacement",
+    ] as const
+  ).flatMap((outcome) => [
+    { outcome, aliased: false },
+    { outcome, aliased: true },
+  ]),
+)(
+  "retains only interrupted terminal custody before shutdown marking: $outcome, aliased=$aliased",
+  async ({ outcome, aliased }) => {
+    const completed = outcome === "completed" || outcome === "completed while retired";
+    const retireWhilePersisting =
+      outcome === "retired while persisting" || outcome === "completed while retired";
+    const sessionKey = `agent:main:dashboard:persisted-terminal-${outcome}-${aliased}`;
+    const sessionId = `persisted-terminal-${outcome}-${aliased}`;
+    const runId = `${sessionId}-run`;
+    const clientRunId = aliased ? `${runId}-client` : runId;
+    const target = { storePath, sessionKey };
+    const subscriptionConfig = { ...cfg, logging: { audit: { enabled: false } } };
+    setRuntimeConfigSnapshot(subscriptionConfig, subscriptionConfig);
+    await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
+    const params = createSubscriptionTestFixture().createParams();
+    const clock = createGatewaySchedulerClock(Date.now());
+    params.scheduler = createTestGatewayScheduler(clock.clock);
+    params.chatRunState.registry.add(runId, { sessionKey, clientRunId });
+    const registration = registerSubscriptionChatRun(params, {
+      runId: clientRunId,
+      sessionKey,
+      sessionId,
+      agentId: "main",
+    });
+    registration.markExecutionStarted();
+    registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
+    const unsubs = startGatewayEventSubscriptions(params);
+    let unsubscribeAgent: Promise<void> | undefined;
+    const drain = () => (unsubscribeAgent ??= unsubs.agentUnsub());
+    let replacement: ReturnType<typeof registerSubscriptionChatRun> | undefined;
+    const replacementRunId = `${runId}-replacement`;
+    const writeEntered = createDeferred();
+    const releaseWrite = createDeferred();
+    const patch = sessionAccessor.patchSessionEntryTarget;
+    const heldWrite = retireWhilePersisting
+      ? vi
+          .spyOn(sessionAccessor, "patchSessionEntryTarget")
+          .mockImplementationOnce(async (...args) => {
+            writeEntered.resolve();
+            await releaseWrite.promise;
+            return patch(...args);
+          })
+      : undefined;
+    try {
+      if (!completed) {
+        registration.controller.abort(createAgentRunRestartAbortError());
+      }
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          ...(!completed ? { aborted: true, stopReason: "restart" } : {}),
+        },
+      });
+      registration.cleanup();
+      if (heldWrite) {
+        await writeEntered.promise;
+        registration.entry.expiresAtMs = clock.clock.now() - 1;
+        const timers = startGatewayMaintenanceTimers({
+          ...createGatewayMaintenanceStateForTest(),
+          ...params,
+        });
+        try {
+          await clock.advanceBy(60_000);
+          expect(params.chatAbortControllers.has(clientRunId)).toBe(false);
+          expect(params.restartRecoveryCandidates.get(clientRunId)).toMatchObject({
+            runId: clientRunId,
+            ...(aliased ? { sourceRunId: runId } : {}),
+          });
+        } finally {
+          await timers.stopPeriodicTasks();
+          await timers.skillUsageCleanup();
+        }
+        releaseWrite.resolve();
+      }
+      await waitForChatAbortTerminalPersistence(registration.entry);
+      expect(params.chatAbortControllers.has(clientRunId)).toBe(false);
+      expect(loadSessionEntry(target)).toMatchObject({
+        status: completed ? "done" : "interrupted",
+        abortedLastRun: !completed,
+        lastRunId: clientRunId,
+      });
+
+      await prepareGatewayRunShutdown({
+        ...params,
+        resolveGatewayContext: () => undefined,
+        restart: true,
+        timeoutMs: 0,
+        warnings: [],
+        getPendingReplyCount: () => 0,
+        chatQueuedTurns: new Map(),
+        removeChatRun: () => undefined,
+        markMainSessionsAbortedForRestart: async (captured) => {
+          if (outcome === "replacement") {
+            // The old terminal is already durable; a newer turn wins before its marker writes.
+            replacement = registerSubscriptionChatRun(params, {
+              runId: replacementRunId,
+              sessionKey,
+              sessionId,
+              agentId: "main",
+            });
+            replacement.markExecutionStarted();
+            registerAgentRunContext(replacementRunId, {
+              sessionKey,
+              sessionId,
+              agentId: "main",
+            });
+            emitAgentEvent({
+              runId: replacementRunId,
+              sessionKey,
+              sessionId,
+              agentId: "main",
+              stream: "lifecycle",
+              data: { phase: "start", startedAt: Date.now() },
+            });
+          }
+          await drain();
+          await markRestartAbortedMainSessions({ ...captured, cfg, stateDir: state.stateDir });
+        },
+      });
+      const saved = loadSessionEntry(target);
+      if (outcome === "interrupted" || outcome === "retired while persisting") {
+        expect(saved).toMatchObject({
+          status: "interrupted",
+          abortedLastRun: true,
+          mainRestartRecovery: { cycleId: expect.any(String), revision: expect.any(Number) },
+        });
+        expect(saved?.restartRecoveryRuns).toEqual([
+          { runId, lifecycleGeneration: getAgentEventLifecycleGeneration() },
+          ...(aliased
+            ? [{ runId: clientRunId, lifecycleGeneration: getAgentEventLifecycleGeneration() }]
+            : []),
+        ]);
+      } else {
+        expect(saved?.mainRestartRecovery).toBeUndefined();
+        if (completed) {
+          expect(params.restartRecoveryCandidates.has(clientRunId)).toBe(false);
+          expect(saved).toMatchObject({
+            status: "done",
+            abortedLastRun: false,
+            lastRunId: clientRunId,
+          });
+        } else {
+          expect(saved?.lifecycleRunId).toBe(replacementRunId);
+        }
+      }
+    } finally {
+      releaseWrite.resolve();
+      await drain();
+      heldWrite?.mockRestore();
+      unsubs.heartbeatUnsub();
+      unsubs.transcriptUnsub();
+      unsubs.lifecycleUnsub();
+      registration.cleanup();
+      replacement?.cleanup();
+      clearAgentRunContext(runId);
+      clearAgentRunContext(replacementRunId);
+      setRuntimeConfigSnapshot(cfg, cfg);
     }
   },
 );

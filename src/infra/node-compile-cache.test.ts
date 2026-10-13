@@ -46,6 +46,62 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   expect((await fs.readdir(loaded)).length).toBeGreaterThan(0);
 });
 
+it.each([false, true])(
+  "flushes newly loaded native bytecode while running (disabled: %s)",
+  async (disabled) => {
+    const root = tempDirs.make("openclaw-cache-flush-");
+    const cache = path.join(root, "cache");
+    await fs.writeFile(path.join(root, "first.mjs"), "export const value = 1;\n");
+    await fs.writeFile(path.join(root, "later.mjs"), "export const value = 2;\n");
+    const helperUrl = new URL("../../node-compile-cache.mjs", import.meta.url).href;
+    const script = `
+      import assert from "node:assert/strict";
+      import { readdirSync } from "node:fs";
+      import { enableCompileCache, getCompileCacheDir } from "node:module";
+      import { setImmediate as nextTurn } from "node:timers/promises";
+      import { pathToFileURL } from "node:url";
+      import { scheduleOpenClawCompileCacheFlush } from ${JSON.stringify(helperUrl)};
+      enableCompileCache(${JSON.stringify(cache)});
+      const directory = getCompileCacheDir();
+      const entries = () => directory
+        ? readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile()).length
+        : 0;
+      assert.equal((await import(pathToFileURL(${JSON.stringify(path.join(root, "first.mjs"))}).href)).value, 1);
+      scheduleOpenClawCompileCacheFlush();
+      await nextTurn();
+      const first = entries();
+      assert.equal((await import(pathToFileURL(${JSON.stringify(path.join(root, "later.mjs"))}).href)).value, 2);
+      scheduleOpenClawCompileCacheFlush();
+      await nextTurn();
+      const later = entries();
+      // Capture disk contents before native process teardown could persist them.
+      process.stdout.write(JSON.stringify({ enabled: directory !== undefined, first, later }));
+    `;
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.NODE_COMPILE_CACHE;
+    delete env.NODE_COMPILE_CACHE_READONLY;
+    delete env.NODE_DISABLE_COMPILE_CACHE;
+    delete env.NODE_OPTIONS;
+    if (disabled) {
+      env.NODE_DISABLE_COMPILE_CACHE = "1";
+    }
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--eval", script],
+      { env },
+    );
+    const observed = JSON.parse(stdout);
+    if (disabled) {
+      expect(observed).toEqual({ enabled: false, first: 0, later: 0 });
+      await expect(fs.stat(cache)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(observed.enabled).toBe(true);
+      expect(observed.first).toBeGreaterThan(0);
+      expect(observed.later).toBeGreaterThan(observed.first);
+    }
+  },
+);
+
 async function maintainCompileCache(directory: string) {
   const worker = new Worker(new URL("../../node-compile-cache.mjs", import.meta.url), {
     workerData: { openclawCompileCacheDirectory: directory },

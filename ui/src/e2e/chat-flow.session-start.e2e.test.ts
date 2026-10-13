@@ -20,7 +20,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const newSessionButton = page.locator(
-        "openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session",
+        "openclaw-app-sidebar .sidebar-rail .sidebar-new-session",
       );
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();

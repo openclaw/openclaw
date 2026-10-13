@@ -5,7 +5,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { GatewayScheduler } from "./gateway-scheduler.js";
+import { GatewayScheduler, type GatewayScheduledJob } from "./gateway-scheduler.js";
 import {
   normalizeSqliteNonNegativeInteger,
   runWithSqliteBusyTimeout,
@@ -13,6 +13,7 @@ import {
 } from "./sqlite-busy-timeout.js";
 import {
   getSqliteDatabaseAdmission,
+  onSqliteDatabaseWriteSettled,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
   type SqliteDatabaseAdmissionKey,
@@ -512,10 +513,56 @@ export function configureSqliteWalMaintenance(
     });
   }
   if (checkpointTickMs > 0 && !isSqliteWalWorkerMaintained(db)) {
-    stopCheckpointTick = schedule("tick", checkpointTickMs, maintain).cancel;
+    let stopped = false;
+    let tick: GatewayScheduledJob | undefined;
+    const cancelTick = () => {
+      tick?.cancel();
+      tick = undefined;
+    };
+    const armTick = () => {
+      if (!stopped && !tick && !scope.signal.aborted && !invalidated) {
+        tick = runInSqliteMaintenanceContext(() =>
+          scope.schedule({
+            id: `${maintenanceId}:tick`,
+            delayMs: checkpointTickMs,
+            run: runTick,
+          }),
+        );
+      }
+    };
+    const runTick = async () => {
+      tick = undefined;
+      await maintain();
+      if (stopped) {
+        return;
+      }
+      const revision = readSqliteDatabaseWriteRevision(db);
+      const completed =
+        revision === undefined ? undefined : sharedCompletedCheckpoint(db, revision);
+      if (completed && Atomics.load(completed, 0) === revision) {
+        cancelTick();
+      } else {
+        // Blocked readers and suspended maintenance still need their existing retry deadline.
+        armTick();
+      }
+    };
+    const unregisterWrites =
+      periodicCheckpointMode === "PASSIVE" ? onSqliteDatabaseWriteSettled(db, armTick) : undefined;
+    if (unregisterWrites) {
+      stopCheckpointTick = () => {
+        stopped = true;
+        unregisterWrites();
+        cancelTick();
+      };
+      armTick();
+    } else {
+      // Untracked writers and explicit blocking policies retain their published cadence.
+      stopCheckpointTick = schedule("tick", checkpointTickMs, maintain).cancel;
+    }
   }
 
   const beginClose = () => {
+    stopCheckpointTick?.();
     runInSqliteMaintenanceContext(() => scope.beginClose());
     return cancelSqliteWalWriteAdmission(db);
   };
@@ -541,9 +588,7 @@ export function configureSqliteWalMaintenance(
         // Worker retirement owns the explicit final checkpoint.
         return false;
       }
-      // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
-      // readers and has starved the event loop for seconds under fleet churn.
-      // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
+      // The connection's lifecycle owner selects its final checkpoint policy.
       return runMaintenance(() => runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode));
     },
   };

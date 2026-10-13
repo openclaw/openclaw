@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import {
@@ -155,6 +156,14 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
           }),
           opts.streamOptions.fetchLinkFavicon,
         )
+      : nothing,
+    frame.outcome.kind === "interrupted"
+      ? html`<div
+          class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation"
+          role="status"
+        >
+          ${t("chat.composer.runInterrupted")}
+        </div>`
       : nothing,
   ];
   return renderMessageGroup(shell, {

@@ -16,7 +16,10 @@
   /* Settings takeover and the main sidebar share the same bottom divider geometry. */
   --shell-sidebar-footer-height: 53px;
   --shell-native-titlebar-controls-inset: var(--openclaw-native-controls-inset, 92px);
-  --shell-native-titlebar-controls-width: 156px;
+  --shell-native-titlebar-controls-width: 60px;
+  --shell-content-leading-inset: 20px;
+  --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
+  --shell-chrome-controls-left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
   /* Collapsed navigation restores toggle, new-thread, and search outside the
      hidden sidebar. Optional controls contribute only while mounted. */
   --shell-controls-width: 104px;
@@ -93,6 +96,7 @@
 
 .shell--chat {
   overflow: hidden;
+  --shell-content-leading-inset: 12px;
 }
 
 /* Collapsing hides the sidebar entirely; shell chrome and Cmd+B bring it back.
@@ -116,7 +120,7 @@
 .shell-chrome-controls {
   position: fixed;
   top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
-  left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
+  left: var(--shell-chrome-controls-left);
   z-index: 45;
   display: flex;
   align-items: center;
@@ -148,13 +152,19 @@
   width: var(--shell-chrome-control-size);
   height: var(--shell-chrome-control-size);
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: var(
+    --shell-chrome-control-border,
+    1px solid color-mix(in srgb, var(--border) 88%, transparent)
+  );
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  background: var(
+    --shell-chrome-control-background,
+    color-mix(in srgb, var(--panel) 92%, transparent)
+  );
   color: var(--muted);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--shell-chrome-control-shadow, var(--shadow-sm));
+  backdrop-filter: var(--shell-chrome-control-backdrop, blur(10px));
+  -webkit-backdrop-filter: var(--shell-chrome-control-backdrop, blur(10px));
 }
 
 .shell-chrome-controls__button:hover:not(:disabled, [aria-disabled="true"]) {
@@ -185,8 +195,10 @@ html.openclaw-native-macos .shell-chrome-controls {
    provide native search/new-thread controls only while the rail is
    collapsed, so expanded sidebar search keeps the pointer path to the palette.
    Older apps only add openclaw-native-macos and keep all web controls. */
-html.openclaw-native-nav .shell-chrome-controls__nav-toggle,
-html.openclaw-native-nav .shell--nav-collapsed .shell-chrome-controls,
+html.openclaw-native-nav:not(.openclaw-native-web-chrome) .shell-chrome-controls__nav-toggle,
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed
+  .shell-chrome-controls,
 html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
@@ -197,14 +209,45 @@ html.openclaw-native-nav .sidebar-brand__collapse {
   display: none;
 }
 
-/* Web-chrome hosts provide this entire cluster in the native titlebar. */
-html.openclaw-native-web-chrome .shell-chrome-controls {
+html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
 
-/* The native titlebar already owns these actions in web-chrome hosts. */
-html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
-  display: none;
+/* One shell cluster serves web and native hosts; only native geometry differs. */
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) {
+  --shell-chrome-control-border: 0;
+  --shell-chrome-control-background: transparent;
+  --shell-chrome-control-shadow: none;
+  --shell-chrome-control-backdrop: none;
+  --rail-header-height: var(--openclaw-native-titlebar-height, 52px);
+  --shell-chrome-controls-inset: 12px;
+  --shell-chrome-controls-left: max(
+    var(--shell-native-titlebar-controls-inset),
+    calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset))
+  );
+
+  .shell-chrome-controls {
+    top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
+  }
+}
+
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav, .shell--settings) {
+  --shell-native-titlebar-controls-left: calc(
+    var(--shell-nav-width) + var(--shell-content-leading-inset)
+  );
+
+  &.shell--nav-collapsed {
+    --shell-chrome-safe-area-left: calc(
+      var(--shell-chrome-controls-left) - var(--shell-nav-width) + var(--shell-controls-width) + 8px
+    );
+    --shell-native-titlebar-controls-left: max(
+      calc(var(--shell-nav-width) + var(--shell-content-leading-inset)),
+      calc(
+        var(--shell-nav-width) + var(--shell-chrome-safe-area-left) +
+          var(--shell-attention-width, 0px)
+      )
+    );
+  }
 }
 
 /* Desktop adapters provide window-control geometry; the shared shell owns
@@ -230,8 +273,8 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
 .macos-titlebar-controls {
   position: fixed;
   top: 0;
-  /* macOS clears its traffic lights; other desktop hosts align to the rail. */
-  left: var(--shell-native-titlebar-controls-inset);
+  /* History follows the content column; Settings keeps the window-control inset. */
+  left: var(--shell-native-titlebar-controls-left);
   /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
   z-index: 50;
   display: flex;
@@ -239,7 +282,11 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   gap: 4px;
   width: max-content;
   min-width: var(--shell-native-titlebar-controls-width);
-  height: var(--openclaw-native-titlebar-height, 50px);
+  height: var(--openclaw-native-titlebar-height, 52px);
+}
+
+.macos-titlebar-controls--history-only {
+  min-width: 156px;
 }
 
 .macos-titlebar-controls__button.topbar-icon-btn {
@@ -928,6 +975,42 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+/* Creation has one compact header equivalent when the navigation rail is hidden. */
+.header-new-session {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  text-decoration: none;
+}
+
+.header-new-session svg {
+  width: 20px;
+  height: 20px;
+}
+
+.header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--accent-hover);
+  color: var(--accent-foreground);
+}
+
+.header-new-session:focus-visible {
+  outline: 2px solid var(--accent-foreground);
+  outline-offset: -4px;
+}
+
+.header-new-session:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .topbar-icon-btn {
   width: 32px;
   height: 32px;
@@ -1253,14 +1336,14 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
-.sidebar-session-toolbar__button[aria-expanded="true"] {
+.sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
 }
 
 /* The filter summary names the active filter; the funnel only keeps its dot. */
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
-.sidebar-session-toolbar__button[aria-expanded="true"],
+.sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"],
 .sidebar-session-toolbar__button.sidebar-session-sort--filtered {
   color: var(--text);
   opacity: 1;
@@ -1875,18 +1958,33 @@ openclaw-settings-save-indicator:empty {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
   --session-row-bg: var(--session-row-tint, transparent);
 
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
   padding-right: 2px;
   border-radius: var(--radius-md);
-  background: var(--session-row-bg);
   color: var(--muted);
   cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+/* Inset only the paint: adjacent fills need breathing room without shrinking
+   click targets, moving text, or changing the list's density. */
+.sidebar-recent-session::after {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  z-index: -1;
+  border: 1px solid var(--session-row-border, transparent);
+  border-radius: inherit;
+  background: var(--session-row-bg);
+  pointer-events: none;
+  transition: inherit;
 }
 
 /* A wash makes tags scannable without coloring the title or replacing the
@@ -2938,6 +3036,7 @@ a:is(
     .sidebar-online__person,
     .sidebar-brand__new-thread,
     .sidebar-new-session,
+    .header-new-session,
     .sidebar-session-catalog-new,
     .settings-sidebar__item,
     .settings-sidebar__subitem,
@@ -3042,13 +3141,17 @@ a:is(
   min-height: max(32px, var(--sidebar-session-row-min-height));
   padding: 0 8px;
   border: 1px solid transparent;
-  background: var(--session-row-bg);
   color: var(--muted);
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.sidebar-zone-entry .sidebar-recent-session::after {
+  /* The host's transparent border still owns its original layout footprint. */
+  inset: 1px -1px;
 }
 
 .sidebar-zone-entry .sidebar-recent-session__link {
@@ -3085,15 +3188,17 @@ a:is(
     color-mix(in srgb, var(--bg-hover) 84%, transparent)
   );
 
+  --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
+
   color: var(--text);
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
   --session-row-bg: color-mix(in srgb, var(--text) 10%, transparent);
 
+  --session-row-border: color-mix(in srgb, var(--accent) 16%, transparent);
+
   color: var(--text-strong);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* Multi-select overrides both tag and active fills, including pinned rows. */
@@ -4513,17 +4618,22 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
     );
   }
 
-  html.openclaw-native-web-chrome & {
-    --page-toolbar-reserve: calc(
-      var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
-        var(--shell-chrome-controls-gap) + var(--shell-attention-width, 0px) -
-        var(--content-inline-padding)
-    );
-  }
-
   html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-chrome) & {
     --page-toolbar-clearance: 48px;
     --page-toolbar-reserve: 0px;
+  }
+}
+
+html.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--settings)
+  .content:not(.content--chat) {
+  --page-toolbar-reserve: calc(
+    var(--shell-native-titlebar-controls-left) - var(--shell-nav-width) +
+      var(--shell-native-titlebar-controls-width) + 8px - var(--content-inline-padding)
+  );
+
+  &:not(.content--toolbar-header, .content--actions-blocked) {
+    padding-top: calc(var(--page-toolbar-height) + 16px);
   }
 }
 

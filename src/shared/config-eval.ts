@@ -158,7 +158,7 @@ export async function prepareBinaryAvailability(
     process.cwd() === cwd;
   const probe = async (bin: string) => {
     for (const candidate of binaryCandidates(search, bin)) {
-      if (failure || !isCurrent()) {
+      if (failure) {
         return;
       }
       assertCurrent?.();

@@ -397,7 +397,7 @@ suite.define(() => {
       await agentPicker.locator(".agent-select__trigger").click();
       await pollLocatorText(agentPicker.locator(".agent-select__menu-title")).toBe("Agents");
       await captureProjectUiProof(suite, page, "new-session-agent-menu-label.png", {
-        surface: agentPicker.locator('wa-dropdown [part="menu"]'),
+        surface: agentPicker.locator(".agent-select__menu"),
         content: [agentPicker.locator(".agent-select__menu-title")],
       });
       await page.keyboard.press("Escape");

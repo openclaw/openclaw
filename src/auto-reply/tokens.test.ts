@@ -63,6 +63,25 @@ describe("isSilentReplyText", () => {
 });
 
 describe("isSilentReplyPayloadText", () => {
+  it.each(["NO_", "NO_R", "NO_RE", "NO_REP", "NO_REPL", " \nNO_R \n"])(
+    "recognizes a truncated final silent token: %j",
+    (text) => {
+      expect(isSilentReplyPayloadText(text)).toBe(true);
+    },
+  );
+
+  it.each(["N", "NO", "No", "no_r", "No issues found", "NO_R alert", "NO_REPLY_EXTRA"])(
+    "preserves ordinary final text: %j",
+    (text) => {
+      expect(isSilentReplyPayloadText(text)).toBe(false);
+    },
+  );
+
+  it("keeps custom silent tokens exact in final payloads", () => {
+    expect(isSilentReplyPayloadText("HELP-", "HELP-QUIET")).toBe(false);
+    expect(isSilentReplyPayloadText("NO_R", "NO_RESPONSE")).toBe(false);
+  });
+
   it("returns true when leaked reasoning text ends in NO_REPLY", () => {
     expect(
       isSilentReplyPayloadText(

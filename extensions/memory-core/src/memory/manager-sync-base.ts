@@ -36,6 +36,7 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { MemoryBackgroundRebuildInterruptedError } from "./manager-sync-control.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
@@ -212,7 +213,7 @@ export abstract class MemoryManagerSyncBase {
       this.sessionBackgroundIndexing && (this.sessionAgentBusy || this.closing || this.closed);
     if (interrupted && this.database !== this.publishedDatabase) {
       // A partial shadow must never replace the published index; retry the rebuild.
-      throw new Error("Memory background rebuild interrupted by foreground activity");
+      throw new MemoryBackgroundRebuildInterruptedError();
     }
     return interrupted;
   }

@@ -2,13 +2,36 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as configEnv from "../config/config-env-vars.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
+
+it("keeps a usage inventory within its captured sibling database owners", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.path("usage-store", "sessions.json");
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    const sessionFile = path.join(path.dirname(storePath), "recorded.jsonl");
+    fs.writeFileSync(sessionFile, "{}\n");
+    const prepared = prepareUsageCostWorker({ agentId: "main", storePath, env: state.env });
+    // Another startup refresh creates a sibling after this operation captured its custody.
+    openOpenClawAgentDatabase({
+      agentId: "other",
+      path: path.join(path.dirname(storePath), "openclaw-agent.other.sqlite"),
+      env: state.env,
+    });
+    await expect(runUsageCostWorker(prepared, { kind: "inventory" })).resolves.toMatchObject({
+      kind: "inventory",
+      files: [{ kind: "jsonl", sourcePath: sessionFile }],
+    });
+  });
+});
 
 it("refreshes and reads usage with the captured Windows environment and database", async () => {
   await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {

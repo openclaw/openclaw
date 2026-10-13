@@ -14,8 +14,8 @@ import type {
   readTranscriptMutationStateSync,
   recordSessionParticipant,
   listSessionParticipantsReadOnly,
-  stageSessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
+import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -194,13 +194,19 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
-    stageSessionPendingInput: mocks.stageSessionPendingInput,
     // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
     hasSessionTranscriptEventsSync: mocks.hasSessionTranscriptEventsSync,
     readTranscriptMutationStateSync: mocks.readTranscriptMutationStateSync,
   };
+});
+
+vi.mock("../../config/sessions/session-accessor.pending-inputs.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.pending-inputs.js")
+  >("../../config/sessions/session-accessor.pending-inputs.js");
+  return { ...actual, stageSessionPendingInput: mocks.stageSessionPendingInput };
 });
 
 vi.mock("../../sessions/user-turn-transcript.js", async () => {

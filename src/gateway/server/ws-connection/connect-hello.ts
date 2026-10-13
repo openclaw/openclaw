@@ -1,6 +1,7 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
 import {
   GATEWAY_SERVER_CAPS,
+  ErrorCodes,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
@@ -26,6 +27,7 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { normalizeControlUiBasePath } from "../../control-ui-shared.js";
 import {
   broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
@@ -34,6 +36,7 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
@@ -150,7 +153,13 @@ export async function sendGatewayHello(
     scopes,
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
-  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
+  const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiLocation = ingress
+    ? {
+        origin: ingress.publicOrigin,
+        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
+      }
+    : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
@@ -283,7 +292,11 @@ export async function sendGatewayHello(
           if (!consumed) {
             await releasePendingNodePairingCleanup();
             setCloseCause("bootstrap-token-consume-failed");
-            close();
+            context.sendHandshakeErrorResponse(
+              ErrorCodes.UNAVAILABLE,
+              "bootstrap token unavailable",
+            );
+            close(1008, "bootstrap token unavailable");
             return;
           }
           bootstrapHandoff = consumed;
@@ -294,11 +307,10 @@ export async function sendGatewayHello(
         `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
       );
       await releasePendingNodePairingCleanup();
-      setCloseCause("bootstrap-token-consume-failed", { error: formatForLog(err) });
-      close();
-      return;
+      throw err;
     }
   }
+  let helloWriteStarted = false;
   try {
     // Bootstrap bookkeeping can await; read live ingress and suspension at delivery.
     if (role === "operator") {
@@ -319,17 +331,8 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
-    const client = context.handler.getClient();
-    if (
-      client?.presenceKey &&
-      !client.invalidated &&
-      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
-      !context.handler.isClosed()
-    ) {
-      commitPresence(client.presenceKey, connId);
-    }
-    onHelloDelivered();
   } catch (err) {
     if (bootstrapHandoff) {
       if (bootstrapHandoff.completion) {
@@ -354,9 +357,27 @@ export async function sendGatewayHello(
       }
     }
     await releasePendingNodePairingCleanup();
+    if (!helloWriteStarted) {
+      throw err;
+    }
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
-    close();
+    logGateway.warn(`hello delivery failed conn=${connId}: ${formatForLog(err)}`);
+    close(1011, "gateway hello delivery failed");
     return;
+  }
+  onHelloDelivered();
+  try {
+    const client = context.handler.getClient();
+    if (
+      client?.presenceKey &&
+      !client.invalidated &&
+      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+      !context.handler.isClosed()
+    ) {
+      commitPresence(client.presenceKey, connId);
+    }
+  } catch (err) {
+    logGateway.warn(`presence commit failed conn=${connId}: ${formatForLog(err)}`);
   }
   if (bootstrapHandoff) {
     try {

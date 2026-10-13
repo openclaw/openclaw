@@ -27,7 +27,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - Use `x-openclaw-session-key` for explicit session routing (rejected with `400 invalid_request_error` if it uses a reserved namespace: `subagent:`, `cron:`, `acp:`).
 - Use `x-openclaw-message-channel` for a non-default synthetic ingress channel context.
 
-For the canonical explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
+For the shared explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
 
 See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security).
 
@@ -267,6 +267,8 @@ Disconnecting the HTTP client cancels active source-URL downloads and the agent 
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts. OpenClaw normalizes common OpenAI-style aliases before those counters reach downstream status/session surfaces, including `input_tokens` / `output_tokens` and `prompt_tokens` / `completion_tokens`.
+
+If a response ends before complete usage arrives, JSON responses and terminal streaming resources omit `usage` instead of presenting zero or provisional counts as complete. Stream completion does not depend on a usage report arriving.
 
 ## Errors
 

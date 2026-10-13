@@ -7,6 +7,7 @@ import { createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../components/login-gate.ts";
 import { i18n } from "../i18n/index.ts";
+import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { solidContent } from "../lit/solid-content.tsx";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
@@ -53,12 +54,12 @@ async function settleRootContent(): Promise<void> {
   flush();
 }
 
-async function createWarmSurface(warm = true, startup?: Promise<void>) {
+async function createWarmSurface(warm = true, startup?: Promise<void>, authMethod = "token") {
   if (warm) {
     const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
     const record: BootRecord = {
       version: 2,
-      authMethod: "token",
+      authMethod,
       credential: "9d17676d",
       savedAt: Date.now(),
       scope,
@@ -113,6 +114,67 @@ function loginGate(container: HTMLElement) {
 }
 
 describe("warm boot app root", () => {
+  it("pins embedded ingress to its serving Gateway and never offers a shared-credential login", async () => {
+    document.documentElement.dataset.openclawRemoteIngress = "true";
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+      gatewayUrl: "wss://dev-gateway.example",
+      proxyPath: "/dev-gateway",
+    });
+    window.history.replaceState(
+      {},
+      "",
+      "/chat/main#gatewayUrl=wss%3A%2F%2Fother.example&token=synthetic-token&bootstrapToken=synthetic-bootstrap&nativeControlAuth=wss%3A%2F%2Fother.example",
+    );
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl: "wss://other.example",
+      token: "synthetic-native-token",
+    };
+    try {
+      localStorage.setItem(
+        "openclaw-device-identity-v1",
+        JSON.stringify({
+          version: 1,
+          deviceId: "previous-visitor",
+          publicKey: "AA",
+          privateKey: "AA",
+          createdAtMs: 1,
+        }),
+      );
+      storeDeviceAuthToken({
+        deviceId: "previous-visitor",
+        role: "operator",
+        gatewayUrl: `ws://${window.location.host}`,
+        token: "test-token",
+        scopes: ["operator.admin", "operator.read"],
+      });
+      const { snapshot, container, draw } = await createWarmSurface(
+        true,
+        undefined,
+        "device-token",
+      );
+      expect(runtime!.warmBoot).toBe(false);
+      expect(runtime!.context.gateway.hasStoredDeviceToken?.()).toBe(false);
+      expect(runtime!.context.gateway.forgetDeviceToken?.()).toBe(false);
+      expect(runtime!.context.gateway.connection.gatewayUrl).toBe(`ws://${window.location.host}`);
+      expect(runtime!.context.gateway.connection.token).toBe("");
+      expect(runtime!.context.gateway.connection.bootstrapToken).toBe("");
+      expect(runtime!.pendingGatewayConnection).toBeNull();
+      await draw();
+      expect(container.querySelector("openclaw-login-gate")).toBeNull();
+      snapshot.phase = "offline";
+      snapshot.lastError = "Ingress unavailable";
+      snapshot.lastErrorCode = "AUTH_DEVICE_TOKEN_MISMATCH";
+      await draw();
+      expect(container.querySelector("openclaw-login-gate")).toBeNull();
+      await vi.dynamicImportSettled();
+      await settleRootContent();
+      expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+    } finally {
+      delete document.documentElement.dataset.openclawRemoteIngress;
+      delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+    }
+  });
+
   it("preserves browser escape focus when the document rerenders its label", () => {
     host = document.createElement("div");
     document.body.append(host);

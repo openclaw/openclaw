@@ -207,7 +207,7 @@ function selectsChildEntries(
   return request.selection?.kind === "children";
 }
 
-/** Full rows share a snapshot with lifecycle fallback; list reads retain listing admission. */
+/** Exact facts are one statement; richer selections retain their shared snapshot. */
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
   capturedDatabase?: OpenClawAgentReadOnlyDatabase,
@@ -276,7 +276,9 @@ export function readExactSessionEntriesWithLifecycle(
             }),
           };
         };
-        return request.lifecycleSessionKey ? snapshot(database, read) : read();
+        // Lifecycle metadata uses the captured session ID. A replaced header may be newer
+        // than the entry; its own transcript snapshot suffices for this descriptive fallback.
+        return read();
       },
       { ...request.database, env: request.env },
     );

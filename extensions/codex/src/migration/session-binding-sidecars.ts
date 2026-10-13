@@ -447,21 +447,21 @@ async function migrateSource(
         }
         const parsed = readStoredCodexAppServerBinding(current);
         if (!parsed) {
-          return `canonical plugin state is invalid at ${key}`;
+          return `current plugin state is invalid at ${key}`;
         }
         const normalized = normalizeStoredCodexAppServerBindingFingerprints(parsed);
         if (!normalized) {
-          return `canonical plugin state is invalid at ${key}`;
+          return `current plugin state is invalid at ${key}`;
         }
         if (isDeepStrictEqual(parsed, normalized)) {
           return parsed;
         }
         if (parsed.lease && parsed.lease.expiresAt > Date.now()) {
-          return `canonical plugin state is leased at ${key}`;
+          return `current plugin state is leased at ${key}`;
         }
         const { observe, compareAndApply } = store;
         if (!observe || !compareAndApply) {
-          return `canonical plugin state could not be normalized at ${key}`;
+          return `current plugin state could not be normalized at ${key}`;
         }
         const observation = await observe(key);
         const candidateParsed = readStoredCodexAppServerBinding(observation.value);
@@ -475,7 +475,7 @@ async function migrateSource(
         // Offline migration is best effort: a conflicting writer leaves the sidecar for the next run.
         const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
         if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
-          return `canonical plugin state changed at ${key}`;
+          return `current plugin state changed at ${key}`;
         }
         importedKeys++;
         return normalized;
@@ -521,7 +521,7 @@ async function migrateSource(
           return retain(current);
         }
         if (current && !hasExpected(current, entry.value)) {
-          return retain(`canonical plugin state changed at ${entry.key}`);
+          return retain(`current plugin state changed at ${entry.key}`);
         }
       }
       for (const entry of entries) {
@@ -529,7 +529,7 @@ async function migrateSource(
           importedKeys++;
         }
         if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-          return retain(`canonical plugin state changed at ${entry.key}`);
+          return retain(`current plugin state changed at ${entry.key}`);
         }
       }
       if (owner) {
@@ -541,7 +541,7 @@ async function migrateSource(
           typeof ownershipResult === "string"
             ? ownershipResult
             : ownershipResult
-              ? "its canonical session was deleted"
+              ? "its saved session was deleted"
               : undefined;
         if (ownershipWarning) {
           if (sessionEntry?.value.state === "active") {
@@ -579,7 +579,7 @@ async function migrateSource(
         } else {
           for (const entry of entries) {
             if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-              return retain(`canonical plugin state changed at ${entry.key}`);
+              return retain(`current plugin state changed at ${entry.key}`);
             }
           }
         }

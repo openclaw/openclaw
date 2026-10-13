@@ -427,7 +427,7 @@ suite.define(() => {
               .count(),
           )
           .toBe(3);
-        const peoplePopover = activityPage.locator("wa-popover.activity-feed__people-popover");
+        const peoplePopover = activityPage.locator(".activity-feed__people-popover:popover-open");
         const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
         if (proofPhase) {
           await page.screenshot({

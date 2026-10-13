@@ -160,6 +160,53 @@ struct UpdateOrchestrationTests {
         #expect(transition.toVersion == "2026.7.6")
     }
 
+    @Test(arguments: ["missing", "stale", "newer-notice", "future-incomplete", "corrupt"])
+    func `same version launches reconcile managed runtime without a usable receipt`(_ receiptState: String) async throws {
+        let suite = "UpdateOrchestrationTests.receipt-independent.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("2026.9.1", forKey: lastLaunchedAppVersionKey)
+        switch receiptState {
+        case "stale":
+            PostAppUpdateReceiptStore.record(
+                fromVersion: "2026.8.1", toVersion: "2026.8.2", defaults: defaults)
+        case "newer-notice":
+            PostAppUpdateReceiptStore.record(
+                fromVersion: "2026.9.1", toVersion: "2026.9.2", defaults: defaults)
+        case "future-incomplete":
+            PostAppUpdateReceiptStore.recordSetupRecovery(
+                fromVersion: "2026.9.1", toVersion: "2026.9.2", defaults: defaults)
+        case "corrupt":
+            defaults.set(Data("not a receipt".utf8), forKey: postAppUpdateReceiptKey)
+        default:
+            break
+        }
+        let pending = PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.9.1", onboardingSeen: true, defaults: defaults)
+        #expect(pending == nil)
+        #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(
+            currentVersion: "2026.9.1", defaults: defaults) == nil)
+        let receipt = try #require(PostUpdateController.launchReceipt(
+            pending: pending, profile: AppProfile(environment: [:]), bundledApp: false,
+            onboardingSeen: true, appVersion: "2026.9.1"))
+        #expect(receipt.toVersion == "2026.9.1")
+        let resolution = await PostUpdateController.resolveGatewayAction(
+            context: PostUpdateRuntimeContext(
+                bundledApp: false, usesSeededGateway: false, hasService: true,
+                installedCLI: nil, ownsManagedRuntime: true),
+            receipt: receipt)
+        {
+            .incompatible(location: "/fixture/openclaw", found: "2026.8.1", required: "2026.9.1")
+        }
+        #expect(resolution.action == .update)
+        #expect(PostUpdateController.notificationContinuation(
+            receipt: receipt, runtimeVerification: .verified, migrationOnlyLaunchCheck: true) == .completeSilently)
+        let dispatched = PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+            receipt: receipt, owner: .gateway, defaults: defaults)
+        #expect(dispatched.toVersion == "2026.9.1")
+        #expect(dispatched.coreUpdatePending)
+    }
+
     @Test func `post-update notice pages to latest direct top-level interaction`() async throws {
         var requestedOffsets: [Int] = []
         let selected = try #require(try await PostUpdateController.preferredNotificationSession(loadPage: { offset in

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { recordCommittedSessionMetadataPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { prepareGitHubPublicationOptionsRead } from "./github-personal-authorization.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import {
+  prepareGitHubPublicationOptionsRead,
+  preparePersonalGitHubSessionActionV2,
+} from "./github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -38,6 +42,18 @@ vi.mock("../session-utils-store-worker.js", () => ({
     return loaded;
   },
 }));
+// mock-isolation: Publication requester admission does not open profile or session stores here.
+vi.mock("../github-publication-requester.js", () => ({
+  prepareGitHubPublicationRequesterV2: async () => ({
+    requester: {
+      signal: new AbortController().signal,
+      prepareSource: () => {
+        throw new Error("Publication source preparation is outside this authorization test.");
+      },
+    },
+    release: () => {},
+  }),
+}));
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
@@ -61,9 +77,14 @@ vi.mock("../operator-role-policy.js", () => ({
   resolveOperatorRolePolicyForAssignment: () =>
     mocks.roleScopes ? { scopes: mocks.roleScopes } : null,
 }));
+// mock-isolation: Selected-session authorization is supplied directly, without initializing sharing storage.
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
-  resolveSessionMutationAuthorization: () => ({}),
+}));
+
+// mock-isolation: Session sharing is admitted independently of the live personal grant checked here.
+vi.mock("../session-sharing-authorization-async.js", () => ({
+  resolveSessionMutationAuthorizationAsync: async () => ({}),
 }));
 
 function createRequest() {
@@ -121,6 +142,36 @@ describe("GitHub publication request discovery", () => {
     mocks.roleScopes = undefined;
     mocks.loadSession.mockReset();
     mocks.loadSession.mockReturnValue(sessionRead());
+  });
+
+  it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
+    const request = createRequest();
+    const grant = new AbortController();
+    const principal = createRemoteControlUiIngressTestContext({
+      principal: { kind: "person", profileId: "profile-cache-test" },
+      signal: grant.signal,
+    }).resolvePrincipal();
+    delete request.client.connId;
+    request.client.authenticatedUserProfile = principal.authenticatedUserProfile;
+    request.client.internal = {
+      remoteIngressPrincipal: principal,
+      operatorRoleActor: principal.operatorRoleActor,
+    };
+    request.context.getClientConnIds = () => new Set();
+    const read = await prepareGitHubPublicationOptionsRead(request, { sessionKey: "main" });
+    releases.push(read.release);
+    expect(read.personal.kind).toBe("eligible");
+    const publication = await preparePersonalGitHubSessionActionV2(request, {
+      sessionKey: "main",
+    });
+    try {
+      expect(() => publication.action.assertCurrent()).not.toThrow();
+      grant.abort();
+      expect(() => read.currentSession()).toThrow("connection is no longer current");
+      expect(() => publication.action.assertCurrent()).toThrow("current authenticated human");
+    } finally {
+      publication.release();
+    }
   });
 
   it.each([

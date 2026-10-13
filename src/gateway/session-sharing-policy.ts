@@ -6,11 +6,10 @@ import {
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { isSessionMember, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -28,9 +27,9 @@ import {
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
-  captureIncognitoSessionMutationFacts,
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
+  captureSessionSharingMemoryFacts,
+  readSessionSharingMemoryFacts,
+  SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -111,20 +110,11 @@ function captureSessionSharingIncognitoTarget(params: {
   }
   const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const memory = captureSessionSharingActorBinding({
+  return readSessionSharingMemoryFacts({
     agentId,
     sessionKey: canonicalKey,
     resolved: { storePath },
   });
-  if (memory) {
-    return { kind: "memory" as const, binding: memory, canonicalKey, storePath };
-  }
-  const binding = captureIncognitoSessionBinding({
-    agentId,
-    sessionKey: canonicalKey,
-    storePath,
-  });
-  return binding && { kind: "native" as const, binding, canonicalKey };
 }
 
 export async function resolveSessionSharingTargetAsync(
@@ -161,20 +151,7 @@ export function resolveSessionSharingTarget(params: {
 }): SessionSharingTarget | null {
   const captured = captureSessionSharingIncognitoTarget(params);
   if (captured) {
-    const facts =
-      captured.kind === "memory"
-        ? captureSessionActorMutationFacts(
-            captured.binding,
-            captured.canonicalKey,
-            true,
-            captured.storePath,
-          )
-        : captureIncognitoSessionMutationFacts(captured.binding, captured.canonicalKey, true);
-    const target = facts.readCurrent().target;
-    if (captured.kind === "memory" && target?.readSource) {
-      params.onReadSource?.(target.readSource);
-    }
-    return target;
+    return captured.target;
   }
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
@@ -208,22 +185,34 @@ export async function withSessionSharingTarget<T>(
   }) => T,
   retainedSelection?: GatewaySessionStoreSelection,
 ): Promise<T> {
-  // Prepared sharing must enforce the same configured physical target as synchronous reads.
-  const captured = captureSessionSharingIncognitoTarget(params);
-  if (captured?.kind === "memory") {
-    const { binding, canonicalKey } = captured;
-    const facts = captureSessionActorMutationFacts(binding, canonicalKey, true, captured.storePath);
-    const { target, members } = facts.readCurrent();
-    return consume({
-      target,
-      storageTarget: {
-        agentId: facts.location.agentId,
-        canonicalKey,
-        storePath: facts.location.path,
+  if (isIncognitoSessionKey(params.sessionKey)) {
+    const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
+    let active = true;
+    const facts = captureSessionSharingMemoryFacts(
+      {
+        agentId,
+        sessionKey: canonicalKey,
+        resolved: {
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+        },
       },
-      members,
-      assertCurrent: () => facts.assertCurrent(),
-    });
+      () => {
+        if (!active) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+      },
+    )!;
+    try {
+      const { target, members } = facts.readCurrent();
+      return await consume({
+        target,
+        storageTarget: { agentId, canonicalKey, storePath: facts.location.path },
+        members,
+        assertCurrent: facts.assertCurrent,
+      });
+    } finally {
+      active = false;
+    }
   }
   const read: Parameters<typeof withGatewaySessionStoreTarget<T>>[1] = (
     selected,
@@ -339,17 +328,10 @@ export function resolveSessionSharingRole(
   if (sessionCap === "none") {
     return "viewer";
   }
-  const member =
-    params.isMember ??
-    isSessionMember(
-      {
-        agentId: params.target.agentId,
-        sessionKey: params.target.storeKey,
-        storePath: params.target.storePath,
-      },
-      identity.id,
-    );
-  return member ? "member" : "viewer";
+  if (params.isMember === undefined) {
+    throw new SessionMutationFactsUnavailableError();
+  }
+  return params.isMember ? "member" : "viewer";
 }
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
@@ -430,16 +412,6 @@ export async function authorizeResolvedSessionMutationAsync(params: {
       { policy: sharing.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
     );
   });
-}
-
-/** Synchronous final-authority exception for existing security effect guards. */
-export function authorizeResolvedSessionMutation(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  sessionKey: string;
-  agentId?: string;
-}): ErrorShape | null {
-  return authorizeSessionMutationTarget(params, () => resolveSessionSharingTarget(params));
 }
 
 export type PreparedSessionMutationFacts = {

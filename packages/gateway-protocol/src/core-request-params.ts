@@ -11,6 +11,7 @@ import type {
   EnvironmentsSessionStatusParams,
   EnvironmentsSessionDestroyParams,
   EnvironmentsSessionExecParams,
+  EnvironmentsAdoptSuggestedProfileParams,
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
@@ -56,6 +57,7 @@ export type GatewayCoreRequestParams = {
   "environments.session.status": EnvironmentsSessionStatusParams;
   "environments.session.destroy": EnvironmentsSessionDestroyParams;
   "environments.session.exec": EnvironmentsSessionExecParams;
+  "environments.adoptSuggestedProfile": EnvironmentsAdoptSuggestedProfileParams;
   "conversations.list": AgentSchema.ConversationListParams;
   "conversations.send": AgentSchema.ConversationSendParams;
   "conversations.turn": AgentSchema.ConversationTurnParams;

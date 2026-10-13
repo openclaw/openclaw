@@ -5522,7 +5522,8 @@ done
 
   it("reports the installed doctor switch unit through the systemd manager", async () => {
     const home = tempDirs.make("openclaw-doctor-busctl-shim-");
-    const serviceName = "openclaw-gateway.service";
+    // Removal must not discover an operator's identically named system service.
+    const serviceName = `${basename(home)}.service`;
     const unitPath = join(home, ".config", "systemd", "user", serviceName);
     mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
     writeFileSync(
@@ -5546,7 +5547,11 @@ done
     ];
     const binDir = join(home, "bin");
     writeExecutables(binDir, {
-      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
+      // Native manager children do not inherit OpenClaw selectors.
+      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8").replace(
+        "process.env.OPENCLAW_SYSTEMD_UNIT",
+        JSON.stringify(serviceName),
+      ),
       "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
     });
     const loadedEnv = {

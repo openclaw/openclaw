@@ -7,6 +7,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import "../../lib/toast-host.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -382,9 +384,7 @@ describe("staged attachment composer adoption", () => {
     const annotation = state.chatAttachments[0]!;
     const ordinary = storedAttachment("undo-ordinary", false);
     state.chatAttachments.push(ordinary);
-    const toastHost = document.createElement("openclaw-toast-host") as HTMLElement & {
-      updateComplete: Promise<boolean>;
-    };
+    const toastHost = document.createElement("openclaw-toast-host");
     document.body.append(toastHost);
 
     (
@@ -392,7 +392,9 @@ describe("staged attachment composer adoption", () => {
         removeBrowserAnnotation: (attachment: (typeof state.chatAttachments)[number]) => void;
       }
     ).removeBrowserAnnotation(annotation);
-    await toastHost.updateComplete;
+    await waitForSolid(() =>
+      expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
+    );
     expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).not.toBeNull();
 
@@ -402,7 +404,7 @@ describe("staged attachment composer adoption", () => {
       phase: "reconnecting",
       hello: null,
     });
-    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
 
     expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).toBeNull();

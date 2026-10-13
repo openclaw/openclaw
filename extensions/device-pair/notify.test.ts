@@ -318,7 +318,7 @@ describe("device-pair notify persistence", () => {
     "subscriber command",
     "subscriber command from another API",
     "persisted seen receipt on restart",
-  ] as const)("reuses empty notifier state and observes a later %s", async (addition) => {
+  ] as const)("sleeps with empty notifier state and observes a later %s", async (addition) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const clock = createGatewaySchedulerClock(1_000);
@@ -339,8 +339,10 @@ describe("device-pair notify persistence", () => {
       expect(warn).not.toHaveBeenCalled();
       await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
       expect(listDevicePairingMock).not.toHaveBeenCalled();
+      expect(gatewayScheduler.nextWakeAtMs).toBeNull();
       await clock.advanceBy(20_000);
       expect(storage.takeStoreReads()).toEqual([]);
+      expect(gatewayScheduler.nextWakeAtMs).toBeNull();
 
       const isSubscriberCommand = addition !== "persisted seen receipt on restart";
       if (isSubscriberCommand) {

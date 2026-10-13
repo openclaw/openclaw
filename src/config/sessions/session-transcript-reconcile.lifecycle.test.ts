@@ -56,6 +56,8 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
 beforeEach(() => setRuntimeConfigSnapshot({}));

@@ -61,6 +61,10 @@ export class ChatTranscriptController implements ReactiveController {
     return this.sessionVirtualizer?.isProgrammaticScroll ?? false;
   }
 
+  get isPositionSettled(): boolean {
+    return this.sessionVirtualizer?.isPositionSettled ?? false;
+  }
+
   scrollToEnd(options: ChatScrollToEndOptions = {}): boolean {
     return this.sessionVirtualizer?.scrollToEnd(options) ?? false;
   }

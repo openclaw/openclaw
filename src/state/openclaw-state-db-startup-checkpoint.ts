@@ -4,6 +4,7 @@ import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.j
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
@@ -14,6 +15,7 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import {
@@ -200,6 +202,7 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
     const db = openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(pathname) : pathname);
     let ownershipAdmitted = false;
     let result: { value: T } | undefined;
+    let seal: ReturnType<typeof prepareSqliteDatabaseCleanClose> | undefined;
     try {
       setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       if (getStateRuntimeSchemaAdmission(db) || checkpointAdmission.get(db)) {
@@ -270,8 +273,20 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
           db.exec("PRAGMA foreign_keys = ON;");
         }
       }
+      if (result) {
+        // This private connection closes below; carry its proof across metadata retirement.
+        // A blocked checkpoint merely leaves the next boot to validate normally.
+        try {
+          truncateSqliteWal(db, pathname);
+          seal = prepareSqliteDatabaseCleanClose(db);
+        } catch (error) {
+          process.emitWarning(`Shared-state clean-close checkpoint failed: ${String(error)}`);
+        }
+      }
     } finally {
+      using closingSeal = seal;
       db.close();
+      closingSeal?.publish();
       if (ownershipAdmitted) {
         ensureOpenClawStatePermissions(pathname, env);
       }

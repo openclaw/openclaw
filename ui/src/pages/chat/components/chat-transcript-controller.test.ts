@@ -135,6 +135,43 @@ describe("chat transcript controller", () => {
     expect(transcriptSize(container)).toBe(200);
   });
 
+  it("reveals committed initial row sizes without waiting for an animation frame", async () => {
+    stubAnimationFrames();
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    const host = new TranscriptTestHost();
+    const transcript = new ChatTranscriptController(host, () => "native-measured-tail");
+    const rows = numberedContentRows(6);
+    host.renderTranscript = () => html`
+      <div class="chat-thread">
+        ${transcript.renderSession("agent:main:native-measured-tail", (session) => {
+          session.setContentReady(true);
+          return session.render(
+            rows,
+            (row) => (row.kind === "content" ? row.content : nothing),
+            null,
+            false,
+          );
+        })}
+      </div>
+    `;
+    document.body.append(host);
+    await host.settleUpdates();
+    const extent = expectDefined(
+      host.querySelector<HTMLElement>(".chat-thread-inner"),
+      "initial rows",
+    );
+    expect(transcriptRows(host).every((row) => observedElements.has(row))).toBe(true);
+    await Promise.resolve();
+    flush();
+    await host.settleUpdates();
+    expect(extent.style.visibility).toBe("");
+    expect(
+      transcriptRows(host).every((row) => row.style.containIntrinsicBlockSize === "100px"),
+    ).toBe(true);
+    expect(host.textContent).toContain("row 5");
+    host.remove();
+  });
+
   it("keeps retained MCP rows and the virtual row model atomic through teardown", async () => {
     const teardownPending = createDeferred();
     transcriptDomState.measuredRowHeight = 180;
@@ -371,6 +408,8 @@ describe("chat transcript controller", () => {
     }));
     const props = threadProps("pane-underfill-anchor", "agent:main:underfill", messages);
     render(renderChatThread(props, transcript), container);
+    await Promise.resolve();
+    flush();
     const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
     expect(scrollElement).not.toBeNull();
     Object.defineProperties(scrollElement, {
@@ -384,6 +423,11 @@ describe("chat transcript controller", () => {
     await Promise.resolve();
     flushFrames();
     render(renderChatThread(props, transcript), container);
+    await Promise.resolve();
+    flush();
+    render(renderChatThread(props, transcript), container);
+    await Promise.resolve();
+    flush();
     expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
     expect(container.textContent).toContain("message 0");
   });
@@ -1023,6 +1067,7 @@ describe("chat transcript controller", () => {
       });
       renderRows(rows);
       for (let frame = 0; frame < 3; frame += 1) {
+        await Promise.resolve();
         flushFrames();
         renderRows(rows);
       }

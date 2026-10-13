@@ -30,10 +30,6 @@ import {
   type TranscriptSourceAuthority,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  assertCanonicalSqliteSessionKeysCurrent,
-  readWithCanonicalSessionAdmission,
-} from "./session-canonical-key.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type {
   SessionModelContextLimits,
@@ -72,15 +68,6 @@ type TranscriptContextSnapshot = {
 };
 
 const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
-
-/** Later appends are allowed; rewriting or removing the accepted turn is not. */
-export function validateSessionTranscriptContextAnchor(
-  scope: SessionTranscriptReadScope,
-  through: TranscriptEntryAnchor,
-  expectedAuthority?: TranscriptSourceAuthority,
-): void {
-  validateDetachedSessionTranscriptContext(scope, { through, expectedAuthority });
-}
 
 /** Unadmitted context retains the prefix captured by its original read snapshot. */
 export function validateSessionTranscriptContextVersion(
@@ -170,29 +157,22 @@ type TranscriptContextValidation = {
 /** Released validators share admission; only multi-statement version reads need a snapshot. */
 function validateDetachedSessionTranscriptContext(
   scope: SessionTranscriptReadScope,
-  validation: TranscriptContextValidation,
+  validation: Pick<TranscriptContextValidation, "version" | "admission">,
 ): void {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     const validate = () => {
-      if (validation.expectedAuthority) {
-        assertCanonicalSqliteSessionKeysCurrent(database);
-      }
       validateSessionTranscriptContextInDatabase(database, resolved, validation, "prefix");
     };
-    return validation.through
-      ? readWithCanonicalSessionAdmission(database, validate)
-      : validation.admission
-        ? validate()
-        : runSqliteDeferredTransactionSync(database.db, validate);
+    return validation.admission
+      ? validate()
+      : runSqliteDeferredTransactionSync(database.db, validate);
   }, toDatabaseOptions(resolved));
-  if (!result.found && (validation.through || validation.admission || validation.version)) {
+  if (!result.found && (validation.admission || validation.version)) {
     throw new SessionTranscriptReadFenceError(
       validation.admission
         ? "Current-turn transcript admission is no longer readable"
-        : validation.through
-          ? "Completed-turn transcript no longer exists"
-          : "Session transcript changed during context read",
+        : "Session transcript changed during context read",
     );
   }
 }

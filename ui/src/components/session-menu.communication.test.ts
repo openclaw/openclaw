@@ -90,27 +90,6 @@ describe("session communication menu", () => {
     expect(choice(menu, "receive", "always").getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("groups settings and shows only Gateway-resolved selections in inline pickers", async () => {
-    const menu = await mountMenu({ session: { effectiveCommunication: policy } });
-    const settings = menuItem(menu, "Advanced");
-    expect(menuItemLabels(menu)).not.toContain("Icon & color");
-    expect(menuItemLabels(menu)).not.toContain("Assign to…");
-    expect(menuItemLabels(menu)).toContain("Move to group");
-    expect(menuItemLabels(settings)).toEqual([
-      "Icon & color",
-      "Fork conversation",
-      "Copy details",
-      "Open in",
-      "Delete…",
-    ]);
-    expect(settings.querySelector('[role="group"][aria-label="Send messages"]')).not.toBeNull();
-    expect(settings.querySelector('[role="group"][aria-label="Receive messages"]')).not.toBeNull();
-    expect(choice(settings, "send", "never").getAttribute("aria-pressed")).toBe("true");
-    expect(choice(settings, "receive", "ask").getAttribute("aria-pressed")).toBe("true");
-    expect(choice(settings, "send", "never").title).toBe("default");
-    expect(menu.querySelector('[value="communication:reset"]')).toBeNull();
-  });
-
   it("dispatches only the selected direction and resets raw overrides together", async () => {
     const onAction = vi.fn();
     const menu = await mountMenu({

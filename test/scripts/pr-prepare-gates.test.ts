@@ -260,6 +260,7 @@ describe("private QA build scope", () => {
       {
         cwd: repoDir,
         env: {
+          OPENCLAW_PR_GATES_REMOTE: "local",
           OPENCLAW_BUILD_PRIVATE_QA: options.qa,
           OPENCLAW_VITEST_MAX_WORKERS: options.workers,
         },
@@ -699,7 +700,7 @@ fi
         "prepare_gates 4242",
         "cat .local/gates.env",
       ].join("\n"),
-      { cwd: repoDir },
+      { cwd: repoDir, env: { OPENCLAW_PR_GATES_REMOTE: "local" } },
     );
 
     expect(result.status).toBe(0);
@@ -746,7 +747,7 @@ fi
       ].join("\n"),
       {
         cwd: repoDir,
-        env: mode === "hosted" ? { OPENCLAW_TESTBOX: "1" } : { OPENCLAW_PR_GATES_REMOTE: "github" },
+        env: mode === "hosted" ? { OPENCLAW_TESTBOX: "1" } : {},
       },
     );
 

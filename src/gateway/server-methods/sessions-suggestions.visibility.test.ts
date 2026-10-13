@@ -13,7 +13,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
+import { addSessionSuggestionInWorker } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -67,7 +67,7 @@ describe("session suggestion visibility and role ceilings", () => {
         setRuntimeConfigSnapshot({});
         await upsertDefaultSuggestionSession();
         for (const authorId of ["alice", "bob"]) {
-          await addSessionSuggestion(
+          await addSessionSuggestionInWorker(
             { agentId: "main", sessionKey },
             { id: authorId, authorId, text: authorId },
           );
@@ -200,7 +200,7 @@ describe("session suggestion visibility and role ceilings", () => {
         ["own-idea", reader.id],
         ["other-idea", owner.id],
       ] as const) {
-        await addSessionSuggestion(
+        await addSessionSuggestionInWorker(
           { agentId: "main", sessionKey },
           {
             id,
@@ -350,7 +350,7 @@ describe("session suggestion visibility and role ceilings", () => {
         { agentId: "main", sessionKey: draftKey },
         { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
       );
-      await addSessionSuggestion(
+      await addSessionSuggestionInWorker(
         { agentId: "main", sessionKey: draftKey },
         {
           id: "draft-suggestion",
@@ -431,7 +431,7 @@ describe("session suggestion visibility and role ceilings", () => {
           visibility: "suggest",
         },
       );
-      await addSessionSuggestion(
+      await addSessionSuggestionInWorker(
         { agentId: "main", sessionKey: incognitoKey },
         {
           id: "incognito-suggestion",
@@ -683,7 +683,7 @@ describe("suggestions queued behind provider review", () => {
         const options = { ...scope, path: database.path };
         const id = "queued-provider-review-suggestion";
         if (action !== "add") {
-          await addSessionSuggestion(scope, {
+          await addSessionSuggestionInWorker(scope, {
             id,
             authorId: "owner",
             text: "Synthetic suggestion",

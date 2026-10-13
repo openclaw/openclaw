@@ -30,12 +30,12 @@ const mocks = vi.hoisted(() => ({
   cleanupTailscaleExposureRoute: vi.fn(),
 }));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+// mock-isolation: Replace the SDK spawn boundary without loading its process owners and workers.
+vi.mock("openclaw/plugin-sdk/process-runtime", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   mocks.realSpawn = actual.spawn;
   return {
-    ...actual,
-    spawn: mocks.spawn,
+    spawnOomScoreAdjusted: mocks.spawn,
   };
 });
 

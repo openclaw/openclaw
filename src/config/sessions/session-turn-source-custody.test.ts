@@ -21,6 +21,63 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([false, true])(
+  "commits initialized first input from an absent preimage (warm=%s)",
+  async (warm) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const scope = { ...f.scope, sessionKey: "agent:main:first-input", sessionId: "first-input" };
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...scope, target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] } },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "initial input actor",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Initial lifecycle",
+          timestamp: 1,
+          idempotencyKey: "first-input:user",
+        },
+        target: {
+          ...scope,
+          expectedSessionId: scope.sessionId,
+          sessionEntry: undefined,
+          initialSessionEntry: {
+            sessionId: scope.sessionId,
+            updatedAt: 1,
+            status: "done",
+            abortedLastRun: false,
+          },
+        },
+        updateMode: "none",
+      });
+      try {
+        if (warm) {
+          await input.actor.read({ assertCurrent() {}, authorize() {} });
+        }
+        bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+        await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+        expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toMatchObject({
+          sessionId: scope.sessionId,
+          status: "done",
+          abortedLastRun: false,
+        });
+        expect(
+          readTranscriptEventRows(f.database, scope.sessionId)
+            .map((row) => JSON.parse(row.eventJson))
+            .filter((event) => event.type === "message"),
+        ).toHaveLength(1);
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
 it.each([
   { phase: "acceptInput", change: "metadata" },
   { phase: "adoptRun", change: "metadata" },

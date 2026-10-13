@@ -264,6 +264,43 @@ it.each<{
   doctor?: true;
 }>([
   {
+    name: "requested open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: 60_000 },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 75_000,
+    nodeTimeout: 70_000,
+    params: { path: "/tabs/open", timeoutMs: 65_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 60_000 },
+  },
+  {
+    name: "capped open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: Number.MAX_SAFE_INTEGER },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 135_000,
+    nodeTimeout: 130_000,
+    params: { path: "/tabs/open", timeoutMs: 125_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 120_000 },
+  },
+  {
+    name: "default open navigation",
+    input: { action: "open", url: "https://example.com/slow" },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 70_000,
+    nodeTimeout: 65_000,
+    params: { path: "/tabs/open", timeoutMs: 60_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
+  {
+    name: "existing-session open attachment",
+    input: { action: "open", profile: "user", url: "https://example.com/slow" },
+    profile: "user",
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 55_000,
+    nodeTimeout: 50_000,
+    params: { path: "/tabs/open", profile: "user", timeoutMs: 45_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
+  {
     name: "requested download wait",
     input: { action: "waitfordownload", path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
     replies: [

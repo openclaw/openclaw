@@ -23,6 +23,7 @@ import {
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
+  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
@@ -31,6 +32,7 @@ import {
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
 import {
+  mergeSubagentRunReadScope,
   prepareSubagentRunReadSnapshot,
   prepareSubagentMaintenanceReadSnapshot,
   prepareSubagentSessionRunReadSnapshot,
@@ -40,6 +42,7 @@ import {
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
@@ -274,6 +277,28 @@ export function consumeFreshSubagentRegistryRows<T>(
   return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, consume);
 }
 
+/** Registration shares the loaded registry; committed receipts keep retained generations current. */
+export async function prepareSubagentRegistrationRows(
+  childSessionKey: string,
+  selectedRunIds: readonly string[],
+  context: OpenClawStateWorkerContext,
+): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
+  const prepared = await prepareSubagentRunsCache(
+    persistedSubagentRunsReadCache,
+    readAllSubagentRunsInWorker,
+    context,
+  );
+  const runIds = new Set(selectedRunIds);
+  return () =>
+    mergeSelectedFullRuns(
+      persistedSubagentRunsReadCache,
+      subagentRuns,
+      prepared,
+      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
+      { context },
+    );
+}
+
 export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
@@ -417,6 +442,20 @@ export function getSubagentSessionListRunsSnapshotForRead(
     });
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentSessionListRunsReadCache);
+}
+
+/** Current control facts reuse the same membership owner as asynchronous payload reads. */
+export function getSubagentControlRunsSnapshotForRead(
+  sessionKey: string,
+): Map<string, SubagentRunReadRecord> {
+  const cache = persistedSubagentSessionListRunsReadCache;
+  const compact = shouldReadPersistedSubagentRuns()
+    ? loadPersistedSubagentRunsForRead(cache)
+    : new Map<string, SubagentRunReadRecord>();
+  return mergeSubagentRunReadScope(subagentRuns, cache, compact, {
+    sessionKeys: [sessionKey],
+    descendants: false,
+  });
 }
 
 /** Exact rows share the owner snapshot while projecting only their complete requester trees. */

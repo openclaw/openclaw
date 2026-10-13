@@ -396,8 +396,17 @@ export async function ensureProjectCheckoutCommit(
     throw new ProjectCloneError("clone_failed", "The repository commit is invalid.");
   }
   const command = (args: string[]) => runProjectCheckoutGit(input, options, args);
-  const present = await command(["cat-file", "-e", `${input.commit}^{commit}`]);
-  if (present.code === 0 && present.termination === "exit") {
+  // --missing disables lazy fetching before revision lookup, including on older
+  // Git. The commit graph cannot stand in for a physically present commit.
+  const present = await command([
+    "-c",
+    "core.commitGraph=false",
+    "rev-list",
+    "--missing=allow-any",
+    "--no-walk",
+    `${input.commit}^{commit}`,
+  ]);
+  if (present.code === 0 && present.termination === "exit" && present.stdout.trim()) {
     return;
   }
   const fetch = () =>

@@ -262,6 +262,13 @@ export const executePreparedWorkerInference = async (
               baseUrl: model.baseUrl,
               ...observation,
             }),
+          {
+            runId: request.runId,
+            sessionId: request.sessionId,
+            accountRoute: prepared.auth.profileId
+              ? `profile:${prepared.auth.profileId}`
+              : "direct:openai",
+          },
         )
       : streamAgent.streamFn;
     const model = providerModel;

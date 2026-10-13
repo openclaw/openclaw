@@ -1005,6 +1005,30 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.reportedModelRef.model).toBe("cost-model");
   });
 
+  it("keeps a configured row's declared response model out of the reroute fact", async () => {
+    const prepared = await prepareStats({
+      responseModel: "upstream-model",
+      config: {
+        models: {
+          providers: {
+            "cost-test-provider": {
+              models: [{ id: "cost-model", responseModelEquivalent: true }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(prepared.agentMeta.terminalReceipt).toMatchObject({
+      effective: {
+        provider: "cost-test-provider",
+        model: "cost-model",
+        responseModel: "upstream-model",
+      },
+      rerouted: false,
+    });
+  });
+
   it("records producer source delivery without an extracted messaging target", async () => {
     const prepared = await prepareStats({
       attempt: {

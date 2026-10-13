@@ -197,11 +197,9 @@ describe("cli json stdout contract", () => {
           expect(result.stdout).toContain(`.openclaw/trajectory-exports/${output}`);
           expect(result.stdout).toContain("trajectory-process-session");
         }
-        await expect(
-          fs.access(
-            path.join(tempHome, ".openclaw", "trajectory-exports", output, "manifest.json"),
-          ),
-        ).resolves.toBeUndefined();
+        await fs.access(
+          path.join(tempHome, ".openclaw", "trajectory-exports", output, "manifest.json"),
+        );
       },
       { prefix: "openclaw-trajectory-success-e2e-" },
     );

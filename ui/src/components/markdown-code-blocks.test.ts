@@ -1,5 +1,3 @@
-import { html, nothing, render } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
@@ -17,7 +15,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(document, "execCommand");
   }
-  document.body.innerHTML = "";
+  document.body.replaceChildren();
 });
 
 function renderCodeCopyButton(text = "const answer = 42;"): HTMLButtonElement {
@@ -54,7 +52,10 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
       tableInteractions: "enabled",
     },
   );
-  render(html`<section class="chat-text">${unsafeHTML(content)}</section>`, container);
+  const section = document.createElement("section");
+  section.className = "chat-text";
+  section.innerHTML = content;
+  container.append(section);
   let blocks = new MarkdownBlocks(container.querySelector("section")!);
   blocks.update(true);
   const code = container.querySelector("code");
@@ -101,7 +102,7 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
     expect(observed.size).toBe(0);
   } finally {
     blocks.dispose();
-    render(nothing, container);
+    container.replaceChildren();
   }
 });
 
@@ -112,12 +113,13 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
   );
-  const view = (prose: string) =>
-    html`<section class="chat-text">
-      ${unsafeHTML(content)}
-      <p>${prose}</p>
-    </section>`;
-  render(view("First"), container);
+  const section = document.createElement("section");
+  section.className = "chat-text";
+  section.innerHTML = content;
+  const paragraph = document.createElement("p");
+  paragraph.textContent = "First";
+  section.append(paragraph);
+  container.append(section);
   const blocks = new MarkdownBlocks(container.querySelector("section")!);
   blocks.update(true);
   await Promise.resolve();
@@ -129,7 +131,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
 
   try {
     for (const prose of ["First paragraph", "First paragraph grows", "First paragraph grows"]) {
-      render(view(prose), container);
+      paragraph.textContent = prose;
       blocks.update(true);
       await Promise.resolve();
       await Promise.resolve();
@@ -148,7 +150,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
     expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
   } finally {
     blocks.dispose();
-    render(nothing, container);
+    container.replaceChildren();
   }
 });
 

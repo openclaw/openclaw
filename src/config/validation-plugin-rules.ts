@@ -98,12 +98,6 @@ export function validatePreparedConfigWithPlugins(
     return registryInfo;
   };
 
-  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
-    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
-    if (pluginMetadataSnapshot) {
-      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
-    }
-  }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
         env: opts.env,

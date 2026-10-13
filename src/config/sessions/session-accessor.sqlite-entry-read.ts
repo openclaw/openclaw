@@ -282,7 +282,7 @@ function scanSessionEntryRows(
   });
 }
 
-/** Indexed child metadata shared by native compatibility and the incognito actor. */
+/** Indexed child metadata for the entry reader worker; memory actors read their own state. */
 export function readSessionChildEntriesInDatabase(
   database: OpenClawAgentDatabaseReader,
   parentSessionKeys: string | readonly string[],

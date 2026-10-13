@@ -4,9 +4,9 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -42,13 +42,11 @@ import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
+import { createCompactionSessionIdReporter } from "./command/compaction-accounting.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { prepareCommandForegroundRun } from "./command/maintenance.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
-import {
-  createCompactionSessionIdReporter,
-  finalizeEmbeddedAgentCommand,
-} from "./command/post-run.js";
+import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandRuntimeContext,
@@ -87,11 +85,19 @@ async function agentCommandInternal(
   watchSkills = false,
 ) {
   const sessionSource = prepared.sessionKey
-    ? captureIncognitoSessionSource({
-        agentId: prepared.sessionAgentId,
-        storePath: prepared.storePath,
-        sessionKey: prepared.sessionKey,
-      })
+    ? captureSessionActorStorageOwner(
+        {
+          agentId: prepared.sessionAgentId,
+          storePath: prepared.storePath,
+          sessionKey: prepared.sessionKey,
+        },
+        {
+          assertCurrent() {
+            prepared.opts.assertSourceCurrent?.();
+          },
+          authorize() {},
+        },
+      )
     : undefined;
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = prepared.opts.modelRun === true || prepared.opts.promptMode === "none";
@@ -228,16 +234,7 @@ async function agentCommandInternal(
         const currentEntry =
           sessionStoreRuntime && storePath && sessionKey
             ? sessionSource
-              ? await withIncognitoSessionEntry(
-                  sessionSource,
-                  normalizeStoreSessionKey(sessionKey),
-                  () => {
-                    opts.abortSignal?.throwIfAborted();
-                    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                    opts.assertSourceCurrent?.();
-                  },
-                  async (entry) => entry,
-                )
+              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
               : await sessionStoreRuntime.readSessionEntryInWorker({
                   ...scope,
                   readConsistency: "latest",

@@ -206,11 +206,22 @@ async function prepareActiveRunsForRestartRecovery(
             activeRuns,
             reason: params.reason,
             isActiveRun: (run) => {
-              const entry = params.chatAbortControllers.get(run.runId);
+              const capturedEntry = activeEntries.get(run.runId);
+              // Restart cancellation can retire the registration before the marker commits.
+              // Keep its captured custody only while no replacement owns this session.
+              const entry =
+                params.chatAbortControllers.get(run.runId) ??
+                (capturedEntry?.controller.signal.aborted &&
+                ![...params.chatAbortControllers.values()].some(
+                  (current) =>
+                    current.sessionKey === run.sessionKey && current.sessionId === run.sessionId,
+                )
+                  ? capturedEntry
+                  : undefined);
               const candidate = params.restartRecoveryCandidates?.get(run.runId);
               return (
                 (entry &&
-                  entry === activeEntries.get(run.runId) &&
+                  entry === capturedEntry &&
                   isRestartRecoveryRun(entry) &&
                   entry.lifecycleGeneration === run.lifecycleGeneration) ||
                 (candidate !== undefined &&

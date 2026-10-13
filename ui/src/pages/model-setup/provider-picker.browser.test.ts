@@ -1,6 +1,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSelect } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.ts";
+import "../../components/agent-select-registration.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../components/web-awesome.ts";
 import "../../test-helpers/load-styles.ts";
@@ -8,9 +9,6 @@ import "../../styles/model-setup.css";
 import { duringElementAnimation } from "../../test-helpers/web-awesome-animation.ts";
 import { ManualProviderPicker } from "./provider-picker.tsx";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
-
-class SelectedAgentPicker extends AgentSelect {}
-customElements.define("test-selected-agent-picker", SelectedAgentPicker);
 
 const disposals: (() => void)[] = [];
 
@@ -50,15 +48,26 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
           ).unmount,
         );
       } else {
-        const picker = new SelectedAgentPicker();
+        const picker = document.createElement("openclaw-agent-select");
         picker.options = options;
         picker.value = "selected";
         picker.onSelect = selected;
         host.append(picker);
       }
       document.body.append(host);
-      const agentPicker = host.querySelector<AgentSelect>("test-selected-agent-picker");
+      const agentPicker = host.querySelector<AgentSelectElement>("openclaw-agent-select");
       await agentPicker?.updateComplete;
+      if (kind === "agent") {
+        const trigger = host.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
+        const items = [...host.querySelectorAll<HTMLElement>("[data-agent-option]")];
+        await page.elementLocator(trigger).click();
+        await expect.poll(() => document.activeElement).toBe(items[28]);
+        await userEvent.keyboard("{End}");
+        expect(document.activeElement).toBe(items[29]);
+        await userEvent.keyboard("{Enter}");
+        expect(selected).toHaveBeenCalledExactlyOnceWith("last");
+        return;
+      }
       const dropdown = host.querySelector("wa-dropdown")!;
       await dropdown.updateComplete;
       const items = Array.from(dropdown.querySelectorAll("wa-dropdown-item"));

@@ -36,9 +36,8 @@ import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
-  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
-  getInternalToolResultContentSource,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
@@ -267,10 +266,10 @@ async function executeAdaptedToolOperation(params: {
       message: described.message,
       cause: err,
     });
-    // A protected network failure keeps its origin after becoming a result here.
-    const contentSource =
-      typeof err === "object" && err !== null ? getInternalToolResultContentSource(err) : undefined;
-    return contentSource ? attachInternalToolResultContentSource(result, contentSource) : result;
+    // Error presentation must preserve private execution and content provenance.
+    return typeof err === "object" && err !== null
+      ? copyInternalToolResultState(err, result)
+      : result;
   }
 }
 

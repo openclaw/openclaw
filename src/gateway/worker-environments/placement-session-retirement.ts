@@ -21,14 +21,13 @@ type PlacementSessionRetirementDeps = {
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
   ) => Promise<PlacementSessionEvidenceResolver>;
-  reportChanges: (
-    operation: () => Promise<void>,
-    before: readonly WorkerSessionPlacementRecord[],
-  ) => Promise<void>;
+  reportChanges: (operation: () => Promise<void>) => Promise<void>;
   warn: (message: string) => void;
 };
 
 export function createPlacementSessionRetirement(deps: PlacementSessionRetirementDeps) {
+  let dirty = true;
+  let retry = false;
   const retireCurrent = async (placement: WorkerSessionPlacementRecord): Promise<boolean> => {
     if (placement.turnClaim) {
       return false;
@@ -66,6 +65,9 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     resolveSessionEvidence: PlacementSessionEvidenceResolver,
   ): Promise<void> => {
     const evidence = await resolveSessionEvidence(placement);
+    if (evidence !== "current") {
+      retry = true;
+    }
     if (evidence !== "absent") {
       return;
     }
@@ -111,24 +113,41 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   };
 
   const reconcile = async (): Promise<void> => {
-    const placements = await deps.placements.listAsync();
-    if (placements.length === 0) {
+    if (!dirty && !retry) {
       return;
     }
-    // The retirement scan already supplies the complete before-snapshot for reporting.
-    await deps.reportChanges(async () => {
-      const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
-      for (const placement of placements) {
-        try {
-          await reconcilePlacement(placement, resolveSessionEvidence);
-        } catch (error) {
-          deps.warn(
-            `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
-          );
-        }
+    // Consume before awaiting so a receipt arriving during discovery remains pending.
+    dirty = false;
+    retry = false;
+    try {
+      const placements = await deps.placements.listAsync();
+      if (placements.length === 0) {
+        return;
       }
-    }, placements);
+      retry = placements.some((placement) => placement.state !== "local");
+      await deps.reportChanges(async () => {
+        const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
+        for (const placement of placements) {
+          try {
+            await reconcilePlacement(placement, resolveSessionEvidence);
+          } catch (error) {
+            retry = true;
+            deps.warn(
+              `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
+            );
+          }
+        }
+      });
+    } catch (error) {
+      dirty = true;
+      throw error;
+    }
   };
 
-  return { reconcile };
+  return {
+    reconcile,
+    invalidate() {
+      dirty = true;
+    },
+  };
 }

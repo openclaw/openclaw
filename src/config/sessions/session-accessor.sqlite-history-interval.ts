@@ -1,5 +1,6 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
+import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -183,9 +184,11 @@ export function readDisplayableActiveEventById(
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
   if (
     !unindexed ||
-    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event)) ||
-    (maxBytes !== undefined && unindexed.serialized_bytes - 1 > maxBytes)
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event))
   ) {
+    return undefined;
+  }
+  if (maxBytes !== undefined && unindexed.serialized_bytes - 1 > maxBytes) {
     return undefined;
   }
   const event = executeSqliteQueryTakeFirstSync(
@@ -207,24 +210,31 @@ export function readDisplayableActiveEventById(
     : undefined;
 }
 
-export function readDisplayableActiveResetMetadataById(
+export function readDisplayableActiveEventMetadataById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-): { active_position: number; event_type: "reset" } | undefined {
+) {
   const indexed = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     selectDisplayableActiveEventById(projection, eventId),
   );
   assertTranscriptNavigationValid(indexed?.navigation_valid);
   if (indexed) {
-    return indexed.event_type === "reset"
-      ? { active_position: indexed.active_position, event_type: "reset" }
-      : undefined;
+    return indexed;
   }
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
-  return unindexed?.event.type === "reset"
-    ? { active_position: unindexed.active_position, event_type: "reset" }
-    : undefined;
+  if (
+    !unindexed ||
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event))
+  ) {
+    return undefined;
+  }
+  return {
+    event_seq: unindexed.event_seq,
+    active_position: unindexed.active_position,
+    message_position: unindexed.message_position,
+    event_type: typeof unindexed.event.type === "string" ? unindexed.event.type : null,
+  };
 }
 
 function countHistoricalDisplayEvents(
@@ -284,8 +294,16 @@ function readHistoricalDisplayEventRange(
     return Object.assign(row, { displaySeq: start + index + 1 });
   });
   let selected = ranged;
+  if (
+    maxBytes === undefined &&
+    ranged.reduce((bytes, row) => bytes + row.serialized_bytes, 2) > SOURCE_PAGE_MAX_BYTES
+  ) {
+    throw new Error(
+      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
+    );
+  }
   if (maxBytes !== undefined) {
-    const limit = Math.max(1_024, Math.floor(maxBytes));
+    const limit = Math.min(SOURCE_PAGE_MAX_BYTES, Math.max(1_024, Math.floor(maxBytes)));
     let bytes = 2;
     let selectedStart = ranged.length;
     while (selectedStart > 0) {

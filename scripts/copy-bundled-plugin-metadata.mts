@@ -30,6 +30,7 @@ import {
   removePathIfExists,
   writeTextFileIfChanged,
 } from "./runtime-postbuild-shared.mjs";
+import { ensureOpenClawExtensionAlias } from "./stage-bundled-plugin-runtime.mts";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
@@ -286,6 +287,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
   // would redirect recursive deletes into the link target.
   assertRealOutputRoot(path.join(repoRoot, "dist"));
   assertRealOutputRoot(distExtensionsRoot);
+  ensureOpenClawExtensionAlias({ repoRoot, distExtensionsRoot });
 
   const buildEntries = new Map(
     collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => [
@@ -294,7 +296,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     ]),
   );
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
-  const sourcePluginDirs = new Set<string>();
+  const sourcePluginDirs = new Set<string>(["node_modules"]);
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
       continue;

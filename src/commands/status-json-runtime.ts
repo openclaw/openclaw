@@ -42,11 +42,13 @@ export async function resolveStatusJsonOutput(params: {
       ...(scan.collection && opts.usage
         ? {
             resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
-              const { readConfigFileSnapshot } = await import("../config/config.js");
+              const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
+                await import("../config/config.js");
               const snapshot = await readConfigFileSnapshot({
                 observe: false,
                 pluginValidation: "core-only",
               });
+              await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
               return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
             },
           }

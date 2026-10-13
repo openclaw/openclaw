@@ -1065,6 +1065,11 @@ async function command() {
       }
     }
     saveRef(cwd, "HEAD", resolveRef(cwd, args.at(-1)));
+    if (cwd === path.join(workspace, ".ci-harness")) {
+      const collector = path.join(cwd, "scripts/ci-collect-checks.sh");
+      fs.mkdirSync(path.dirname(collector), { recursive: true });
+      fs.copyFileSync(new URL("../../../scripts/ci-collect-checks.sh", import.meta.url), collector);
+    }
     if (linux || cwd !== workspace) {
       const action = path.join(cwd, ".github/actions/setup-node-env");
       fs.mkdirSync(action, { recursive: true });

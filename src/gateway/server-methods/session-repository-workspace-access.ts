@@ -14,7 +14,7 @@ import {
   type WorkspaceInspectionResult,
 } from "../../worker/workspace-inspection-protocol.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import type { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -25,7 +25,8 @@ type Operation = WorkspaceInspectionInput["operation"];
 /** Repository identity never resolves through the Gateway's local workspace defaults. */
 export async function resolveRepositoryWorkspaceAccess(
   loaded: LoadedSession,
-  context?: GatewayRequestContext,
+  context: GatewayRequestContext | undefined,
+  assertCallerCurrent: () => void,
 ) {
   const entry = loaded.entry;
   const workspaceId = entry?.repositoryWorkspaceId;
@@ -37,7 +38,7 @@ export async function resolveRepositoryWorkspaceAccess(
     sessionKey: loaded.canonicalKey,
     storePath: loaded.storePath,
   };
-  const metadata = captureSessionEntryMetadataRead(scope);
+  const metadata = captureSessionEntryMetadataRead(scope, assertCallerCurrent);
   let facts: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
   let placementRead:
     | Awaited<ReturnType<WorkerSessionPlacementStore["prepareSessionPlacement"]>>
@@ -50,15 +51,12 @@ export async function resolveRepositoryWorkspaceAccess(
     placementRead?.release();
     unregister();
   };
-  let readCurrent: () => SessionEntryCurrentFacts | undefined = () =>
-    metadata
-      ? metadata.readCurrent()
-      : loadGatewaySessionEntryReadOnly(loaded.canonicalKey, { agentId: loaded.agentId }).entry;
+  let readCurrent: () => SessionEntryCurrentFacts | undefined = () => metadata?.readCurrent();
   try {
     if (!metadata && !isIncognitoSessionKey(loaded.canonicalKey)) {
       await withSessionEntryReadOnlyInWorker(
         scope,
-        () => {},
+        assertCallerCurrent,
         async (read) => {
           if (!read.ok) {
             throw read.error;
@@ -121,6 +119,7 @@ export async function resolveRepositoryWorkspaceAccess(
       }
     };
     const assertSession = (expectedRevision?: number) => {
+      assertCallerCurrent();
       if (!active) {
         throw new Error("The cloud repository session source is unavailable.");
       }

@@ -291,6 +291,7 @@
         "execution_decision_facts"
       ],
       "indexes": [
+        "execution_decision_facts_cursor_id_idx",
         "execution_decision_facts_context_occurred_idx",
         "execution_decision_facts_run_occurred_idx"
       ],
@@ -349,6 +350,7 @@
         "cron_run_receipts"
       ],
       "indexes": [
+        "cron_run_receipts_cursor_id_idx",
         "idx_cron_run_receipts_active_job",
         "idx_cron_run_receipts_job_history"
       ],
@@ -446,6 +448,7 @@
         "skill_workshop_changes"
       ],
       "indexes": [
+        "skill_workshop_changes_cursor_id_idx",
         "idx_skill_workshop_changes_agent_time"
       ],
       "dependencies": [],
@@ -473,16 +476,7 @@
       "file": "fragment-worker_session_placement_moves.postgres.sql"
     }
   ],
-  "pendingPromotion": [
-    {
-      "name": "idx_acp_sessions_resume_agent",
-      "reason": "v22 promotion follow-up PR4b (#169254): derive the ACP resume value once and index its promoted column"
-    },
-    {
-      "name": "idx_acp_sessions_resume_acpx",
-      "reason": "v22 promotion follow-up PR4b (#169254): derive the ACP resume value once and index its promoted column"
-    }
-  ],
+  "pendingPromotion": [],
   "sqliteOnlyAllowList": [
     {
       "column": "node_worker_launches.launch_id",

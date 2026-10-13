@@ -497,8 +497,9 @@ export function handlePageGatewayEvent(
         payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
       );
       const recoveryRunId =
-        payload?.state === "final" &&
-        (payload.message === undefined || payload.message === null) &&
+        (payload?.state === "error" ||
+          (payload?.state === "final" &&
+            (payload.message === undefined || payload.message === null))) &&
         sessionMatches &&
         typeof payload.runId === "string" &&
         (!state.chatRunId || state.chatRunId === payload.runId)
@@ -533,7 +534,10 @@ export function handlePageGatewayEvent(
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&
         recoveryScope &&
-        getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
+        (payload?.state === "error"
+          ? state.chatRunError?.runId === recoveryRunId
+          : getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status ===
+            "completed"),
       );
       const recoveryOwnership: TerminalRecoveryOwnership | null =
         shouldRecoverMissingTerminal && payload?.runId
@@ -550,14 +554,17 @@ export function handlePageGatewayEvent(
           : null;
       if (recoveryOwnership && claimTerminalRecovery(state, recoveryOwnership)) {
         state.pendingSessionMessageReloadSessionKey = null;
-        // The first owned message-less terminal recovers history even when an
-        // earlier snapshot already marked the run complete. Replays, yielded, or
-        // background-run terminals must not repeat I/O or disturb the foreground pane.
-        // Persistence can trail the terminal event, so retry bounded authoritative
-        // snapshots until the completed run's reply becomes visible.
-        void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
-          () => undefined,
-        );
+        if (payload?.state === "error") {
+          // Failure receipts commit before chat.error but do not emit session.message.
+          // A reloaded pane has no pending message refresh to recover that notice.
+          refreshChatEventHistory(state, isPresented(), true);
+        } else {
+          // Successful reply persistence can trail a message-less final. Replays,
+          // yielded, and background-run terminals must not repeat recovery I/O.
+          void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
+            () => undefined,
+          );
+        }
       } else {
         replayPendingSessionMessageReload(state, payload, isPresented);
       }

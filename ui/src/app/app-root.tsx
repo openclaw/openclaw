@@ -1,3 +1,4 @@
+import "../lib/toast-host.ts";
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
 import { render, type JSX as SolidJSX } from "@solidjs/web";
 import {
@@ -55,6 +56,7 @@ import { LitRouteHost } from "./lit-route-host.tsx";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 import { connectShellViewport } from "./shell-viewport.ts";
 
@@ -190,6 +192,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     return (
       !connected() &&
       !(
+        isRemoteControlUiIngress() ||
         browserSignInRecovery ||
         snapshot().phase === "reconnecting" ||
         snapshot().phase === "reload-required" ||

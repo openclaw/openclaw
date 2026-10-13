@@ -110,7 +110,16 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   await settleRoster(sidebar);
   const revealRunningRows = async () => {
     for (let page = 0; page < 2; page++) {
-      probe.reset();
+      probe.reset(() => {
+        const runningRows = [...sidebar.querySelectorAll<HTMLElement>(".session-row-host")].filter(
+          (row) => row.querySelector(".session-glyph__ring, .session-glyph__trace-run"),
+        );
+        // Earlier rows can notify before the final page's new rows receive their entries.
+        return (
+          (page === 0 || runningRows.length === 11) &&
+          runningRows.every((row) => intersections.has(row))
+        );
+      });
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-pagination__button")!.click();
       await settleRoster(sidebar);
       await probe.delivered;

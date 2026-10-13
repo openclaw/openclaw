@@ -1,5 +1,4 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -10,8 +9,10 @@ import {
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -316,24 +317,31 @@ it("keeps target discovery on the captured physical store across session prepara
 });
 
 it.each(["branch replacement", "turn cancellation and release"])(
-  "qualifies private worktrees without host session SQL across %s",
+  "qualifies memory-only private worktrees without host session SQL across %s",
   async (change) => {
-    const authority = { assertCurrent() {} };
-    const actor = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env: process.env,
-      authority,
-    });
-    assert(actor);
+    const authority = { assertCurrent() {}, authorize() {} };
     const selected = {
       ...session,
       sessionKey: "agent:main:dashboard:incognito-publication-availability",
     };
-    await actor.sessions.create(authority, {
-      sessionKey: selected.sessionKey,
-      entry: { ...mocks.session().entry, updatedAt: Date.now() },
-    });
+    const location = {
+      agentId: selected.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: selected.agentId }),
+    };
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: selected.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    readSessionActorStorageResult(
+      await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: { entry: { ...mocks.session().entry, updatedAt: Date.now() } },
+        },
+        authority,
+      ),
+    );
     await deleteRegistryWorktree(process.env, worktree.id);
     await insertRegistryWorktree(process.env, { ...worktree, ownerId: selected.sessionKey });
     mocks.session.mockImplementation(() => {
@@ -344,40 +352,47 @@ it.each(["branch replacement", "turn cancellation and release"])(
     const scheduler = createTestGatewayScheduler(clock.clock);
     const discovery = startGitHubPublicationDiscovery({ scheduler });
     try {
-      await withIncognitoSessionBinding({ actor }, async () => {
-        expect(await prepareGitHubPublicationAvailability(selected)).toBe(true);
-        if (change === "turn cancellation and release") {
-          const turn = new AbortController();
-          withIncognitoSessionBinding({ actor, admissionSignal: turn.signal }, () =>
-            readGitHubPublicationFact(selected),
+      expect(await prepareGitHubPublicationAvailability(selected)).toBe(true);
+      if (change === "turn cancellation and release") {
+        const turn = new AbortController();
+        runWithSessionActorStorage(
+          {
+            ...location,
+            actor,
+            authority: {
+              assertCurrent: () => turn.signal.throwIfAborted(),
+              authorize() {},
+            },
+          },
+          () => readGitHubPublicationFact(selected),
+        );
+        turn.abort();
+        await actor.release();
+        await clock.wake();
+        expect(readGitHubPublicationFact(selected).available).toBe(true);
+      } else {
+        mocks.identity.mockImplementationOnce(async () => {
+          await patchSessionEntryCore(
+            {
+              agentId: "main",
+              sessionKey: selected.sessionKey,
+              storePath: location.path,
+            },
+            () => ({
+              worktree: { id: worktree.id, repoRoot: worktree.repoRoot, branch: "replacement" },
+            }),
           );
-          turn.abort();
-          await actor.release();
-          await clock.wake();
-          expect(readGitHubPublicationFact(selected).available).toBe(true);
-        } else {
-          mocks.identity.mockImplementationOnce(async () => {
-            await patchSessionEntryCore(
-              {
-                agentId: "main",
-                sessionKey: selected.sessionKey,
-                storePath: actor.path,
-              },
-              () => ({
-                worktree: { id: worktree.id, repoRoot: worktree.repoRoot, branch: "replacement" },
-              }),
-            );
-            return identity;
-          });
-          expect(await prepareGitHubPublicationAvailability(selected)).toBe(false);
-        }
-        sql.expectIdle();
-      });
+          return identity;
+        });
+        expect(await prepareGitHubPublicationAvailability(selected)).toBe(false);
+      }
+      sql.expectIdle();
     } finally {
       sql.restore();
       await discovery.stop();
       await scheduler.stop();
-      await actor.close();
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
     }
   },
 );

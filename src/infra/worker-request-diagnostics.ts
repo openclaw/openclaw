@@ -98,7 +98,10 @@ export function trackWorkerRequest(
   const label = requestClasses.has(requestClass) ? requestClass : "other";
   const enqueuedAt = performance.now();
   const timing: DiagnosticWorkerRequestFields["timing"] =
-    detailedTiming && kind === "sqlite_writer" ? { enqueued: enqueuedAt } : undefined;
+    kind === "sqlite_writer" &&
+    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request"))
+      ? { enqueued: enqueuedAt }
+      : undefined;
   let startedAt: number | undefined;
   let completed = false;
   const emit = (

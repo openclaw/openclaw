@@ -325,6 +325,7 @@ export function buildChatItems(
     if (
       !props.showToolCalls &&
       isToolResult &&
+      !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
       !hasSessionsYieldCall(msg) &&
       !permissionInMessage(msg)
     ) {

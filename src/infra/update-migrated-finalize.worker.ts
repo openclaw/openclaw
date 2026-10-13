@@ -62,6 +62,7 @@ import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
+import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
@@ -535,6 +536,7 @@ void (async () => {
     finalizeMigratedUpdate,
     finalizeActiveDebugProxyCaptures,
     closeOpenClawStateDatabaseAsync,
+    closeDefaultRetainedNativeWorkerSource,
   ]) {
     try {
       await finalize();

@@ -278,6 +278,7 @@ export function attachGatewayHarness(options: {
   deferSocketSend?: boolean;
   socket?: WebSocket;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
+  publishPresence?: () => void;
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
@@ -295,6 +296,7 @@ export function attachGatewayHarness(options: {
   handoffAuthenticatedReceive?: () => void;
 }) {
   const connectionWork = new GatewayConnectionWork();
+  const logGateway = createLogger();
   const logWsControl = createLogger();
   const attachment = createGatewayAttachmentCompletion(
     options.connId,
@@ -421,7 +423,7 @@ export function attachGatewayHarness(options: {
       ({
         refreshConnectedUserProfile,
         broadcast: vi.fn(),
-        publishPresence: vi.fn(),
+        publishPresence: options.publishPresence ?? vi.fn(),
       }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
@@ -437,7 +439,7 @@ export function attachGatewayHarness(options: {
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-    logGateway: createLogger() as never,
+    logGateway: logGateway as never,
     logHealth: createLogger() as never,
     logWsControl: logWsControl as never,
   });
@@ -457,6 +459,7 @@ export function attachGatewayHarness(options: {
     clearHandshakeTimer,
     finishSocketSend: (error?: Error) => finishSocketSend?.(error),
     handoffAuthenticatedReceive,
+    logGateway,
     logWsControl,
     refreshConnectedUserProfile,
     refreshedProfileIds,

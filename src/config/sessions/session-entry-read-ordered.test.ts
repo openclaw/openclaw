@@ -16,6 +16,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntryReadOnlyInWorker,
@@ -111,6 +112,67 @@ it("retains exact reads without dispatch, isolates agent stores, and evicts the 
           })
         ).entries,
       ).toEqual([]);
+    } finally {
+      requests.restore();
+    }
+  });
+});
+
+it("derives lifecycle and current runtime targets from committed facts and retires them on replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:retained-lifecycle";
+    const scope = { agentId: "main", storePath: database.path, sessionKey, env };
+    const owner = { agentId: "main", path: database.path };
+    const input = { ...scope, sessionKeys: [sessionKey] };
+    const runtimeTarget = { agentId: "logical", sessionId: "original", sessionKey };
+    const request = {
+      sessionKeys: [sessionKey],
+      lifecycleSessionKey: sessionKey,
+      runtimeTarget,
+    };
+    replaceSessionEntrySync(scope, {
+      sessionId: "original",
+      updatedAt: 1,
+      sessionStartedAt: 100,
+      lastInteractionAt: 200,
+    });
+    await readSessionEntriesFromStoreInWorker(input);
+    const requests = observeEntryReaderRequests();
+    try {
+      expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
+        lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
+        runtimeTarget: { ...runtimeTarget, storePath: database.path },
+      });
+      expect(
+        (await readSessionEntriesFromStoreInWorker({ ...input, lifecycleSessionKey: sessionKey }))
+          .lifecycleTimestamps,
+      ).toEqual({ sessionStartedAt: 100, lastInteractionAt: 200 });
+      expect(requests.count()).toBe(0);
+
+      replaceSessionEntrySync(scope, {
+        sessionId: "replacement",
+        updatedAt: 2,
+        sessionStartedAt: 300,
+        lastInteractionAt: 400,
+      });
+      expect(readRetainedSessionEntryFacts(owner, request)).toBeUndefined();
+      expect((await readSessionEntriesFromStoreInWorker(input)).entries[0]?.entry.sessionId).toBe(
+        "replacement",
+      );
+      const currentRequest = {
+        ...request,
+        runtimeTarget: { ...runtimeTarget, sessionId: "replacement" },
+      };
+      expect(readRetainedSessionEntryFacts(owner, currentRequest)).toMatchObject({
+        lifecycleTimestamps: { sessionStartedAt: 300, lastInteractionAt: 400 },
+        runtimeTarget: { ...currentRequest.runtimeTarget, storePath: database.path },
+      });
+      expect(readRetainedSessionEntryFacts(owner, request)).toBeUndefined();
+
+      replaceSessionEntrySync(scope, { sessionId: "replacement", updatedAt: 3 });
+      await readSessionEntriesFromStoreInWorker(input);
+      expect(readRetainedSessionEntryFacts(owner, currentRequest)).toBeUndefined();
     } finally {
       requests.restore();
     }
