@@ -348,7 +348,9 @@ describe("runDoctorHealthFlow update outcomes", () => {
           await runDoctorHealthFlow(runtime, { nonInteractive: true });
           const result = await consumeUpdatePostInstallDoctorResult(resultPath);
           expect(result).not.toBeNull();
-          expect(result?.warnings ?? []).toEqual(stillPending.map(formatDeferredPluginMigration));
+          expect(result?.warnings ?? []).toEqual(
+            stillPending.map((plugin) => formatDeferredPluginMigration(plugin)),
+          );
         } finally {
           await consumeUpdatePostInstallDoctorResult(resultPath);
         }
