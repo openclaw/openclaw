@@ -28,6 +28,11 @@ working state, not completed work. Startup, approval, question, and subagent-wai
 controls keep their distinct presentation. Text appears as it arrives, including
 short fragments before a tool call or the final response.
 
+If an inactive run's saved history ends during tool use and has no terminal
+assistant message, Chat keeps its commentary and tool activity visible and marks
+the run **Interrupted**. This presentation does not resume the run or recover an
+answer that was never saved.
+
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
 shows the tool label instead of leaving the text blank. Hover the icon to see the

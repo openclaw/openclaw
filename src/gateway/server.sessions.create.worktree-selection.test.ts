@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as registryReads from "../agents/worktrees/registry-read.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
@@ -65,7 +67,7 @@ function managedWorktreeFixture(params: {
   };
 }
 
-test.each([
+test.for([
   {
     name: "registered catalog target",
     request: { catalogId: "claude" },
@@ -111,8 +113,11 @@ test.each([
     },
   },
 ])(
-  "sessions.create allocates a checkout independently of its title through the $name selection",
-  async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) =>
+  "sessions.create names its session during checkout preparation through the $name selection",
+  async (
+    { request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection },
+    { signal },
+  ) =>
     await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
       testState.agentConfig = {
@@ -158,6 +163,18 @@ test.each([
       }
       let sessionKey: string | undefined;
       const titlePersisted = createDeferredCore();
+      const preparingWorkspace = createDeferredCore();
+      const releaseWorkspace = createDeferredCore();
+      const createWorktree = captureMethodCall("createWithOutcome")(
+        ManagedWorktreeService.prototype,
+      );
+      const worktreeSpy = vi
+        .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+        .mockImplementation(async function (this: ManagedWorktreeService, params) {
+          preparingWorkspace.resolve();
+          await releaseWorkspace.promise;
+          return createWorktree(this, params);
+        });
       const checkTitle = () => {
         if (
           sessionKey &&
@@ -211,9 +228,12 @@ test.each([
           runStarted: true,
         });
         sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
-        expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
+        await withinTest(preparingWorkspace.promise, signal);
         checkTitle();
-        await titlePersisted.promise;
+        await withinTest(titlePersisted.promise, signal);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCountBefore);
+        releaseWorkspace.resolve();
+        expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
         const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
         expect(entry).toMatchObject({
           displayName: "Attachment Repair",
@@ -227,7 +247,9 @@ test.each([
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
       } finally {
         stopTitleObserver();
+        releaseWorkspace.resolve();
         await settleWorkspaceRuns(context, storePath, sessionKey, true);
+        worktreeSpy.mockRestore();
         await removeSessionWorktree(sessionKey);
         setActivePluginRegistry(createEmptyPluginRegistry());
         testState.agentConfig = undefined;

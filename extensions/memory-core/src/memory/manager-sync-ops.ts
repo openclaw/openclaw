@@ -44,7 +44,10 @@ import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
-import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
+import {
+  hasTargetedSessionSyncParams,
+  MemoryBackgroundRebuildInterruptedError,
+} from "./manager-sync-control.js";
 import { MEMORY_SYNC_DEFERRED, type MemorySyncOutcome } from "./manager-sync-outcome.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
@@ -682,7 +685,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,
       });
-      this.recordFullReindexFailure(withEmbeddings);
+      if (!(err instanceof MemoryBackgroundRebuildInterruptedError)) {
+        this.recordFullReindexFailure(withEmbeddings);
+      }
       throw err;
     } finally {
       try {

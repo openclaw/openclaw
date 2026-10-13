@@ -55,6 +55,15 @@ Stopping with `/stop`, deleting, resetting, or archiving a session cancels only 
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
 
+## Automatic session names
+
+Interactive chat sessions without an explicit name generate a topic title in the
+background when the Gateway dispatches their message. Naming starts alongside
+worktree and reply preparation; it does not wait for the agent’s first progress
+event and does not block the turn. The name appears when the title model finishes.
+If the title request fails while overlapping a turn, it retries once after that
+turn settles. Explicit names and manual renames are preserved.
+
 ## DM isolation
 
 By default, all DMs share one session for continuity, which is fine for

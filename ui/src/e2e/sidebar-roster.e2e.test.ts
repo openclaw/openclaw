@@ -12,6 +12,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
+  pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
@@ -31,6 +32,7 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
       async ({ page }) => {
+        await page.clock.install();
         const agentsList: AgentsListResult = {
           defaultId: "main",
           mainKey: "main",
@@ -265,23 +267,39 @@ suite.define(() => {
         };
         const activityReads = () => gateway.getRequests("sessions.list", activityQuery);
         const initialReads = (await activityReads()).length;
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessions,
+          sessions: sessions.sessions.map((row) =>
+            row.key === "agent:main:project"
+              ? Object.assign({}, row, { label: "Harbor project refreshed" })
+              : row,
+          ),
+        });
+        await pauseVirtualClock(page);
         await gateway.deferNext("sessions.list", activityQuery);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           key: "agent:main:main",
         });
+        await page.clock.fastForward(5_001);
         await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 1);
         for (let index = 0; index < 3; index += 1) {
           await gateway.emitGatewayEvent("sessions.changed", {
             agentId: "main",
             key: "agent:main:main",
           });
-          // Exercise separate debounce windows while the original server read stays held.
-          await page.waitForTimeout(250);
+          // Cross full collection windows while the original server read stays held.
+          await page.clock.fastForward(5_001);
           expect(await activityReads()).toHaveLength(initialReads + 1);
         }
         await gateway.resolveDeferred("sessions.list");
+        await page.clock.resume();
+        await sidebar.getByText("Harbor project refreshed", { exact: true }).waitFor();
+        await pauseVirtualClock(page);
+        // A held read reaches the maximum cooldown before its one trailing refresh.
+        await page.clock.fastForward(15_001);
         await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 2);
+        await page.clock.resume();
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         const workspaceMenu = sidebar.locator(".sidebar-agent-menu");

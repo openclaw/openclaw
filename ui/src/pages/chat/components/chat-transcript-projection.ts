@@ -151,6 +151,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const transcriptChain = projectTranscriptChain(chatItems, {
     sessionKey: props.sessionKey,
+    messages: props.messages,
+    activeRunId: props.runActive || props.runWorking ? props.runId : null,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     bubbleMode: props.chatBubbleMode === true,
