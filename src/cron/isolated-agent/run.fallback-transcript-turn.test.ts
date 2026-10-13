@@ -61,7 +61,9 @@ describe("runCronIsolatedAgentTurn fallback transcript turn", () => {
     expect(calls.map((call) => `${call.provider}/${call.model}`)).toEqual([PRIMARY, FALLBACK]);
     const [primary, fallback] = calls;
     const recorder = primary?.userTurnTranscriptRecorder;
-    expect(recorder).toBeDefined();
+    if (!recorder) {
+      throw new Error("primary invocation is missing its user-turn recorder");
+    }
     expect(fallback?.userTurnTranscriptRecorder).toBe(recorder);
     expect(primary?.modelRoutingProvenance).toMatchObject({
       requestedProvider: "openai",
