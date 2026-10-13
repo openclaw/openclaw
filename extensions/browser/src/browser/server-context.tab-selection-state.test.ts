@@ -415,15 +415,22 @@ describe("browser tab selection and ownership", () => {
   });
 
   it("ignores dashboard durable records when reading page-tab activity for eviction", async () => {
+    const activeDashboard = retainedDashboardRecord("OLD1");
+    const releasedDashboard: DurableTabRecord = {
+      ...retainedDashboardRecord("OLD2"),
+      lastUsedAt: 9_999,
+      dashboard: {
+        ...retainedDashboardRecord("OLD2").dashboard!,
+        state: "released",
+      },
+    };
     vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
-      retainedDashboardRecord("OLD1"),
+      activeDashboard,
+      releasedDashboard,
     ]);
     vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([
-      {
-        ...retainedDashboardRecord("OLD2"),
-        kind: "durable",
-        lastUsedAt: 9_999,
-      },
+      { ...activeDashboard, kind: "durable" },
+      { ...releasedDashboard, kind: "durable" },
     ]);
     mockCreatedTarget("NEW", "http://127.0.0.1:3009");
     seedVolatileTabActivity(
