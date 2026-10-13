@@ -297,17 +297,9 @@ describe("session list requests", () => {
     },
   );
 
-  it("queues a reentrant observed refresh behind the current request", async () => {
-    const firstResponse = createDeferred<SessionsListResult>();
-    const secondResponse = createDeferred<SessionsListResult>();
-    const secondStarted = createDeferred();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(async () => firstResponse.promise)
-      .mockImplementationOnce(async () => {
-        secondStarted.resolve();
-        return secondResponse.promise;
-      });
+  it("joins a reentrant observed refresh to the current request", async () => {
+    const response = createDeferred<SessionsListResult>();
+    const request = vi.fn(async () => response.promise);
     const { sessions } = sessionHarness(request);
     let requestedAgain = false;
     let reentrant: Promise<void> | undefined;
@@ -324,18 +316,12 @@ describe("session list requests", () => {
     try {
       expect(requestedAgain).toBe(true);
       expect(request).toHaveBeenCalledOnce();
-
-      firstResponse.resolve(listResult(["agent:writer:first"]));
-      await secondStarted.promise;
-      expect(request).toHaveBeenCalledTimes(2);
-
-      secondResponse.resolve(listResult(["agent:writer:current"]));
+      response.resolve(listResult(["agent:writer:current"]));
       await Promise.all([initial, reentrant]);
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenCalledOnce();
       expect(observedKeys).toEqual(["agent:writer:current"]);
     } finally {
-      firstResponse.resolve(listResult());
-      secondResponse.resolve(listResult());
+      response.resolve(listResult());
       await Promise.allSettled([initial, reentrant]);
       observation.dispose();
       sessions.dispose();

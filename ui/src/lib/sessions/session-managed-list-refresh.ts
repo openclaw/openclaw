@@ -46,6 +46,7 @@ export function getManagedSessionList(
     receivedKeys: new Set(),
     startupRetryAttempt: 0,
     readGeneration: 0,
+    readRevision: 0,
     connectionEpoch: null,
     snapshot: { result: null, agentId: null, loading: false, error: null },
     listeners: new Set(),
@@ -163,6 +164,7 @@ export function createSessionManagedListRefresh(
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const issuedRevision = nextRevision();
+          entry.readRevision = issuedRevision;
           const generation = entry.readGeneration;
           const readIsCurrent = () =>
             isCurrent() &&
