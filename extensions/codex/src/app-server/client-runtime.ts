@@ -658,13 +658,15 @@ export function hasCodexAppServerLiveThread(
   return hasThreadOwnership(configuredClients.get(client), threadId);
 }
 
-export function isCodexAppServerLiveThreadClaimed(
-  client: CodexAppServerClient,
-  threadId: string,
-): boolean {
-  const runtime = configuredClients.get(client);
-  return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
-}
+// Claimed runs and protected native work are both live-only ownership marks.
+const hasLiveThreadMark =
+  (mark: "claimedThreads" | "protectedThreads") =>
+  (client: CodexAppServerClient, threadId: string): boolean =>
+    isCodexAppServerClientRuntimeLive(client) &&
+    configuredClients.get(client)?.[mark].has(threadId) === true;
+export const isCodexAppServerLiveThreadClaimed = hasLiveThreadMark("claimedThreads");
+/** Native commands and children can still need an otherwise-idle subscription. */
+export const isCodexAppServerLiveThreadProtected = hasLiveThreadMark("protectedThreads");
 
 export function hasCodexAppServerSiblingThreadWork(
   client: CodexAppServerClient,

@@ -11,6 +11,7 @@ import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
   isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -60,7 +61,11 @@ type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
 };
 
 type CodexWarmThreadReuseResult =
-  | { kind: "ready"; binding: CodexAppServerThreadLifecycleBinding }
+  | {
+      kind: "ready";
+      binding: CodexAppServerThreadLifecycleBinding;
+      cleanupOnFailure?: () => Promise<void>;
+    }
   | { kind: "rotate" }
   | { kind: "resume"; prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult };
 
@@ -150,7 +155,10 @@ export async function releaseCodexBoundLiveThread(
   }
   const client = previous?.client ?? options.client;
   try {
-    if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
+    if (
+      isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
+      isCodexAppServerLiveThreadProtected(client, options.threadId)
+    ) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
     return await releaseCodexRetainedLiveThread({
@@ -169,7 +177,10 @@ export async function releaseCodexBoundLiveThread(
     });
   } finally {
     // Rejection must free the lane so the claimed run can still be stopped.
-    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId));
+    await previous?.release(
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+        !isCodexAppServerLiveThreadProtected(client, options.threadId),
+    );
   }
 }
 
@@ -251,6 +262,54 @@ export async function tryReuseCodexLiveThread(
   let ownershipTransferred = false;
   let preserveSubscription = false;
   let nativeThread: CodexThread | undefined;
+  const cleanup = async (preserveOwner: boolean, ownership = retainedThread): Promise<void> => {
+    let failure: { cause: unknown } | undefined;
+    let retainSubscription = preserveOwner;
+    try {
+      if (retainSubscription) {
+        // Recheck immediately before republishing: even a passive failure can
+        // race cancellation or replacement of the retained generation.
+        try {
+          assertWarmOwner();
+          retainSubscription = isSameCodexAppServerThreadOwner(
+            params.bindingStore.read(bindingIdentity),
+            binding,
+          );
+        } catch {
+          retainSubscription = false;
+        }
+      }
+      if (retainSubscription) {
+        if (
+          !(await retainCodexAppServerBindingSubscription(
+            params.client,
+            binding.threadId,
+            ownership,
+          ))
+        ) {
+          failure = {
+            cause: new Error("Codex live thread ownership could not be returned to its session"),
+          };
+        }
+      } else {
+        // Keep the claim's generation fence across policy awaits and binding conflicts.
+        await retainedThread.release(binding.threadId);
+      }
+    } catch (cause) {
+      failure = { cause };
+    }
+    if (failure) {
+      await abandonCodexLiveThreadRelease(
+        {
+          client: params.client,
+          abandonClient: params.abandonClient,
+          lifecycleTiming,
+          threadId: binding.threadId,
+        },
+        failure.cause,
+      );
+    }
+  };
   try {
     assertWarmOwner();
     if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
@@ -444,9 +503,21 @@ export async function tryReuseCodexLiveThread(
       threadId: binding.threadId,
       action: "resumed",
     });
+    const liveThreadEphemeralPolicy = ephemeralPolicy && {
+      ...ephemeralPolicy,
+      skillsInstructions: params.skillsInstructions,
+    };
     ownershipTransferred = true;
     return {
       kind: "ready",
+      // Publication or enclosing lease settlement can fail after this transfer.
+      // Protected work keeps a current warm owner, not a deferred unsubscribe claim.
+      cleanupOnFailure: () =>
+        cleanup(isCodexAppServerLiveThreadProtected(params.client, binding.threadId), {
+          ...retainedThread,
+          configFingerprint: liveThreadConfigFingerprint,
+          ephemeralPolicy: liveThreadEphemeralPolicy,
+        }),
       binding: {
         ...binding,
         ...(!incognito
@@ -459,10 +530,7 @@ export async function tryReuseCodexLiveThread(
             }
           : {}),
         liveThreadConfigFingerprint,
-        liveThreadEphemeralPolicy: ephemeralPolicy && {
-          ...ephemeralPolicy,
-          skillsInstructions: params.skillsInstructions,
-        },
+        liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
@@ -472,51 +540,7 @@ export async function tryReuseCodexLiveThread(
     };
   } finally {
     if (!ownershipTransferred) {
-      let failure: { cause: unknown } | undefined;
-      try {
-        if (preserveSubscription) {
-          // Recheck immediately before republishing: even a passive failure can
-          // race cancellation or replacement of the retained generation.
-          try {
-            assertWarmOwner();
-            preserveSubscription = isSameCodexAppServerThreadOwner(
-              params.bindingStore.read(bindingIdentity),
-              binding,
-            );
-          } catch {
-            preserveSubscription = false;
-          }
-        }
-        if (preserveSubscription) {
-          if (
-            !(await retainCodexAppServerBindingSubscription(
-              params.client,
-              binding.threadId,
-              retainedThread,
-            ))
-          ) {
-            failure = {
-              cause: new Error("Codex live thread ownership could not be returned to its session"),
-            };
-          }
-        } else {
-          // Keep the claim's generation fence across policy awaits and binding conflicts.
-          await retainedThread.release(binding.threadId);
-        }
-      } catch (cause) {
-        failure = { cause };
-      }
-      if (failure) {
-        await abandonCodexLiveThreadRelease(
-          {
-            client: params.client,
-            abandonClient: params.abandonClient,
-            lifecycleTiming,
-            threadId: binding.threadId,
-          },
-          failure.cause,
-        );
-      }
+      await cleanup(preserveSubscription);
     }
   }
 }
