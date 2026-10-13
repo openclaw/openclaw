@@ -125,6 +125,12 @@ export function planCronJobMutation(
         if (options.createdActor) {
           nextJob.createdActor = structuredClone(options.createdActor);
         }
+        if (options.sandboxProvenance !== undefined) {
+          nextJob.sandboxProvenance = structuredClone(options.sandboxProvenance);
+        }
+        if (options.sandbox === "required") {
+          nextJob.sandbox = "required";
+        }
         if (options.sourceConversation) {
           nextJob.sourceConversation = structuredClone(options.sourceConversation);
         }

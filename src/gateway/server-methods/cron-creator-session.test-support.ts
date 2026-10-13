@@ -1,6 +1,8 @@
 import { expect, it, type Mock } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronDeliveryPreview } from "../../cron/types.js";
 import {
   agentTurnCronParams,
@@ -18,6 +20,7 @@ export type CronCreatorSessionLookup = {
   entry?: {
     agentHarnessId?: unknown;
     createdActor?: SessionCreatedActor;
+    createdVia?: SessionEntry["createdVia"];
     modelSelectionLocked?: unknown;
     sessionId?: unknown;
     lifecycleRevision?: string;
@@ -25,11 +28,14 @@ export type CronCreatorSessionLookup = {
   };
 };
 
-export function registerCronCreatorSessionTests(fixture: {
-  invokeCron: ReturnType<typeof createCronTestInvoker>;
-  loadGatewaySessionEntry: Mock<(sessionKey: string) => CronCreatorSessionLookup>;
-  resolveCronDeliveryPreview: Mock<() => Promise<CronDeliveryPreview>>;
-}) {
+export function registerCronCreatorSessionTests(
+  getRuntimeConfig: Mock<() => OpenClawConfig>,
+  fixture: {
+    invokeCron: ReturnType<typeof createCronTestInvoker>;
+    loadGatewaySessionEntry: Mock<(sessionKey: string) => CronCreatorSessionLookup>;
+    resolveCronDeliveryPreview: Mock<() => Promise<CronDeliveryPreview>>;
+  },
+) {
   const { invokeCron, loadGatewaySessionEntry, resolveCronDeliveryPreview } = fixture;
   it("stamps the authenticated profile as private cron creator provenance", async () => {
     const client: GatewayClient = {
@@ -42,10 +48,24 @@ export function registerCronCreatorSessionTests(fixture: {
       },
     };
 
-    const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(), { client });
+    loadGatewaySessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:foreign",
+      entry: {
+        sessionId: "foreign",
+        createdActor: { type: "human", source: "profile", id: "foreign-person" },
+      },
+    });
+    const { context, respond } = await invokeCron(
+      "cron.add",
+      agentTurnCronParams({ sessionKey: "agent:main:foreign" }),
+      { client },
+    );
 
     const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
     expect(options.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
+    expect(options.sandboxProvenance).toEqual({
+      actor: { type: "human", source: "profile", id: "profile-ada" },
+    });
     expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
     expectCronSuccess(respond);
   });
@@ -94,6 +114,7 @@ export function registerCronCreatorSessionTests(fixture: {
       if (caller === "operator") {
         expect(options).not.toHaveProperty("skillLibrarySelections");
         expect(options).not.toHaveProperty("createdActor");
+        expect(options.sandboxProvenance).toEqual({ actor: undefined });
       } else {
         expect(options.skillLibrarySelections).toEqual([]);
         expect(options.createdActor).toEqual({
@@ -101,11 +122,46 @@ export function registerCronCreatorSessionTests(fixture: {
           source: "profile",
           id: "profile-ada",
         });
+        expect(options.sandboxProvenance).toEqual({
+          actor: { type: "human", source: "profile", id: "profile-ada" },
+        });
       }
       expect(requireCronAddPayload(context)).not.toHaveProperty("sourceConversation");
       expect(resolveCronDeliveryPreview).toHaveBeenCalledWith(
         expect.objectContaining({ job: expect.objectContaining({ sourceConversation }) }),
       );
+      expectCronSuccess(respond);
+    },
+  );
+
+  it.each([undefined, false, true])(
+    "selects the agent-created job creator with Lab=%s",
+    async (enabled) => {
+      getRuntimeConfig.mockReturnValue({
+        agents: { defaults: { experimental: { delegatedCreatorAttribution: enabled } } },
+      });
+      loadGatewaySessionEntry.mockReturnValue({
+        canonicalKey: "agent:ops:main",
+        entry: {
+          sessionId: "session-ops-main",
+          createdVia: "spawn",
+          createdActor: { type: "human", source: "profile", id: "another-profile" },
+        },
+      });
+      const client = callerClient("ops");
+      client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "profile-ada",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+      });
+      const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(), { client });
+      expect(
+        requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options").createdActor,
+      ).toEqual({
+        type: "human",
+        source: "profile",
+        id: enabled ? "profile-ada" : "another-profile",
+      });
       expectCronSuccess(respond);
     },
   );
@@ -130,6 +186,7 @@ export function registerCronCreatorSessionTests(fixture: {
         canonicalKey: "agent:ops:main",
         entry: {
           sessionId: "session-ops-main",
+          createdVia: "spawn",
           createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
         },
       });
@@ -157,11 +214,16 @@ export function registerCronCreatorSessionTests(fixture: {
 
   it.each([
     { createdActor: { type: "human", source: "profile", id: "spoofed-profile" } },
+    { sandboxProvenance: { actor: { type: "human", source: "profile", id: "spoofed-profile" } } },
+    { sandbox: "required" },
     { sourceConversation: { sessionKey: "agent:main:other", sessionId: "spoofed-session" } },
   ])("rejects caller-supplied private cron creator facts: %j", async (privateFields) => {
     const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(privateFields));
 
     expect(context.cron.add).not.toHaveBeenCalled();
     expectResponseError(respond, { code: "INVALID_REQUEST" });
+    const update = await invokeCron("cron.update", { id: "existing-job", patch: privateFields });
+    expect(update.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(update.respond, { code: "INVALID_REQUEST" });
   });
 }

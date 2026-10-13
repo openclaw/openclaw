@@ -158,6 +158,7 @@ describe("LabsPage", () => {
       expect(page.textContent).not.toContain(title);
     }
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(labToggle(page, "Human creator attribution").checked).toBe(false);
     expect(page.textContent).toContain("Host Desktop");
     expect(page.textContent).toContain("Cloud Worker Desktop");
     expect(codeModeToggle(page).checked).toBe(true);
@@ -225,6 +226,16 @@ describe("LabsPage", () => {
       sourceConfig: { tools: { codeMode: { enabled: true } } },
       expectedPatch: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
+    },
+    {
+      label: "Human creator attribution",
+      sourceConfig: {
+        agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } },
+      },
+      expectedPatch: {
+        agents: { defaults: { experimental: { delegatedCreatorAttribution: null } } },
+      },
+      note: "labs: update delegatedCreatorAttribution",
     },
     {
       label: "Custom plugin UI",
@@ -303,6 +314,14 @@ describe("LabsPage", () => {
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { chatBubbles: true } } } },
       note: "labs: update chatBubbles",
+    },
+    {
+      label: "Human creator attribution",
+      sourceConfig: {},
+      expectedPatch: {
+        agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } },
+      },
+      note: "labs: update delegatedCreatorAttribution",
     },
     {
       label: "Custom plugin UI",

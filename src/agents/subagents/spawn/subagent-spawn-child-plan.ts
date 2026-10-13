@@ -100,13 +100,17 @@ export async function resolveSubagentChildPlan(params: {
     agentId: params.requesterAgentId,
     preparedSessionEntry: params.requesterEntry ?? null,
   });
-  const creationPolicy = inheritSessionCreationPolicy(
-    {
-      sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
-      createdActor: requesterRuntime.createdActor,
-    },
-    { type: "agent", id: params.requesterAgentId },
-  );
+  const creationPolicy = {
+    sandboxProvenance: { actor: { type: "agent" as const, id: params.requesterAgentId } },
+    ...inheritSessionCreationPolicy(
+      {
+        sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
+        createdActor: requesterRuntime.createdActor,
+        sandboxProvenance: requesterRuntime.sandboxProvenance,
+      },
+      { type: "agent", id: params.requesterAgentId },
+    ),
+  };
   // A fresh child has no stored row yet; admission must include its inherited isolation.
   const childRuntimeSandboxed =
     creationPolicy.sandbox === "required" ||

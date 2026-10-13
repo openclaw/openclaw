@@ -85,6 +85,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
         [restoredKey]: sessionStoreEntry("foreign-archived", {
           visibility: "shared",
           createdActor: { type: "human", source: "profile", id: creatorId },
+          owner: { actor: { type: "human", id: memberId } },
           archivedAt: 1,
         }),
       },

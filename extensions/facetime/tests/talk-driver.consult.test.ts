@@ -1,5 +1,10 @@
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mocks,
   resetTalkDriverMocks,
@@ -24,6 +29,30 @@ function consult(itemId: string, callId: string, question: string) {
 
 describe("FaceTime talk driver consult delivery", () => {
   beforeEach(resetTalkDriverMocks);
+  afterEach(clearRuntimeConfigSnapshot);
+
+  it("captures the hot setting before working delivery and refreshes the next consult", async () => {
+    mocks.consult.mockResolvedValue({ text: "Checked." });
+    const initial: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(initial);
+    const driver = await startReadyFaceTimeTalkDriver(startParams({ fullConfig: initial }));
+    const enabled: OpenClawConfig = {
+      agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } },
+    };
+    setRuntimeConfigSnapshot(enabled);
+    mocks.bridge.bridge.supportsToolResultContinuation = true;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    mocks.bridge.submitToolResult.mockImplementationOnce(() => promise);
+    const pending = consult("item-hot", "call-hot", "Check");
+    expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce();
+    setRuntimeConfigSnapshot(initial);
+    resolve();
+    await pending;
+    expect(mocks.consult).toHaveBeenLastCalledWith(expect.objectContaining({ cfg: enabled }));
+    await consult("item-next", "call-next", "Next");
+    expect(mocks.consult).toHaveBeenLastCalledWith(expect.objectContaining({ cfg: initial }));
+    await driver.close("test-complete");
+  });
 
   it("never lets late cancellation of a superseded consult abort its successor", async () => {
     mocks.consult.mockImplementation(() => new Promise<{ text: string }>(() => {}));

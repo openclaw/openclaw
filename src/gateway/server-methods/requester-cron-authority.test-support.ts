@@ -70,17 +70,26 @@ export const cfg = { agents: { entries: { main: {} } } };
 export let stateDir: string;
 export let cron: CronService;
 
-export function installRequesterCronAuthorityTestHooks() {
+export function installRequesterCronAuthorityTestHooks({
+  seedSource = true,
+}: { seedSource?: boolean } = {}) {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     stateDir = tempDirs.make("openclaw-requester-cron-authority-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setRuntimeConfigSnapshot(cfg);
-    replaceSessionEntrySync(
-      { sessionKey: SESSION },
-      { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor: CREATOR },
-    );
+    if (seedSource) {
+      replaceSessionEntrySync(
+        { sessionKey: SESSION },
+        {
+          sessionId: SESSION_ID,
+          updatedAt: 1,
+          lifecycleRevision: "original",
+          createdActor: CREATOR,
+        },
+      );
+    }
   });
 
   afterEach(async () => {

@@ -12,6 +12,7 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { OpenClawPluginApi } from "../api.js";
 import { buildCallBriefInstructions } from "./call-brief.js";
 import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
@@ -227,6 +228,7 @@ export async function createVoiceCallRuntime(params: {
   };
 
   const cfg = fullConfig ?? coreConfig;
+  const readConfig = createRuntimeConfigReader(cfg);
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
   const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
 
@@ -307,6 +309,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeHandler.registerToolHandler(
         REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         async (args, callId, handlerContext) => {
+          const consultConfig = readConfig();
           handlerContext.abortSignal?.throwIfAborted();
           const call = manager.getCall(callId);
           if (!call) {
@@ -320,14 +323,14 @@ export async function createVoiceCallRuntime(params: {
             callId: call.callId,
             phone: call.direction === "outbound" ? call.to : call.from,
             explicitSessionKey: call.sessionKey,
-            coreSession: cfg.session,
+            coreSession: consultConfig.session,
           });
           const requesterSessionKey =
             typeof call.metadata?.requesterSessionKey === "string"
               ? call.metadata.requesterSessionKey
               : undefined;
           const modelLockParams = {
-            cfg,
+            cfg: consultConfig,
             agentRuntime,
             agentId,
             sessionKey,
@@ -335,7 +338,7 @@ export async function createVoiceCallRuntime(params: {
           };
           assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
           const fastContext = await resolveRealtimeVoiceFastContextConsult({
-            cfg,
+            cfg: consultConfig,
             agentId,
             sessionKey,
             config: effectiveConfig.realtime.fastContext,
@@ -367,12 +370,12 @@ export async function createVoiceCallRuntime(params: {
           const thinkLevel =
             effectiveConfig.realtime.consultThinkingLevel ??
             agentRuntime.resolveThinkingDefault({
-              cfg,
+              cfg: consultConfig,
               provider: agentProvider,
               model,
             });
           return await consultRealtimeVoiceAgent({
-            cfg,
+            cfg: consultConfig,
             agentRuntime,
             logger: log,
             agentId,

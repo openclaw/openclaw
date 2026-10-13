@@ -106,6 +106,8 @@ describe("toPublicCronJob", () => {
     const job: CronStoredJob = {
       ...makeCronJob({}),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      sandboxProvenance: { actor: { type: "human", source: "profile", id: "isolation-alice" } },
+      sandbox: "required",
       sourceConversation: {
         sessionKey: "agent:main:conversation",
         sessionId: "creating-session",
@@ -114,6 +116,10 @@ describe("toPublicCronJob", () => {
     };
 
     expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
+    expect(toPublicCronJob(job)).not.toHaveProperty("sandboxProvenance");
+    expect(toPublicCronJob(job)).not.toHaveProperty("sandbox");
+    expect(job.sandboxProvenance?.actor?.id).toBe("isolation-alice");
+    expect(job.sandbox).toBe("required");
     expect(toPublicCronJob(job)).not.toHaveProperty("sourceConversation");
     expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
     expect(job.sourceConversation?.lifecycleRevision).toBe("generation-1");

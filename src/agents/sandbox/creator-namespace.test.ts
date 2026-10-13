@@ -13,9 +13,14 @@ import {
 } from "./shared.js";
 
 describe("required sandbox creator namespaces", () => {
-  it.each(["agent", "session", "shared"] as const)(
-    "separates non-profile resources with configured %s scope",
-    async (scope) => {
+  it.each([
+    { scope: "agent", retained: false },
+    { scope: "session", retained: false },
+    { scope: "shared", retained: false },
+    { scope: "shared", retained: true },
+  ] as const)(
+    "separates non-profile resources with $scope scope (retained=$retained)",
+    async ({ scope, retained }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const id = "equal-creator-id";
         const cfg: OpenClawConfig = {
@@ -77,10 +82,26 @@ describe("required sandbox creator namespaces", () => {
                 sessionId: sessionKey,
                 updatedAt: 1,
                 createdVia: "cron",
-                createdActor,
+                createdActor: retained
+                  ? { type: "human", source: "profile", id: "bookkeeping-bob" }
+                  : createdActor,
+                ...(retained ? { sandboxProvenance: { actor: createdActor } } : {}),
                 sandbox: "required",
               },
             );
+            if (index === 0 && suffix === "one") {
+              const changed = await upsertSessionEntryCore(
+                { agentId: "main", sessionKey },
+                {
+                  sandboxProvenance: {
+                    actor: { type: "human", source: "profile", id: "attempted-retarget" },
+                  },
+                },
+              );
+              expect(changed?.sandboxProvenance).toEqual(
+                retained ? { actor: createdActor } : undefined,
+              );
+            }
             const layout = await layoutFor(sessionKey);
             for (const alias of [
               sessionKey.slice("agent:main:".length),

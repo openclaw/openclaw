@@ -236,83 +236,100 @@ describe("CronService declarative jobs", () => {
     },
   );
 
-  it("keeps the first creator across declaration convergence and restart", async () => {
-    const { cron: writer, storePath } = await setup();
-    const sourceConversation = {
-      sessionKey: "agent:ops:conversation",
-      sessionId: "creating-session",
-      lifecycleRevision: "generation-1",
-    };
-    const selections = [
-      {
-        skillId: "00000000-0000-4000-8000-000000000001",
-        revision: "a".repeat(64),
-        name: "s_report_00000000000040008000",
-        ownerProfileId: "profile-ada",
-      },
-    ];
+  it.each([
+    undefined,
+    {},
+    { actor: { type: "human", source: "profile", id: "isolation-alice" } },
+  ] satisfies Array<CronAddOptions["sandboxProvenance"]>)(
+    "keeps creator and isolation %j across declaration convergence and restart",
+    async (sandboxProvenance) => {
+      const { cron: writer, storePath } = await setup();
+      const sourceConversation = {
+        sessionKey: "agent:ops:conversation",
+        sessionId: "creating-session",
+        lifecycleRevision: "generation-1",
+      };
+      const selections = [
+        {
+          skillId: "00000000-0000-4000-8000-000000000001",
+          revision: "a".repeat(64),
+          name: "s_report_00000000000040008000",
+          ownerProfileId: "profile-ada",
+        },
+      ];
 
-    const created = await add(writer, declaration(), {
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-      sourceConversation,
-      skillLibrarySelections: selections,
-    });
-    expect(created.job).toMatchObject({
-      createdActor: { type: "human", id: "profile-ada" },
-      sourceConversation,
-    });
+      const created = await add(writer, declaration(), {
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
+        ...(sandboxProvenance !== undefined
+          ? { sandboxProvenance, sandbox: "required" as const }
+          : {}),
+        sourceConversation,
+        skillLibrarySelections: selections,
+      });
+      expect(created.job).toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+        sourceConversation,
+      });
 
-    const replayed = await add(writer, declaration(), {
-      sourceConversation: { ...sourceConversation, lifecycleRevision: "generation-2" },
-    });
-    expect(replayed).toMatchObject({
-      created: false,
-      updated: false,
-      job: { sourceConversation },
-    });
+      const replayed = await add(writer, declaration(), {
+        sandboxProvenance: { actor: { type: "agent", id: "attempted-retarget" } },
+        sandbox: "required",
+        sourceConversation: { ...sourceConversation, lifecycleRevision: "generation-2" },
+      });
+      expect(replayed).toMatchObject({
+        created: false,
+        updated: false,
+        job: { sourceConversation },
+      });
 
-    const converged = await add(writer, declaration({ displayName: "Updated report" }), {
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      sourceConversation: { sessionKey: "agent:ops:other", sessionId: "other-session" },
-      skillLibrarySelections: [],
-    });
-    expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
-    expect(converged.job).toMatchObject({
-      createdActor: { type: "human", id: "profile-ada" },
-      sourceConversation,
-    });
-    await writer.update(created.id, { sessionKey: "agent:ops:other" });
-    writer.stop();
+      const converged = await add(writer, declaration({ displayName: "Updated report" }), {
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+        sandboxProvenance: { actor: { type: "human", source: "profile", id: "profile-bob" } },
+        sourceConversation: { sessionKey: "agent:ops:other", sessionId: "other-session" },
+        skillLibrarySelections: [],
+      });
+      expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
+      expect(converged.job).toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+        sourceConversation,
+      });
+      await writer.update(created.id, { sessionKey: "agent:ops:other" });
+      writer.stop();
 
-    const reader = createCronService(storePath, false);
-    await expect(reader.readJob(created.id)).resolves.toMatchObject({
-      createdActor: { type: "human", id: "profile-ada" },
-      sourceConversation,
-      skillLibrarySelections: selections,
-    });
-    const job = (await loadCronStore(storePath)).jobs.find((stored) => stored.id === created.id)!;
-    expect(toPublicCronJob(job)).not.toHaveProperty("skillLibrarySelections");
-    const session = {
-      cfg: {},
-      sessionKey: "agent:ops:cron:test",
-      agentId: "ops",
-      nowMs: Date.now(),
-      forceNew: true,
-      lifecycleTimestamps: {},
-    };
-    const first = resolveCronSession({
-      ...session,
-      store: {},
-      skillLibrarySelections: job.skillLibrarySelections,
-    });
-    expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
-    const restarted = resolveCronSession({
-      ...session,
-      store: { [session.sessionKey]: first.sessionEntry },
-      skillLibrarySelections: [],
-    });
-    expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
-  });
+      const reader = createCronService(storePath, false);
+      await expect(reader.readJob(created.id)).resolves.toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+        sourceConversation,
+        skillLibrarySelections: selections,
+      });
+      const job = (await loadCronStore(storePath)).jobs.find((stored) => stored.id === created.id)!;
+      expect(job.sandboxProvenance).toEqual(sandboxProvenance);
+      expect(job.sandbox).toBe(sandboxProvenance === undefined ? undefined : "required");
+      expect(toPublicCronJob(job)).not.toHaveProperty("sandboxProvenance");
+      expect(toPublicCronJob(job)).not.toHaveProperty("sandbox");
+      expect(toPublicCronJob(job)).not.toHaveProperty("skillLibrarySelections");
+      const session = {
+        cfg: {},
+        sessionKey: "agent:ops:cron:test",
+        agentId: "ops",
+        nowMs: Date.now(),
+        forceNew: true,
+        lifecycleTimestamps: {},
+      };
+      const first = resolveCronSession({
+        ...session,
+        store: {},
+        skillLibrarySelections: job.skillLibrarySelections,
+      });
+      expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
+      const restarted = resolveCronSession({
+        ...session,
+        store: { [session.sessionKey]: first.sessionEntry },
+        skillLibrarySelections: [],
+      });
+      expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
+    },
+  );
 
   it("keeps declaration-key uniqueness local to the caller visibility predicate", async () => {
     const { cron } = await setup();

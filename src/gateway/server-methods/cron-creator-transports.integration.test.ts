@@ -52,7 +52,6 @@ import {
 import { deviceHandlers } from "./devices.js";
 import {
   SESSION,
-  CREATOR,
   cfg,
   stateDir,
   admission,
@@ -82,7 +81,16 @@ describe("original caller through Cron creator transports", () => {
   ] as const)(
     "retains the %s scope boundary through real automation creation (%s)",
     async ([source, revocation], { signal }) => {
-      const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
+      const config: OpenClawConfig = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            experimental: { delegatedCreatorAttribution: true },
+          },
+        },
+        tools: { allow: [AUTOMATIONS_TOOL_NAME] },
+      };
       setRuntimeConfigSnapshot(config);
       const entered = createDeferred();
       const release = createDeferred();
@@ -203,7 +211,11 @@ describe("original caller through Cron creator transports", () => {
                     await created;
                     const before = await fixture.read();
                     expect(before).toMatchObject([
-                      { name: "Recovered caller job", enabled: false },
+                      {
+                        name: "Recovered caller job",
+                        enabled: false,
+                        createdActor: { type: "human", source: "profile", id: profile.id },
+                      },
                     ]);
                     if (revocation !== "none") {
                       hold = true;
@@ -283,52 +295,64 @@ describe("original caller through Cron creator transports", () => {
       }
     },
   );
-  it("preserves ordinary restricted caller creation without management admission", async () => {
-    const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
-    setRuntimeConfigSnapshot(config);
-    const fixture = createCronFixture(undefined, config);
-    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-    client.internal = {};
-    expect(admission("restricted-creator", client)).toBeUndefined();
-    await inRun("restricted-creator", undefined, async (_identity, admitted) => {
-      bindGatewayContextResolver(admitted, () => fixture.context);
-      try {
-        const tools = await createCreatorTransportTools({
-          transport: "embedded",
-          config,
-          admitted,
-          // Tool access does not grant Gateway-wide management admission.
-          senderIsOwner: true,
-        });
-        await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: {
-            name: "Restricted caller job",
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "current",
-            payload: { kind: "agentTurn", message: "Check status", timeoutSeconds: 0 },
-            delivery: { mode: "none" },
-          },
-        });
-        const jobs = await fixture.read();
-        expect(jobs).toMatchObject([
-          {
-            createdActor: CREATOR,
-            owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
-            scheduledToolPolicy: {
-              mode: "account",
-              ownerSessionKey: SESSION,
-              ownerAccountId: "default",
+  it.each([false, true])(
+    "preserves ordinary restricted caller creation without management admission (creator Lab %s)",
+    async (enabled) => {
+      const config: OpenClawConfig = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { experimental: { delegatedCreatorAttribution: enabled } },
+        },
+        tools: { allow: [AUTOMATIONS_TOOL_NAME] },
+      };
+      setRuntimeConfigSnapshot(config);
+      const fixture = createCronFixture(undefined, config);
+      const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+      client.internal = {};
+      expect(admission("restricted-creator", client)).toBeUndefined();
+      await inRun("restricted-creator", undefined, async (_identity, admitted) => {
+        bindGatewayContextResolver(admitted, () => fixture.context);
+        try {
+          const tools = await createCreatorTransportTools({
+            transport: "embedded",
+            config,
+            admitted,
+            // Tool access does not grant Gateway-wide management admission.
+            senderIsOwner: true,
+          });
+          await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "add",
+            job: {
+              name: "Restricted caller job",
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "current",
+              payload: { kind: "agentTurn", message: "Check status", timeoutSeconds: 0 },
+              delivery: { mode: "none" },
             },
-            payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
-          },
-        ]);
-        expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
-      } finally {
-        clearGatewayContextResolver(admitted);
-      }
-    });
-  });
+          });
+          const jobs = await fixture.read();
+          expect(jobs).toMatchObject([
+            {
+              createdActor: enabled
+                ? { type: "agent", id: "main" }
+                : { type: "human", source: "profile", id: "fixture-operator" },
+              owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
+              scheduledToolPolicy: {
+                mode: "account",
+                ownerSessionKey: SESSION,
+                ownerAccountId: "default",
+              },
+              payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
+            },
+          ]);
+          expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+        } finally {
+          clearGatewayContextResolver(admitted);
+        }
+      });
+    },
+  );
   it.each([
     ["cli", "local"],
     ["embedded", "local"],
@@ -340,7 +364,10 @@ describe("original caller through Cron creator transports", () => {
     async (transport, origin) => {
       const config: OpenClawConfig = {
         ...cfg,
-        agents: { ...cfg.agents, defaults: { workspace: stateDir } },
+        agents: {
+          ...cfg.agents,
+          defaults: { workspace: stateDir, experimental: { delegatedCreatorAttribution: true } },
+        },
         tools: { allow: [AUTOMATIONS_TOOL_NAME] },
       };
       setRuntimeConfigSnapshot(config);
@@ -440,7 +467,7 @@ describe("original caller through Cron creator transports", () => {
           expect(before).toMatchObject([
             {
               name: "Live creator",
-              createdActor: CREATOR,
+              createdActor: { type: "agent", id: "main" },
               sessionKey: SESSION,
               sessionTarget: "current",
               payload: {

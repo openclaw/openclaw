@@ -5,7 +5,7 @@ import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
@@ -264,6 +264,7 @@ export function createPersistCronSessionEntry(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
   createdActor?: SessionCreatedActor;
+  sandboxProvenance?: SessionEntry["sandboxProvenance"];
   sandbox?: "required";
   workspaceDir: string;
   persistSessionEntry: CronSessionRowWriter;
@@ -310,6 +311,7 @@ export function createPersistCronSessionEntry(params: {
           const creationStamp = buildSessionCreationStamp({
             via: "cron",
             actor: params.createdActor ?? { type: "system" },
+            sandboxProvenance: params.sandboxProvenance,
             sandbox: params.sandbox,
           });
           committedEntry = { ...persistedEntry, ...creationStamp };
@@ -391,6 +393,7 @@ export function createCronRunContinuationSession(params: {
   cronSession: MutableCronSession;
   runSessionKey: string;
   createdActor?: SessionCreatedActor;
+  sandboxProvenance?: SessionEntry["sandboxProvenance"];
   sandbox?: "required";
   thinkingLevel?: string;
   toolsAllow?: string[];
@@ -457,6 +460,7 @@ export function createCronRunContinuationSession(params: {
     const source = structuredClone(params.cronSession.sessionEntry);
     delete source.createdVia;
     delete source.createdActor;
+    delete source.sandboxProvenance;
     delete source.createdAt;
     // Node-local lineage must not leak across keys: the base row's generation
     // chain and fork ancestry describe the cron root, not this :run: node.
@@ -498,6 +502,7 @@ export function createCronRunContinuationSession(params: {
           ...(!current
             ? buildSessionCreationStamp({
                 via: "cron",
+                sandboxProvenance: params.sandboxProvenance,
                 ...inheritSessionCreationPolicy(
                   params.cronSession.sessionEntry,
                   params.createdActor ?? { type: "system" },

@@ -405,10 +405,10 @@ export function writeSessionEntry(
   }
   if (canonicalPreviousEntry?.sandbox === "required") {
     if (
-      normalizedEntry.sandbox !== "required" ||
-      normalizedEntry.createdVia !== canonicalPreviousEntry.createdVia ||
-      normalizedEntry.createdAt !== canonicalPreviousEntry.createdAt ||
-      !isDeepStrictEqual(normalizedEntry.createdActor, canonicalPreviousEntry.createdActor)
+      !isDeepStrictEqual(
+        preserveCreationStamp({}, normalizedEntry),
+        preserveCreationStamp({}, canonicalPreviousEntry),
+      )
     ) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
         "blocked role-required session creation provenance downgrade",

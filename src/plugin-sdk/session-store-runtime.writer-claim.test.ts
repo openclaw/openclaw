@@ -42,6 +42,11 @@ function expectGenerationPrivateFieldsCleared(entry: InternalSessionEntry | unde
   expect(entry?.transcriptByteCompactionLatch).toBeUndefined();
 }
 
+const sessionEntryKeepsIsolationPrivate: "sandboxProvenance" extends keyof SessionEntry
+  ? false
+  : true = true;
+void sessionEntryKeepsIsolationPrivate;
+
 const sessionEntryKeepsWriterClaimPrivate: "activeWriterRunId" extends keyof SessionEntry
   ? false
   : true = true;
@@ -116,6 +121,7 @@ describe("plugin session writer claim projection", () => {
 
   it("excludes private claims and retired thinking provenance from entries and patches", () => {
     const entry = {
+      sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-subject" } },
       activeWriterRunId: "run-writer",
       lifecycleRunId: "run-lifecycle",
       sessionDiffBaselineCapture: {
@@ -154,6 +160,7 @@ describe("plugin session writer claim projection", () => {
     });
     expect(
       projectPluginSessionEntryPatch({
+        sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-subject" } },
         activeWriterRunId: "run-next",
         lifecycleRunId: "run-lifecycle-next",
         sessionDiffBaselineCapture: {

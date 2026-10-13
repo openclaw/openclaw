@@ -1,9 +1,14 @@
 import { expect, it } from "vitest";
 import {
+  resolveDelegatedSessionCreator,
   inheritSpawnSessionOwner,
+  inheritSessionCreationPolicy,
+  sessionSandboxActor,
+  preserveCreationStamp,
   sessionPersonalProfileId,
   type SessionActor,
   type SessionCreatedActor,
+  type SessionSandboxProvenance,
 } from "./session-entry-provenance.js";
 
 type Source = Parameters<typeof sessionPersonalProfileId>[0];
@@ -91,5 +96,53 @@ it("inherits only the requesting human's current owner, including canonical prof
       assignedBy: spawningAgent,
       assignedAt: now ?? expect.any(Number),
     });
+  }
+});
+
+it("keeps required isolation separate from explicit and actorless creation attribution", () => {
+  const actor = { type: "human", source: "profile", id: "alice" } as const;
+  const requester = { type: "human", source: "profile", id: "bob" } as const;
+  const cases: Array<SessionSandboxProvenance | undefined> = [undefined, {}, { actor }];
+  for (const sandboxProvenance of cases) {
+    const source = { createdActor: actor, sandbox: "required" as const, sandboxProvenance };
+    const isolation = sandboxProvenance === undefined ? actor : sandboxProvenance.actor;
+    const next = inheritSessionCreationPolicy(source, requester);
+    expect(next).toMatchObject({
+      actor: requester,
+      sandbox: "required",
+      sandboxProvenance: { actor: isolation },
+    });
+    expect(inheritSessionCreationPolicy(source).actor).toEqual(actor);
+    expect(
+      sessionSandboxActor({ createdActor: requester, sandboxProvenance: next.sandboxProvenance }),
+    ).toEqual(isolation);
+    expect(
+      preserveCreationStamp({ sandboxProvenance: { actor: requester } }, source).sandboxProvenance,
+    ).toEqual(sandboxProvenance);
+  }
+});
+
+it("gates only new delegated attribution, retaining each entry point's legacy creator", () => {
+  const fallback = { type: "agent", id: "main" } as const;
+  const other = { type: "human", source: "profile", id: "other" } as const;
+  for (const legacyActor of [undefined, fallback, creator]) {
+    for (const createdVia of ["operator", "spawn", "cron", "talk"] as const) {
+      const source = { createdVia, createdActor: creator };
+      for (const enabled of [false, true, false]) {
+        const select = (requesterProfileId?: string) =>
+          resolveDelegatedSessionCreator({
+            enabled,
+            source,
+            fallback,
+            legacyActor,
+            requesterProfileId,
+          });
+        expect(select(other.id)).toEqual(enabled ? other : legacyActor);
+        expect(select()).toEqual(
+          enabled ? (createdVia === "operator" ? fallback : creator) : legacyActor,
+        );
+        expect(source.createdActor).toEqual(creator);
+      }
+    }
   }
 });

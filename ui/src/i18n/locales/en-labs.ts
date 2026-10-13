@@ -12,6 +12,11 @@ const enLabs = {
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
       refresh: "Refresh configuration",
     },
+    delegatedCreatorAttribution: {
+      title: "Human creator attribution",
+      description:
+        "Mark new agent-delegated sessions and cron jobs with their verified human creator. Off by default. Applies without restarting; existing creators, permissions, and execution isolation stay unchanged. Turning this off does not undo stored attribution.",
+    },
     codeMode: {
       title: "Code Mode",
       description:

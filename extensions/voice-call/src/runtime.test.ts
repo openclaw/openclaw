@@ -1,13 +1,20 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 // Voice Call tests cover runtime plugin behavior.
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import {
+  createMockConsultAgentRuntime,
   createMockSessionRuntime,
   registerFastContextMemoryProvider,
 } from "./runtime.fast-context.test-support.js";
@@ -161,7 +168,10 @@ function requireRealtimeConsultToolHandler() {
   return registeredToolHandler[1];
 }
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-voice-call-runtime-");
+
 describe("createVoiceCallRuntime lifecycle", () => {
+  afterEach(clearRuntimeConfigSnapshot);
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveVoiceCallConfig.mockImplementation((cfg: VoiceCallConfig) => cfg);
@@ -561,13 +571,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     }));
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
+      ...createMockConsultAgentRuntime(
+        sessionStore,
+        path.join(sessionDirs.make(), "sessions.json"),
+      ),
       runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -584,10 +591,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
-    await createVoiceCallRuntime({
+    const initial: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(initial);
+    const runtime = await createVoiceCallRuntime({
       scheduler: createTestPluginServiceScheduler(),
       config,
-      coreConfig: {} as OpenClawConfig,
+      coreConfig: initial,
       agentRuntime: agentRuntime as never,
     });
 
@@ -605,6 +614,14 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "custom_tool",
     ]);
     const handler = requireRealtimeConsultToolHandler();
+    const enabled: OpenClawConfig = {
+      agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } },
+    };
+    setRuntimeConfigSnapshot(enabled);
+    mocks.resolveRealtimeFastContextConsult.mockImplementationOnce(async () => {
+      setRuntimeConfigSnapshot(initial);
+      return { handled: false };
+    });
     await expect(
       handler({ question: "What should I say?" }, "call-1", {
         partialUserTranscript: "Also check the ETA.",
@@ -617,6 +634,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       expectDefined(runEmbeddedAgent.mock.calls.at(0), "embedded OpenClaw consult call")[0],
       "embedded OpenClaw consult params",
     );
+    expect(consultParams.config).toBe(enabled);
     expect(consultParams.agentId).toBe("support");
     expect(consultParams.sessionKey).toBe("agent:support:voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
@@ -642,6 +660,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.extraSystemPrompt).toContain("Ask for tomorrow delivery");
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
+    await handler({ question: "Next" }, "call-1", {});
+    expect(runEmbeddedAgent).toHaveBeenLastCalledWith(expect.objectContaining({ config: initial }));
+    await runtime.stop();
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
@@ -699,13 +720,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const sessionStore: Record<string, unknown> = {};
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
+      ...createMockConsultAgentRuntime(
+        sessionStore,
+        path.join(sessionDirs.make(), "sessions.json"),
+      ),
       runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -748,13 +766,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const sessionStore: Record<string, unknown> = {};
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
+      ...createMockConsultAgentRuntime(
+        sessionStore,
+        path.join(sessionDirs.make(), "sessions.json"),
+      ),
       runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -802,13 +817,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     const runEmbeddedAgent = vi.fn();
     const agentRuntime = {
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
+      ...createMockConsultAgentRuntime(
+        sessionStore,
+        path.join(sessionDirs.make(), "sessions.json"),
+      ),
       runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -851,13 +863,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     }));
     const sessionStore: Record<string, unknown> = {};
     const agentRuntime = {
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
+      ...createMockConsultAgentRuntime(
+        sessionStore,
+        path.join(sessionDirs.make(), "sessions.json"),
+      ),
       runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -950,7 +959,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
         scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: {} as OpenClawConfig,
-        agentRuntime: { session: createMockSessionRuntime({}) } as never,
+        agentRuntime: {
+          session: createMockSessionRuntime({}, path.join(sessionDirs.make(), "sessions.json")),
+        } as never,
       });
       return { handler: requireRealtimeConsultToolHandler(), open, search };
     }
@@ -1003,13 +1014,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     }));
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
+      ...createMockConsultAgentRuntime(
+        sessionStore,
+        path.join(sessionDirs.make(), "sessions.json"),
+      ),
       runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({

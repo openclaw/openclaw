@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearBootstrapSnapshot, getOrLoadBootstrapFiles } from "../../agents/bootstrap-cache.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -15,6 +17,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   loadSessionEntryMock,
@@ -47,6 +51,82 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("cron session preparation", () => {
+  it.each(["legacy", "empty", "agent", "system", "channel"] as const)(
+    "keeps %s isolation provenance distinct from the bookkeeping creator",
+    async (kind) => {
+      resetRunCronIsolatedAgentTurnHarness();
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("cron-isolation-fallback-"));
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+      const profile = ensureProfileForEmail("legacy-isolation@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const createdActor = { type: "human", source: "profile", id: profile.id } as const;
+      const sandboxProvenance: SessionEntry["sandboxProvenance"] =
+        kind === "legacy"
+          ? undefined
+          : kind === "empty"
+            ? {}
+            : kind === "channel"
+              ? { actor: { type: "human", source: "channel", id: profile.id } }
+              : { actor: { type: kind, id: profile.id } };
+      const config: OpenClawConfig = {
+        session: { store: database.path },
+        agents: { defaults: { sandbox: { mode: "off", workspaceAccess: "rw" } } },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+                sessions: { others: "view" },
+                sandbox: "required",
+              },
+            },
+          },
+        },
+      };
+      resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+      loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+      patchSessionEntryMock.mockImplementation(actualAccessor.patchSessionEntryCore);
+      const result = await prepareCronRunContext({
+        input: makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          cfg: config,
+          sessionKey: "cron:test-job",
+          job: makeIsolatedAgentJobFixture({
+            delivery: { mode: "none" },
+            createdActor,
+            sandboxProvenance,
+          }),
+        }),
+        isFastTestEnv: true,
+        onLifecycleInterrupt() {},
+      });
+      if (!result.ok) {
+        throw new Error("Cron preparation failed");
+      }
+      try {
+        const sessionKey = "agent:main:cron:test-job";
+        const row = actualAccessor.loadSessionEntry({ storePath: database.path, sessionKey });
+        expect(row?.createdActor).toEqual(createdActor);
+        expect(row?.sandboxProvenance).toEqual(sandboxProvenance);
+        const runtime = await resolveSandboxRuntimeStatusAsync({ cfg: config, sessionKey });
+        expect(runtime.sandboxRequired).toBe(kind === "legacy" || kind === "channel");
+        expect(runtime.isolationSubject).toEqual(
+          kind === "legacy"
+            ? { kind: "profile", profileId: profile.id }
+            : kind === "channel"
+              ? { kind: "session", sessionKey }
+              : undefined,
+        );
+      } finally {
+        await result.context.preparedModelRuntimeLease?.[Symbol.asyncDispose]();
+        result.context.sessionWorkAdmission.release();
+        await result.context.workspaceLease?.release();
+      }
+    },
+  );
+
   it.each(["unchanged", "workspace"] as const)(
     "revalidates %s authority across absent-field snapshot representations",
     async (change) => {

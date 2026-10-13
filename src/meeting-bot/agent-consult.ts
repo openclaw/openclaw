@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -41,6 +42,7 @@ export function createMeetingRealtimeEngineBindings(params: {
   tools: RealtimeVoiceTool[];
   handleToolCall: (call: MeetingRealtimeToolCallParams) => Promise<void>;
 } {
+  const readConfig = createRuntimeConfigReader(params.fullConfig);
   const surface: MeetingAgentConsultSurface = {
     id: params.platform.id,
     provider: params.platform.id,
@@ -56,7 +58,7 @@ export function createMeetingRealtimeEngineBindings(params: {
     consultAgent: async (consult) =>
       await consultMeetingAgent({
         surface,
-        config: params.fullConfig,
+        config: readConfig(),
         runtime: params.runtime,
         logger: params.logger,
         agentId: params.config.realtime.agentId,
@@ -68,7 +70,7 @@ export function createMeetingRealtimeEngineBindings(params: {
       const abortSignal = readMeetingRealtimeToolAbortSignal(call.session);
       await handleMeetingRealtimeConsultToolCall({
         surface,
-        config: params.fullConfig,
+        config: readConfig(),
         runtime: params.runtime,
         logger: params.logger,
         agentId: params.config.realtime.agentId,

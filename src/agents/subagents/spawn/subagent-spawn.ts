@@ -69,11 +69,6 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  let assertDelegationCurrent: (() => void) | undefined;
-  const assertActive = composeSessionSourceAssertion([ctx.assertActive], (assertSource) => {
-    assertSource();
-    assertDelegationCurrent?.();
-  });
   const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
@@ -134,7 +129,11 @@ export async function spawnSubagentDirect(
       context: ctx,
     });
     const delegatedToolPolicy = delegation.policy;
-    assertDelegationCurrent = delegation.assertCurrent;
+    const assertActive = composeSessionSourceAssertion([
+      ctx.assertActive,
+      delegation.assertCurrent,
+      operatorAuthority?.assertCurrent,
+    ]);
     if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }
@@ -186,6 +185,7 @@ export async function spawnSubagentDirect(
         assertActive,
         cfg,
         requesterAgentId,
+        requesterProfileId: operatorAuthority?.profileId,
         targetAgentId,
         childSessionKey,
         label: label || undefined,

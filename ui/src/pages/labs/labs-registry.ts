@@ -53,6 +53,12 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
+      id: "delegatedCreatorAttribution",
+      docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#human-creator-attribution",
+      configPath: ["agents", "defaults", "experimental", "delegatedCreatorAttribution"],
+    },
+    {
+      ...BOOLEAN_GATE,
       id: "codeMode",
       docsUrl: "https://docs.openclaw.ai/tools/code-mode",
       configPath: ["tools", "codeMode", "enabled"],

@@ -36,7 +36,7 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models, Custom
+Labs includes Human creator attribution, Speech bubbles, Decision assistance, Code Mode, Tool Search for all models, Custom
 plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
@@ -58,6 +58,39 @@ force Code Mode on for every model.
 Tool Search is enabled by default when `tools.toolSearch` is unset.
 Turning its Labs switch off disables the global default; turning it on restores
 that default.
+
+## Human creator attribution
+
+**Settings → Labs → Human creator attribution** controls
+`agents.defaults.experimental.delegatedCreatorAttribution`. The default is
+**off**; only explicit `true` enables it. It applies to newly created
+agent-delegated sessions, native and ACP subagents, and automations—not direct
+human creations or existing stored creators.
+
+When enabled, a verified requesting person is recorded as creator. Follow-on
+work can retain its delegated or scheduled task's creator when no new human
+requester is present. Ordinary conversation assignment is not proof of causality.
+When disabled, each entry point retains its earlier creator policy: ordinarily
+agent attribution for subagents, inherited parent attribution for required
+sandbox children, and captured source-session attribution for agent automations.
+
+Under the default hot-reload mode, saving the switch changes subsequent creation
+operations without restarting the Gateway. Already-admitted work uses its
+captured configuration. Existing sessions, jobs, resets, rollovers, and scheduled
+runs keep their original attribution. Turning the switch off removes its saved
+override; sibling experimental settings are preserved.
+
+The executing agent, live requester authorization, tool permissions, required
+sandbox restrictions, and private isolation identity do not change. The switch
+does not publish sessions, grant membership, or transfer creator/admin sharing
+or archive authority to an assignee. Public links remain an explicit opt-in.
+
+**Disabling is not a downgrade.** Older binaries may reject this config key and
+may not understand separately retained isolation or ACP lineage. Equal database
+schema versions alone do not prove compatibility. Use a compatible retained
+binary for rollback, or restore a matching pre-upgrade backup with its binary;
+backup recovery does not retain changes made after that backup. See
+[Rollback and recovery](/install/updating/rollback-and-recovery).
 
 ## Decision assistance
 

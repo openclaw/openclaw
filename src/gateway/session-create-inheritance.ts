@@ -9,6 +9,8 @@ import {
   inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
   inheritSpawnSessionOwner,
+  resolveDelegatedSessionCreator,
+  sessionSandboxActor,
   type SessionOwnerAssignment,
 } from "../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -16,6 +18,7 @@ import { inheritSessionSelection } from "../config/sessions/session-entry-select
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
+import { resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { invalidSessionRequest } from "./session-request-error.js";
@@ -117,10 +120,10 @@ function resolveResidentProfileId(profileId: string): string | undefined {
 }
 
 /** Derives trusted child policy and ownership from the locked spawn parent. */
-export function resolveSessionCreateInheritance(params: {
-  creation: SessionCreation | undefined;
-  parent: SessionEntry | undefined;
-}): {
+export function resolveSessionCreateInheritance(
+  params: Pick<CreateGatewaySessionParams, "cfg" | "creation">,
+  parent: SessionEntry | undefined,
+): {
   creation: SessionCreation | undefined;
   ownerAssignment?: SessionOwnerAssignment;
 } {
@@ -128,7 +131,7 @@ export function resolveSessionCreateInheritance(params: {
     return { creation: params.creation };
   }
   const ownerAssignment = inheritSpawnSessionOwner(
-    params.parent,
+    parent,
     params.creation.actor,
     params.creation.requesterProfileId,
     Date.now(),
@@ -137,11 +140,37 @@ export function resolveSessionCreateInheritance(params: {
   return {
     creation: {
       ...params.creation,
-      ...inheritSessionCreationPolicy(params.parent, params.creation.actor),
-      inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
+      sandboxProvenance: { actor: params.creation.actor },
+      ...inheritSessionCreationPolicy(
+        parent,
+        resolveDelegatedSessionCreator({
+          enabled: params.cfg.agents?.defaults?.experimental?.delegatedCreatorAttribution === true,
+          source: parent,
+          fallback: params.creation.actor,
+          legacyActor: parent?.sandbox === "required" ? parent.createdActor : params.creation.actor,
+          requesterProfileId: params.creation.requesterProfileId,
+        }),
+      ),
+      inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parent),
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),
   };
+}
+
+/** Resolve containment independently of the new node's attribution. */
+export function resolveSessionCreateSandbox(
+  cfg: CreateGatewaySessionParams["cfg"],
+  creation: SessionCreation | undefined,
+) {
+  return (
+    creation?.sandbox ??
+    resolveCreatorSandbox(cfg, {
+      actor: sessionSandboxActor({
+        createdActor: creation?.actor,
+        sandboxProvenance: creation?.sandboxProvenance,
+      }),
+    })
+  );
 }
 
 /** Project the trusted spawn policy only onto a genuinely new child row. */

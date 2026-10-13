@@ -127,6 +127,8 @@ export async function add(
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
+        sandboxProvenance: opts?.sandboxProvenance,
+        sandbox: opts?.sandbox,
         sourceConversation: opts?.sourceConversation,
         skillLibrarySelections: opts?.skillLibrarySelections,
         scheduledToolPolicy: opts?.scheduledToolPolicy,

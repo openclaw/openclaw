@@ -67,10 +67,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../registry/subagent-registry.persistence.test-support.js";
+import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
@@ -158,18 +155,21 @@ it.each([
   ["runtime", "abort"],
   ["row", "admission close"],
   ["thread", "admission close"],
-  ["thread", "live"],
+  ["thread", "live", false],
+  ["thread", "live", true],
   ["actor", "admission close"],
   ["metadata", "admission close"],
   ["initialized", "admission close"],
 ] as const)(
   "pending ACP spawn transfers work only from its live parent: %s / %s",
-  async (stage, closure) => {
+  async (stage, closure, creatorLab = false) => {
     const cfg = getRuntimeConfig();
-    await writeSubagentSessionEntry({
-      stateDir,
-      ...parentScope,
-      defaultSessionId: "parent-session",
+    cfg.agents!.defaults!.experimental = { delegatedCreatorAttribution: creatorLab };
+    await sessionAccessor.upsertSessionEntryCore(parentScope, {
+      sessionId: "parent-session",
+      updatedAt: Date.now(),
+      createdVia: "spawn",
+      createdActor: { type: "human", source: "profile", id: "causal-creator" },
     });
     const live = closure === "live";
     const thread = stage === "thread";
@@ -465,6 +465,11 @@ it.each([
           material_sequence: spawned.sequence,
         });
         expect(sourceBoundary.entry).toMatchObject({
+          createdActor: creatorLab
+            ? { type: "human", source: "profile", id: "causal-creator" }
+            : { type: "agent", id: "main" },
+          spawnedByAgentId: "main",
+          sandboxProvenance: { actor: { type: "agent", id: "main" } },
           spawnedBy: parentSessionKey,
           parentSessionKey,
           spawnedBySessionId: "parent-session",

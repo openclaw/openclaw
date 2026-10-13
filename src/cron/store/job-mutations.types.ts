@@ -12,6 +12,8 @@ type CronJobMutationOptions = Pick<
   | "enabledExplicit"
   | "systemOwned"
   | "createdActor"
+  | "sandboxProvenance"
+  | "sandbox"
   | "sourceConversation"
   | "skillLibrarySelections"
   | "toolsAllowProvenance"

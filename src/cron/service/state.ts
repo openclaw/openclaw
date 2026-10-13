@@ -441,6 +441,8 @@ export type CronAddOptions = {
   systemOwned?: boolean;
   /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
   createdActor?: SessionCreatedActor;
+  sandboxProvenance?: CronStoredJob["sandboxProvenance"];
+  sandbox?: CronStoredJob["sandbox"];
   /** Authenticated caller provenance stamped by the service, never public input. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
   /** Private proof from an authenticated agent-runtime caller. */

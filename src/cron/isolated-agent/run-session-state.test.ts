@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -544,7 +544,7 @@ describe("createPersistCronSessionEntry", () => {
     );
   });
 
-  it("retains the required base creator when a continuation is created after job ownership changes", async () => {
+  it("retains required base isolation independently of a fresh continuation creator", async () => {
     const creator = { type: "human", source: "profile", id: "profile-original-creator" } as const;
     const lifecycleRevision = crypto.randomUUID();
     const cronSession = makeCronSession(
@@ -566,7 +566,12 @@ describe("createPersistCronSessionEntry", () => {
     });
     await continuation.initialize();
     await continuation.sync();
-    expect(store[runSessionKey]).toMatchObject({ createdActor: creator, sandbox: "required" });
+    expect(store[runSessionKey]).toMatchObject({
+      createdActor: { type: "human", source: "profile", id: "profile-current-job-owner" },
+      sandbox: "required",
+      sandboxProvenance: { actor: creator },
+    });
+    expect(cronSession.sessionEntry.createdActor).toEqual(creator);
   });
 
   it("persists isolated cron state only under the stable cron session key", async () => {

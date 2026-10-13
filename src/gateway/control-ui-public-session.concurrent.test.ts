@@ -4,6 +4,8 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
+  persistSessionTranscriptTurn,
+  loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -56,7 +58,10 @@ it("serves public text and images through real publication, isolation, and revoc
       sessionId: locator.sessionId,
       updatedAt: 1,
       label: "Public concurrency",
-      publicShare: { id: locator.shareId, sessionId: locator.sessionId, createdAt: 1 },
+      createdVia: "spawn",
+      createdActor: { type: "human", source: "profile", id: "public-creator" },
+      sandbox: "required",
+      sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-isolation" } },
     });
     await replaceTranscriptEvents(locator, [
       { type: "session", version: 3, id: locator.sessionId },
@@ -74,6 +79,27 @@ it("serves public text and images through real publication, isolation, and revoc
       },
       { type: "message", id: "image", parentId: "answer", message: imageMessage },
       { type: "message", id: "held-image", parentId: "image", message: imageMessage },
+      {
+        type: "message",
+        id: "system",
+        parentId: "held-image",
+        message: { role: "system", content: "Private system instruction" },
+      },
+      {
+        type: "message",
+        id: "thinking",
+        parentId: "system",
+        message: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Private reasoning" }],
+        },
+      },
+      {
+        type: "message",
+        id: "tool",
+        parentId: "thinking",
+        message: { role: "toolResult", toolCallId: "read-private", content: "Private tool output" },
+      },
     ]);
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const context = createGatewayRequestContext(makeContextParams());
@@ -105,6 +131,14 @@ it("serves public text and images through real publication, isolation, and revoc
       const mediaUrl = (shareToken: string, entry: string) =>
         `${origin}/share/session/media?${new URLSearchParams({ token: shareToken, entry, attachment: "content-0" })}`;
       const paths = [path, "/chat/main/public-concurrency-bbbbbbbbaaaa40008000000000000001"];
+      for (const publicPath of paths) {
+        const unpublished = await fetch(`${origin}${publicPath}`);
+        expect(unpublished.status).toBe(404);
+        await unpublished.text();
+      }
+      await patchSessionEntryCore(locator, () => ({
+        publicShare: { id: locator.shareId, sessionId: locator.sessionId, createdAt: 1 },
+      }));
       const validators = new Map<string, string>();
       for (const publicPath of paths) {
         const started = performance.now();
@@ -120,6 +154,15 @@ it("serves public text and images through real publication, isolation, and revoc
         );
         expect(replies.map((reply) => reply.status)).toEqual(Array(20).fill(200));
         expect(replies.every((reply) => reply.body.includes("Public answer"))).toBe(true);
+        for (const excluded of [
+          "Private system instruction",
+          "Private reasoning",
+          "Private tool output",
+          "private-isolation",
+          "sandboxProvenance",
+        ]) {
+          expect(replies.every((reply) => !reply.body.includes(excluded))).toBe(true);
+        }
         expect(replies.every((reply) => reply.body.includes("/share/session/media?token="))).toBe(
           true,
         );
@@ -139,6 +182,26 @@ it("serves public text and images through real publication, isolation, and revoc
           readers: 20,
           elapsedMs: Math.round(performance.now() - started),
         });
+      }
+      const appended = await persistSessionTranscriptTurn(locator, {
+        config: cfg,
+        expectedSessionId: locator.sessionId,
+        messages: [
+          {
+            eventId: "future-message",
+            message: { role: "assistant", content: "Future public answer" },
+            now: 2,
+          },
+        ],
+      });
+      expect(appended.appendedCount).toBe(1);
+      for (const [publicPath, etag] of validators) {
+        const future = await fetch(`${origin}${publicPath}`, {
+          headers: { "If-None-Match": etag },
+        });
+        expect(future.status).toBe(200);
+        expect(future.headers.get("etag")).not.toBe(etag);
+        expect(await future.text()).toContain("Future public answer");
       }
       const image = await fetch(mediaUrl(token, "image"));
       expect(image.status).toBe(200);
@@ -209,6 +272,25 @@ it("serves public text and images through real publication, isolation, and revoc
         expect(revoked.status).toBe(404);
         expect(await revoked.text()).not.toContain("Public answer");
       }
+      const replacement = { ...locator, shareId: "c".repeat(48) };
+      await patchSessionEntryCore(locator, () => ({
+        publicShare: { id: replacement.shareId, sessionId: locator.sessionId, createdAt: 3 },
+      }));
+      const retired = await fetch(`${origin}${path}`);
+      expect(retired.status).toBe(404);
+      await retired.text();
+      for (const publicPath of [
+        paths[1],
+        buildControlUiPublicSessionSharePath({ token: codec.mint(replacement) }),
+      ]) {
+        const restored = await fetch(`${origin}${publicPath}`);
+        expect(restored.status).toBe(200);
+        expect(await restored.text()).toContain("Future public answer");
+      }
+      expect(loadSessionEntry(locator)).toMatchObject({
+        createdActor: { type: "human", source: "profile", id: "public-creator" },
+        sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-isolation" } },
+      });
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

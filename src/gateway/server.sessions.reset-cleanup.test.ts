@@ -28,6 +28,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -725,72 +726,91 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
   expect(closedKeys).not.toContain("agent:main:acp-grandchild");
 });
 
-test("sessions.reset closes a spawned ACP child that lives in a different agent store", async () => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  // Per-agent store layout: ACP children live under the target agent's own
-  // store file, which is different from the parent's store.
-  testState.sessionConfig = {
-    store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-  };
-  testState.agentsConfig = {
-    ownership: "explicit",
-    entries: { main: {}, codex: {} },
-  };
-  testState.agentConfig = { systemAgent: { agentId: "main" } };
-  const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  await writeSessionStore({
-    agentId: "main",
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-    storePath: mainStorePath,
-  });
-  await writeSessionStore({
-    agentId: "codex",
-    entries: {
-      "agent:codex:acp:cross-store-child": sessionStoreEntry("sess-codex-child", {
-        spawnedBy: "agent:main:main",
-      }),
-    },
-    storePath: codexStorePath,
-  });
-  seedCanonicalAcpSessionMeta({
-    sessionKey: "agent:main:main",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "runtime:main",
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
-  });
-  seedCanonicalAcpSessionMeta({
-    sessionKey: "agent:codex:acp:cross-store-child",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "runtime:codex-child",
-      mode: "oneshot",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
-  });
+test.each([false, true])(
+  "sessions.reset closes a human-created cross-agent ACP child (global=%s)",
+  async (global) => {
+    const parentKey = global ? "global" : "agent:main:main";
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+    }
+    // Creator attribution must not erase the parent agent namespace.
+    testState.sessionConfig = {
+      ...(global ? { scope: "global" as const } : {}),
+      store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+    };
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { main: {}, codex: {} },
+    };
+    testState.agentConfig = { systemAgent: { agentId: "main" } };
+    const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
+    await writeSessionStore({
+      agentId: "main",
+      entries: {
+        [parentKey]: sessionStoreEntry("sess-main"),
+      },
+      storePath: mainStorePath,
+    });
+    await writeSessionStore({
+      agentId: "codex",
+      entries: {
+        "agent:codex:acp:cross-store-child": sessionStoreEntry("sess-codex-child", {
+          spawnedBy: parentKey,
+          spawnedByAgentId: "main",
+          createdVia: "spawn",
+          createdActor: { type: "human", source: "profile", id: "main" },
+        }),
+        "agent:codex:acp:other-parent": sessionStoreEntry("sess-other-child", {
+          spawnedBy: parentKey,
+          spawnedByAgentId: "codex",
+          createdVia: "spawn",
+          createdActor: { type: "human", source: "profile", id: "main" },
+        }),
+      },
+      storePath: codexStorePath,
+    });
+    seedCanonicalAcpSessionMeta({
+      sessionKey: "agent:main:main",
+      meta: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:main",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    for (const child of ["cross-store-child", "other-parent"]) {
+      seedCanonicalAcpSessionMeta({
+        sessionKey: `agent:codex:acp:${child}`,
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: child,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      });
+    }
 
-  const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
-  expect(reset.ok).toBe(true);
+    const reset = await directSessionReq<{ ok: true }>("sessions.reset", {
+      key: parentKey,
+      agentId: "main",
+    });
+    expect(reset.ok).toBe(true);
 
-  // The child in the codex store is closed even though it is not in the main
-  // (parent) store — cleanup enumerates the combined cross-agent store.
-  const closedKeys = (
-    acpManagerMocks.closeSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
-  ).map((call) => call[0]?.sessionKey);
-  expect(closedKeys).toContain("agent:codex:acp:cross-store-child");
-});
+    // The child in the codex store is closed even though it is not in the main
+    // (parent) store — cleanup enumerates the combined cross-agent store.
+    const closedKeys = (
+      acpManagerMocks.closeSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
+    ).map((call) => call[0]?.sessionKey);
+    expect(closedKeys).toContain("agent:codex:acp:cross-store-child");
+    expect(closedKeys).not.toContain("agent:codex:acp:other-parent");
+  },
+);
 
 test("sessions.reset closes child ACP runtimes concurrently so stuck children do not serialize cleanup", async ({
   signal,
@@ -915,6 +935,12 @@ test("sessions.reset preserves explicit session preferences across session rollo
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   const preferences = {
+    createdActor: { type: "human", source: "profile", id: "creator-bob" },
+    sandbox: "required",
+    sandboxProvenance: { actor: { type: "human", source: "profile", id: "isolation-alice" } },
+    spawnedBy: "global",
+    spawnedByAgentId: "main",
+    createdVia: "spawn",
     responseUsage: "tokens",
     pinnedAt: 123,
     label: "Operator session",
@@ -937,6 +963,13 @@ test("sessions.reset preserves explicit session preferences across session rollo
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry).toMatchObject(preferences);
+  const { sandboxProvenance: _privateIsolation, ...publicPreferences } = preferences;
+  expect(reset.payload?.entry).toMatchObject(publicPreferences);
+  expect(reset.payload?.entry).not.toHaveProperty("sandboxProvenance");
+  expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
   expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject(preferences);
+  await closeOpenClawAgentDatabasesAsync();
+  expect(
+    loadSessionEntry({ sessionKey: "agent:main:main", storePath, readConsistency: "latest" }),
+  ).toMatchObject(preferences);
 });

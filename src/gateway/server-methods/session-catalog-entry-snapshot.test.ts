@@ -4,10 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  buildSessionCreationStamp,
-  inheritSessionCreationPolicy,
-} from "../../config/sessions/session-entry-provenance.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -231,10 +228,9 @@ describe("session catalog entry snapshots", () => {
     });
     const creation = buildSessionCreationStamp({
       via: "spawn",
-      ...inheritSessionCreationPolicy(
-        { createdActor: { type: "human", source: "profile", id: "former" }, sandbox: "required" },
-        { type: "agent", id: "research" },
-      ),
+      actor: { type: "human", source: "profile", id: "former" },
+      sandbox: "required",
+      sandboxProvenance: { actor: { type: "human", source: "profile", id: "isolation-other" } },
       now: 1,
     });
     const entries = [

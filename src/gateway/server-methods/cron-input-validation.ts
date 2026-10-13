@@ -4,6 +4,11 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  sessionSandboxActor,
+  resolveDelegatedSessionCreator,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -247,15 +252,33 @@ export async function captureCronCreatorSession(
           lifecycleRevision: creatorSession.lifecycleRevision,
         }
       : undefined;
-  // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
+  // The admitted requester wins over conversation attribution; neither the job
+  // owner nor an operator-supplied delivery session identifies that requester.
+  const requester = resolveOperatorSessionCreation(client).actor;
   const actor = callerScope
-    ? creatorSession?.createdActor
-    : resolveOperatorSessionCreation(client).actor;
-  const actorId = normalizeOptionalString(actor?.id);
-  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+    ? resolveDelegatedSessionCreator({
+        enabled: cfg.agents?.defaults?.experimental?.delegatedCreatorAttribution === true,
+        source: creatorSession,
+        fallback: { type: "agent", id: callerScope.agentId },
+        legacyActor: creatorSession?.createdActor,
+        requesterProfileId: sessionCreatorProfileId(requester),
+      })
+    : requester;
+  const snapshotActor = (value: typeof requester) => {
+    const id = normalizeOptionalString(value?.id);
+    return value ? { ...value, ...(id ? { id } : {}) } : undefined;
+  };
+  const createdActor = snapshotActor(actor);
   return {
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
+    // Preserve the pre-attribution isolation subject, including explicit absence.
+    sandboxProvenance: {
+      actor: snapshotActor(callerScope ? sessionSandboxActor(creatorSession) : requester),
+    },
+    ...(callerScope && creatorSession?.sandbox === "required"
+      ? { sandbox: "required" as const }
+      : {}),
     ...(callerScope && creatorSession?.skillLibrarySelections
       ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
       : {}),

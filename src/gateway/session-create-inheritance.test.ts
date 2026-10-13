@@ -5,7 +5,10 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareSessionCreateParent } from "./session-create-inheritance.js";
+import {
+  prepareSessionCreateParent,
+  resolveSessionCreateInheritance,
+} from "./session-create-inheritance.js";
 
 it("inherits an in-process parent update after warming discovery", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -31,3 +34,51 @@ it("inherits an in-process parent update after warming discovery", async () => {
     });
   });
 });
+
+it.each([undefined, false, true])(
+  "uses the %s creator Lab without changing required isolation or ownership",
+  (enabled) => {
+    const parentActor = { type: "human", source: "profile", id: "parent" } as const;
+    const isolationActor = { type: "human", source: "profile", id: "isolation" } as const;
+    const caller = { type: "agent", id: "main" } as const;
+    for (const sandbox of [undefined, "required"] as const) {
+      const parent = {
+        sessionId: "parent-session",
+        updatedAt: 1,
+        createdActor: parentActor,
+        sandbox,
+        sandboxProvenance: { actor: isolationActor },
+      };
+      const creation = { via: "spawn" as const, actor: caller, requesterProfileId: "requester" };
+      const result = resolveSessionCreateInheritance(
+        {
+          cfg: { agents: { defaults: { experimental: { delegatedCreatorAttribution: enabled } } } },
+          creation,
+        },
+        parent,
+      );
+      expect(result.creation?.actor).toEqual(
+        enabled
+          ? { type: "human", source: "profile", id: "requester" }
+          : sandbox
+            ? parentActor
+            : caller,
+      );
+      expect(result.creation?.sandbox).toBe(sandbox);
+      expect(result.creation?.sandboxProvenance).toEqual({
+        actor: sandbox ? isolationActor : caller,
+      });
+      expect(result.ownerAssignment?.actor).toEqual(caller);
+      expect(parent.createdActor).toEqual(parentActor);
+      expect(
+        resolveSessionCreateInheritance(
+          {
+            cfg: {},
+            creation: { via: "operator", actor: parentActor },
+          },
+          parent,
+        ).creation?.actor,
+      ).toEqual(parentActor);
+    }
+  },
+);

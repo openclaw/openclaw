@@ -64,6 +64,9 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    sandboxProvenance: entry.sandboxProvenance
+      ? structuredClone(entry.sandboxProvenance)
+      : undefined,
     owner: entry.owner
       ? {
           ...entry.owner,

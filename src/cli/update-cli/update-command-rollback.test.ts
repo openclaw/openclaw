@@ -56,6 +56,7 @@ import {
   expectActiveRollbackIdentity,
   expectDoctorRollback,
   readRollbackFixtureSchemaVersions,
+  registerRollbackAttributionRowTests,
   registerRollbackReportTests,
   writeDoctorRollbackConfig,
   writeDoctorRollbackReceipt,
@@ -157,6 +158,12 @@ describe("verified package rollback", () => {
     });
   });
   registerRollbackReportTests(() => ({ candidateRoot, previousRoot, stateDir: serviceStateDir }));
+  registerRollbackAttributionRowTests(() => ({
+    candidateRoot,
+    previousRoot,
+    stateDir: serviceStateDir,
+    restart: mocks.restart,
+  }));
   it.each([false, true])(
     "records refused project rollback without an additional stop (during stop=%s)",
     async (duringStop) => {
@@ -711,7 +718,9 @@ describe("verified package rollback", () => {
                   inspected: true,
                   runtimeInspected: true,
                   running: true,
-                  serviceEnv: { OPENCLAW_STATE_DIR: stateDir },
+                  // Rollback installs the complete captured service environment. Keep the
+                  // fixture home and private scratch paths when it replaces process.env.
+                  serviceEnv: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
                   serviceNodeRunner: "/previous/node",
                   serviceUpdateVerdict: {
                     kind: "owned",
@@ -847,7 +856,7 @@ describe("verified package rollback", () => {
 
   it("excludes a competing config writer across package rollback and config restoration", async () => {
     const stateDir = serviceStateDir;
-    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const configPath = path.join(stateDir, "openclaw.json");
     const original = '{"gateway":{"mode":"local","port":19101}}\n';
     const candidate = '{"gateway":{"mode":"local","port":19102}}\n';

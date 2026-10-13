@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { withPersonalToolTurn } from "../../../auto-reply/reply/personal-tool-turn.test-support.js";
 import {
   assignSessionOwner,
+  upsertSessionEntryCore,
   listSessionEntryKeysReadOnly,
   loadSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -61,6 +62,15 @@ export function registerParticipantSpawnCases(options: {
         name: "Bob",
         operatorAuthority: bobSource.authority,
       };
+      const parentCreator = { type: "human", source: "profile", id: "original-creator" } as const;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: parentSessionKey },
+        {
+          sessionId: "parent-session",
+          createdVia: "operator",
+          createdActor: parentCreator,
+        },
+      );
       const bound = await createBoundParent(aliceSource.authority);
       assignSessionOwner(
         { agentId: "main", storePath: bound.storePath, sessionKey: parentSessionKey },
@@ -159,6 +169,17 @@ export function registerParticipantSpawnCases(options: {
                       ]
                     : []),
                 ]);
+                expect(entry.createdActor).toEqual({
+                  type: "human",
+                  source: "profile",
+                  id: profileId,
+                });
+                const parent = loadSessionEntry({
+                  storePath: bound.storePath,
+                  sessionKey: parentSessionKey,
+                });
+                expect(parent?.createdActor).toEqual(parentCreator);
+                expect(parent?.owner?.actor).toEqual({ type: "human", id: "alice" });
                 const authority = readAdmittedRunOperatorAuthority(admitted);
                 expect(authority?.profileId).toBe(profileId);
                 if (visible) {

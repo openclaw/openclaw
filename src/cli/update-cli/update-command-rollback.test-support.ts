@@ -9,11 +9,21 @@ import {
 } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.entry.js";
 import type {
   AgentDefaultsConfig,
   ConfigFileSnapshot,
   OpenClawConfig,
 } from "../../config/types.js";
+import { loadCronJobsStore, saveCronJobsStore } from "../../cron/store.js";
+import type { CronStoreFile } from "../../cron/types.js";
 import { readUpdateStateSchemaVersionsInProcess } from "../../infra/update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -25,6 +35,9 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { printResult } from "./progress.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
@@ -416,6 +429,132 @@ export function registerRollbackReportTests(
       );
       await printResult(result, { run });
       expect(log).toHaveBeenCalledWith(expect.stringContaining(message));
+    },
+  );
+}
+
+/** Schema admission with real durable rows; package switching stays a synthetic transport. */
+export function registerRollbackAttributionRowTests(
+  getFixture: () => {
+    candidateRoot: string;
+    previousRoot: string;
+    stateDir: string;
+    restart: Mock;
+  },
+) {
+  it.each([true, false])(
+    "retains attribution rows across package rollback (previous schema compatible=%s)",
+    async (compatible) => {
+      const { candidateRoot, previousRoot, stateDir: serviceStateDir, restart } = getFixture();
+      vi.stubEnv("OPENCLAW_STATE_DIR", serviceStateDir);
+      const env = { ...process.env };
+      setRuntimeConfigSnapshot({});
+      try {
+        const configSnapshot = await createConfigIO({
+          env,
+          pluginValidation: "skip",
+        }).readConfigFileSnapshot();
+        const schemaVersions = await readRollbackFixtureSchemaVersions({
+          stateDir: serviceStateDir,
+          config: {},
+          env,
+        });
+        const scope = { agentId: "main", env, sessionKey: "agent:main:retained-child" };
+        const createdActor = { type: "human", source: "profile", id: "requester" } as const;
+        const entry = {
+          sessionId: "retained-child",
+          createdActor,
+          // An explicitly empty legacy isolation subject must not become the creator.
+          sandboxProvenance: {},
+          spawnedByAgentId: "delegating-agent",
+          spawnedBy: "agent:delegating-agent:main",
+        };
+        const persistedEntry = await upsertSessionEntryCore(scope, entry);
+        expect(persistedEntry).not.toBeNull();
+        const storePath = path.join(serviceStateDir, "cron", "jobs.json");
+        const store: CronStoreFile = {
+          version: 1,
+          jobs: [
+            {
+              id: "retained-job",
+              name: "Retained job",
+              enabled: true,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "retained work" },
+              state: {},
+              createdActor,
+              sandboxProvenance: { actor: { type: "agent", id: "delegating-agent" } },
+            },
+          ],
+        };
+        await saveCronJobsStore(storePath, store);
+        // The candidate reader and reopened owners must observe durable rows, not caches.
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        const rollback = vi.fn(async () => ({
+          name: "package rollback",
+          command: "restore",
+          cwd: previousRoot,
+          durationMs: 1,
+          exitCode: 0,
+          activePackageRoot: previousRoot,
+        }));
+        const supported = {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        };
+        const outcome = await rollbackFailedUpdate({
+          definitionRecovery: {},
+          result: {
+            status: "error",
+            mode: "npm",
+            root: candidateRoot,
+            reason: "readyz-unhealthy",
+            steps: [],
+            durationMs: 1,
+            before: { version: "2026.9.1" },
+            after: { version: "2026.9.3" },
+          },
+          previousRoot,
+          configSnapshot,
+          schemaVersions,
+          candidateSchemaVersions: supported,
+          previousSchemaVersions: { ...supported, agent: supported.agent - (compatible ? 0 : 1) },
+          opts: { json: true, restart: false },
+          timeoutMs: 1000,
+          preManagedServiceStop: {
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            stopped: false,
+            serviceEnv: env,
+          },
+          packageTransaction: { backupRoot: previousRoot, complete: async () => {}, rollback },
+        });
+        if (compatible) {
+          expect(rollback).toHaveBeenCalledOnce();
+          expect(outcome.result.rollbackOutcome?.status).toBe("succeeded");
+          expect(outcome.result.root).toBe(previousRoot);
+        } else {
+          expect(rollback).not.toHaveBeenCalled();
+          expect(outcome.result.reason).toBe("rollback-state-unverified");
+          expect(outcome.result.root).toBe(candidateRoot);
+        }
+        expect(restart).not.toHaveBeenCalled();
+        const reopened = loadSessionEntry(scope);
+        expect(reopened).toMatchObject(entry);
+        expect(reopened).toEqual(persistedEntry);
+        expect(reopened?.sandboxProvenance).toEqual({});
+        expect(await loadCronJobsStore(storePath)).toEqual(store);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        clearRuntimeConfigSnapshot();
+      }
     },
   );
 }

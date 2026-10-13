@@ -1,5 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** True when this entry's transcript began as a copy of a parent (actual forkSource ancestry or the legacy/thread-settled marker). */
 export function sessionEntryForkedFromParent(
@@ -93,6 +93,7 @@ export function preserveSessionLineage(
   Pick<
     SessionEntry,
     | "spawnedBy"
+    | "spawnedByAgentId"
     | "spawnedBySenderIsOwner"
     | "spawnedBySessionId"
     | "parentSessionKey"
@@ -109,6 +110,7 @@ export function preserveSessionLineage(
   return {
     ...preserveSessionInheritedToolPolicy(entry),
     spawnedBy: entry?.spawnedBy,
+    spawnedByAgentId: entry?.spawnedByAgentId,
     spawnedBySenderIsOwner: entry?.spawnedBySenderIsOwner,
     spawnedBySessionId: entry?.spawnedBySessionId,
     parentSessionKey: entry?.parentSessionKey,

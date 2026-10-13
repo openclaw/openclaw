@@ -900,11 +900,13 @@ describe("spawnSubagentDirect seam flow", () => {
   );
 
   it.each([
-    { required: false, source: "profile", sandbox: "inherit" },
-    { required: true, source: "profile", sandbox: "require" },
+    { required: false, source: "profile", sandbox: "inherit", enabled: false },
+    { required: true, source: "profile", sandbox: "require", enabled: false },
+    { required: false, source: "profile", sandbox: "inherit", enabled: true },
+    { required: true, source: "profile", sandbox: "require", enabled: true },
   ] as const)(
-    "inherits native child $source provenance without host session SQL ($required) with sandbox=$sandbox",
-    async ({ required, source, sandbox }) => {
+    "separates native child creator from $source isolation without host session SQL ($required) with sandbox=$sandbox and attribution=$enabled",
+    async ({ required, source, sandbox, enabled }) => {
       await withOpenClawTestState({ prefix: "openclaw-spawn-required-parent-" }, async (state) => {
         const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
         const parentSessionKey = "agent:main:main";
@@ -923,7 +925,10 @@ describe("spawnSubagentDirect seam flow", () => {
         configOverride = createConfigOverride({
           session: { store: storePath },
           agents: {
-            defaults: { sandbox: { mode: "off" } },
+            defaults: {
+              sandbox: { mode: "off" },
+              experimental: { delegatedCreatorAttribution: enabled },
+            },
             entries: { main: { workspace: state.workspaceDir } },
           },
         });
@@ -945,7 +950,12 @@ describe("spawnSubagentDirect seam flow", () => {
           expect(result.status).toBe("accepted");
           const child = persistedStore?.[result.childSessionKey as string];
           expect(child).toMatchObject({ createdVia: "spawn", parentSessionKey });
-          expect(child?.createdActor).toEqual(required ? actor : { type: "agent", id: "main" });
+          expect(child?.createdActor).toEqual(
+            !enabled && required ? actor : { type: "agent", id: "main" },
+          );
+          expect(child?.sandboxProvenance).toEqual({
+            actor: required ? actor : { type: "agent", id: "main" },
+          });
           expect(child?.sandbox).toBe(required ? "required" : undefined);
           expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
         } finally {

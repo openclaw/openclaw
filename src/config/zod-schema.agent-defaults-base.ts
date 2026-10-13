@@ -78,6 +78,8 @@ export const AgentDefaultsBaseSchema = z.strictObject({
     .strictObject({
       /** Global opt-in for automatic Decision experiments; model selection is separate. */
       decisionAssistance: z.boolean().optional(),
+      /** Attribute new delegated work to its verified human requester (default: false). */
+      delegatedCreatorAttribution: z.boolean().optional(),
       localModelLean: z.boolean().optional(),
     })
     .optional(),

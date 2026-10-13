@@ -84,6 +84,24 @@ it("classifies unbound memory policy and rejects execution after permission or s
         sandboxRequired: false,
         sandboxed: true,
       });
+      const requiredKey = "agent:main:dashboard:incognito-required-policy";
+      await replaceSessionEntry(
+        { ...scope, sessionKey: requiredKey },
+        {
+          sessionId: "required-policy",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: "bob" },
+          sandboxProvenance: { actor: { type: "human", source: "profile", id: "alice" } },
+          incognito: true,
+          sandbox: "required",
+          sandboxMode: "off",
+        },
+      );
+      expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: requiredKey })).toMatchObject({
+        sandboxRequired: true,
+        sandboxed: true,
+        isolationSubject: { kind: "profile", profileId: "alice" },
+      });
       expect(observe.queries).toEqual([]);
     } finally {
       observe.restore();

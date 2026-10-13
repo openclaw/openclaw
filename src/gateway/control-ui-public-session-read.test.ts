@@ -75,6 +75,10 @@ async function seed(messages: unknown[], target = locator) {
     sessionId: target.sessionId,
     updatedAt: 1,
     label: "Public example",
+    createdVia: "spawn",
+    createdActor: { type: "human", source: "profile", id: "public-creator" },
+    sandbox: "required",
+    sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-isolation" } },
     publicShare: { id: target.shareId, sessionId: target.sessionId, createdAt: 1 },
   });
   await replaceTranscriptEvents(target, [

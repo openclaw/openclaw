@@ -2,12 +2,21 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import {
+  clearConfigCache,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../../config/config.js";
+import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import type { SessionCreatedActor } from "../../../config/sessions/session-entry-provenance.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -16,12 +25,14 @@ import {
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
+import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../sandbox/runtime-status.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
 import {
   createBoundSpawnInvocation,
   type createSpawnBoundaryParent,
-  type createSpawnOperatorSource,
+  createSpawnOperatorSource,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -29,12 +40,80 @@ type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type Source = ReturnType<typeof createSpawnOperatorSource>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
+export async function createGuestSpawnParent(options: {
+  audit: boolean;
+  cfg: OpenClawConfig;
+  writeConfig: (cfg: OpenClawConfig) => Promise<void>;
+  createBoundParent: (
+    authority: Source["authority"],
+    settings: {
+      guestProfileId: string;
+      isolationProfileId: string;
+    },
+  ) => Promise<BoundParent>;
+}) {
+  const guestRole = {
+    scopes: ["operator.sessions.write"],
+    agents: ["main"],
+    sessions: { others: "none" },
+    sandbox: "required",
+  } satisfies GatewayOperatorRoleDefinition;
+  const runtimeConfig = {
+    ...options.cfg,
+    logging: { audit: { enabled: options.audit, executionIdentity: options.audit } },
+    gateway: { roles: { default: "guest", definitions: { guest: guestRole } } },
+  };
+  await options.writeConfig(runtimeConfig);
+  clearConfigCache();
+  setRuntimeConfigSnapshot(runtimeConfig);
+  const modelPolicy = prepareOperatorModelPolicy({
+    cfg: runtimeConfig,
+    policy: { sourceAgent: "main", allow: ["custom/test-model"] },
+  });
+  const guest = ensureProfileForEmail("spawn-guest@example.test");
+  const releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
+  try {
+    const source = createSpawnOperatorSource(guest.id, guestRole.scopes, {
+      modelPolicy,
+      rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
+      readCurrentRoleAssignment: () => "guest",
+    });
+    const isolationActor = {
+      type: "human",
+      source: "profile",
+      id: ensureProfileForEmail("spawn-isolation-alice@example.test").id,
+    } as const;
+    const bound = await options.createBoundParent(source.authority, {
+      guestProfileId: source.authority.profileId,
+      isolationProfileId: isolationActor.id,
+    });
+    expect(
+      loadSessionEntry({ storePath: bound.storePath, sessionKey: bound.parentSessionKey }),
+    ).toMatchObject({
+      sandbox: "required",
+      createdActor: { type: "human", source: "profile", id: source.authority.profileId },
+    });
+    return {
+      bound,
+      source,
+      modelPolicy,
+      scopes: guestRole.scopes,
+      isolationActor,
+      releaseProfileCatalog,
+    };
+  } catch (error) {
+    releaseProfileCatalog();
+    throw error;
+  }
+}
+
 export function registerGuestSpawnCases(options: {
   createGuestParent: (audit?: boolean) => Promise<{
     bound: BoundParent;
     source: Source;
     modelPolicy: Source["authority"]["modelPolicy"];
     scopes: string[];
+    isolationActor: SessionCreatedActor;
   }>;
   createBoundGateway: (
     bound: BoundParent,
@@ -56,7 +135,8 @@ export function registerGuestSpawnCases(options: {
   it.for([false, true])(
     "launches an owned hidden child and returns its result (audit=%s)",
     async (audit, { signal }) => {
-      const { bound, source, modelPolicy, scopes } = await options.createGuestParent(audit);
+      const { bound, source, modelPolicy, scopes, isolationActor } =
+        await options.createGuestParent(audit);
       const { runtime } = await options.createBoundGateway(bound);
       const nativeAnnounce = await vi.importActual<
         typeof import("../announce/subagent-announce.js")
@@ -121,6 +201,16 @@ export function registerGuestSpawnCases(options: {
           spawnedBy: bound.parentSessionKey,
           createdActor: { type: "human", source: "profile", id: source.authority.profileId },
           sandbox: "required",
+          sandboxProvenance: { actor: isolationActor },
+        });
+        expect(
+          await resolveSandboxRuntimeStatusAsync({
+            cfg: bound.cfg,
+            sessionKey: details.childSessionKey,
+          }),
+        ).toMatchObject({
+          sandboxRequired: true,
+          isolationSubject: { kind: "profile", profileId: isolationActor.id },
         });
         expect(
           await settleRequesterAfterSessionSpawns({

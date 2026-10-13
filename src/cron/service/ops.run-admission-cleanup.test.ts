@@ -21,6 +21,7 @@ import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
+import { waitForCronRunQueue } from "./run-queue.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const opsRegressionFixtures = setupCronRegressionFixtures({
@@ -434,6 +435,8 @@ describe("cron service run admission cleanup", () => {
         trigger,
         !terminal,
       );
+      const warn = vi.fn();
+      state.deps.log = { ...state.deps.log, warn };
       let activationPersisted = false;
       let failureInjected = false;
       const errorText = terminal ? "terminal cleanup persist failed" : "activation persist failed";
@@ -465,8 +468,16 @@ describe("cron service run admission cleanup", () => {
         ).rejects.toThrow(errorText);
         expect(failureInjected).toBe(true);
         expect(activationPersisted).toBe(terminal);
-        // Keep the storage fault active until every stopped launch cleanup has settled.
+        // Stop can snapshot the queue before activation publishes its launcher. Caller
+        // rejection also precedes catch cleanup; retain the fault through both owners.
         await state.schedulerDrain;
+        await waitForCronRunQueue(state);
+        if (terminal) {
+          expect(warn).toHaveBeenCalledWith(
+            { err: expect.stringContaining(errorText) },
+            "cron: failed launch left for recovery",
+          );
+        }
       } finally {
         stopObserving();
         database.exec("DROP TRIGGER fail_cron_activation_or_cleanup");

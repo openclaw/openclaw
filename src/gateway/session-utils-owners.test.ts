@@ -1,9 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  buildSessionCreationStamp,
-  inheritSessionCreationPolicy,
-} from "../config/sessions/session-entry-provenance.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -536,10 +533,9 @@ it.each(["spawn"] as const)(
     const child: SessionEntry = {
       ...buildSessionCreationStamp({
         via,
-        ...inheritSessionCreationPolicy(
-          { createdActor: { type: "human", source: "profile", id: "former" }, sandbox: "required" },
-          { type: "agent", id: "research" },
-        ),
+        actor: { type: "human", source: "profile", id: "former" },
+        sandbox: "required",
+        sandboxProvenance: { actor: { type: "human", source: "profile", id: "isolation-other" } },
         now: 1,
       }),
       sessionId: "delegated",

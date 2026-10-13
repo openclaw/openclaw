@@ -11,7 +11,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
@@ -414,6 +414,9 @@ export type CronStoredJob = CronJob & {
   skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   /** Immutable creator provenance stamped by the trusted cron creation seam. */
   createdActor?: SessionCreatedActor;
+  /** Creation-owned isolation facts, independent of public attribution and assignment. */
+  sandboxProvenance?: SessionEntry["sandboxProvenance"];
+  sandbox?: SessionEntry["sandbox"];
   toolsAllowProvenance?: CronToolsAllowProvenance;
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
   /** Exact expected pin for jobs created from a verified host-owned exec projection. */

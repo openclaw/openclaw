@@ -24,6 +24,8 @@ export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.utilityModel": "Agent Utility Model",
   "agents.defaults.decisionModel": "Decision Model",
   "agents.defaults.experimental.decisionAssistance": "Decision Assistance (Experimental)",
+  "agents.defaults.experimental.delegatedCreatorAttribution":
+    "Human Creator Attribution (Experimental)",
   "agents.entries.*.decisionModel": "Agent Decision Model",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",

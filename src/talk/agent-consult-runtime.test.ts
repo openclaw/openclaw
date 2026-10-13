@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import {
   emitTrustedDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -27,6 +27,21 @@ type ForkSessionEntryFromParent =
   typeof import("../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
 type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0];
 type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
+
+const coreSessionMocks = vi.hoisted(() => ({
+  read: vi.fn<
+    typeof import("../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+  >(),
+  patch: vi.fn<typeof import("../config/sessions/session-accessor.js").patchSessionEntryCore>(),
+}));
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: coreSessionMocks.read,
+}));
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  patchSessionEntryCore: coreSessionMocks.patch,
+}));
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionEntryFromParent: vi.fn<ForkSessionEntryFromParent>(),
@@ -51,56 +66,34 @@ function testTempPath(name: string): string {
 }
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
-  const sessionStore: Record<
-    string,
-    {
-      sessionId?: string;
-      updatedAt?: number;
-      createdVia?: SessionEntry["createdVia"];
-      createdActor?: SessionEntry["createdActor"];
-      createdAt?: number;
-      sandbox?: SessionEntry["sandbox"];
-      archivedAt?: number;
-      sessionFile?: string;
-      spawnedBy?: string;
-      agentHarnessId?: string;
-      modelSelectionLocked?: boolean;
-      forkedFromParent?: boolean;
-      totalTokens?: number;
-      delivery?: SessionEntry["delivery"];
-      permissionMode?: SessionEntry["permissionMode"];
-      toolOverrides?: SessionEntry["toolOverrides"];
+  const sessionStore: Record<string, Partial<InternalSessionEntry>> = {};
+  const readStored = (sessionKey: string): InternalSessionEntry | undefined => {
+    const entry = sessionStore[sessionKey];
+    return entry ? { sessionId: "", updatedAt: 0, ...entry } : undefined;
+  };
+  coreSessionMocks.read.mockImplementation(async ({ sessionKey }, assertCurrent) => {
+    assertCurrent?.();
+    return readStored(sessionKey);
+  });
+  coreSessionMocks.patch.mockImplementation(async ({ sessionKey }, update, options = {}) => {
+    const existingEntry = readStored(sessionKey);
+    const entry = existingEntry ?? options.fallbackEntry;
+    if (!entry) {
+      return null;
     }
-  > = {};
+    options.workerGuard?.assertCurrent?.();
+    const patch = await update(entry, { existingEntry });
+    options.workerGuard?.assertCurrent?.();
+    const next = { ...entry, ...patch };
+    sessionStore[sessionKey] = next;
+    return next;
+  });
   const runEmbeddedAgent = vi.fn(async (_params?: RunEmbeddedAgentParams) => ({
     payloads,
     meta: {},
   }));
   const getSessionEntry = vi.fn(
     (params: { sessionKey: string }) => sessionStore[params.sessionKey],
-  );
-  const prepareSessionEntryPatch = vi.fn(
-    async (params: {
-      sessionKey: string;
-      fallbackEntry?: Record<string, unknown>;
-      authority: { kind: "host"; assertCurrent: () => void };
-      prepare: (
-        entry: Record<string, unknown>,
-      ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
-    }) => {
-      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
-      if (!existing) {
-        return null;
-      }
-      const patch = await params.prepare({ ...existing });
-      params.authority.assertCurrent();
-      if (!patch) {
-        return existing;
-      }
-      const next = { ...existing, ...patch };
-      sessionStore[params.sessionKey] = next;
-      return next;
-    },
   );
   return {
     runtime: {
@@ -114,7 +107,6 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         getSessionEntryAsync: vi.fn(
           async (params: { sessionKey: string }) => sessionStore[params.sessionKey],
         ),
-        prepareSessionEntryPatch,
       },
       runEmbeddedAgent,
     },
@@ -184,6 +176,8 @@ describe("realtime voice agent consult runtime", () => {
 
   afterEach(async () => {
     sessionForkMocks.forkSessionEntryFromParent.mockReset();
+    coreSessionMocks.read.mockReset();
+    coreSessionMocks.patch.mockReset();
     const tempDir = testTempDir;
     testTempDir = undefined;
     if (tempDir) {
@@ -347,10 +341,12 @@ describe("realtime voice agent consult runtime", () => {
     expect(Object.keys(voiceSession).toSorted()).toStrictEqual([
       "createdAt",
       "createdVia",
+      "sandboxProvenance",
       "sessionId",
       "updatedAt",
     ]);
     expect(voiceSession.createdVia).toBe("talk");
+    expect(voiceSession.sandboxProvenance).toEqual({});
     expectPositiveTimestamp(voiceSession.createdAt);
     expectNonEmptyString(voiceSession.sessionId);
     expectPositiveTimestamp(voiceSession.updatedAt);
@@ -432,7 +428,7 @@ describe("realtime voice agent consult runtime", () => {
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
+    expect(coreSessionMocks.patch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -462,7 +458,7 @@ describe("realtime voice agent consult runtime", () => {
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(forkSessionEntryFromParent).not.toHaveBeenCalled();
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
+    expect(coreSessionMocks.patch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -535,7 +531,7 @@ describe("realtime voice agent consult runtime", () => {
       'Session "voice:archive-race" is archived. Restore it before starting new work.',
     );
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
+    expect(coreSessionMocks.patch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -694,7 +690,7 @@ describe("realtime voice agent consult runtime", () => {
         sessionKey: "agent:main:subagent:google-meet:meet-1",
       }),
     );
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
+    expect(coreSessionMocks.patch).not.toHaveBeenCalled();
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -709,6 +705,7 @@ describe("realtime voice agent consult runtime", () => {
       forkedFromParent: true,
       createdVia: "talk",
       createdActor: { type: "human", source: "profile", id: "profile-required" },
+      sandboxProvenance: { actor: { type: "human", source: "profile", id: "profile-required" } },
       sandbox: "required",
       createdAt: forkedEntry.createdAt,
       updatedAt: forkedEntry.updatedAt,
@@ -770,7 +767,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
     );
-    expect(runtime.session.prepareSessionEntryPatch).toHaveBeenCalled();
+    expect(coreSessionMocks.patch).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expectNonEmptyString(call.sessionId);
     expect(call.sessionFile).toBeUndefined();

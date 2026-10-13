@@ -8,12 +8,16 @@ import type {
   PluginsControlUiCatalog,
   PluginsUiDescriptorsResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { prepareHostConfigSnapshot } from "../config/io.snapshot-preparation.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
@@ -22,6 +26,7 @@ import {
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
+import { createGatewaySession } from "./session-create-service.js";
 
 const TOKEN = "labs-hot-reload-synthetic-token";
 const PLUGIN_ID = "labs-browser-fixture";
@@ -132,6 +137,7 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     } };`,
   );
   const labsPatch = (enabled: boolean) => ({
+    agents: { defaults: { experimental: { delegatedCreatorAttribution: enabled } } },
     tools: {
       codeMode: { enabled: enabled ? "auto" : false },
       toolSearch: { enabled, mode: "directory" },
@@ -142,7 +148,7 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
   });
   await state.writeConfig({
     ...labsPatch(false),
-    agents: { entries: { main: {} } },
+    agents: { ...labsPatch(false).agents, entries: { main: {} } },
     desktop: { host: { enabled: false, port: rfbAddress.port } },
     plugins: {
       allow: [PLUGIN_ID],
@@ -243,12 +249,60 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     }
   };
 
+  const parentKey = "agent:main:creator-lab-parent";
+  const isolationActor = { type: "human", source: "profile", id: "isolation-profile" } as const;
+  const parentActor = { type: "human", source: "profile", id: "parent-profile" } as const;
+  const requester = { type: "human", source: "profile", id: "requester-profile" } as const;
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: parentKey },
+    {
+      sessionId: "creator-lab-parent",
+      updatedAt: 1,
+      createdVia: "operator",
+      createdActor: parentActor,
+      sandbox: "required",
+      sandboxProvenance: { actor: isolationActor },
+    },
+  );
+  const originals = new Map<string, ReturnType<typeof loadSessionEntry>>();
+  const createChild = async (
+    enabled: boolean,
+    cfg = getRuntimeConfig(),
+    onPhase?: Parameters<typeof createGatewaySession>[0]["onPhase"],
+  ) => {
+    const created = await createGatewaySession({
+      cfg,
+      agentId: "main",
+      parentSessionKey: parentKey,
+      commandSource: "creator-lab-hot-reload",
+      onPhase,
+      operatorRoleActor: { kind: "system" },
+      creation: {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterProfileId: requester.id,
+      },
+    });
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    if (!created.ok) {
+      throw new Error("creator Lab child failed");
+    }
+    expect(created.entry.createdActor).toEqual(enabled ? requester : parentActor);
+    expect(created.entry).not.toHaveProperty("sandboxProvenance");
+    const stored = loadSessionEntry({ agentId: "main", sessionKey: created.key });
+    expect(stored).toMatchObject({
+      sandbox: "required",
+      sandboxProvenance: { actor: isolationActor },
+    });
+    expect(stored?.publicShare).toBeUndefined();
+    originals.set(created.key, stored);
+  };
+  await createChild(false);
   await assertPluginUi(false);
   await expect(observeHost()).rejects.toMatchObject({
     message: expect.stringContaining("disabled"),
   });
-  let activeObserver: WebSocket | undefined;
-  for (const enabled of [true, false, true]) {
+  const patchLabs = async (enabled: boolean) => {
     const config = await gateway.request<{ hash: string }>("config.get", {});
     const patch = await gateway.request<{
       restart?: unknown;
@@ -256,6 +310,52 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     }>("config.patch", { raw: JSON.stringify(labsPatch(enabled)), baseHash: config.hash });
     expect(patch.sentinel.payload.stats.requiresRestart).toBe(false);
     expect(patch.restart).toBeUndefined();
+  };
+  const parentHeld = createDeferredCore();
+  const releaseParent = createDeferredCore();
+  const admitted = createDeferredCore();
+  const capturedConfig = getRuntimeConfig();
+  const holdingParent = runExclusiveSessionLifecycleMutation("create", {
+    scope: resolveSessionStorePathCore(capturedConfig.session?.store, { agentId: "main" }),
+    identities: [parentKey, "creator-lab-parent"],
+    run: async () => {
+      parentHeld.resolve();
+      await releaseParent.promise;
+    },
+  });
+  await parentHeld.promise;
+  const pausedCreation = createChild(false, capturedConfig, (phase) => {
+    if (phase === "lifecycleAdmission") {
+      admitted.resolve();
+    }
+  });
+  try {
+    await awaitGateBeforeSettlement(
+      admitted.promise,
+      pausedCreation,
+      "Creation settled before parent gate",
+    );
+    await patchLabs(true);
+    expect(getRuntimeConfig().agents?.defaults?.experimental?.delegatedCreatorAttribution).toBe(
+      true,
+    );
+    releaseParent.resolve();
+    await pausedCreation;
+  } finally {
+    releaseParent.resolve();
+    await Promise.allSettled([holdingParent, pausedCreation]);
+  }
+  let activeObserver: WebSocket | undefined;
+  for (const enabled of [true, false, true]) {
+    if (!enabled || activeObserver) {
+      await patchLabs(enabled);
+    }
+    await createChild(enabled);
+    for (const [sessionKey, original] of originals) {
+      expect(loadSessionEntry({ agentId: "main", sessionKey })?.createdActor).toEqual(
+        original?.createdActor,
+      );
+    }
     await assertPluginUi(enabled);
     await assertWorkerDesktop(enabled);
     if (enabled) {

@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 
 const consultRealtimeVoiceAgent = vi.hoisted(() => vi.fn(async () => ({ text: "done" })));
@@ -41,13 +46,16 @@ const platform: MeetingPlatformRuntimeMetadata = {
   },
 };
 
-function createBindings(agentId: string | undefined) {
+function createBindings(
+  agentId: string | undefined,
+  fullConfig: OpenClawConfig = { agents: { entries: { operator: {} } } },
+) {
   return createMeetingRealtimeEngineBindings({
     platform,
     config: {
       realtime: { ...(agentId ? { agentId } : {}), toolPolicy: "safe-read-only" },
     },
-    fullConfig: { agents: { entries: { operator: {} } } },
+    fullConfig,
     runtime: { agent: {} } as never,
     logger: {} as never,
   });
@@ -67,6 +75,54 @@ describe("createMeetingRealtimeEngineBindings", () => {
   beforeEach(() => {
     consultRealtimeVoiceAgent.mockClear();
   });
+
+  afterEach(clearRuntimeConfigSnapshot);
+
+  it.each([false, true])(
+    "captures hot config per consult and preserves scoped config (scoped=%s)",
+    async (scoped) => {
+      const initial: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(initial);
+      const bindings = createBindings("main", scoped ? {} : initial);
+      const enabled: OpenClawConfig = {
+        agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } },
+      };
+      setRuntimeConfigSnapshot(enabled);
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const submitToolResult = vi
+        .fn()
+        .mockImplementationOnce(() => promise)
+        .mockResolvedValue(undefined);
+      const pending = bindings.handleToolCall({
+        strategy: "bidi",
+        session: makeSession(submitToolResult, true),
+        event: {
+          itemId: "item-hot",
+          callId: "call-hot",
+          name: "openclaw_agent_consult",
+          args: { question: "Check" },
+        },
+        meetingSessionId: "meeting-hot",
+        transcript: [],
+        onTalkEvent: vi.fn(),
+      });
+      expect(submitToolResult).toHaveBeenCalledOnce();
+      setRuntimeConfigSnapshot(initial);
+      resolve();
+      await pending;
+      expect(consultRealtimeVoiceAgent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cfg: scoped ? {} : enabled }),
+      );
+      await bindings.consultAgent({
+        meetingSessionId: "meeting-next",
+        args: { question: "Next" },
+        transcript: [],
+      });
+      expect(consultRealtimeVoiceAgent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cfg: initial }),
+      );
+    },
+  );
 
   it("targets the configured default agent when agentId is omitted", async () => {
     await createBindings(undefined).consultAgent({

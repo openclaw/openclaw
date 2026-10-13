@@ -11,6 +11,7 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { sessionSandboxActor } from "../../config/sessions/session-entry-provenance.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -178,7 +179,9 @@ export async function prepareCronRunContext(params: {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
-    const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+    const sandbox =
+      input.job.sandbox ??
+      resolveCreatorSandbox(runtimeCfg, { actor: sessionSandboxActor(input.job) });
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -287,6 +290,7 @@ export async function prepareCronRunContext(params: {
         cronSession,
         agentSessionKey,
         createdActor: input.job.createdActor,
+        sandboxProvenance: input.job.sandboxProvenance,
         sandbox,
         workspaceDir,
         persistSessionEntry: persistCronSessionRow,
@@ -602,6 +606,7 @@ export async function prepareCronRunContext(params: {
             cronSession,
             runSessionKey,
             createdActor: input.job.createdActor,
+            sandboxProvenance: input.job.sandboxProvenance,
             sandbox,
             thinkingLevel: requestedThinkLevel,
             toolsAllow: agentPayload?.toolsAllow,

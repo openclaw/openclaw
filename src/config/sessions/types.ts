@@ -40,6 +40,7 @@ import type {
   SessionEntryProvenance,
   SessionOwnerAssignment,
   SessionParticipant,
+  SessionSandboxProvenance,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
@@ -335,6 +336,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     lastActivityAt?: number;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
+    /** Host-recorded parent agent namespace when a spawn key alone is ambiguous. */
+    spawnedByAgentId?: string;
     /** Host-captured owner status of the spawning invocation; never inferred from child launch authority. */
     spawnedBySenderIsOwner?: boolean;
     /** Parent session id captured with the spawn authority receipt; navigation uses parentSessionId. */
@@ -641,6 +644,8 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Creation-owned isolation identity, never public data or a live requester grant. */
+  sandboxProvenance?: SessionSandboxProvenance;
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
@@ -715,7 +720,9 @@ export function resolveSessionPluginTraceLines(
   return resolveSessionPluginLines(entry, isSessionPluginTraceLine);
 }
 
-export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
+export function normalizeSessionRuntimeModelFields(
+  entry: InternalSessionEntry,
+): InternalSessionEntry {
   const normalizedModel = normalizeOptionalString(entry.model);
   const normalizedProvider = normalizeOptionalString(entry.modelProvider);
   // A provider without a model is not durable runtime metadata.
@@ -738,7 +745,7 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
 }
 
 export function setSessionRuntimeModel(
-  entry: SessionEntry,
+  entry: InternalSessionEntry,
   runtime: { provider: string; model: string },
 ): boolean {
   const provider = runtime.provider.trim();
@@ -752,8 +759,8 @@ export function setSessionRuntimeModel(
 }
 
 function resolveMergedUpdatedAt(
-  existing: SessionEntry | undefined,
-  patch: Partial<SessionEntry>,
+  existing: InternalSessionEntry | undefined,
+  patch: Partial<InternalSessionEntry>,
   preserveActivity: boolean,
 ): number {
   const now = Date.now();
@@ -771,10 +778,10 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
 }
 
 function mergeSessionEntryWithPolicy(
-  existing: SessionEntry | undefined,
-  patch: Partial<SessionEntry>,
+  existing: InternalSessionEntry | undefined,
+  patch: Partial<InternalSessionEntry>,
   preserveActivity = false,
-): SessionEntry {
+): InternalSessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, preserveActivity);
   if (!existing) {
@@ -806,6 +813,7 @@ function mergeSessionEntryWithPolicy(
     next.createdActor = existing.createdActor;
   }
   next.inheritedGitContributorProfileIds = existing.inheritedGitContributorProfileIds;
+  next.sandboxProvenance = existing.sandboxProvenance;
   if (existing.sandbox === "required") {
     next.sandbox = existing.sandbox;
   } else {
@@ -836,24 +844,27 @@ function mergeSessionEntryWithPolicy(
   return stripRetiredSessionEntryLocators(normalizeSessionRuntimeModelFields(next));
 }
 
-function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
-  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+function stripRetiredSessionEntryLocators(entry: InternalSessionEntry): InternalSessionEntry {
+  const mutable = entry as InternalSessionEntry & {
+    sessionFile?: unknown;
+    transcriptPath?: unknown;
+  };
   delete mutable.sessionFile;
   delete mutable.transcriptPath;
   return entry;
 }
 
 export function mergeSessionEntry(
-  existing: SessionEntry | undefined,
-  patch: Partial<SessionEntry>,
-): SessionEntry {
+  existing: InternalSessionEntry | undefined,
+  patch: Partial<InternalSessionEntry>,
+): InternalSessionEntry {
   return mergeSessionEntryWithPolicy(existing, patch);
 }
 
 export function mergeSessionEntryPreserveActivity(
-  existing: SessionEntry | undefined,
-  patch: Partial<SessionEntry>,
-): SessionEntry {
+  existing: InternalSessionEntry | undefined,
+  patch: Partial<InternalSessionEntry>,
+): InternalSessionEntry {
   return mergeSessionEntryWithPolicy(existing, patch, true);
 }
 

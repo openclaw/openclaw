@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
+  assignSessionOwner,
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -63,7 +64,10 @@ async function createSession() {
   await upsertSessionEntryCore(scope, {
     sessionId,
     updatedAt: 1,
+    createdVia: "spawn",
     createdActor: { type: "human", source: "profile", id: "owner" },
+    sandbox: "required",
+    sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-isolation" } },
   });
 }
 
@@ -115,6 +119,9 @@ describe("world-readable session publication management", () => {
         shareId: firstGrant.id,
       });
       expect(projectPublicSessionEntry(loadSessionEntry(scope)!)).not.toHaveProperty("publicShare");
+      expect(projectPublicSessionEntry(loadSessionEntry(scope)!)).not.toHaveProperty(
+        "sandboxProvenance",
+      );
 
       expect((await setPublic(false))?.[0]).toBe(true);
       expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
@@ -141,6 +148,14 @@ describe("world-readable session publication management", () => {
   it("rejects non-managers and stale generation confirmations without changing publication", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await createSession();
+      const assignment = assignSessionOwner(scope, {
+        owner: { type: "human", id: "assignee" },
+        assignedBy: { type: "human", id: "owner" },
+        assignedAt: 2,
+      });
+      expect(assignment?.actor).toEqual({ type: "human", id: "assignee" });
+      expect(loadSessionEntry(scope)?.owner).toEqual(assignment);
+      expect((await setPublic(true, identifiedClient("assignee")))?.[0]).toBe(false);
       expect((await setPublic(true, identifiedClient("outsider")))?.[0]).toBe(false);
       expect((await setPublic(true, undefined, "previous-generation"))?.[0]).toBe(false);
       expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
@@ -148,6 +163,7 @@ describe("world-readable session publication management", () => {
       admin.connect.scopes = ["operator.admin"];
       expect((await setPublic(true, admin))?.[0]).toBe(true);
       const publication = loadSessionEntry(scope)?.publicShare;
+      expect((await setPublic(false, identifiedClient("assignee")))?.[0]).toBe(false);
       expect((await setPublic(false, identifiedClient("outsider")))?.[0]).toBe(false);
       expect(loadSessionEntry(scope)?.publicShare).toEqual(publication);
     });

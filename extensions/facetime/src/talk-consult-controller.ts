@@ -12,6 +12,7 @@ import {
   type RealtimeVoiceToolCallEvent,
   type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { FaceTimeConfig } from "./config.js";
 import {
   AGENT_CONSULT_MESSAGE_PROVIDER,
@@ -52,6 +53,7 @@ export function createFaceTimeConsultController(params: {
   close: (reason: string) => Promise<void>;
   onHangupRequested: () => Promise<void>;
 }) {
+  const readConfig = createRuntimeConfigReader(params.fullConfig);
   const pending = new Map<string, PendingAgentConsult>();
   let hangupRequested = false;
 
@@ -228,6 +230,7 @@ export function createFaceTimeConsultController(params: {
       await submitToolError(event, `Tool "${event.name}" not available`);
       return;
     }
+    const consultConfig = readConfig();
     // Caller speech can be a clarification or a request for progress. Keep the
     // current task alive until the realtime model actually requests a new
     // agent consult, which is the unambiguous replacement boundary.
@@ -311,7 +314,7 @@ export function createFaceTimeConsultController(params: {
       });
     };
     void consultRealtimeVoiceAgent({
-      cfg: params.fullConfig,
+      cfg: consultConfig,
       agentRuntime: params.runtime.agent,
       logger: params.logger,
       agentId: params.consultAgentId,

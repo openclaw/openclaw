@@ -1,5 +1,6 @@
 // Registers a selected memory provider so realtime fast-context tests reach the
 // host's real provider acquisition instead of a mocked lookup.
+import path from "node:path";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -12,9 +13,9 @@ type MockSessionEntry = {
   [key: string]: unknown;
 };
 
-export function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
+export function createMockSessionRuntime(sessionStore: Record<string, unknown>, storePath: string) {
   return {
-    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+    resolveStorePath: vi.fn(() => storePath),
     loadSessionStore: vi.fn(() => sessionStore),
     saveSessionStore: vi.fn(async () => {}),
     updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
@@ -44,7 +45,22 @@ export function createMockSessionRuntime(sessionStore: Record<string, unknown>) 
         return next;
       },
     ),
-    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+    resolveSessionFilePath: vi.fn(() => path.join(path.dirname(storePath), "session.json")),
+  };
+}
+
+export function createMockConsultAgentRuntime(
+  sessionStore: Record<string, unknown>,
+  storePath: string,
+) {
+  return {
+    resolveAgentDir: vi.fn(() => "/tmp/agent"),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+    resolveAgentIdentity: vi.fn(),
+    resolveThinkingDefault: vi.fn(() => "high"),
+    resolveAgentTimeoutMs: vi.fn(() => 30_000),
+    ensureAgentWorkspace: vi.fn(async () => {}),
+    session: createMockSessionRuntime(sessionStore, storePath),
   };
 }
 

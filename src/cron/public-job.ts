@@ -6,6 +6,8 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     sourceConversation: _sourceConversation,
     skillLibrarySelections: _skillLibrarySelections,
     createdActor: _createdActor,
+    sandboxProvenance: _sandboxProvenance,
+    sandbox: _sandbox,
     toolsAllowProvenance: _toolsAllowProvenance,
     toolsAllowExecTarget: _toolsAllowExecTarget,
     toolsAllowExecTargetRequirement: _toolsAllowExecTargetRequirement,

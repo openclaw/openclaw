@@ -9,6 +9,7 @@ import {
 import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
+  resolveDelegatedSessionCreator,
 } from "../../../config/sessions/session-entry-provenance.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import {
@@ -44,6 +45,8 @@ import {
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
   requesterAgentId: string;
+  /** Selected host-admitted requester, never a model argument or assigned owner. */
+  requesterProfileId?: string;
   targetAgentId: string;
   childSessionKey: string;
   label?: string;
@@ -53,7 +56,10 @@ export async function createInitialSubagentSession(input: {
   senderIsOwner?: boolean;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
-  creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
+  creationPolicy: Pick<
+    Parameters<typeof buildSessionCreationStamp>[0],
+    "actor" | "sandbox" | "sandboxProvenance"
+  >;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
@@ -313,6 +319,18 @@ export async function createInitialSubagentSession(input: {
                   ...buildSessionCreationStamp({
                     via: "spawn",
                     ...params.creationPolicy,
+                    actor: resolveDelegatedSessionCreator({
+                      enabled:
+                        params.cfg.agents?.defaults?.experimental?.delegatedCreatorAttribution ===
+                        true,
+                      source: parentEntry,
+                      fallback: params.creationPolicy.actor,
+                      legacyActor:
+                        params.creationPolicy.sandbox === "required"
+                          ? parentEntry?.createdActor
+                          : params.creationPolicy.actor,
+                      requesterProfileId: params.requesterProfileId,
+                    }),
                     ...(!params.incognito
                       ? {
                           inheritedGitContributorProfileIds:

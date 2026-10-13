@@ -305,6 +305,7 @@ describe("SQLite session row persistence", () => {
     ];
     const entry: InternalSessionEntry = {
       sessionId: "runtime-skills-session",
+      sandboxProvenance: { actor: { type: "human", source: "profile", id: "private-isolation" } },
       updatedAt: 42,
       pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
       pendingWorktree: {
@@ -328,7 +329,7 @@ describe("SQLite session row persistence", () => {
       .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
       .get(sessionKey) as { entry_json: string };
     const persisted = JSON.parse(row.entry_json) as InternalSessionEntry;
-    for (const key of ["pendingProjectGitUrl", "pendingWorktree"] as const) {
+    for (const key of ["pendingProjectGitUrl", "pendingWorktree", "sandboxProvenance"] as const) {
       expect(persisted[key]).toEqual(entry[key]);
       expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.[key]).toEqual(entry[key]);
       expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);

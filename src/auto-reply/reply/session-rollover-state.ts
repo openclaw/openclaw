@@ -50,6 +50,7 @@ export function resolveReplySessionRolloverState(
             ? { sessionRoot: entry.sessionRoot }
             : {}),
           spawnedBy: entry.spawnedBy,
+          spawnedByAgentId: entry.spawnedByAgentId,
           spawnedBySenderIsOwner: entry.spawnedBySenderIsOwner,
           spawnedBySessionId: entry.spawnedBySessionId,
           spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
