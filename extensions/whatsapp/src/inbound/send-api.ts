@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
 import type { AnyMessageContent, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize-target.js";
+import { recordWhatsAppPoll } from "../poll-vote-store.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import type { WhatsAppSocketOperationAdapter } from "../socket-timing.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../targets-runtime.js";
@@ -35,6 +37,37 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
+async function recordSentWhatsAppPoll(params: {
+  accountId: string;
+  result: WhatsAppSendResult;
+  chatJids: string[];
+  selfJids: readonly (string | null | undefined)[];
+  question: string;
+  options: string[];
+  selectableCount: number;
+  messageSecret: Uint8Array;
+}): Promise<void> {
+  // Recording is best effort: the poll is already delivered, and the store logs only codes.
+  try {
+    await recordWhatsAppPoll(
+      {
+        accountId: params.accountId,
+        pollMessageId: params.result.messageId,
+        origin: "sent",
+        chatJids: [...params.chatJids, ...params.result.keys.map((key) => key.remoteJid)],
+        creatorJids: [...params.selfJids, ...params.result.keys.map((key) => key.participant)],
+        question: params.question,
+        secret: params.messageSecret,
+        options: params.options,
+        selectableCount: params.selectableCount,
+      },
+      { mode: "overwrite" },
+    );
+  } catch {
+    // recordWhatsAppPoll already resolves store failures; nothing may fail the send.
+  }
+}
+
 export function createWebSendApi(params: {
   sock: WhatsAppSocketOperationAdapter;
   defaultAccountId: string;
@@ -47,6 +80,8 @@ export function createWebSendApi(params: {
   // proactive sends to LID-addressed contacts reach the recipient instead of
   // ending up in a sender-only ghost chat (#67378). Defaults to PN-only.
   authDir?: string;
+  /** The account's own PN/LID JIDs, recorded as the creator of polls it sends. */
+  selfJids?: () => readonly (string | null | undefined)[];
 }) {
   const resolveOutboundJid = (recipient: string): string =>
     params.authDir
@@ -170,18 +205,31 @@ export function createWebSendApi(params: {
     sendPoll: async (
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
-    ) =>
-      await sendStructuredMessage(
-        to,
-        {
-          poll: {
-            name: poll.question,
-            values: poll.options,
-            selectableCount: poll.maxSelections ?? 1,
-          },
-        },
-        "poll",
-      ),
+    ): Promise<WhatsAppSendResult> => {
+      // Own the secret so a vote on this poll can be decrypted after a restart.
+      const messageSecret = randomBytes(32);
+      const selectableCount = poll.maxSelections ?? 1;
+      const jid = resolveOutboundJid(to);
+      const result = await runAcceptedSend("poll", params.defaultAccountId, async (capture) => {
+        capture(
+          await params.sock.sendMessage(jid, {
+            poll: { name: poll.question, values: poll.options, selectableCount, messageSecret },
+          }),
+          "poll",
+        );
+      });
+      await recordSentWhatsAppPoll({
+        accountId: params.defaultAccountId,
+        result,
+        chatJids: [jid, toWhatsappJid(to)],
+        selfJids: params.selfJids?.() ?? [],
+        question: poll.question,
+        options: poll.options,
+        selectableCount,
+        messageSecret,
+      });
+      return result;
+    },
     sendContact: async (to: string, contact: StructuredContactSend) =>
       await sendStructuredMessage(
         to,
