@@ -111,6 +111,10 @@ it.each([
       git(state.root, "clone", "--bare", "--quiet", source, bare);
       git(state.root, "clone", "--quiet", bare, cloud);
       const url = "https://github.com/example/handoff-fixture.git";
+      const localGitArgs = (argv: string[]) =>
+        argv.map((arg) =>
+          arg === url || arg === "https://github.com/upstream/handoff-fixture.git" ? bare : arg,
+        );
       git(source, "remote", "add", "origin", url);
       await registerClonedProjectRegistry({ path: source, name: "Handoff", originUrl: url });
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:handoff" };
@@ -299,7 +303,7 @@ it.each([
             }
             throw new Error("Unexpected synthetic GitHub API request: " + argv.join(" "));
           }
-          const mapped = argv.map((x) => (x === url ? bare : x));
+          const mapped = localGitArgs(argv);
           const answer = await actual.runCommandBuffered(mapped, options);
           if (argv.includes("push")) {
             pushes.push({ code: answer.code, stderr: answer.stderr.toString() });
@@ -309,10 +313,7 @@ it.each([
       );
       mocked.timed.mockImplementation(
         (argv: string[], options: Parameters<typeof actual.runCommandWithTimeout>[1]) =>
-          actual.runCommandWithTimeout(
-            argv.map((x) => (x === url ? bare : x)),
-            options,
-          ),
+          actual.runCommandWithTimeout(localGitArgs(argv), options),
       );
       const move = () =>
         materializeSessionRepositoryWorkspaceOnGateway({

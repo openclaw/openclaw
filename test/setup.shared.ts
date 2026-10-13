@@ -1,3 +1,4 @@
+import "./setup.github-network.js";
 // Native-loader projects replace execArgv, so their setup also owns SQLite admission.
 import "./vitest/vitest.sqlite-preload.mts";
 import { vi } from "vitest";

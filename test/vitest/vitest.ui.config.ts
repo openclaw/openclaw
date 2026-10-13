@@ -34,7 +34,10 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     intersectIncludeFile: true,
     isolate: false,
     name: "ui",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: [
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+      "ui/src/test-helpers/github-network.setup.ts",
+    ],
     useNonIsolatedRunner: true,
   });
   return {

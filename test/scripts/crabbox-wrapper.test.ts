@@ -508,7 +508,13 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
   const gitBinDir = makeFakeGit(gitResponses);
   return {
     ...process.env,
-    PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
+    PATH: [
+      ...(options.extraPathEntries ?? []),
+      binDir,
+      gitBinDir,
+      path.dirname(resolveTestNodeExecPath()),
+      process.env.PATH ?? "",
+    ]
       .filter(Boolean)
       .join(path.delimiter),
     CRABBOX_PROVIDER: "",

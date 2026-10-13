@@ -12,6 +12,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createComposedCatalogFixture } from "./session-catalog.performance.test-support.js";
 
+vi.mock("../../infra/shell-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/shell-env.js")>()),
+  prepareShellPathFromLoginShell: async () => null,
+}));
+
 function measureHostCpuReference(): number {
   const bytes = Uint8Array.from({ length: 65_536 }, (_, index) => index & 255);
   const hash = () => {
