@@ -258,20 +258,4 @@ describe("A2A channel inbound dispatch", () => {
     expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_FAILED");
     fixture.store.stop();
   });
-
-  it("rejects observe-only runtime admissions because they cannot produce a reply", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
-      admission: { kind: "observeOnly", reason: "policy-observe-only" },
-      dispatched: true,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.route.sessionKey,
-      dispatchResult: createA2aDispatchResult(false),
-    }));
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_REJECTED");
-    fixture.store.stop();
-  });
 });

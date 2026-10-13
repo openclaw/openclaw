@@ -34,10 +34,10 @@ import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
-  loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { readMemoryIndex } from "./manager-index-read.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -56,15 +56,10 @@ import {
 } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
-  readMemorySourceChunks,
-  readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
-import {
-  loadMemorySourceFileState,
-  refreshMemorySessionSourceState,
-} from "./manager-source-state.js";
+import { refreshMemorySessionSourceState } from "./manager-source-state.js";
 
 type PublicationConnection =
   | MemoryShadowConnection
@@ -383,8 +378,15 @@ function createPublicationBackend(
             }
           : input;
       }
-      if (command.type === "index.facts") {
-        return readMemoryDatabaseFacts(db);
+      if (
+        command.type === "index.facts" ||
+        command.type === "source.state" ||
+        command.type === "source.hash" ||
+        command.type === "source.chunks" ||
+        command.type === "cache.read" ||
+        command.type === "session.current"
+      ) {
+        return readMemoryIndex(db, command).value;
       }
       if (command.type === "schema.admit") {
         // Storage/STRICT migration must disable foreign keys before BEGIN.
@@ -401,31 +403,14 @@ function createPublicationBackend(
           }
         }
       }
-      if (command.type === "source.hash") {
-        return readMemorySourceHash(db, command.input.source, command.input.path);
-      }
-      if (command.type === "source.chunks") {
-        return readMemorySourceChunks(db, command.input.source, command.input.path);
-      }
       if (command.type === "index.writeMetadata") {
         const serialized = JSON.stringify(command.input);
         return withFacts(writeSingleStatement(() => writeMeta(serialized)));
-      }
-      if (command.type === "source.state") {
-        return loadMemorySourceFileState({ db, ...command.input });
       }
       if (command.type === "source.refresh") {
         return withFacts(
           writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
         );
-      }
-      if (command.type === "session.current") {
-        return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
-          ? "forgotten"
-          : "current";
-      }
-      if (command.type === "cache.read") {
-        return loadMemoryEmbeddingCache({ ...command.input, db });
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
         staged =

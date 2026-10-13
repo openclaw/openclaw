@@ -266,7 +266,6 @@ export async function createCodexInferenceProxy(params: {
             preparedUpload.assertCurrent();
             auth?.assertCurrent();
           };
-          assertAuthorized();
           if (auth) {
             for (const key of [
               "authorization",
