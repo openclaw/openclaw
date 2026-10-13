@@ -48,7 +48,7 @@ final class DashboardWebView: WKWebView {
 
     /// WebKit's own Paste menu item pastes inside the page without calling `paste:`. WebKit's
     /// context menus do not auto-enable items, so the item keeps WebKit's enabled state.
-    static func routePasteMenuItems(_ items: [NSMenuItem], to target: AnyObject) {
+    private static func routePasteMenuItems(_ items: [NSMenuItem], to target: AnyObject) {
         for item in items where item.identifier?.rawValue == self.pasteMenuItemIdentifier {
             item.target = target
             item.action = #selector(DashboardWebView.paste(_:))

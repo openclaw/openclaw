@@ -45,21 +45,6 @@ struct DashboardImagePasteTests {
         #expect(DashboardPastedImages.pngData(from: Data("not an image".utf8)) == nil)
     }
 
-    @Test func `the context menu Paste item runs the web view paste`() {
-        let target = NSView()
-        let paste = NSMenuItem(title: "Paste", action: nil, keyEquivalent: "")
-        paste.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierPaste")
-        let copy = NSMenuItem(title: "Copy", action: nil, keyEquivalent: "")
-        copy.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierCopy")
-
-        DashboardWebView.routePasteMenuItems([copy, paste], to: target)
-
-        #expect(paste.target === target)
-        #expect(paste.action == #selector(DashboardWebView.paste(_:)))
-        #expect(copy.target == nil)
-        #expect(copy.action == nil)
-    }
-
     @Test func `paste gives the focused composer an HEIC screenshot as PNG and leaves other pastes to WebKit`()
         async throws
     {
@@ -82,6 +67,38 @@ struct DashboardImagePasteTests {
             #expect(pasted["files"] as? [String] == ["image.png image/png"])
             let png = try #require((pasted["png"] as? String).flatMap { Data(base64Encoded: $0) })
             #expect(try Self.imageFacts(png) == ImageFacts(type: UTType.png.identifier, width: 8, height: 6))
+
+            // Opening the WebKit context menu and choosing Paste delivers an HEIC screenshot through the same path.
+            let menu = NSMenu()
+            let reload = NSMenuItem(title: "Reload", action: nil, keyEquivalent: "")
+            reload.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierReload")
+            let pasteItem = NSMenuItem(title: "Paste", action: nil, keyEquivalent: "")
+            pasteItem.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierPaste")
+            menu.items = [reload, pasteItem]
+            let event = try #require(NSEvent.mouseEvent(
+                with: .rightMouseDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1))
+            document.webView.willOpenMenu(menu, with: event)
+            #expect(menu.items.map(\.identifier?.rawValue) == ["WKMenuItemIdentifierPaste"])
+
+            pasteboard.clearContents()
+            try #require(pasteboard.writeObjects([Self.item([.heic: Self.heic])]))
+            menu.performActionForItem(at: 0)
+            try await TestWait.state("context menu converted paste") {
+                try await document.webView.evaluateJavaScript("typeof window.pastes[2]?.png") as? String == "string"
+            }
+            let menuPasted = try #require(
+                try await document.webView.evaluateJavaScript("window.pastes[2]") as? [String: Any])
+            #expect(menuPasted["trusted"] as? Bool == false)
+            #expect(menuPasted["target"] as? String == "composer")
+            #expect(menuPasted["files"] as? [String] == ["image.png image/png"])
         }
     }
 
