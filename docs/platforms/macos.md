@@ -74,6 +74,8 @@ older Gateway without automatic AI setup opens the native AI picker instead.
 Native setup remains available from the menu for manual recovery: choose
 **This Mac** or enter an existing Gateway's address, prepare the local runtime
 when needed, then select an AI connection to run its live model check.
+Native setup keeps the current page visible when runtime readiness removes the
+installation step from the flow.
 
 Existing installations and remote connections keep their saved setup. Native AI
 detection only presents available connections; it checks and activates one after
