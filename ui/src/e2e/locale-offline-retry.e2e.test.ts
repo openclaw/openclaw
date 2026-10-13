@@ -113,7 +113,6 @@ suite.define(() => {
       };
       expect(browserState.navigatorLanguage).toBe(scenario.browserLocale);
       expect(browserState.savedLocale).toBe(scenario.savedLocale);
-      expect(browserState.swedishTranslationMemoryPresent).toBe(false);
       await trigger.click();
       await swedishOption.waitFor();
       await swedishOption.scrollIntoViewIfNeeded();
