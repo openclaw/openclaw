@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
+import { ComposerDictationSession } from "./composer-dictation-session.ts";
 import { ComposerDictationController, insertComposerDictation } from "./composer-dictation.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
@@ -18,10 +20,28 @@ type MockProcessor = {
 
 const listeners = new Set<GatewayListener>();
 const processors: MockProcessor[] = [];
+const audios: MockAudio[] = [];
+let speechStarted = createDeferred();
 let request: ReturnType<
   typeof vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>
 >;
 let getUserMedia: ReturnType<typeof vi.fn>;
+
+class MockAudio extends EventTarget {
+  readonly pause = vi.fn();
+  readonly load = vi.fn();
+  readonly removeAttribute = vi.fn();
+  readonly play = vi.fn(async () => {
+    if (this.src.startsWith("blob:")) {
+      speechStarted.resolve();
+    }
+  });
+
+  constructor(public src: string) {
+    super();
+    audios.push(this);
+  }
+}
 
 class MockAudioContext {
   readonly destination = {};
@@ -210,7 +230,12 @@ beforeEach(() => {
   vi.useFakeTimers();
   listeners.clear();
   processors.length = 0;
+  audios.length = 0;
+  speechStarted = createDeferred();
   request = vi.fn(async (method: string) => {
+    if (method === "tts.speak") {
+      return { audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" };
+    }
     if (method === "talk.session.create") {
       return {
         sessionId: "dictation-1",
@@ -228,6 +253,14 @@ beforeEach(() => {
     value: { getUserMedia },
   });
   vi.stubGlobal("AudioContext", MockAudioContext);
+  vi.stubGlobal("Audio", MockAudio);
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:synthetic-speech");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
 });
 
 afterEach(() => {
@@ -240,6 +273,99 @@ afterEach(() => {
 });
 
 describe("ComposerDictationController", () => {
+  it("lets Read aloud discard pending dictation without stopping newer playback", async () => {
+    const start = vi.spyOn(ComposerDictationSession.prototype, "start");
+    const { controller, onCommit, options } = createHarness();
+    const reading = new GatewaySpeechPlayback();
+    try {
+      expect(controller.startDirect()).toBe(true);
+      const started = start.mock.results[0];
+      assert.isDefined(started);
+      await started.value;
+
+      const finished = controller.finishActive();
+      const speaking = reading.speak(options.client, "New message");
+      await speechStarted.promise;
+      emit({
+        transcriptionSessionId: "dictation-1",
+        type: "transcript",
+        text: "confirmed words",
+        final: true,
+      });
+      emit({ transcriptionSessionId: "dictation-1", type: "close", reason: "completed" });
+      await expect(finished).resolves.toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
+      const currentAudio = audios.at(-1);
+      assert.isDefined(currentAudio);
+      expect(currentAudio.pause).toHaveBeenCalledOnce();
+      currentAudio.dispatchEvent(new Event("ended"));
+      await speaking;
+    } finally {
+      reading.stop();
+      controller.dispose();
+    }
+  });
+
+  it("stops Read aloud before capture and lets new Read aloud discard dictation", async () => {
+    const createStarted = createDeferred();
+    const closed = createDeferred();
+    const implementation = request.getMockImplementation();
+    request.mockImplementation(async (method, params) => {
+      if (method === "talk.session.create") {
+        createStarted.resolve();
+      }
+      if (method === "talk.session.close") {
+        closed.resolve();
+      }
+      return implementation?.(method, params);
+    });
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
+    });
+    const { controller, onCommit, options } = createHarness();
+    const previous = new GatewaySpeechPlayback();
+    const next = new GatewaySpeechPlayback();
+    const reading = previous.speak(options.client, "First message");
+    try {
+      await speechStarted.promise;
+      const firstAudio = audios[0];
+      assert.isDefined(firstAudio);
+      expect(controller.startDirect()).toBe(true);
+      expect(firstAudio.pause).toHaveBeenCalledTimes(2);
+      await reading;
+      await createStarted.promise;
+      expect(controller.active).toBe(true);
+
+      speechStarted = createDeferred();
+      const replacement = next.speak(options.client, "Second message");
+      expect(controller.active).toBe(false);
+      expect(stopTrack).toHaveBeenCalledOnce();
+      await speechStarted.promise;
+      await closed.promise;
+      expect(request).toHaveBeenCalledWith(
+        "talk.session.close",
+        { sessionId: "dictation-1", discard: true },
+        { timeoutMs: null },
+      );
+      emit({
+        transcriptionSessionId: "dictation-1",
+        type: "transcript",
+        text: "discard",
+        final: true,
+      });
+      expect(onCommit).not.toHaveBeenCalled();
+      const nextAudio = audios.at(-1);
+      assert.isDefined(nextAudio);
+      nextAudio.dispatchEvent(new Event("ended"));
+      await replacement;
+    } finally {
+      previous.stop();
+      next.stop();
+      controller.dispose();
+    }
+  });
+
   it("keeps captured text and releases dictation on microphone loss when error delivery throws", async () => {
     const { controller, onCommit, onError } = createHarness();
     const track = Object.assign(new EventTarget(), { stop: vi.fn() });

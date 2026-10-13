@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { ComposerDictationSession, formatDictationError } from "./composer-dictation-session.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
@@ -53,6 +54,7 @@ export function insertComposerDictation(
 
 export class ComposerDictationController {
   readonly inputLevel = new RealtimeTalkLevelSignal();
+  private readonly playback = new GatewaySpeechPlayback();
   private options: ComposerDictationControllerOptions;
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
@@ -308,6 +310,7 @@ export class ComposerDictationController {
     this.retirePendingCommit();
     this.session = session;
     try {
+      this.playback.prepare(client, () => void this.stop({ commit: false }));
       await session.start();
     } catch (error) {
       if (this.session !== session || this.disposed || this.finalizing) {
@@ -338,6 +341,7 @@ export class ComposerDictationController {
     this.session = null;
     this.reset();
     if (committed) {
+      this.playback.stop();
       this.options.onCommit(transcript);
     }
     if (!options.commit) {
@@ -349,7 +353,7 @@ export class ComposerDictationController {
       return Promise.resolve(true);
     }
     // The composer unlocks immediately, while this exact stopped session keeps
-    // ownership of its bounded final accumulator until a new session supersedes it.
+    // its final accumulator and voice claim until another voice action supersedes it.
     this.pendingCommitSession = session;
     this.syncCancellationListeners();
     return session
@@ -358,6 +362,7 @@ export class ComposerDictationController {
         const ownsPendingCommit = this.pendingCommitSession === session;
         if (ownsPendingCommit) {
           this.pendingCommitSession = null;
+          this.playback.stop();
           this.syncCancellationListeners();
         }
         if (!ownsPendingCommit || !lateTranscript || !wasActive || this.disposed) {
@@ -369,6 +374,7 @@ export class ComposerDictationController {
       .catch(() => {
         if (this.pendingCommitSession === session) {
           this.pendingCommitSession = null;
+          this.playback.stop();
           this.syncCancellationListeners();
         }
         return false;
@@ -383,6 +389,7 @@ export class ComposerDictationController {
   private retirePendingCommit(): void {
     const session = this.pendingCommitSession;
     this.pendingCommitSession = null;
+    this.playback.stop();
     this.syncCancellationListeners();
     void session?.cancel().catch(() => undefined);
   }

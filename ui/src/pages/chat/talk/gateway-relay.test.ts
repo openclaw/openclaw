@@ -799,12 +799,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
     void transport.stop();
 
-    const appendCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
-    const closeCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.close");
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    const closeCalls = requestCallsFor(client, "talk.session.close");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(1);
     expect(closeCalls[0]?.[1]).toEqual({ sessionId: "relay-1" });
@@ -825,12 +821,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
     void transport.stop();
 
-    const appendCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
-    const closeCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.close");
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    const closeCalls = requestCallsFor(client, "talk.session.close");
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime relay closed");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(0);

@@ -161,6 +161,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       session: selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const mainKey = resolveUiConfiguredMainKey({
+      agentsList: this.context.agents.state.agentsList,
+      hello: gatewaySnapshot.hello,
+    });
     const composerAccess = readChatPaneComposerAccess(gatewaySnapshot, selectedSession, catalog);
     const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
     const placementComposer = this.placementComposerPresentation(
@@ -666,10 +670,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
       senderAgentAvatars: state.senderAgentAvatars,
-      mainKey: resolveUiConfiguredMainKey({
-        agentsList: this.context.agents.state.agentsList,
-        hello: this.context.gateway.snapshot.hello,
-      }),
+      mainKey,
       ...userPresentation,
       personActivity: personActivityRouting(this.context),
       mediaPolicyEpoch: state.mediaPolicyEpoch,
@@ -682,10 +683,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.settings,
         state.sessionKey,
         this.context.config.current.chatBubblesEnabled,
-        resolveUiConfiguredMainKey({
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-        }),
+        mainKey,
       ),
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
