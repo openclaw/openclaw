@@ -41,6 +41,7 @@ async function settleDismissMenu(element: LobsterPetElement) {
 function selectDismissal(element: LobsterPetElement, value: "dismiss" | "dismiss-permanently") {
   expectDefined(
     element.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${value}"]`),
+    `${value} menu item`,
   ).click();
 }
 
@@ -406,8 +407,8 @@ describe("lobster pet element", () => {
       document.removeEventListener("overlay-hide", veto);
     }
     selectDismissal(element, "dismiss");
-    expect(document.activeElement).toBe(composer);
     await element.updateComplete;
+    expect(document.activeElement).toBe(composer);
 
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
     expect(gone).toBe(true);
