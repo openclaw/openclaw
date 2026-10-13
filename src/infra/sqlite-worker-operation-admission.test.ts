@@ -31,6 +31,10 @@ import {
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
+import {
+  SqliteWorkerSlotCustody,
+  readSqliteWorkerRequestCustody,
+} from "./sqlite-worker-request-custody.js";
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -487,11 +491,14 @@ it.each([
     });
     const resolve = vi.fn(() => events.push("reply"));
     const reject = vi.fn(() => events.push("reject"));
+    const custody = new SqliteWorkerSlotCustody().createRequest();
+    custody.activate();
+    custody.accept();
     const job: Job = {
+      custody,
       observation: { started() {}, completed() {} },
       request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
       bytes: 0,
-      nativeDispatched: true,
       operationAdmission: { admission, releaseService() {} },
       resolve,
       reject,
@@ -509,6 +516,7 @@ it.each([
       settleSqliteWorkerOperationContext(owner, "completed");
       expect(events).toEqual([]);
       settleSqliteWorkerJob(job, undefined, { written: true });
+      expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
       expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
       expect(publish).toHaveBeenCalledOnce();
       expect(db.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);

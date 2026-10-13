@@ -23,6 +23,7 @@ import type {
 } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
@@ -162,6 +163,7 @@ export function createSqliteWorkerLifecycle({
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
+      custody: new SqliteWorkerSlotCustody(),
       ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
@@ -334,6 +336,7 @@ export function createSqliteWorkerLifecycle({
   }
 
   function retire(slot: Slot): Promise<void> {
+    slot.custody.retire();
     slot.retiring ??= (async () => {
       const errors: unknown[] = [];
       if (!slot.exited) {
