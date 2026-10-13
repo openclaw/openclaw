@@ -392,6 +392,44 @@ describe("talk.catalog handler", () => {
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
   });
 
+  it("reads independent provider sections while speech availability is pending", async () => {
+    const realtimeRead = createDeferred<boolean>();
+    mocks.listSpeechProviders.mockReturnValue([
+      {
+        id: "speech",
+        label: "Speech",
+        isConfiguredAsync: () => realtimeRead.promise,
+      },
+    ] as never);
+    mocks.listRealtimeVoiceProviders.mockReturnValue([
+      {
+        id: "realtime",
+        label: "Realtime",
+        isConfigured: () => {
+          realtimeRead.resolve(true);
+          return true;
+        },
+      },
+    ] as never);
+    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+      provider: { id: "realtime" },
+    });
+    const respond = vi.fn();
+    await callTalkHandler("talk.catalog", {
+      params: {},
+      respond,
+      config: { talk: { realtime: { provider: "realtime" } } },
+    });
+    expectRespondOk(respond, {
+      speech: expect.objectContaining({
+        providers: [expect.objectContaining({ id: "speech", configured: true })],
+      }),
+      realtime: expect.objectContaining({
+        providers: [expect.objectContaining({ id: "realtime", configured: true })],
+      }),
+    });
+  });
+
   it("rejects an ambiguous owner before discovering catalog providers", async () => {
     const respond = vi.fn();
     await mocks.listRealtimeTranscriptionProviders.withImplementation(
