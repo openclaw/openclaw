@@ -25,14 +25,24 @@ metadata:
     expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
   });
 
-  it("preserves inline JSON values", () => {
-    const content = `---
+  it.each(["", " # display metadata", " #"])(
+    "preserves inline JSON values before %j",
+    (comment) => {
+      const content = `---
 name: inline-json
-metadata: {"openclaw": {"events": ["test"]}}
+metadata: {"openclaw": {"events": ["test#tag"]}}${comment}
 ---
 `;
-    const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw": {"events": ["test"]}}');
+      const result = parseFrontmatterBlock(content);
+      expect(result.metadata).toBe('{"openclaw": {"events": ["test#tag"]}}');
+    },
+  );
+
+  it("normalizes an indented YAML flow mapping without a line-parser fallback", () => {
+    const result = parseFrontmatterBlock(`---
+  metadata: {openclaw: {emoji: lobster}} # display metadata
+---`);
+    expect(JSON.parse(result.metadata ?? "")).toEqual({ openclaw: { emoji: "lobster" } });
   });
 
   it("keeps a flow value that continues on the next line", () => {
