@@ -160,13 +160,31 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     }
   });
 
-  it.each(["running", "restarting", "stopping"] as const)(
+  it.each(["running", "restarting", "stopping", "updating-close", "updating-handoff"] as const)(
     "records an unhandled rejection stop reason while %s",
     async (phase) => {
       const { exitAfterSignalExitBarriers } = await import("../signal-exit-barrier.js");
       const closing = createDeferredCore();
       const closed = createDeferredCore();
+      const handoffEntered = createDeferredCore();
+      const handoffFinished = createDeferredCore<{ respawn: boolean }>();
       const completeBoot = vi.fn();
+      const updating = phase === "updating-close" || phase === "updating-handoff";
+      if (updating) {
+        runLoopFixture.consumeGatewayRestartIntent.mockReturnValueOnce({
+          reason: "update.run",
+          successorOwner: {
+            kind: "managed-update-handoff",
+            handoffId: "stop-reason-test",
+            installRoot: "/openclaw/install",
+          },
+        });
+        runLoopFixture.isForegroundUpdateHandoff.mockReturnValue(true);
+        runLoopFixture.completeForegroundUpdateHandoffAfterClose.mockImplementationOnce(() => {
+          handoffEntered.resolve();
+          return handoffFinished.promise;
+        });
+      }
       try {
         await withIsolatedSignals(async ({ captureSignal }) => {
           const close = createCloseMock();
@@ -184,25 +202,33 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
           });
           await waitForStart(started);
           if (phase !== "running") {
-            captureSignal(phase === "restarting" ? "SIGUSR2" : "SIGTERM")();
+            captureSignal(phase === "stopping" ? "SIGTERM" : "SIGUSR2")();
             await closing.promise;
+          }
+          if (phase === "updating-handoff") {
+            closed.resolve();
+            await handoffEntered.promise;
           }
           exitAfterSignalExitBarriers(1, "unhandled rejection");
           await closing.promise;
           closed.resolve();
+          handoffFinished.resolve({ respawn: true });
           await expect(exited).resolves.toBe(1);
           expect(completeBoot).toHaveBeenCalledWith({
             outcome: "clean_stop",
             reason: "stop (process exit: unhandled rejection)",
           });
           expect(gatewayLog.info).toHaveBeenCalledWith(
-            phase !== "running"
-              ? "received unhandled rejection during shutdown; finishing shutdown without restart"
-              : "received unhandled rejection; shutting down",
+            updating
+              ? "received SIGTERM; stopping after foreground update settlement"
+              : phase !== "running"
+                ? "received unhandled rejection during shutdown; finishing shutdown without restart"
+                : "received unhandled rejection; shutting down",
           );
         });
       } finally {
         closed.resolve();
+        handoffFinished.resolve({ respawn: false });
       }
     },
   );

@@ -156,7 +156,13 @@ export async function runGatewayLoop(params: {
   // the requesting job before returning; a signal job must never throw an exit.
   const finishLoop = (code: number) => {
     if (pendingRestartCompletion) {
-      completeBoot(pendingRestartCompletion);
+      completeBoot(
+        hostExitRequested &&
+          hostExitReason &&
+          pendingRestartCompletion.outcome === "planned_restart"
+          ? loopCompletion.formatHostExitCompletion(false, hostExitReason)
+          : pendingRestartCompletion,
+      );
     }
     terminalExitCode ??= hostExitRequested && code === 0 ? hostExitCode : code;
     restartResolver?.();
@@ -890,6 +896,9 @@ export async function runGatewayLoop(params: {
     if (terminalExitCode !== undefined || (hostExitRequested && action !== "stop")) {
       return;
     }
+    if (hostExitRequested && action === "stop") {
+      hostExitReason ??= loopCompletion.formatShutdownReason({ action, signal, restartReason });
+    }
     if (
       updateSuccessor.handleSignal(
         { action, signal, restartIntent },
@@ -927,9 +936,6 @@ export async function runGatewayLoop(params: {
       hostedStop,
     };
     const trigger = action === "stop" ? (restartReason ?? signal) : signal;
-    if (hostExitRequested && action === "stop") {
-      hostExitReason ??= loopCompletion.formatShutdownReason(acceptedRequest);
-    }
     restartRecovery.abort();
     if (shuttingDown) {
       const currentRestartRequest = pendingStartupRequest ?? activeRestartRequest;
