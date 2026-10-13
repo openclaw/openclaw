@@ -65,6 +65,7 @@ describe("post-ready maintenance scheduling", () => {
       finishRecovery.resolve();
       await recovery;
       await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
       expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
       expect(cron.start).toHaveBeenCalledOnce();
     } finally {
@@ -95,6 +96,8 @@ describe("post-ready maintenance scheduling", () => {
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
       ready.resolve();
       await pending;
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(1);
       await clock.advanceBy(15 * 60 * 1000);
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(2);
