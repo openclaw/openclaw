@@ -248,7 +248,8 @@ describe("sessions view", () => {
 
   it.each([
     ["profile-ada", "Ada Lovelace", "Ada Lovelace"],
-    ["gateway-owner", "Saved owner name", "Shared owner"],
+    ["gateway-owner", "Saved owner name", "Saved owner name · Shared owner"],
+    ["gateway-owner", undefined, "Shared owner"],
   ])("offers person grouping and labels the durable profile %s", async (id, name, expected) => {
     const container = document.createElement("div");
     renderView(

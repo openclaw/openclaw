@@ -110,7 +110,7 @@ export function renderSessionSection(params: {
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = personOwner
     ? personIdentity?.type === "profile"
-      ? presenceViewerLabel({ id: personIdentity.id, name: personOwner.label || personOwner.id })
+      ? presenceViewerLabel({ id: personIdentity.id, name: personOwner.label?.trim() || undefined })
       : personOwner.label || personOwner.id
     : section.project
       ? section.project.name

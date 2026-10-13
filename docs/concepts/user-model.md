@@ -119,7 +119,7 @@ A single-user Gateway gives unidentified operator connections one durable local 
 
 When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Node, ephemeral, and synthetic connections do not receive an owner profile.
 
-The Control UI labels this presence **Shared owner** in the People sidebar, activity card, session viewers, and person groups. The card explains that it is not a personal sign-in. Its connection and activity details remain visible. Your saved name on the Profile page is unchanged.
+The Control UI shows the saved Profile name with a **Shared owner** qualifier in the People sidebar, activity card, session viewers, and person groups (for example, **Alex · Shared owner**). Without a saved name, it shows **Shared owner**. The card explains that it is not a personal sign-in. Its connection and activity details remain visible. Editing the name changes presentation, not authentication or permissions.
 
 On macOS, an owner without a saved avatar uses the Gateway host account's user picture. Uploading an avatar in **Settings → Profile → Identity** overrides that default. The picture stays a local, process-cached default rather than a saved profile upload. Restart the Gateway after changing it in macOS. This applies only to the shared owner profile, not to people signed in with their own identities. Unavailable pictures fall back to initials.
 

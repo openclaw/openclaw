@@ -28,7 +28,7 @@ function creatorLabel({ actor }: SessionUsageCreator): string {
     actor.id ||
     t(actor.type === "system" ? "usage.creators.system" : "usage.common.unknown");
   return actor.identity?.type === "profile"
-    ? presenceViewerLabel({ id: actor.identity.id, name })
+    ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || undefined })
     : name;
 }
 

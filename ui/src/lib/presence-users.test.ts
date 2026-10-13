@@ -12,6 +12,14 @@ it.each([
   [{ id: "gateway-owner" }, { name: "Shared owner", isSharedOwner: true }],
   [
     { id: "gateway-owner", name: "Saved owner name" },
+    { name: "Saved owner name · Shared owner", isSharedOwner: true },
+  ],
+  [
+    { id: "gateway-owner", name: "  " },
+    { name: "Shared owner", isSharedOwner: true },
+  ],
+  [
+    { id: "gateway-owner", email: "shared@example.test" },
     { name: "Shared owner", isSharedOwner: true },
   ],
   [

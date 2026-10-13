@@ -38,9 +38,12 @@ export function presenceUserLabel(
   fallbackName = user.id,
 ) {
   const isSharedOwner = user.id === GATEWAY_OWNER_PROFILE_ID;
+  const ownerName = isSharedOwner ? user.name?.trim() : undefined;
   return {
     name: isSharedOwner
-      ? t("presence.sharedOwner.name")
+      ? ownerName
+        ? t("presence.sharedOwner.named", { name: ownerName })
+        : t("presence.sharedOwner.name")
       : (user.name ?? user.email ?? fallbackName),
     isSharedOwner,
   };
