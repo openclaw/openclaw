@@ -6,8 +6,10 @@ import "../../styles.css";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-progress.css";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { renderChatModelControls } from "./components/chat-model-controls.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 let container: HTMLDivElement;
@@ -30,7 +32,11 @@ afterEach(async () => {
   await page.viewport(viewport.width, viewport.height);
 });
 
-function drawComposer(attachment = false, goal = false) {
+function drawComposer(
+  attachment = false,
+  goal = false,
+  overrides: Parameters<typeof createComposerProps>[0] = {},
+) {
   render(
     renderChatComposer(
       createComposerProps({
@@ -47,6 +53,7 @@ function drawComposer(attachment = false, goal = false) {
           inputTokens: 19_600,
           outputTokens: 126,
         },
+        ...overrides,
       }),
     ),
     container,
@@ -68,6 +75,50 @@ function isPainted(element: HTMLElement) {
     )
   );
 }
+
+describe("context usage typography", () => {
+  it.each([
+    { width: 1280, scale: 1 },
+    { width: 1280, scale: 1.25 },
+    { width: 375, scale: 1.25 },
+  ])("matches the model label at $width px and $scale text scale", async ({ width, scale }) => {
+    await page.viewport(width, 720);
+    container.style.setProperty("--control-ui-text-scale", String(scale));
+    const sessionsResult = createSessionsListResult({ model: "example", modelProvider: "example" });
+    const { composer, trigger } = drawComposer(false, false, {
+      composerControls: renderChatModelControls({
+        activeRunId: null,
+        connected: true,
+        gatewayAvailable: true,
+        loading: false,
+        modelCatalog: [{ id: "example", name: "Example model", provider: "example" }],
+        modelCatalogState: { hasSnapshot: true, status: "ready" },
+        modelSwitching: false,
+        sending: false,
+        sessionKey: "main",
+        selectedSession: sessionsResult.sessions[0],
+        sessionsResult,
+        stream: null,
+      }),
+    });
+    const contextLabel = trigger.querySelector("span")!;
+    const modelLabel = composer.querySelector(
+      ".chat-controls__model-trigger .chat-controls__inline-select-label",
+    )!;
+    const typography = (element: Element) => {
+      const style = getComputedStyle(element);
+      return {
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        lineHeight: style.lineHeight,
+        letterSpacing: style.letterSpacing,
+        color: style.color,
+      };
+    };
+    expect(typography(contextLabel)).toEqual(typography(modelLabel));
+  });
+});
 
 describe("context usage popup geometry", () => {
   it("paints the complete readout outside a clipped short split pane and dismisses it", async () => {

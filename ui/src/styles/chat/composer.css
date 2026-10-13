@@ -1908,6 +1908,18 @@ html[dir="rtl"] .chat-attachment-loading > span {
   display: none;
 }
 
+/* Context is a peer of the model picker, including when UI text is scaled. */
+.chat-controls__inline-select-trigger,
+.agent-chat__input .context-ring {
+  font-size: var(--chat-composer-chip-text, 13px);
+  line-height: 1.35;
+}
+
+/* Keep the dial's usage palette and the label's warning state intact. */
+.agent-chat__input .context-ring:not(.context-ring--warning) > span {
+  color: var(--chat-composer-secondary);
+}
+
 /* Composer controls are quiet text controls: no borders/fills at rest so the
    composer frame stays the only chrome; hover/open get a soft wash. */
 .chat-controls__inline-select-trigger {
@@ -1927,8 +1939,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: var(--chat-composer-chip-text, 13px);
-  line-height: 1.35;
   overflow: hidden;
   user-select: none;
 }
