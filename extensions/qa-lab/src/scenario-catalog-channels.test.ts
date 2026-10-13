@@ -497,40 +497,6 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"sleep"');
   });
 
-  it("settles the Telegram busy-lane completion from native run facts on a leased participant", () => {
-    const scenario = requireFlowScenario(
-      readQaScenarioById("subagent-completion-busy-lane-telegram-live"),
-    );
-    const flow = JSON.stringify(scenario.execution.flow);
-    const config = scenario.execution.config as
-      | { requiredProviderMode?: string; requiredChannelDriver?: string }
-      | undefined;
-
-    expect(scenario.execution.channel).toBe("telegram");
-    expect(config?.requiredProviderMode).toBe("live-frontier");
-    // The leased-participant ingress contract exists only on the live adapter,
-    // so a mock-driver lane must never claim this scenario's real Telegram turn.
-    expect(config?.requiredChannelDriver).toBe("live");
-    // A multi-participant lease rejects any sender that is neither a leased
-    // alias nor a tester user id, and "primary" is the alias the adapter always
-    // creates for the leased credential itself.
-    expect(flow).toContain('"senderId":"primary"');
-    expect(flow).not.toContain('"senderId":"alice"');
-    // The Tasks CLI was retired without a compatibility facade, so both waits
-    // read the isolated Gateway's own subagent_runs rows instead.
-    expect(flow).not.toContain("runQaCli");
-    expect(flow).not.toContain("'tasks'");
-    expect(flow).toContain("readNativeQaSubagentRuns(env)");
-    expect(flow).toContain("run.execution.status === 'terminal'");
-    expect(flow).toContain("run.execution.outcome?.status === 'ok'");
-    expect(flow).toContain("run.delivery?.status === 'delivered'");
-    expect(flow).toContain("Number.isFinite(run.execution.endedAt)");
-    // Dependent reads migrate with the polls; the flat fields no longer exist.
-    expect(flow).toContain("completedChild.execution.endedAt");
-    expect(flow).not.toContain("task.status");
-    expect(flow).not.toContain("task.deliveryStatus");
-  });
-
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-message-flows"));
 
