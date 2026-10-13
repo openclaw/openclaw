@@ -307,14 +307,23 @@ describe("doctor config flow", () => {
               : {}),
           }),
         );
-        if (status === "loaded") {
-          expect(readRuntimeConfig().gateway?.mode).toBe(mode);
-        } else {
-          expect(readRuntimeConfig).toThrow("Runtime config is not prepared");
-        }
+        expect(readRuntimeConfig().gateway?.mode).toBe(mode);
       });
     },
   );
+
+  it("publishes repaired runtime config when the source config was invalid", async () => {
+    await using result = await runConfig({
+      config: { gateway: { bind: "localhost" } },
+      repair: true,
+      preflightMode: "compat",
+    });
+
+    expect(result.sourceConfigValid).toBe(false);
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.gateway?.bind).toBe("loopback");
+    expect(readRuntimeConfig().gateway?.bind).toBe("loopback");
+  });
 
   it("previews and persists context-budget migration with every path reported", async () => {
     const model = { id: "gpt-5.4", name: "GPT-5.4" };

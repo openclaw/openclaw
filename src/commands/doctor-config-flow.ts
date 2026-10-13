@@ -639,9 +639,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
-  if (!snapshot.exists || snapshot.valid) {
-    await setAppliedRuntimeConfigSnapshot(cfg, cfg);
-  }
+  await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 
