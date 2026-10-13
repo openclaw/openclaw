@@ -505,7 +505,10 @@ export function assignTransportErrorDetails(
     try {
       const record = asOptionalRecord(error);
       const response = asOptionalRecord(record?.response);
-      const detail = asOptionalRecord(record?.error) ?? asOptionalRecord(response?.error);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
       getAiTransportHost().logWarn("provider-error", "Model request failed", {
         provider: output.provider,
         model: output.model,

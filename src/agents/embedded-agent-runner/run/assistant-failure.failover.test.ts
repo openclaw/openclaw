@@ -146,6 +146,7 @@ describe("assistant failure recovery", () => {
     });
     await expect(
       runWithModelFallback({
+        cfg: undefined,
         provider: "anthropic",
         model: "test-model",
         manifestPlugins: [],
