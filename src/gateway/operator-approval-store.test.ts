@@ -314,7 +314,7 @@ describe("operator approval store", () => {
       await forceDenyOperatorApproval({
         id: "b-match",
         reason: "no-route",
-        resolver: { kind: "system" },
+        resolver: { kind: "system", id: null },
         nowMs: 2_000,
         databaseOptions,
       });
