@@ -44,9 +44,16 @@ target below about 60% of the live bucket. With the current 10,000-registration
 bucket, that means a 6,000-registration operating target, leaving headroom for
 concurrent repositories, retries, and burst overlap.
 
-Trusted automatic hybrid first-attempt preflight jobs request the existing
-16-class after three nearby hosted preflights remained unassigned while their
-Blacksmith security jobs completed. Each eligible hybrid run admits one
+Automatic canonical hybrid and RunsOn first-attempt preflight jobs use the
+Blacksmith 4-class, matching default Blacksmith preflight. The original 16-class
+placement addressed hosted assignment stalls, not a measured compute requirement.
+On October 13, 610 existing 4-class preflights over 24 hours had no OOM events,
+113-second p95 duration, and 14.31% p95 peak memory. A representative job exposed
+two CPUs and 7.65 GiB RAM. Local full and changed manifest plans also fit two CPUs
+and 4 GiB without swap, with identical outputs to four CPUs. Keep the 20-minute
+deadline, planner profiles, cache trust, and hosted retry/manual/override routes.
+Monitor assignment latency after rollout; these observations do not establish
+matched-workload billing savings. Each eligible hybrid run admits one
 Blacksmith preflight and gate, plus security when optional hosted admission is
 closed, for at most three control registrations; default Blacksmith retains one.
 All three occur in the current non-Node union and reserved 5,110 envelope.

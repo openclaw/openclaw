@@ -2313,90 +2313,91 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
-  it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
-    const workflow = readCiWorkflow();
-    const context = {
-      eventName: "pull_request",
-      repository: "openclaw/openclaw",
-      runAttempt: 1,
-      runnerBackend: "hybrid",
-    } as const;
-    for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
-      const expression = workflow.jobs[jobName]["runs-on"];
-      for (const eventName of ["pull_request", "push"] as const) {
-        expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          jobName === "preflight"
-            ? "blacksmith-16vcpu-ubuntu-2404"
-            : "blacksmith-4vcpu-ubuntu-2404",
-        );
-      }
-      expect(
-        evaluateWorkflowExpression(expression, {
-          ...context,
-          authorAssociation: "NONE",
-          headRepository: "contributor/openclaw",
-        }),
-        `${jobName}: untrusted fork first attempt`,
-      ).toBe(evaluateWorkflowExpression(expression, context));
-      for (const override of [
-        { runAttempt: 0 },
-        { runAttempt: 2 },
-        { runAttempt: 2, headRepository: "contributor/openclaw" },
-        { runnerBackend: "github" },
-        { eventName: "workflow_dispatch" },
-        { repository: "contributor/openclaw" },
-      ] as const) {
-        expect(evaluateWorkflowExpression(expression, { ...context, ...override }), jobName).toBe(
-          "ubuntu-24.04",
-        );
-      }
-      for (const runnerBackend of ["", "blacksmith"] as const) {
+  it.each(["hybrid", "runson"] as const)(
+    "keeps %s controls on Blacksmith when optional hosted admission is closed",
+    (runnerBackend) => {
+      const workflow = readCiWorkflow();
+      const context = {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend,
+      } as const;
+      for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
+        const expression = workflow.jobs[jobName]["runs-on"];
         for (const eventName of ["pull_request", "push"] as const) {
-          expect(
-            evaluateWorkflowExpression(expression, { ...context, eventName, runnerBackend }),
-            jobName,
-          ).toBe(jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04");
+          expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
+            "blacksmith-4vcpu-ubuntu-2404",
+          );
+        }
+        expect(
+          evaluateWorkflowExpression(expression, {
+            ...context,
+            authorAssociation: "NONE",
+            headRepository: "contributor/openclaw",
+          }),
+          `${jobName}: untrusted fork first attempt`,
+        ).toBe(evaluateWorkflowExpression(expression, context));
+        for (const override of [
+          { runAttempt: 0 },
+          { runAttempt: 2 },
+          { runAttempt: 2, headRepository: "contributor/openclaw" },
+          { runnerBackend: "github" },
+          { eventName: "workflow_dispatch" },
+          { repository: "contributor/openclaw" },
+        ] as const) {
+          expect(evaluateWorkflowExpression(expression, { ...context, ...override }), jobName).toBe(
+            "ubuntu-24.04",
+          );
+        }
+        for (const runnerBackend of ["", "blacksmith"] as const) {
+          for (const eventName of ["pull_request", "push"] as const) {
+            expect(
+              evaluateWorkflowExpression(expression, { ...context, eventName, runnerBackend }),
+              jobName,
+            ).toBe(jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04");
+          }
         }
       }
-    }
-    for (const [jobName, task, expected] of [
-      ["preflight", undefined, "blacksmith-16vcpu-ubuntu-2404"],
-      ["security-fast", undefined, "ubuntu-24.04"],
-      ["checks-ui", undefined, "ubuntu-24.04"],
-      ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
-      ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
-      ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(workflow.jobs[jobName]["runs-on"], {
-          ...context,
-          matrix: { task },
-          preflightOutputs: { hybrid_hosted_offload: "true" },
-        }),
-        `${jobName}: ${task ?? "default"}`,
-      ).toBe(expected);
-    }
-    for (const frozenTarget of ["true", ""]) {
-      expect(
-        evaluateWorkflowExpression(workflow.jobs["checks-ui-e2e-real-gateway"]["runs-on"], {
-          ...context,
-          preflightOutputs: { frozen_target: frozenTarget },
-        }),
-      ).toBe("blacksmith-32vcpu-ubuntu-2404");
-    }
-    for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
-      for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
+      for (const [jobName, task, expected] of [
+        ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
+        ["security-fast", undefined, "ubuntu-24.04"],
+        ["checks-ui", undefined, "ubuntu-24.04"],
+        ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
+        ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
+        ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
+      ] as const) {
         expect(
-          evaluateWorkflowExpression(workflow.jobs.preflight["runs-on"], {
+          evaluateWorkflowExpression(workflow.jobs[jobName]["runs-on"], {
             ...context,
-            authorAssociation,
-            headRepository,
+            matrix: { task },
+            preflightOutputs: { hybrid_hosted_offload: "true" },
           }),
-          `${authorAssociation}: ${headRepository}`,
-        ).toBe("blacksmith-16vcpu-ubuntu-2404");
+          `${jobName}: ${task ?? "default"}`,
+        ).toBe(expected);
       }
-    }
-  });
+      for (const frozenTarget of ["true", ""]) {
+        expect(
+          evaluateWorkflowExpression(workflow.jobs["checks-ui-e2e-real-gateway"]["runs-on"], {
+            ...context,
+            preflightOutputs: { frozen_target: frozenTarget },
+          }),
+        ).toBe("blacksmith-32vcpu-ubuntu-2404");
+      }
+      for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
+        for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
+          expect(
+            evaluateWorkflowExpression(workflow.jobs.preflight["runs-on"], {
+              ...context,
+              authorAssociation,
+              headRepository,
+            }),
+            `${authorAssociation}: ${headRepository}`,
+          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+        }
+      }
+    },
+  );
 
   it.each([
     {
