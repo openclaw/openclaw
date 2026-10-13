@@ -369,7 +369,8 @@ function downgradeRichBlockTags(text: string): string {
         if (tag.closing) {
           lists.pop();
         } else {
-          const listStart = tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
+          const listStart =
+            tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
           lists.push({
             name: tag.name,
             next: Number.isInteger(listStart) && listStart > 0 ? listStart : 1,
