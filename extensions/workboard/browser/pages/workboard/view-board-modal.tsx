@@ -92,8 +92,7 @@ export function BoardModal(props: {
     }
     const initialDraft = draft();
     const client = props.client;
-    const isPresented = () => !disposed && props.draft === initialDraft;
-    const isCurrent = () => isPresented() && props.client === client;
+    const isCurrent = () => !disposed && props.client === client;
     let sessions: WorkboardSessionsBoardSpec | undefined;
     try {
       sessions = initialDraft.sessions
@@ -156,7 +155,7 @@ export function BoardModal(props: {
       }
     } finally {
       initialDraft.saving = false;
-      if (isPresented()) {
+      if (!disposed) {
         props.requestUpdate();
       }
     }

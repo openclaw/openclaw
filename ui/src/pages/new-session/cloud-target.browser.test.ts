@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
+import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target-view.tsx";
 
 const container = document.createElement("div");
 document.body.append(container);

@@ -35,6 +35,34 @@ describe("isProviderModelRerouted", () => {
   });
 
   it.each([
+    { requested: "gpt-5.6", response: "gpt-5.6-sol", rerouted: false },
+    { requested: "gpt-5.6", response: "gpt-5.6-sol-2026-08-01", rerouted: false },
+    { requested: "gpt-5.6-luna", response: "gpt-5.6-luna-2026-08-02", rerouted: false },
+    { requested: "gpt-5.6", response: "gpt-5.6-luna", rerouted: true },
+    { requested: "gpt-5.6", response: "gpt-5.6-luna-2026-08-02", rerouted: true },
+    { requested: "gpt-5.6", response: "gpt-5.6", rerouted: false },
+  ])(
+    "classifies an OpenAI $requested run answered as $response as rerouted=$rerouted",
+    ({ requested, response, rerouted }) => {
+      expect(
+        isProviderModelRerouted(
+          { provider: "openai", model: requested },
+          { provider: "openai", model: requested, responseModel: response },
+        ),
+      ).toBe(rerouted);
+    },
+  );
+
+  it("retains a change of effective model even when its response is declared equivalent", () => {
+    expect(
+      isProviderModelRerouted(
+        { provider: "openai", model: "gpt-5.6" },
+        { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
     {
       provider: "arcee",
       model: "arcee-ai/trinity-large-preview",

@@ -192,7 +192,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
           const assertRequestCurrent = () => {
             options?.signal?.throwIfAborted();
             assertSteeringCurrent();
-            input.assertHostActive?.assertScopeCurrent?.();
+            (input.assertHostActive?.assertScopeCurrent ?? input.assertHostActive)?.();
           };
           // Runtime admission queues behind the user append; join it outside that write lane.
           await userTurnRecorder?.waitForRuntimePersistence();

@@ -18,7 +18,10 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+} from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
@@ -374,6 +377,7 @@ export function writeSessionInputCompletion(
   );
   const actor = readSessionActorTransactionState(database, scope);
   if (actor && (!retained || retained.succeeded === 0)) {
+    actor.completions = writableSessionActorMap(actor.completions);
     actor.completions.set(scope.idempotencyKey, {
       session_key: scope.sessionKey,
       session_id: scope.sessionId,
@@ -406,7 +410,10 @@ export function writeSessionInputCompletion(
       pending.request_hash === scope.requestHash &&
       pending.lifecycle_generation === scope.lifecycleGeneration
     ) {
-      actor?.pendingInputs.delete(scope.idempotencyKey);
+      if (actor) {
+        actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
+        actor.pendingInputs.delete(scope.idempotencyKey);
+      }
     }
   }
   return outcome;
@@ -683,6 +690,7 @@ export function consumeSessionPendingInput(
       if (!inputIds.has(row.input_id)) {
         continue;
       }
+      actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
       if (pending.sourceInputIds) {
         actor.pendingInputs.set(key, { ...row, consumed_event_id: pending.inputId });
       } else {

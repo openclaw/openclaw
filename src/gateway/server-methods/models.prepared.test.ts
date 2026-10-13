@@ -32,7 +32,7 @@ import {
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-it("serves the published model-list projection and replaces it with its metadata generation", async () => {
+it("retains the model-list projection until its catalog facts change", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "model-list-projection-" },
     async (state) => {
@@ -133,6 +133,15 @@ it("serves the published model-list projection and replaces it with its metadata
         await harness.runtime.refresh();
         expect(await read()).toEqual(expected);
         expect(prepareProjection).toHaveBeenCalledOnce();
+        harness.setSkillsVersion(2);
+        await harness.runtime.refresh();
+        expect(await read()).toEqual(expected);
+        expect(prepareProjection).toHaveBeenCalledOnce();
+        expect(await harness.runtime.read({ agentId: "main", includeModels: false })).toMatchObject(
+          {
+            commands: [{ name: "command-2-1" }],
+          },
+        );
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;

@@ -3,6 +3,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic, type JSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
+import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { iconData } from "../../../components/icon-data.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -22,10 +23,12 @@ import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-render.solid.tsx";
+import { renderChatPermissionCard } from "./chat-divider.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
@@ -390,6 +393,8 @@ type ToolCardProps = {
 
 function ToolCardView(props: ToolCardProps) {
   const card = createMemo(() => resolveToolCardDisplay(props.card), { equals: false });
+  const permission = () =>
+    readNodePermissionRequest(asNullableRecord(card().details)?.permissionMissing);
   const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
   const view = createMemo(() =>
     resolveToolCallView({ name: card().name, args: card().args, details: card().details }),
@@ -464,80 +469,89 @@ function ToolCardView(props: ToolCardProps) {
   );
   return (
     <Show
-      when={card().name.trim().toLowerCase() === "progress_card" && !props.hasChildren}
+      when={permission()}
       fallback={
-        <div
-          class={[
-            "chat-tool-msg-collapse chat-tool-msg-collapse--manual",
-            { "is-open": props.options.expanded },
-          ]}
-        >
-          <Row
-            class={[
-              "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
-              {
-                "chat-tool-row--running": running(),
-                [`chat-tool-row--${linkedRow()}`]: Boolean(linkedRow()),
-              },
-            ]}
-            type={linkedRow() ? undefined : "button"}
-            aria-expanded={linkedRow() ? undefined : props.options.expanded ? "true" : "false"}
-            onPointerEnter={syncToolDisclosureOverflow}
-            onFocus={linkedRow() ? undefined : syncToolDisclosureOverflow}
-            onFocusIn={linkedRow() ? syncToolDisclosureOverflow : undefined}
-            onClick={linkedRow() ? undefined : toggle}
-          >
-            <Show when={linkedRow()}>
-              <button
-                class="chat-tool-row__toggle"
-                type="button"
-                aria-expanded={props.options.expanded ? "true" : "false"}
-                aria-label={
-                  subagent()
-                    ? `${display().label} ${subagent()!.label}`
-                    : resolveToolRowText(card(), view(), outcome())
-                }
-                onClick={toggle}
-              />
-            </Show>
-            {rowContent()}
-          </Row>
-          <Show when={props.options.expanded}>
-            <Show
-              when={props.hasChildren}
-              fallback={
-                <div class="chat-tool-msg-body">
-                  <ExpandedToolCardContent card={props.card} options={props.options} />
-                </div>
-              }
+        <Show
+          when={card().name.trim().toLowerCase() === "progress_card" && !props.hasChildren}
+          fallback={
+            <div
+              class={[
+                "chat-tool-msg-collapse chat-tool-msg-collapse--manual",
+                { "is-open": props.options.expanded },
+              ]}
             >
-              <div class="chat-tool-children">
-                {props.children}
-                <details class="chat-tool-wrapper-details">
-                  <summary>{t("chat.toolCards.toolInput")}</summary>
-                  <div class="chat-tool-msg-body">
-                    <ExpandedToolCardContent card={props.card} options={props.options} />
+              <Row
+                class={[
+                  "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
+                  {
+                    "chat-tool-row--running": running(),
+                    [`chat-tool-row--${linkedRow()}`]: Boolean(linkedRow()),
+                  },
+                ]}
+                type={linkedRow() ? undefined : "button"}
+                aria-expanded={linkedRow() ? undefined : props.options.expanded ? "true" : "false"}
+                onPointerEnter={syncToolDisclosureOverflow}
+                onFocus={linkedRow() ? undefined : syncToolDisclosureOverflow}
+                onFocusIn={linkedRow() ? syncToolDisclosureOverflow : undefined}
+                onClick={linkedRow() ? undefined : toggle}
+              >
+                <Show when={linkedRow()}>
+                  <button
+                    class="chat-tool-row__toggle"
+                    type="button"
+                    aria-expanded={props.options.expanded ? "true" : "false"}
+                    aria-label={
+                      subagent()
+                        ? `${display().label} ${subagent()!.label}`
+                        : resolveToolRowText(card(), view(), outcome())
+                    }
+                    onClick={toggle}
+                  />
+                </Show>
+                {rowContent()}
+              </Row>
+              <Show when={props.options.expanded}>
+                <Show
+                  when={props.hasChildren}
+                  fallback={
+                    <div class="chat-tool-msg-body">
+                      <ExpandedToolCardContent card={props.card} options={props.options} />
+                    </div>
+                  }
+                >
+                  <div class="chat-tool-children">
+                    {props.children}
+                    <details class="chat-tool-wrapper-details">
+                      <summary>{t("chat.toolCards.toolInput")}</summary>
+                      <div class="chat-tool-msg-body">
+                        <ExpandedToolCardContent card={props.card} options={props.options} />
+                      </div>
+                    </details>
                   </div>
-                </details>
-              </div>
-            </Show>
-          </Show>
-          <Show when={props.options.showApprovalReviews !== false}>
-            <ToolApprovalReviews card={card()} />
-          </Show>
-        </div>
+                </Show>
+              </Show>
+              <Show when={props.options.showApprovalReviews !== false}>
+                <ToolApprovalReviews card={card()} />
+              </Show>
+            </div>
+          }
+        >
+          <div class="chat-tool-msg-collapse chat-progress-card-receipt">
+            <div class="chat-tool-msg-summary chat-tool-row" role="status">
+              <span class="chat-tool-msg-summary__icon">
+                <ToolIcon name="listChecks" />
+              </span>
+              <span class="chat-progress-card-receipt__text">
+                {progressReceiptLabel(card(), outcome())}
+              </span>
+            </div>
+          </div>
+        </Show>
       }
     >
-      <div class="chat-tool-msg-collapse chat-progress-card-receipt">
-        <div class="chat-tool-msg-summary chat-tool-row" role="status">
-          <span class="chat-tool-msg-summary__icon">
-            <ToolIcon name="listChecks" />
-          </span>
-          <span class="chat-progress-card-receipt__text">
-            {progressReceiptLabel(card(), outcome())}
-          </span>
-        </div>
-      </div>
+      {(request) => (
+        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+      )}
     </Show>
   );
 }

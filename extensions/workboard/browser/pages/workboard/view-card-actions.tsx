@@ -31,6 +31,7 @@ import {
   engineBlockedByRuntime,
   formatStatusLabel,
   workboardMutationContext,
+  workboardViewState,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 export async function moveCardToStatus(
@@ -65,10 +66,7 @@ export function CardMoveControl(input: {
     wide?: boolean;
   };
 }) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+  const state = workboardViewState(() => input.workboard);
   const statuses = createMemo(() =>
     state().statuses.includes(input.card.status)
       ? state().statuses
@@ -223,10 +221,7 @@ export function CardAction(
     | { kind: "stop" | "delete"; busy: boolean }
   ),
 ) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+  const state = workboardViewState(() => input.workboard);
   const appearance = createMemo(() => {
     switch (input.kind) {
       case "edit":
@@ -321,10 +316,7 @@ export function StartExecutionButton(input: {
   engine: WorkboardExecutionEngine | null;
   mode: WorkboardExecutionMode;
 }) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+  const state = workboardViewState(() => input.workboard);
   const busy = createMemo(() => state().busyCardIds.has(input.card.id) || state().dispatching);
   const runtimeBlock = createMemo(() =>
     engineBlockedByRuntime(input.workboard, input.card, input.engine),

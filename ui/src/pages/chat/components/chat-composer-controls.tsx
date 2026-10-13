@@ -94,7 +94,7 @@ function renderMicrophoneNotice(className: string, message: string, role?: "stat
   );
 }
 
-function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
+export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
   const [opened, setOpened] = createSignal(props.open);
   // Without an available capture route, a checked "System default" would claim
   // a selection that cannot exist. Show the discovery issue alone.
@@ -317,7 +317,7 @@ type ComposerVoiceButtonProps = {
   onToggleVoice?: () => void;
 };
 
-function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
+export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
   const active = () => props.readDictation?.()?.active === true;
   const arming = () => props.readDictation?.()?.arming === true;
   const finalizing = () => props.readDictation?.()?.finalizing === true;
@@ -405,7 +405,7 @@ function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | und
     button.addEventListener("pointerdown", (event) => read()?.(event), true);
 }
 
-function ComposerDictationSendAction(props: {
+export function ComposerDictationSendAction(props: {
   readDictation: () => ComposerDictationController;
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
@@ -718,32 +718,4 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
 
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
   return solidTemplate(renderMicrophonePickerSolid, props);
-}
-
-export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
-  return solidTemplate(renderComposerVoiceButtonSolid, props);
-}
-
-export function renderComposerDictationSendAction(
-  dictation: ComposerDictationController,
-  onSend: (submissionAction?: Event) => void,
-  onPointerDown?: (event: PointerEvent) => void,
-) {
-  return solidTemplate(ComposerDictationSendAction, {
-    readDictation: () => dictation,
-    onSend,
-    onPointerDown,
-  });
-}
-
-function RenderComposerDictationStatusAdapter(props: {
-  readDictation?: () => ComposerDictationController;
-}) {
-  return <>{renderComposerDictationStatusSolid(props.readDictation?.())}</>;
-}
-
-export function renderComposerDictationStatus(dictation?: ComposerDictationController) {
-  return solidTemplate(RenderComposerDictationStatusAdapter, {
-    readDictation: dictation ? () => dictation : undefined,
-  });
 }

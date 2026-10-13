@@ -152,16 +152,26 @@ answer can settle after another assistant message has been committed. The helper
 correlates matching text with an uncorrelated assistant occurrence in that run,
 in transcript order, so repeated answers retain distinct identities.
 
-The delivery receipt remains stored, but `chat.history` presents the correlated
-answer once. This does not change provider replay. A run ID is provenance, not
-write authorization; the existing session checks still apply. If no source run
-is supplied, correlation retains the latest-message behavior.
+The delivery receipt remains stored. For text-only replies, `chat.history`
+presents the correlated answer once; rows with media facts or displayable
+non-text content remain visible. This does not change provider replay. A run ID
+is provenance, not write authorization; the existing session checks still apply.
+If no source run is supplied, correlation retains the latest-message behavior.
 
 SQLite resolves delivery idempotency keys through their index independently of
 run correlation. Run correlation reads assistant messages from the producing
 run's indexed input onward; for a legacy run without that input identity, it
 searches only the most recent 4,096 transcript events. Settle those legacy
 deliveries promptly rather than relying on a full-history text search.
+
+Media mirrors retain full references in delivery facts while displaying compact
+filenames. Source correlation uses the authored caption before filename expansion,
+so media and plain answers with identical captions consume distinct occurrences
+in run order. Unkeyed mirrors suppress an exact text-and-media repeat; different
+attachments with the same filename remain distinct. Keyed replay rejects changed
+media references for rows that record them. Earlier fieldless mirrors replay their
+original text and delivery facts without rewriting stored bytes; their
+filename-only representation cannot distinguish same-basename attachments.
 
 ## Bounded model context
 
@@ -420,7 +430,7 @@ Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ plugi
     Default model and provider constants:
 
     ```typescript
-    const model = api.runtime.agent.defaults.model; // e.g. "gpt-6-astra"
+    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.6-sol"
     const provider = api.runtime.agent.defaults.provider; // e.g. "openai"
     ```
 

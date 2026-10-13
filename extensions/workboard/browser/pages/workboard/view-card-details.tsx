@@ -34,6 +34,7 @@ import {
   formatPriorityLabel,
   workboardErrorMessage,
   workboardMutationContext,
+  workboardViewState,
   renderPriorityIcon,
   formatStatusLabel,
   formatUpdatedTime,
@@ -106,10 +107,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
     initialActiveElement instanceof HTMLElement && initialActiveElement !== document.body
       ? initialActiveElement
       : undefined;
-  const state = () => {
-    void props.revision;
-    return getWorkboardState(props.host);
-  };
+  const state = workboardViewState(() => props);
   const noteValue = liveInputValue(() => state().detailCommentBody);
   const visibleError = () => workboardErrorMessage(state(), props.pageError);
   const card = () => {

@@ -39,8 +39,9 @@ import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-sett
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { getChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
@@ -337,7 +338,7 @@ describe("chat pane composer controls", () => {
       ).toBe(String(!connected));
       expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
       const permissionContainer = document.createElement("div");
-      render(renderChatPermissionPicker(controls.permissionPicker), permissionContainer);
+      render(solidTemplate(ChatPermissionPicker, controls.permissionPicker), permissionContainer);
       expect(
         permissionContainer.querySelector('[data-chat-permission-select="true"]'),
       ).not.toBeNull();
@@ -377,7 +378,7 @@ describe("chat pane composer controls", () => {
       agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
-    render(renderChatPermissionPicker(controls.permissionPicker), container);
+    render(solidTemplate(ChatPermissionPicker, controls.permissionPicker), container);
     expect(container.querySelector("wa-dropdown-item")).toBeNull();
     container.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
     flush();

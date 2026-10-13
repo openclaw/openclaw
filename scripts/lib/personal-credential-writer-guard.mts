@@ -17,8 +17,13 @@ const personalPublication = "src/gateway/github-personal-publication-store.worke
 const repositoryPublication = "src/gateway/github-repository-publication-store.worker.ts";
 const publicationLifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const publicationDeletion = "src/state/github-personal-publication-lifecycle.ts";
+const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
+const authRelocation = "src/infra/state-migrations.shared-auth-store.ts";
+const machineState = "src/state/config-machine-state-write.ts";
 const guardedTables = new Set([
   "secret_store_entries",
+  "auth_profile_store",
+  "config_machine_state",
   "github_publication_requests",
   "github_personal_publication_requests",
   "github_repository_publication_requests",
@@ -171,6 +176,31 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
+  // Canonical auth sinks publish before releasing authority; state-only writes do not revoke.
+  [key(authCells, "writeAuthProfileJsonCell"), 2],
+  [key(authCells, "deleteAuthProfileJsonCell"), 2],
+  // Exclusive stopped-owner relocation copies the shared row and then removes its source.
+  [key(authRelocation, "copyRowsToState"), 1],
+  [key(authRelocation, "cleanupSourceRows"), 1],
+  // Transitional generic entry points: the next credential-custody phase reserves the auth key.
+  ...[
+    "upsertConfigMachineState",
+    "updateConfigMachineStateInDatabase",
+    "deleteConfigMachineState",
+    "importConfigMachineState",
+  ].map((name): [string, number] => [key(machineState, name), 1]),
+  // These dynamic keys are bounded by their owning reader/producer, not by TypeScript literals.
+  [
+    key(
+      "src/commands/doctor-session-incognito-key-repair-state.ts",
+      "rewriteSharedStateSessionKeys",
+    ),
+    1,
+  ],
+  [key("src/infra/state-migrations.node-host.ts", "migrateIntoDatabase"), 1],
+  [key("src/infra/state-migrations.tui-last-session.ts", "migrateLegacyTuiLastSessions"), 2],
+  [key("src/gateway/mention-inbox-store.worker.ts", "writeMentionStoreChanges/writeValue"), 1],
+  [key("src/gateway/mention-inbox-store.worker.ts", "writeMentionStoreChanges/flushDeletes"), 1],
   ...[...publicationWriters.keys()].map((id): [string, number] => [id, 1]),
   [key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"), 2],
   [key(accounts, "writeRecord"), 1],
@@ -209,6 +239,66 @@ const sinks = new Map<string, number>([
     2,
   ],
 ]);
+
+const rawMachineStateSinks = new Map([
+  [key("src/state/openclaw-state-db-schema-v12-foldin.ts", "migrateSingletonStateFoldInV12"), 1],
+  [key("src/state/openclaw-state-db-schema-v13-widerow.ts", "migrateJsonCanonicalWideRowsV13"), 2],
+]);
+
+function mayWriteAuthMachineState(
+  node: ts.CallExpression,
+  checker: NativeTypeScriptProject["project"]["checker"],
+): boolean {
+  const mayIncludeAuthKey = (value: ts.Node): boolean => {
+    if (ts.isArrayLiteralExpression(value)) {
+      return value.elements.some(mayIncludeAuthKey);
+    }
+    const type = checker.getTypeAtLocation(value);
+    const variants = type.isUnionType() ? type.getTypes() : [type];
+    return variants.some((variant) =>
+      variant.isStringLiteralType() ? variant.value === "authProfiles.store" : true,
+    );
+  };
+  let selected = true;
+  let changesKey = false;
+  let query: ts.Node = node;
+  while (ts.isPropertyAccessExpression(query.parent) && ts.isCallExpression(query.parent.parent)) {
+    const call = query.parent.parent;
+    const method = query.parent.name.text;
+    if (method === "values" || method === "set") {
+      const values = call.arguments[0];
+      const property =
+        values && ts.isObjectLiteralExpression(values)
+          ? values.properties.find(
+              (entry) =>
+                ts.isPropertyAssignment(entry) &&
+                (ts.isIdentifier(entry.name) || ts.isStringLiteralLikeNode(entry.name)) &&
+                entry.name.text === "state_key",
+            )
+          : undefined;
+      if (property && ts.isPropertyAssignment(property)) {
+        if (method === "set") {
+          changesKey ||= mayIncludeAuthKey(property.initializer);
+        } else {
+          selected = mayIncludeAuthKey(property.initializer);
+        }
+      }
+    } else if (
+      method === "where" &&
+      call.arguments[0] &&
+      ts.isStringLiteralLikeNode(call.arguments[0]) &&
+      call.arguments[0].text === "state_key" &&
+      call.arguments[1] &&
+      ts.isStringLiteralLikeNode(call.arguments[1]) &&
+      ["=", "in"].includes(call.arguments[1].text) &&
+      call.arguments[2]
+    ) {
+      selected &&= mayIncludeAuthKey(call.arguments[2]);
+    }
+    query = call;
+  }
+  return selected || changesKey;
+}
 
 const repeatedEdges = new Map([
   [
@@ -306,6 +396,7 @@ export function inspectPersonalCredentialWriters(
   };
   const violations: string[] = [];
   const sinkCounts = new Map<string, number>();
+  const rawSinkCounts = new Map<string, number>();
   const edgeCounts = new Map<string, number>();
   for (const { file, source } of sources) {
     const fail = (node: ts.Node, reason: string) => {
@@ -365,7 +456,11 @@ export function inspectPersonalCredentialWriters(
               : (tableType?.isUnionType() ? tableType.getTypes() : tableType ? [tableType] : [])
                   .filter((type) => type.isStringLiteralType())
                   .map((type) => type.value);
-        const guarded = tables.filter((name) => guardedTables.has(name));
+        const guarded = tables.filter(
+          (name) =>
+            guardedTables.has(name) &&
+            (name !== "config_machine_state" || mayWriteAuthMachineState(node, checker)),
+        );
         if (guarded.length) {
           const id = key(file, operation(node));
           const count = (sinkCounts.get(id) ?? 0) + 1;
@@ -378,13 +473,21 @@ export function inspectPersonalCredentialWriters(
           }
         }
       }
-      if (
-        (ts.isStringLiteralLikeNode(node) || ts.isTemplateHead(node)) &&
-        /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?(?:secret_store_entries|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/i.test(
-          node.text,
-        )
-      ) {
-        fail(node, "raw authority-table write bypasses the reviewed writer sinks");
+      if (ts.isStringLiteralLikeNode(node) || ts.isTemplateHead(node)) {
+        const writes = node.text.matchAll(
+          /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?(secret_store_entries|auth_profile_store|config_machine_state|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
+        );
+        for (const write of writes) {
+          const id = key(file, operation(node));
+          const count = (rawSinkCounts.get(id) ?? 0) + 1;
+          rawSinkCounts.set(id, count);
+          if (
+            write[1]?.toLowerCase() !== "config_machine_state" ||
+            count > (rawMachineStateSinks.get(id) ?? 0)
+          ) {
+            fail(node, "raw authority-table write bypasses the reviewed writer sinks");
+          }
+        }
       }
       if (
         (ts.isIdentifier(node) || ts.isStringLiteral(node)) &&

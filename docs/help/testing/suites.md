@@ -31,6 +31,29 @@ PR CI reports numeric ratchet violations as warnings too. The suppression
 baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
+## Runner exit status
+
+`pnpm test`, `scripts/test-projects.mts`, and `scripts/run-vitest.mjs` distinguish
+Vitest failures from runner infrastructure failures:
+
+- `0`: the command completed successfully.
+- `1`: Vitest failed, or rejected the requested tests or arguments.
+- `2`: loader startup, runner preparation, child completion, worker disposal, or report publication failed.
+  Existing native failure codes other than `1` remain unchanged.
+
+The runner completes worker disposal and requested report publication before it
+returns. A later infrastructure failure takes precedence over an earlier test
+failure. Across parallel completions, the first observed native status other than
+`0`, `1`, or reserved infrastructure `2` wins, regardless of when `2` arrives.
+Infrastructure outcomes stop new shard admission; already admitted shards still
+join. Ordinary assertion failures keep the selection's continuation policy.
+Forwarded signals retain their signal outcome after cleanup.
+
+For an expected-failure proof, require exit `1` and the intended assertion in its
+report. Wait for the outer command to terminate. A report alone does not prove
+that cleanup succeeded. An interrupted command or missing terminal result is
+not a completed expected failure.
+
 ## Test suites (what runs where)
 
 Think of the suites as "increasing realism" (and increasing flakiness/cost).
