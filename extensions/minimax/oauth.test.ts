@@ -411,7 +411,7 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
+  it("records the issuing account endpoint for Global and CN credentials", async () => {
     for (const [region, expectedHosts] of [
       [
         "global",
@@ -436,6 +436,7 @@ describe("loginMiniMaxPortalOAuth", () => {
       await expect(loginMiniMax({ region })).resolves.toMatchObject({
         access: "access",
         refresh: "refresh",
+        tokenEndpoint: expectedHosts[1],
       });
       expect(
         fetchMock.mock.calls.map(([input]) =>
