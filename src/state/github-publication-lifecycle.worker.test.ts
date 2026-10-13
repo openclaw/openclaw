@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -40,6 +41,16 @@ describe("retained publication lifecycle authority", () => {
   let lifecycleRoot: string;
   let lifecycleContext: OpenClawStateWorkerContext;
   let profileId: string;
+  const connectionGeneration = randomUUID();
+  const deleteRequestId = randomUUID();
+  const coldRequestId = randomUUID();
+  const lifecycleCases = (["shared", "personal"] as const).flatMap((publicationKind) =>
+    (["original-revision", null, "missing"] as const).map((revision) => ({
+      publicationKind,
+      revision,
+      requestId: randomUUID(),
+    })),
+  );
   const requester = {
     version: 1 as const,
     actor: { kind: "system" as const },
@@ -54,7 +65,7 @@ describe("retained publication lifecycle authority", () => {
     const row: PersonalGitHubPublicationRow = {
       request_id: requestId,
       owner_profile_id: profileId,
-      connection_generation: "fixture-generation",
+      connection_generation: connectionGeneration,
       idempotency_key: requestId,
       request_digest: "",
       session_id: requestId,
@@ -128,18 +139,17 @@ describe("retained publication lifecycle authority", () => {
     lifecycleContext = captureOpenClawStateWorkerContext();
     profileId = ensureProfileForEmail("lifecycle-worker@example.test").id;
     runOpenClawStateWriteTransaction(({ db }) => {
-      for (const publicationKind of ["shared", "personal"] as const) {
-        for (const lifecycleRevision of ["original-revision", null]) {
+      for (const { revision, ...input } of lifecycleCases) {
+        if (revision !== "missing") {
           insertGitHubPublicationSessionLifecycle(db, {
-            publicationKind,
-            requestId: `${publicationKind}-${lifecycleRevision}`,
-            lifecycleRevision,
+            ...input,
+            lifecycleRevision: revision,
             requester,
           });
         }
       }
     });
-    for (const requestId of ["delete-binding", "cold-race"]) {
+    for (const requestId of [deleteRequestId, coldRequestId]) {
       insertPersonal(requestId, "original-revision");
     }
     // A real close drops resident facts so the next preparations exercise cold worker reads.
@@ -165,25 +175,22 @@ describe("retained publication lifecycle authority", () => {
     const sql = observeMainThreadSql();
     try {
       sql.calibrate();
-      for (const publicationKind of ["shared", "personal"] as const) {
-        for (const revision of ["original-revision", null, "missing"]) {
-          const input = { publicationKind, requestId: `${publicationKind}-${revision}` };
-          const binding = await prepareGitHubPublicationSessionLifecycle(input);
-          const expected =
-            revision === "missing"
-              ? undefined
-              : { lifecycle_revision: revision, requester_authority_json: requesterJson };
+      for (const { revision, ...input } of lifecycleCases) {
+        const binding = await prepareGitHubPublicationSessionLifecycle(input);
+        const expected =
+          revision === "missing"
+            ? undefined
+            : { lifecycle_revision: revision, requester_authority_json: requesterJson };
+        expect(binding.readCurrent()).toEqual(expected);
+        const requests = vi.spyOn(Worker.prototype, "postMessage");
+        try {
+          expect((await prepareGitHubPublicationSessionLifecycle(input)).readCurrent()).toEqual(
+            expected,
+          );
           expect(binding.readCurrent()).toEqual(expected);
-          const requests = vi.spyOn(Worker.prototype, "postMessage");
-          try {
-            expect((await prepareGitHubPublicationSessionLifecycle(input)).readCurrent()).toEqual(
-              expected,
-            );
-            expect(binding.readCurrent()).toEqual(expected);
-            expect(requests).not.toHaveBeenCalled();
-          } finally {
-            requests.mockRestore();
-          }
+          expect(requests).not.toHaveBeenCalled();
+        } finally {
+          requests.mockRestore();
         }
       }
       sql.expectIdle();
@@ -195,7 +202,7 @@ describe("retained publication lifecycle authority", () => {
   it("denies before deletion commits and never revives the retained binding after reinsertion", async ({
     signal,
   }) => {
-    const input = { publicationKind: "personal" as const, requestId: "delete-binding" };
+    const input = { publicationKind: "personal" as const, requestId: deleteRequestId };
     const binding = await prepareGitHubPublicationSessionLifecycle(input);
     const remove = await prepareDeletion(input.requestId);
     const receipt = holdNextReceipt();
@@ -234,7 +241,7 @@ describe("retained publication lifecycle authority", () => {
   });
 
   it("rejects a cold worker result overtaken by a canonical deletion", async ({ signal }) => {
-    const input = { publicationKind: "personal" as const, requestId: "cold-race" };
+    const input = { publicationKind: "personal" as const, requestId: coldRequestId };
     const remove = await prepareDeletion(input.requestId);
     const readReady = createDeferredCore();
     const release = createDeferredCore();
