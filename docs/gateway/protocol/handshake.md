@@ -75,8 +75,10 @@ preauth timeout share this default. Operators can override the server budget wit
 When the Gateway already holds a named canonical owner and its local-owner
 binding, initial connections and reconnects reuse those profile facts. Committed
 profile writes update the retained catalog; creating an owner, adopting a missing
-name, or repairing a binding still uses the profile writer. Every connection
-retains its authentication, device authorization, role, and visibility checks.
+name, or restoring an absent binding still uses the profile writer. Merged or
+misbound owners require `openclaw doctor --fix` before reconnecting. Every
+connection retains its authentication, device authorization, role, and visibility
+checks.
 
 ```json
 {
