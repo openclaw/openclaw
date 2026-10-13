@@ -1,10 +1,10 @@
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 /** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
 import {
   type FastMode,
   normalizeFastMode,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 
 export { normalizeFastMode };
@@ -37,9 +37,9 @@ export type ThinkingCatalogEntry = {
   baseUrl?: string;
   contextWindow?: number;
   contextTokens?: number;
-  contextWindows?: ModelCatalogEntry["contextWindows"];
-  contextWindowDefault?: ModelCatalogEntry["contextWindowDefault"];
-  contextWindowSource?: ModelCatalogEntry["contextWindowSource"];
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+  contextWindowSource?: "synthetic";
   reasoning?: boolean;
   configuredReasoning?: boolean;
   /** Concrete runtime owner of thinking policy; internal and never project to clients. */

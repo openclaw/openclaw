@@ -40,7 +40,17 @@ it.each([undefined, 100_000])(
               providers: {
                 [provider]: {
                   baseUrl: "https://fixture.example.test/v1",
-                  models: [{ id: model, name: model, contextTokens: cap }],
+                  models: [
+                    {
+                      id: model,
+                      name: model,
+                      contextTokens: cap,
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      maxTokens: 16384,
+                    },
+                  ],
                 },
               },
             },
