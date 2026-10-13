@@ -41,10 +41,10 @@ Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
 New observers capture those resources when admitting a directory. File scans
 publish through the current binding, including scans spanning a restart.
-Detached filesystem notifications reuse that scope's
-serialized child; they do not launch a native process for each WAL change.
+Detached filesystem notifications use that cancellation scope and the shared
+serialized process pool; they do not launch a native process for each WAL change.
 Every refresh still re-admits the current database source and checks its authority.
-Reader retirement stops change publications and joins the retained reader;
+Scope retirement stops change publications and joins accepted reads;
 the next Gateway generation rebinds retained observers before startup admission.
 
 Persisted auth-row observation belongs to the host. Catalog workers reload
@@ -52,6 +52,36 @@ credentials through their native task owner instead of retaining background row
 readers for WAL notifications. Workers still observe physical file replacement
 to retire native SQLite handles; session-only WAL activity needs no worker auth
 reread.
+
+Generic scoped SQLite reads share at most four process slots, matched by captured
+runtime generation, environment, working directory, and spawn-broker owner.
+Compatible requests serialize on their slot and pass their database identity,
+command, and artifact-preserving scope on every request. Closing a caller scope
+cancels and joins its reads; it does not close an idle pooled process. Each read
+releases its native readers before its reply. Idle processes retire after one
+minute, and failed or cancelled processes retire before another request reuses
+that slot. Runtimes without qualified native SQLite close still require process
+retirement before releasing snapshot custody.
+Unconfirmed native cleanup quarantines its slot without releasing that custody.
+Reads use remaining healthy capacity; four quarantined slots reject visibly
+instead of launching another process or waiting indefinitely.
+
+Paced page-cache warming leases one of those same slots until its caller scope
+closes. Its iterator stays in one exclusive child across `begin` and `step`
+requests; other reads cannot interleave or evict it. Closing the scope joins child
+retirement even when warming is abandoned between steps. A cancelled reservation
+that never entered the child releases promptly without retiring another caller's
+active read. When all slots are leased, new requests wait with cancellation.
+
+Read requests launch through the Gateway's spawn broker when available. Broker
+nonadmission fails the request rather than spawning a native replacement on the
+Gateway thread. CLI contexts without a broker use the same bounded pool with
+native launches; idle children do not keep the CLI alive. Caller-owned staging
+and raw snapshot-copy sessions keep their existing native-close lifecycle.
+The existing `openclaw_child_process_spawn_total` operation label distinguishes
+`sqlite.scoped-read.broker`, `sqlite.scoped-read.native`, and caller-owned
+`sqlite.session.broker` / `sqlite.session.native` launches without recording
+paths, database identities, or commands.
 
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
@@ -100,6 +130,13 @@ not redirect an open worker handle. Closing and reopening captures the new path
 identity, and open admission still rejects replacements that collide with a live
 owner. Creation and schema-maintenance requests keep their target checks at the
 actual effect.
+
+Direct session readers retain an already-selected canonical target for the read.
+A creator borrower stops checking its original alias after
+the worker publishes the admitted file identity. Retargeting an alias does not
+redirect or invalidate those retained operations; a fresh lookup resolves the
+new target. Worker opens still check physical identity. Target-discovery checks
+shared with cross-store effects and source checks used for authorization remain.
 
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed
@@ -4379,7 +4416,7 @@ rewrite/append watermark. Read workers validate that snapshot before extending
 it, so worker retirement does not discard the cache. Workers also adopt the host's
 live database validation receipt before canonical admission, preserving pending-row
 checks without repeating whole-store validation. Branch reads share the existing
-maintenance reader's prewarming, thirty-minute idle window, database custody, and
+maintenance reader's prewarming, five-minute idle window, database custody, and
 memory-pressure retirement. They no longer start a dedicated worker after short
 idle gaps, and foreground history retains its separate reader. Branch identity and lifecycle
 reads use metadata without loading saved prompts or diff snapshots. After a complete scan
@@ -4950,7 +4987,7 @@ foreground browser loading; main-thread handler and optional discovery preparati
 still wait for idle time. An admitted operator connection also starts detached
 prewarming when that lane is cold. Prewarming reads
 no transcripts, writes no data, and uses normal database custody and cleanup. Warm
-calls coalesce without extending the 30-minute idle retirement deadline; failures
+calls coalesce without extending the five-minute lane idle retirement deadline; failures
 are debug-only and never block startup or connection admission. Schemas, retention,
 and update behavior are unchanged.
 

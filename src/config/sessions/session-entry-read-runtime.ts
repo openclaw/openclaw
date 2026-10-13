@@ -680,11 +680,7 @@ export async function withSessionStoreReaderInWorker<T>(
         { agentId: target.agentId, path: direct.physicalPath },
         agentId ?? target.agentId,
         target.path,
-        {
-          assertCurrent: () => {
-            assertSessionStoreReadCandidate(target.path, candidates);
-          },
-        },
+        { assertCurrent: assertSourcesCurrent },
       );
     } else {
       result = await withSessionStoreTarget(
