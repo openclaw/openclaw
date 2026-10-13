@@ -861,8 +861,9 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
-    const location = database.db.location();
-    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    const owners = captureSqliteDatabaseAdmissions(undefined, { location: database.path });
+    assert.equal(owners.length, 1);
+    const [owner] = owners;
     assert(owner);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();

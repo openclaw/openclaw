@@ -21,7 +21,7 @@ function readRegular(path) {
   return readFileSync(path, "utf8");
 }
 
-function incomingReview(pr, incoming, jsonOid) {
+export function incomingReview(pr, incoming, jsonOid) {
   const reviewPath = ".local/review.json";
   const review = JSON.parse(readRegular(reviewPath));
   const prMeta = JSON.parse(readRegular(".local/pr-meta.json"));

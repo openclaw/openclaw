@@ -9,8 +9,10 @@ import {
 import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import * as sessionStoreWorker from "../../gateway/session-utils-store-worker.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -56,6 +58,52 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
+
+it("keeps retained subagent interruptions out of main-session startup worker admission", async () => {
+  const stateDir = sessionDirs.make();
+  const storePath = path.join(stateDir, "sessions.json");
+  const sessionKey = "agent:main:main";
+  await replaceSessionEntry(
+    { storePath, sessionKey },
+    { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
+  );
+  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
+  const retained = Array.from({ length: 4_500 }, (_, index) => ({
+    sessionKey: `agent:main:subagent:retained-${index}`,
+    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+  }));
+  const read = vi
+    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
+    .mockResolvedValue([...retained, ...summaries]);
+  const resolveTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+  const lookup = vi
+    .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+    .mockImplementation((params) => {
+      if (params.key !== sessionKey) {
+        return Promise.reject(new Error("worker task capacity reached"));
+      }
+      return resolveTarget(params);
+    });
+  const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
+  try {
+    expect(
+      await markStartupOrphanedMainSessionsForRecovery({
+        cfg: { session: { store: storePath } },
+        stateDir,
+      }),
+    ).toEqual({ marked: 1, skipped: 0 });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 0 },
+    });
+    expect(lookup.mock.calls.length).toBe(1);
+    expect(lookup.mock.calls[0]?.[0].key).toBe(sessionKey);
+  } finally {
+    read.mockRestore();
+    lookup.mockRestore();
+    warn.mockRestore();
+  }
+});
 
 it.each([false, true])(
   "reports skipped shutdown sessions when another is marked: %s",

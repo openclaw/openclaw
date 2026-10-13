@@ -1582,6 +1582,7 @@ src/process/exec-termination.ts
 src/process/exec.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
+src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts

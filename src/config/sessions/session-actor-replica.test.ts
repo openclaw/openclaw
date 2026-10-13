@@ -580,6 +580,8 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
 });
 
 it("reuses list facts and invalidates summary watermarks after transcript writes", async () => {
+  // Worker retirement revokes resident facts, so settle earlier fixtures before asserting reuse.
+  await drainGlobalSingletonLifecycleState("restart");
   await withReplica(async (fixture) => {
     const { scope, replica } = fixture;
     replaceSessionEntrySync(scope, {

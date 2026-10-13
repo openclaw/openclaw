@@ -67,6 +67,7 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 - PR CI fails → `pnpm test:ci-failed <pr>`; read pre-existing/new/unknown classification.
 - Fix new failures; investigate unknown → `pnpm test:ci-failed <pr> --run` until selected tests pass locally → push once.
+- `--run` enables `OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1`: collect ordinary failures across selected configs, while infrastructure failures still stop; use the same opt-in for manual focused reruns.
 - Pre-existing failures: [failure-table landing rule](../openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures). Matching signatures ≠ job-name-only attribution.
 - Never `gh run rerun` to chase green; never local full suite for CI repair.
 - Bind diagnosis to exact SHA + job. Fetch failed logs once; prefer exact run/job

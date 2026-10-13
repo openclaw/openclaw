@@ -452,6 +452,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     auth,
   });
   const sessionFork = {
+    runId: attempt.runId,
     sessionId: attempt.sessionId,
     agentId: input.sessionAgentId,
   };

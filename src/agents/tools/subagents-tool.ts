@@ -356,8 +356,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             })),
           });
         }
-        const { cfg, controller, readable, controlled } = readCurrentScope();
         if (action === "list") {
+          const cfg = opts.config ?? getRuntimeConfig();
+          const controller = controllerRead.read();
           const readContext = await buildControlledSubagentRunsReadContext(
             controller.controllerSessionKey,
             controller.controllerAgentId,
@@ -384,6 +385,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           });
         }
         if (action === "cancel") {
+          const { cfg, controller, readable, controlled } = readCurrentScope();
           const runId = requestedRunId;
           if (!runId) {
             throw new ToolInputError("Subagent runId required");

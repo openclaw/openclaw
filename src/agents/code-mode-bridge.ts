@@ -23,6 +23,7 @@ import {
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import { formatSkillInstructions } from "./skill-instruction-result.js";
 import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
@@ -480,7 +481,20 @@ export async function runBridgeRequest(params: {
         if (!isRecord(result) || result.isError || !isRecord(result.details)) {
           throw new ToolInputError("Installed skill request failed.");
         }
-        value = params.request.method === "skillsRead" ? result.details.content : result.details;
+        if (params.request.method === "skillsRead") {
+          const { name, location, locationNote, content } = result.details;
+          if (
+            typeof name !== "string" ||
+            typeof location !== "string" ||
+            typeof content !== "string" ||
+            (locationNote !== undefined && typeof locationNote !== "string")
+          ) {
+            throw new ToolInputError("Installed skill instructions are unavailable.");
+          }
+          value = formatSkillInstructions({ name, location, locationNote, content });
+        } else {
+          value = result.details;
+        }
         break;
       }
       case "sleep": {

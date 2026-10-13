@@ -706,15 +706,24 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     const completedNames = new Set(
       attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
+    const runningNames = new Set(
+      expected.effectiveRunStatus === "in_progress" &&
+        expectedAttempt === effectiveRunAttempt &&
+        effectiveRunAttempt > plannedRunAttempt
+        ? attempt.jobs
+            .filter((job) => job?.status === "in_progress" && (job.runner_id || job.runner_name))
+            .map((job) => job.name)
+        : [],
+    );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Skipped jobs and GitHub's runnerless queued rerun copies (beside a completed
-      // sibling in the same attempt) carry no independent evidence. GitHub may
-      // mirror the completed sibling's steps onto these copies, so runner identity is
-      // the stable discriminator. Drop them before identity checks because they collide.
+      // GitHub's runnerless queued copies can outlive the real rerun job. While
+      // the latest rerun is active, retain its running job so collection stays
+      // pending; terminal evidence still requires the completed sibling. Mirrored
+      // steps do not identify a real runner.
       const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
-      if (skipped || (ghost && completedNames.has(job.name))) {
+      if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
         continue;
       }
       if (names.has(job.name)) {
@@ -742,6 +751,7 @@ export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) 
   const provenance = validateReleaseChildRunProvenance(run, expected);
   const composite = composeReleaseAttemptJobs(attempts, {
     effectiveRunAttempt: provenance.effectiveRunAttempt,
+    effectiveRunStatus: run.status,
     plannedRunAttempt: expected.plannedRunAttempt,
   });
   return {

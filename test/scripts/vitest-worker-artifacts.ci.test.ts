@@ -12,6 +12,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
@@ -160,7 +161,7 @@ function createCiProbe(
 
 function ciEnv(probe: string, parallelism: number, repeatSpec = false): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...testRunnerFixtureEnv(),
     // Nested groups own their cache slots; a parent cache leaf forces serial admission.
     OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "",

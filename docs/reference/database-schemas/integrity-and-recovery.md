@@ -37,6 +37,16 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
+Schema identity covers the application version, canonical SQL definitions,
+and the admission policy revision. Commit and build
+IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
+the policy revision for migrations or schema-version changes not reflected in canonical
+SQL, and for changes to validation rules or serialized admission facts.
+Updating from an older seal-identity format requires one full validation;
+subsequent compatible builds reuse the new seal. Managed drain followed by an
+interrupt uses ordinary close and can publish a seal once its writers settle.
+Forced termination before successful close cannot certify the database.
+
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
 preflight, or integrity verification. It also avoids a post-ready verification
@@ -538,6 +548,10 @@ free space of at least twice the uncompressed store directory size. It takes
 verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
 preserves ownership, modes, and access/default ACLs, checks copy size and
 `PRAGMA quick_check`, then atomically exchanges directories.
+It also re-records the relocated identity of any recorded migration recovery
+original and destination database it rewrites, so `update cleanup` eligibility
+survives the rewrite; a copy that no longer matches the recorded content keeps
+its original record and stays protected.
 Symbolic links retain their exact link text and ownership without following targets (including dangling links), and empty regular files are preserved.
 The report names the retained original directory and the standalone backups.
 Keep them until the updated Gateway has been verified; do not overwrite newer

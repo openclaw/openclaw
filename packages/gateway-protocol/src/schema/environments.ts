@@ -281,11 +281,34 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
   ),
 });
 
+/** A discoverable config proposal, never an admitted placement destination. */
+export const SuggestedWorkerProfileSummarySchema = closedObject({
+  id: NonEmptyString,
+  providerId: NonEmptyString,
+  providerDisplayId: Type.Optional(
+    Type.String({ pattern: "^[a-z][a-z0-9-]{0,63}(?![\\s\\S])", maxLength: 64 }),
+  ),
+});
+
+export const EnvironmentsAdoptSuggestedProfileParamsSchema = closedObject({});
+export const EnvironmentsAdoptSuggestedProfileResultSchema = closedObject({
+  profile: WorkerEnvironmentProfileSummarySchema,
+});
+export type SuggestedWorkerProfileSummary = Static<typeof SuggestedWorkerProfileSummarySchema>;
+export type WorkerEnvironmentProfileSummary = Static<typeof WorkerEnvironmentProfileSummarySchema>;
+export type EnvironmentsAdoptSuggestedProfileParams = Static<
+  typeof EnvironmentsAdoptSuggestedProfileParamsSchema
+>;
+export type EnvironmentsAdoptSuggestedProfileResult = Static<
+  typeof EnvironmentsAdoptSuggestedProfileResultSchema
+>;
+
 /** Profile-only requests leave environments empty without reading inventory. */
 export const EnvironmentsListResultSchema = closedObject({
   requiredProfile: Type.Optional(NonEmptyString),
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
+  suggestedProfile: Type.Optional(SuggestedWorkerProfileSummarySchema),
   preparedPool: Type.Optional(
     closedObject({
       maxTotal: Type.Integer({ minimum: 0 }),

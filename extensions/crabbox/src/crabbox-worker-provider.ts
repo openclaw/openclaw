@@ -23,7 +23,6 @@ import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-op
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
 import {
   createCrabboxNodeEnrollmentSetup,
-  createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import {
@@ -41,7 +40,10 @@ import {
   resolveCrabboxPreparationTarget,
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
-import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
+import {
+  prepareCrabboxProjectFiles,
+  prepareCrabboxWorkerRuntime,
+} from "./crabbox-worker-project.js";
 import {
   createCrabboxProvisionAuthority,
   failProvisionAfterCleanup,
@@ -69,7 +71,6 @@ import {
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
   resolveCrabboxWarmImageCaptureTimeoutMs,
-  WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
@@ -388,40 +389,18 @@ export function createCrabboxWorkerProvider(
       let runtimePrepared = false;
       let runtimeSetupFailed = false;
       const prepareRuntime = async (scrubScript?: string) => {
-        if (!options?.prepareNodeRuntime) {
-          throw new Error("Crabbox project snapshots require node runtime preparation");
-        }
-        const runtime = await options.prepareNodeRuntime();
-        assertCurrent();
-        const setup = createCrabboxNodeRuntimeSetup({
-          nodeBootstrap: runtime.nodeBootstrap,
-          workerBundle: runtime.workerBundle,
+        await prepareCrabboxWorkerRuntime({
+          context: inspectedParams,
+          prepareNodeRuntime: options?.prepareNodeRuntime,
           leaseId,
-          target: parsed.target,
+          scrubScript,
+          preparationSignal,
+          assertCurrent,
+          onSetupFailure: () => {
+            runtimeSetupFailed = true;
+          },
         });
-        try {
-          await runProvisionSetup({
-            ...inspectedParams,
-            phase: "node runtime preparation",
-            // Scrub must inherit no shell credentials from runtime installation.
-            setup: scrubScript
-              ? `${setup.command}\nunset ${Object.keys(setup.forwardedEnv).join(" ")}\n${scrubScript}`
-              : setup.command,
-            forwardedEnv: setup.forwardedEnv,
-            timeoutMs:
-              resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs) +
-              (scrubScript ? WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS : 0),
-            signal:
-              preparationSignal && runtime.signal
-                ? AbortSignal.any([preparationSignal, runtime.signal])
-                : (preparationSignal ?? runtime.signal),
-          });
-          runtimePrepared = true;
-        } catch (error) {
-          // The command owner settles setup failure; outer catches must not stop twice.
-          runtimeSetupFailed = true;
-          throw error;
-        }
+        runtimePrepared = true;
         assertCurrent();
       };
       if (project && (await warmImages.lookupLease(leaseId))?.phase !== "enrolled") {
@@ -434,28 +413,40 @@ export function createCrabboxWorkerProvider(
             runCommand,
             signal: preparationSignal,
             timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
+            recordRecipePreparation: (metadata) =>
+              warmImages.noteRecipePreparation(leaseId, metadata, () => {
+                preparationSignal?.throwIfAborted();
+                assertCurrent();
+              }),
           });
           assertCurrent();
-          await warmImages.markPrepared(leaseId, project.baseCommit, () => {
-            preparationSignal?.throwIfAborted();
-            assertCurrent();
-          });
-          captured = await warmImages.capture(
-            {
-              ...context,
-              id: leaseId,
-              profile: parsed,
-              signal: preparationSignal,
-              assertCurrent,
-              projectCaptureRequired:
-                preparedProject?.captureRequired || preparedReplay ? true : undefined,
-              projectCaptureReplay: preparedReplay ? true : undefined,
-              ...(allocationChoice.kind === "checkpoint"
-                ? { forkedCheckpointId: allocationChoice.checkpointId }
-                : {}),
+          await warmImages.markPrepared(
+            leaseId,
+            project.baseCommit,
+            () => {
+              preparationSignal?.throwIfAborted();
+              assertCurrent();
             },
-            prepareRuntime,
+            preparedProject,
           );
+          captured = preparedProject?.captureSkipped
+            ? false
+            : await warmImages.capture(
+                {
+                  ...context,
+                  id: leaseId,
+                  profile: parsed,
+                  signal: preparationSignal,
+                  assertCurrent,
+                  projectCaptureRequired:
+                    preparedProject?.captureRequired || preparedReplay ? true : undefined,
+                  projectCaptureReplay: preparedReplay ? true : undefined,
+                  ...(allocationChoice.kind === "checkpoint"
+                    ? { forkedCheckpointId: allocationChoice.checkpointId }
+                    : {}),
+                },
+                prepareRuntime,
+              );
         } catch (error) {
           // The runtime grant has a separate abort signal; revalidate the project owner.
           signal?.throwIfAborted();
@@ -707,6 +698,7 @@ export function createCrabboxWorkerProvider(
             await warmImages.capture({
               ...context,
               profile: captureProfile,
+              teardown: true,
               onCaptureStart: () => {
                 capturing = true;
                 captureStarted.resolve();

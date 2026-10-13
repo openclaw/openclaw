@@ -39,6 +39,7 @@ import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,6 +60,24 @@ const watchdogEnv = (timeout: number) => ({
 });
 
 describe("scripts/run-vitest", () => {
+  it("pins fixture scheduling independently of ambient CI and preserves explicit overrides", () => {
+    const inherited = {
+      PATH: "/fixture/bin",
+      CI: "1",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
+    };
+    expect(testRunnerFixtureEnv({}, inherited)).toEqual({ PATH: "/fixture/bin" });
+    expect(testRunnerFixtureEnv({ CI: "1", GITHUB_ACTIONS: "true" }, inherited)).toEqual({
+      PATH: "/fixture/bin",
+      CI: "1",
+      GITHUB_ACTIONS: "true",
+    });
+    expect(inherited.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE).toBe("1");
+    expect(inherited.CI).toBe("1");
+    expect(inherited.GITHUB_ACTIONS).toBe("true");
+  });
+
   it("reports an actionable error when Vitest cannot be resolved", () => {
     const error = new Error("Cannot find module 'vitest/package.json'");
     (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
@@ -304,7 +323,7 @@ describe("scripts/run-vitest", () => {
       {
         detached: true,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
-        env: { ...process.env, OPENCLAW_NATIVE_BUN_PARENT_IPC: "1" },
+        env: testRunnerFixtureEnv({ OPENCLAW_NATIVE_BUN_PARENT_IPC: "1" }),
       },
     );
     let stderr = "";
@@ -393,12 +412,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
         ],
         {
           encoding: "utf8",
-          env: {
-            ...process.env,
+          env: testRunnerFixtureEnv({
             NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${JSON.stringify(importUrl)}`]
               .filter(Boolean)
               .join(" "),
-          },
+          }),
         },
       );
       expect(result.status).toBe(2);

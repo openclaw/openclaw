@@ -382,11 +382,36 @@ export type WorkerProvider = {
             signal: AbortSignal,
           ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
+          /** Persist diagnostics before a declared recipe rejects preparation. */
+          recordRecipePreparation?: (value: {
+            source: "devcontainer" | "script" | "detected" | "none";
+            ignoredPropertiesNote?: string;
+            note?: string;
+            phaseDurationsMs?: {
+              onCreate?: number;
+              updateContent?: number;
+              detectedInstall?: number;
+            };
+            failure?: { reason: string; outputTail?: string };
+          }) => Promise<void>;
         }) => Promise<{
           seedKey: string;
           cacheHit: boolean;
           /** New completed setup must enter the reusable image before enrollment. */
           captureRequired?: true;
+          /** Detected setup is best effort; this allocation must remain cold on failure. */
+          captureSkipped?: string;
+          recipePreparation?: {
+            source: "devcontainer" | "script" | "detected" | "none";
+            ignoredPropertiesNote?: string;
+            note?: string;
+            phaseDurationsMs?: {
+              onCreate?: number;
+              updateContent?: number;
+              detectedInstall?: number;
+            };
+            failure?: { reason: string; outputTail?: string };
+          };
           preparedWorkspace?: {
             preparationKey: string;
             cacheKey: string;

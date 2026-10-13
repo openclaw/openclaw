@@ -37,7 +37,7 @@ Default fork first attempts run their existing core lint stripes on Blacksmith16
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+PR jobs and independent checks run to completion after a failure, including forks and retries. Setup, planning, build dependencies, cancellation, and watchdog deadlines still stop work that cannot safely proceed. Failing runs therefore take longer and use more runner time; successful runs keep the same selected checks, job names, and concurrency. `pr-failure-report` compares
 every failed or timed-out job with the newest completed scheduled main CI run
 and publishes a **pre-existing**, **new**, or **unknown** classification in its
 summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify

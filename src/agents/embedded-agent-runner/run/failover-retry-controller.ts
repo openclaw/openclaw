@@ -367,16 +367,18 @@ export function createEmbeddedRunFailoverRetryController(input: {
         );
         return false;
       }
+      const outputLimit = retry.reason === "output_limit";
+      const attempt = (outputLimit ? outputLimitRetryCount : retryCount) + 1;
+      const maxRetries = outputLimit
+        ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
+        : retryBudget;
       log.warn(
-        `transient same-model retry ${retryCount + 1}/${retryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
+        `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${JSON.stringify(params.runId)} sessionId=${JSON.stringify(input.getSessionId())}`,
       );
       try {
         await retry.onRetry?.({
-          attempt: retry.reason === "output_limit" ? outputLimitRetryCount + 1 : retryCount + 1,
-          maxRetries:
-            retry.reason === "output_limit"
-              ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
-              : retryBudget,
+          attempt,
+          maxRetries,
           delayMs,
           reason: retry.reason,
         });

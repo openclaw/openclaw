@@ -188,6 +188,7 @@ describe("runtime auth snapshot publication", () => {
   it("publishes one shared credential generation before notifying any derived snapshot reader", () => {
     const sharedPath = "/tmp/openclaw-auth-atomic/shared.sqlite";
     const owner = {
+      env: {},
       databasePath: sharedPath,
       sharedDatabasePath: sharedPath,
       location: "state-db" as const,

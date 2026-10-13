@@ -388,6 +388,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,

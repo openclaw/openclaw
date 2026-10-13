@@ -4,9 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { runAuthProfileMigration } from "../flows/doctor-auth-health.js";
+import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import {
   saveExecApprovals,
@@ -47,6 +50,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   };
 });
 
+import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
@@ -63,6 +67,51 @@ describe("noteSecurityWarnings gateway exposure", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
+
+  it.each([
+    { name: "resolved env shorthand", botToken: "${TELEGRAM_BOT_TOKEN_FAKE_A}", plaintext: false },
+    {
+      name: "explicit env reference",
+      botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN_FAKE_A" },
+      plaintext: false,
+    },
+    { name: "literal token", botToken: "synthetic-telegram-token", plaintext: true },
+  ])("classifies $name after auth-profile migration", async ({ botToken, plaintext }) => {
+    await withExecApprovalsFile({ version: 1 }, async () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN_FAKE_A", "synthetic-telegram-token");
+      const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          plugins: { enabled: false },
+          channels: { telegram: { accounts: { default: { botToken } } } },
+        }),
+      );
+      const snapshot = await createConfigIO({
+        configPath,
+        observe: false,
+      }).readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+      const ctx: DoctorHealthFlowContext = {
+        cfg: snapshot.config,
+        cfgForPersistence: snapshot.config,
+        configResult: { cfg: snapshot.config },
+        configPath,
+        sourceConfigValid: true,
+        options: { nonInteractive: true },
+        prompter: makePrompter(false),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        env: process.env,
+      };
+
+      await runAuthProfileMigration(ctx);
+      const findings = await collectSecurityWarnings(ctx.cfg);
+
+      expect(findings.some((finding) => finding.checkId === "config.plaintext_secrets")).toBe(
+        plaintext,
+      );
+    });
+  });
 
   it("does not let pending legacy exec approvals abort Doctor security checks", async () => {
     await withTestDir({ prefix: "openclaw-doctor-security-legacy-" }, async (home) => {

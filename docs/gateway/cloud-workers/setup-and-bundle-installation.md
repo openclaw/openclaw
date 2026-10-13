@@ -6,6 +6,8 @@ read_when: "You are writing a profile setup command, or you need a custom node d
 
 What runs on the leased box before enrollment, how the Gateway prepares and verifies the runtime archive it installs there, and how to build a complete custom node package.
 
+For repository dependencies and lifecycle commands, commit a [cloud environment file](/gateway/cloud-workers/environment-file). OpenClaw uses `.devcontainer/devcontainer.json` or `.devcontainer.json` before the committed executable `.openclaw/worktree-setup.sh` fallback, then detects JavaScript dependency installs when neither exists. Preparation commands run before capture; `postCreateCommand` and `postStartCommand` run after session workspace binding. Keep `settings.setup` below focused on machine prerequisites.
+
 ## Automatic Linux Node toolchains
 
 Linux x64 and arm64 workers need no Node installation in `settings.setup`. Before project preparation or runtime installation, OpenClaw preserves a supported Node on `PATH` when npm, npx, and Corepack are also available; otherwise it installs the development/CI-pinned Node.js 24.21.0 release from nodejs.org. The default Linux archive digests are pinned in OpenClaw source. Downloads use HTTPS and must pass SHA-256 verification before extraction. The image needs a compatible glibc, `curl`, `tar`, and `sha256sum`.
