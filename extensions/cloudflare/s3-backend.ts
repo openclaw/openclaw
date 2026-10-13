@@ -11,6 +11,7 @@ import {
   S3ServiceException,
   UploadPartCommand,
   type CompletedPart,
+  type GetObjectCommandOutput,
   type S3Client,
 } from "@aws-sdk/client-s3";
 import type { StorageBackend } from "openclaw/plugin-sdk/plugin-entry";
@@ -326,7 +327,7 @@ export function createR2Backend(
               while (offset <= end) {
                 opts?.signal?.throwIfAborted();
                 try {
-                  const result = await client.send(
+                  const result: GetObjectCommandOutput = await client.send(
                     new GetObjectCommand({
                       ...target,
                       Range: `bytes=${offset}-${end}`,
