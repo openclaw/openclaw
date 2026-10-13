@@ -592,20 +592,21 @@ export function recordSessionParticipantInWorker(
         (result.value === "inserted" || result.value === "updated") &&
         (!currentKeys || currentKeys.has(location.sessionKey))
       ) {
-        if (result.projectionChanged) {
-          const change: SessionRowChange = {
-            ...location,
-            scope: "session-entry",
-            facts: { kind: "participants", projection: result.participants },
-          };
-          if (database) {
-            recordCommittedSessionMetadataPublication(database, location.sessionKey, change.facts);
-          }
-          sessionChanges.emit(
-            database ? bindSessionEntryPublicationSource(change, database) : change,
-            database?.db,
-          );
+        const change: SessionRowChange = {
+          ...location,
+          scope: "session-entry",
+          facts: result.projectionChanged
+            ? { kind: "participants", projection: result.participants }
+            : { kind: "participants", projectionChanged: false },
+        };
+        if (database && result.projectionChanged) {
+          recordCommittedSessionMetadataPublication(database, location.sessionKey, change.facts);
         }
+        // Count-only writes still invalidate exact aggregate records in the actor replica.
+        sessionChanges.emit(
+          database ? bindSessionEntryPublicationSource(change, database) : change,
+          database?.db,
+        );
         const notify = () =>
           emitSessionLifecycleEvent({
             agentId: location.agentId,

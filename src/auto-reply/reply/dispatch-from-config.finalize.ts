@@ -9,6 +9,7 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   setReplyPayloadMetadata,
@@ -153,7 +154,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
         deliveryId: String(replyIndex),
-        ...(heartbeat ? { skipTts: true } : {}),
+        ...(heartbeat ? { skipTts: !hasReplyPayloadSpeechContent(reply) } : {}),
         ...(shouldAttachDeferredText
           ? {
               deferredTtsText: deferredTtsTextPending,

@@ -18,10 +18,10 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
+import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import {
   inspectAgentAuthProfileJsonCellReadOnly,
   readAuthProfileRowsReadOnly,
-  writeAuthProfileJsonCell,
 } from "./auth-profiles/sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,

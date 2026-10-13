@@ -290,7 +290,7 @@ describe("memory_search real manager", () => {
     expect(provider.embedQueryCalls).toBe(0);
   });
 
-  it("keeps routine transcript refresh silent during memory_search", async () => {
+  it("serves memory_search without flushing pending transcript changes", async () => {
     const cfg = keywordConfig(["memory", "sessions"]);
     await session("refresh-proof", "The transcript refresh marker is cobalt orchid.");
     const manager = await indexedManager(cfg, undefined, "baseline");
@@ -301,34 +301,12 @@ describe("memory_search real manager", () => {
     );
     Reflect.set(manager, "sessionsDirty", true);
 
-    const maintenanceReady = createDeferred<void>();
-    const releaseMaintenance = createDeferred<void>();
-    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
-    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
-      const acquired = await originalGet(params);
-      if (params.purpose !== "maintenance" || !acquired) {
-        return acquired;
-      }
-      const fields = acquired as unknown as {
-        syncArchiveFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-      };
-      const syncArchiveFiles = fields.syncArchiveFiles.bind(acquired);
-      vi.spyOn(fields, "syncArchiveFiles").mockImplementation(async (syncParams) => {
-        const result = await syncArchiveFiles(syncParams);
-        maintenanceReady.resolve();
-        await releaseMaintenance.promise;
-        return result;
-      });
-      return acquired;
-    });
-
+    const getSpy = vi.spyOn(MemoryIndexManager, "get");
     try {
       const tool = searchTool(cfg, {
         agentSessionKey: "agent:main:telegram:direct:active-refresh-proof",
       });
-      const execution = tool.execute("routine-refresh", zebraQuery);
-      await maintenanceReady.promise;
-      const result = await execution;
+      const result = await tool.execute("routine-refresh", zebraQuery);
 
       expect(result.details).toMatchObject({
         results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
@@ -336,8 +314,9 @@ describe("memory_search real manager", () => {
       expect(result.details).not.toHaveProperty("stale");
       expect(result.details).not.toHaveProperty("warning");
       expect(result.details).not.toHaveProperty("action");
+      expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+      expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
     } finally {
-      releaseMaintenance.resolve();
       getSpy.mockRestore();
     }
   });

@@ -178,8 +178,21 @@ When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
 
-Search-triggered maintenance applies pending memory and session changes
-incrementally while searches remain available. A failed full rebuild retains
+Search-triggered maintenance applies pending memory-file changes incrementally
+while searches remain available. Session transcript indexing waits until the
+agent has had no transcript changes or running turns for 30 seconds. While the
+agent is idle, continuous transcript changes defer indexing for at most about five
+minutes, plus embedding time. Running and back-to-back turns can defer it longer:
+each return to idle starts a fresh quiet period. One pass covers the agent's pending
+sessions, sharing transcript preparation, embedding-cache reads, and bounded
+publication transactions. If a turn starts during a pass, indexing finishes its
+current bounded group and resumes after the next quiet period.
+
+New session content becomes searchable after that delay. The current turn already
+has its own content in context; `memory_search` does not force a transcript flush.
+Graceful shutdown does not flush queued indexing. On the next startup, incremental
+catch-up resumes from each source's indexed sequence, including rewrites and
+compaction. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
 Growing session transcripts retain unchanged indexed chunks and embed only new
 or changed chunks, even when the embedding cache is disabled. An explicit full

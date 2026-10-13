@@ -126,7 +126,8 @@ function resolveGatewayModelThinkingFacts(
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
   const policySource =
     typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  // Config and catalog publications replace the context; partial rows reuse its model facts.
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;

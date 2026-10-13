@@ -149,6 +149,10 @@ describe("private session source staging", () => {
 
   it("drains accepted staging before manager close releases its database", async () => {
     const { manager, db } = await setup();
+    await fixture.seedSessionTranscript({
+      sessionId: "shadow-sibling",
+      messages: [{ role: "user", timestamp: 1, content: "Violet sibling preference." }],
+    });
     const inspection = memoryIndexFixtureWriter(manager);
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
@@ -161,7 +165,8 @@ describe("private session source staging", () => {
       prepare,
     ) {
       const result = await replace.call(this, input, assertCurrent, prepare);
-      if (this.isShadow && input.source === "sessions") {
+      const replacements = Array.isArray(input) ? input : [input];
+      if (this.isShadow && replacements.some(({ source }) => source === "sessions")) {
         entered.resolve();
         await resume.promise;
       }
@@ -182,8 +187,13 @@ describe("private session source staging", () => {
       await Promise.all([sync, close]);
       expect(db.isOpen).toBe(false);
       expect(
-        inspection.prepare("SELECT source FROM memory_index_sources WHERE source='sessions'").all(),
-      ).toEqual([{ source: "sessions" }]);
+        inspection
+          .prepare("SELECT path FROM memory_index_sources WHERE source='sessions' ORDER BY path")
+          .all(),
+      ).toEqual([
+        { path: "sessions/main/shadow-session.jsonl" },
+        { path: "sessions/main/shadow-sibling.jsonl" },
+      ]);
     } finally {
       resume.resolve();
       await Promise.allSettled([sync, close]);

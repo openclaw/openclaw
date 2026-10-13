@@ -1,5 +1,6 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -671,6 +672,12 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
     },
     { name: "media-only", payloads: [{ mediaUrl: "https://example.test/result.png" }] },
+    {
+      name: "speech-only before synthesis",
+      payloads: [
+        setReplyPayloadMetadata({ text: "" }, { tts: { tagged: true, text: "Spoken answer." } }),
+      ],
+    },
     {
       name: "rich error",
       payloads: [{ isError: true, mediaUrl: "https://example.test/error.png" }],

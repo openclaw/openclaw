@@ -204,7 +204,7 @@ describe("native profile-bound input admission", () => {
           if (!prepared.ok) {
             throw new Error("Native session preparation failed");
           }
-          const session = qualifyChatSendSession(prepared.value);
+          const session = await qualifyChatSendSession(prepared.value);
           const binding = (await createExpectedProfileBinding(source.id, fixture.client))!;
           binding.markInvoked();
           linkEmail(email, target.id);
@@ -216,7 +216,7 @@ describe("native profile-bound input admission", () => {
               context: fixture.context,
               respond: vi.fn(),
               assertCurrent: binding.assertCurrent,
-            }).finally(session.releaseSessionTarget),
+            }),
           ).rejects.toMatchObject({
             error: {
               details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },

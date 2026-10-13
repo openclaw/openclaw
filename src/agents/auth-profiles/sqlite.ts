@@ -30,12 +30,11 @@ import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { prepareFreshSharedAuthStoreWriteAsync } from "./shared-store-bootstrap-async.js";
 import { prepareFreshSharedAuthStoreWrite } from "./shared-store-bootstrap.js";
+import { writeAuthProfileJsonCell, deleteAuthProfileJsonCell } from "./sqlite-json-write.js";
 import {
   inspectAuthProfileJsonCell,
   inspectAgentAuthProfileJsonCellReadOnly,
   readAuthProfileJsonCellText,
-  writeAuthProfileJsonCell,
-  deleteAuthProfileJsonCell,
 } from "./sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,

@@ -196,6 +196,79 @@ it("permits audited nonpersonal cleanup without granting a whole-file exemption"
   ]);
 });
 
+it.each([
+  "db.insertInto('auth_profile_store').values({ store_key: 'primary' });",
+  "const table = 'auth_profile_store'; db.deleteFrom(table);",
+  "db.exec('UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?');",
+  "db.insertInto('config_machine_state').values({ state_key: 'authProfiles.store' });",
+  "const key = 'authProfiles.store'; db.deleteFrom('config_machine_state').where('state_key', '=', key);",
+  "db.deleteFrom('config_machine_state').where('state_key', 'in', ['authProfiles.state', 'authProfiles.store']);",
+  "db.updateTable('config_machine_state').set({ state_key: 'authProfiles.store' }).where('state_key', '=', 'other');",
+  "db.exec('DELETE FROM config_machine_state WHERE state_key = ?');",
+  "db.insertInto('config_machine_state').values({ state_key: unknownKey });",
+])("rejects a synthetic shared or agent credential bypass: %s", (write) => {
+  expect(inspect({ "src/new-writer.worker.ts": `function write() { ${write} }` })).toHaveLength(1);
+});
+
+it("permits bounded noncredential machine-state writes", () => {
+  expect(
+    inspect({
+      "src/new-writer.worker.ts": `
+      const unrelated = 'authProfiles.state';
+      db.insertInto('config_machine_state').values({ state_key: unrelated });
+      db.deleteFrom('config_machine_state').where('state_key', '=', unrelated);
+    `,
+    }),
+  ).toEqual([]);
+});
+
+it("counts canonical auth sinks and transitional generic sinks without file exemptions", () => {
+  const authCells = "src/agents/auth-profiles/sqlite-json-write.ts";
+  const machineState = "src/state/config-machine-state-write.ts";
+  const write = `db.insertInto('auth_profile_store');
+    db.insertInto('config_machine_state').values({ state_key: 'authProfiles.store' });`;
+  const sources = {
+    [authCells]: `function writeAuthProfileJsonCell() { ${write} }`,
+    [machineState]: `function upsertConfigMachineState(key: string) {
+      db.insertInto('config_machine_state').values({ state_key: key });
+    }`,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      [authCells]: `${sources[authCells]} function bypass() { db.deleteFrom('auth_profile_store'); }`,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed auth_profile_store writer")]);
+  expect(
+    inspect({
+      ...sources,
+      [authCells]: `function writeAuthProfileJsonCell() { ${write} db.deleteFrom('auth_profile_store'); }`,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed auth_profile_store writer")]);
+  expect(
+    inspect({
+      ...sources,
+      [machineState]: `${sources[machineState]} function bypass() {
+      db.deleteFrom('config_machine_state').where('state_key', '=', 'authProfiles.store');
+    }`,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed config_machine_state writer")]);
+});
+
+it("limits offline raw machine-state migration exceptions to their reviewed statements", () => {
+  const file = "src/state/openclaw-state-db-schema-v12-foldin.ts";
+  const statement = "INSERT INTO config_machine_state (state_key) VALUES (?)";
+  const source = (sql: string) =>
+    `function migrateSingletonStateFoldInV12() { db.exec('${sql}'); }`;
+  expect(inspect({ [file]: source(statement) })).toEqual([]);
+  for (const sql of [`${statement}; ${statement}`, "DELETE FROM auth_profile_store"]) {
+    expect(inspect({ [file]: source(sql) })).toEqual([
+      expect.stringContaining("raw authority-table write"),
+    ]);
+  }
+});
+
 const lifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";

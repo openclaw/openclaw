@@ -57,7 +57,7 @@ export function isVectorKnnRow(value: unknown): value is VectorKnnRow {
   );
 }
 
-export function validateVectorKnnRequest(request: VectorKnnRequest): void {
+function validateVectorKnnRequest(request: VectorKnnRequest): void {
   if (!SQL_IDENTIFIER_RE.test(request.vectorTable)) {
     throw new Error("invalid memory vector table identifier");
   }

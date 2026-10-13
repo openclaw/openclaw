@@ -1863,6 +1863,7 @@ src/state/openclaw-state-lease-heartbeat.ts
 src/state/openclaw-state-lease-heartbeat.worker.ts
 src/state/openclaw-state-lease-options.ts
 src/state/openclaw-state-lease-process-exit.ts
+src/state/openclaw-state-lease-renewal.worker.ts
 src/state/openclaw-state-lease-storage.ts
 src/state/openclaw-state-lease-store.ts
 src/state/openclaw-state-lease-worker-operation.ts

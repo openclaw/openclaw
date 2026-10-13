@@ -323,7 +323,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   );
 }
 
-export const NewSessionPage = defineSolidBridge<
+defineSolidBridge<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
