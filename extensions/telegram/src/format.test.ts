@@ -499,6 +499,8 @@ describe("file references", () => {
       renderTelegramHtmlText("```html\n<ul><li>literal</li></ul>\n```", {
         downgradeRichPromptTags: true,
       }),
-    ).toBe('<pre><code class="language-html">&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n</code></pre>');
+    ).toBe(
+      '<pre><code class="language-html">&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n</code></pre>',
+    );
   });
 });
