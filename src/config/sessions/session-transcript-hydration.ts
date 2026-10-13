@@ -324,6 +324,7 @@ export function prepareSessionTranscriptHydration(
                   true,
                   undefined,
                   signal,
+                  "history.hydration",
                 ),
               {
                 assertCurrent: assertSource,

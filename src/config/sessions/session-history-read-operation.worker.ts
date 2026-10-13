@@ -192,16 +192,16 @@ async function prepareHistoryRead(
     case "board-snapshot":
     case "board-widget-document": {
       const [
-        { withOpenClawAgentDatabaseReadOnly },
+        { withScopedOpenClawAgentDatabaseReadOnly },
         { runSqliteDeferredTransactionSync },
         { readBoardSnapshotWithHtmlViewMetadata, readBoardWidgetDocument },
       ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
+        import("../../state/openclaw-agent-db-readonly-scope.js"),
         import("../../infra/sqlite-transaction.js"),
         import("../../boards/sqlite-board-store.kernel.js"),
       ]);
       return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
+        const read = withScopedOpenClawAgentDatabaseReadOnly(
           (database) =>
             runSqliteDeferredTransactionSync(database.db, () =>
               request.kind === "board-snapshot"

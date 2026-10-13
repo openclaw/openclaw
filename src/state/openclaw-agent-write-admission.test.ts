@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -193,17 +194,30 @@ it.each(["ok", "error"] as const)(
     const failure = new Error("synthetic-private-error");
     const value = { result: "synthetic-private-result" };
     const order: string[] = [];
+    const observations: unknown[] = [];
+    const diagnostics = channel("openclaw.agent-database.reservation");
+    const observe = (observation: unknown) => {
+      observations.push(observation);
+    };
+    diagnostics.subscribe(observe);
     const first = withSqliteReaderOwner(
       { operation: "synthetic-private-operation", ownerKind: "main" },
       () =>
-        runOpenClawAgentWriteAdmission(options, async () => {
-          order.push("holder");
-          await release.promise;
-          if (outcome === "error") {
-            throw failure;
-          }
-          return value;
-        }),
+        runOpenClawAgentWriteAdmission(
+          options,
+          async () => {
+            order.push("holder");
+            await release.promise;
+            if (outcome === "error") {
+              throw failure;
+            }
+            return value;
+          },
+          false,
+          undefined,
+          undefined,
+          "session-manager.write",
+        ),
     );
     const settled = first.then(
       (result) => ({ result }),
@@ -232,6 +246,7 @@ it.each(["ok", "error"] as const)(
         [
           {
             operation: "direct",
+            caller: "session-manager.write",
             outcome,
             pid: process.pid,
             threadId,
@@ -247,10 +262,16 @@ it.each(["ok", "error"] as const)(
       ]);
       expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
       expect(JSON.stringify(warnings)).not.toContain(options.path);
+      expect(observations).toEqual([
+        warnings[0]![0],
+        expect.objectContaining({ operation: "direct", writerExecutionMs: 25 }),
+      ]);
+      expect(JSON.stringify(observations)).not.toContain("synthetic-private");
     } finally {
       release.resolve();
       releaseFollower.resolve();
       await Promise.allSettled([first, next]);
+      diagnostics.unsubscribe(observe);
     }
   },
 );

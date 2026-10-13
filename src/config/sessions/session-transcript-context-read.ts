@@ -259,6 +259,7 @@ export function readSessionTranscriptModelContextAsync<T>(
           true,
           undefined,
           signal,
+          "history.model-context",
         );
       }
       const context = await readSessionTranscriptModelContextInWorker(
