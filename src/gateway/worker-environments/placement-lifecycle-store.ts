@@ -205,6 +205,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
               context.admission.identity,
               facts.sessionId,
               facts.retired,
+              facts.retiredIdentity,
             )
           : facts.placement
             ? stagePlacementTurnClaimWorkerPublication(
