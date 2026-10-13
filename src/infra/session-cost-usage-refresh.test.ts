@@ -9,6 +9,7 @@ import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import {
@@ -158,6 +159,156 @@ describe("session cost usage refresh", () => {
       }
     });
   }
+
+  it("refreshes each dirty session once after its own quiet gap and parks when clean", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      const dirty = (sessionFile: string) =>
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFile),
+            sessionFiles: [sessionFile],
+            coalesce: true,
+          }),
+        );
+      try {
+        dirty(sessionFiles[0]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        dirty(sessionFiles[0]);
+        dirty(sessionFiles[1]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        dirty(sessionFiles[1]);
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(refresh).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refresh.mock.calls.map(([params]) => params.sessionFiles)).toEqual([
+          [sessionFiles[0]],
+        ]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(refresh.mock.calls.map(([params]) => params.sessionFiles)).toEqual(
+          sessionFiles.map((file) => [file]),
+        );
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+      } finally {
+        await scope.drain();
+      }
+    });
+  });
+
+  it("preserves oldest dirty age across turns and refreshes overdue work in the next idle gap", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
+      const dirty = () =>
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+      let claim: ReturnType<typeof claimAgentRunContext>;
+      try {
+        dirty();
+        for (let turn = 0; turn < 15; turn++) {
+          claim = claimAgentRunContext("usage-batch-turn", { agentId }, { trackOwner: true });
+          dirty();
+          await vi.advanceTimersByTimeAsync(10_000);
+          releaseAgentRunContext("usage-batch-turn", claim);
+          await vi.advanceTimersByTimeAsync(10_000);
+        }
+        expect(refresh).toHaveBeenCalledTimes(1);
+        dirty();
+        claim = claimAgentRunContext("usage-batch-turn", { agentId }, { trackOwner: true });
+        await vi.advanceTimersByTimeAsync(360_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        releaseAgentRunContext("usage-batch-turn", claim);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        releaseAgentRunContext("usage-batch-turn", claim);
+        await scope.drain();
+      }
+    });
+  });
+
+  it("wakes a busy retry when an overlapping turn becomes idle", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const held = createDeferredCore<"busy">();
+      const refresh = vi
+        .mocked(refreshCostUsageCacheForAgent)
+        .mockResolvedValue("refreshed")
+        .mockReturnValueOnce(held.promise);
+      let claim: ReturnType<typeof claimAgentRunContext>;
+      try {
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        claim = claimAgentRunContext("usage-busy-turn", { agentId }, { trackOwner: true });
+        held.resolve("busy");
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        releaseAgentRunContext("usage-busy-turn", claim);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        releaseAgentRunContext("usage-busy-turn", claim);
+        held.resolve("busy");
+        await scope.drain();
+      }
+    });
+  });
+
+  it("retains appends arriving during refresh for the next quiet gap", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const held = createDeferredCore<"refreshed">();
+      const refresh = vi
+        .mocked(refreshCostUsageCacheForAgent)
+        .mockResolvedValue("refreshed")
+        .mockReturnValueOnce(held.promise);
+      const dirty = () =>
+        scope.run(() =>
+          requestCostUsageCacheRefresh({
+            config,
+            agentId,
+            storePath: path.dirname(sessionFiles[0]),
+            sessionFiles: [sessionFiles[0]],
+            coalesce: true,
+          }),
+        );
+      try {
+        dirty();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        dirty();
+        held.resolve("refreshed");
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        held.resolve("refreshed");
+        await scope.drain();
+      }
+    });
+  });
 
   it("bounds pending backfill batches and preserves queued rebuilds across a busy retry", async () => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {

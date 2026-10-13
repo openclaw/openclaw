@@ -260,6 +260,10 @@ without first loading the public reader or probing access. Registration is only
 a navigation hint: the protected handoff still checks current permissions.
 Denied access or a login redirect falls back to the public reader. Browsers
 without the worker retain the public document and protected access probe.
+The handoff rechecks that conversation's current access after preparing the app
+document. Activity in other conversations does not restart navigation. If access
+changes during preparation, the handoff stops with a visible error and offers
+reload or login; it does not redirect back into another automatic probe.
 The anonymous private-thread document initially returns `404`, then an admitted
 browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal

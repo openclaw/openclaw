@@ -5,14 +5,73 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 type Listener = (filename?: string) => void;
 type Directory = {
   path: string;
-  listeners: Set<Listener>;
+  listeners: Map<Listener, number>;
+  nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
 };
 type Source = { path: string; watcher: fs.FSWatcher; directories: Set<Directory> };
 
 const directories = new Map<string, Directory>();
 const sources = new Map<string, Source>();
-let fallback: ReturnType<typeof setInterval> | undefined;
+let fallback: ReturnType<typeof setTimeout> | undefined;
+const REPAIR_INTERVAL_MS = 30_000;
+const RECOVERY_INTERVAL_MS = 300_000;
+
+function nextFallback(intervalMs: number): Directory["nextFallback"] {
+  const now = Date.now();
+  const atMs = (Math.floor(now / intervalMs) + 1) * intervalMs;
+  return { atMs, elapsedAtMs: performance.now() + atMs - now };
+}
+
+function fallbackRemaining(directory: Directory): number {
+  return Math.min(
+    directory.nextFallback.atMs - Date.now(),
+    directory.nextFallback.elapsedAtMs - performance.now(),
+  );
+}
+
+function retainEarlierFallback(directory: Directory, deadline: Directory["nextFallback"]): void {
+  directory.nextFallback.atMs = Math.min(directory.nextFallback.atMs, deadline.atMs);
+  directory.nextFallback.elapsedAtMs = Math.min(
+    directory.nextFallback.elapsedAtMs,
+    deadline.elapsedAtMs,
+  );
+}
+
+function fallbackInterval(directory: Directory): number {
+  return directory.source?.path === directory.path
+    ? Math.min(RECOVERY_INTERVAL_MS, ...directory.listeners.values())
+    : REPAIR_INTERVAL_MS;
+}
+
+function scheduleFallback() {
+  clearTimeout(fallback);
+  fallback = undefined;
+  if (!directories.size) {
+    return;
+  }
+  const delayMs = Math.min(...Array.from(directories.values(), fallbackRemaining));
+  fallback = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        for (const entry of Array.from(directories.values())) {
+          if (fallbackRemaining(entry) > 0 || directories.get(entry.path) !== entry) {
+            continue;
+          }
+          if (!entry.source || (entry.source.path !== entry.path && fs.existsSync(entry.path))) {
+            detach(entry);
+            attach(entry);
+          }
+          // Native events are primary; recovery covers missed notifications.
+          entry.nextFallback = nextFallback(fallbackInterval(entry));
+          notify(entry);
+        }
+        scheduleFallback();
+      },
+      Math.max(0, Math.ceil(delayMs)),
+    ).unref(),
+  );
+}
 
 function detach(directory: Directory) {
   const source = directory.source;
@@ -24,7 +83,7 @@ function detach(directory: Directory) {
 }
 
 function notify(directory: Directory, filename?: string) {
-  const listeners = Array.from(directory.listeners);
+  const listeners = Array.from(directory.listeners.keys());
   for (const listener of listeners) {
     listener(filename);
   }
@@ -64,8 +123,10 @@ function attach(directory: Directory) {
             for (const entry of readmit) {
               if (directories.get(entry.path) === entry) {
                 attach(entry);
+                retainEarlierFallback(entry, nextFallback(fallbackInterval(entry)));
               }
             }
+            scheduleFallback();
           }
         }),
       );
@@ -77,7 +138,9 @@ function attach(directory: Directory) {
         for (const entry of affected) {
           detach(entry);
           notify(entry);
+          retainEarlierFallback(entry, nextFallback(REPAIR_INTERVAL_MS));
         }
+        scheduleFallback();
       });
       return;
     } catch {
@@ -94,33 +157,24 @@ function attach(directory: Directory) {
 export function observeOwnedDirectory(
   directoryPath: string,
   onChange: Listener,
+  options?: { recoveryIntervalMs?: 30_000 },
 ): { close(): void } {
   const key = path.resolve(directoryPath);
   let directory = directories.get(key);
   if (!directory) {
-    directory = { path: key, listeners: new Set() };
+    directory = {
+      path: key,
+      listeners: new Map(),
+      nextFallback: { atMs: Infinity, elapsedAtMs: Infinity },
+    };
     directories.set(key, directory);
     attach(directory);
   }
   const selected = directory;
   const listener: Listener = (filename) => onChange(filename);
-  selected.listeners.add(listener);
-  fallback ??= runInDetachedAsyncContext(() =>
-    setInterval(() => {
-      const observed = Array.from(directories.values());
-      for (const entry of observed) {
-        if (directories.get(entry.path) !== entry) {
-          continue;
-        }
-        if (!entry.source || (entry.source.path !== entry.path && fs.existsSync(entry.path))) {
-          detach(entry);
-          attach(entry);
-        }
-        // Revalidate owner facts even when native notifications were dropped.
-        notify(entry);
-      }
-    }, 30_000).unref(),
-  );
+  selected.listeners.set(listener, options?.recoveryIntervalMs ?? RECOVERY_INTERVAL_MS);
+  retainEarlierFallback(selected, nextFallback(fallbackInterval(selected)));
+  scheduleFallback();
   return {
     close() {
       if (!selected.listeners.delete(listener) || selected.listeners.size) {
@@ -129,8 +183,10 @@ export function observeOwnedDirectory(
       directories.delete(key);
       detach(selected);
       if (!directories.size) {
-        clearInterval(fallback);
+        clearTimeout(fallback);
         fallback = undefined;
+      } else {
+        scheduleFallback();
       }
     },
   };

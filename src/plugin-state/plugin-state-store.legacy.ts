@@ -30,6 +30,7 @@ import {
   type PreparedKeyedStoreOptions,
 } from "./plugin-state-store.validation.js";
 
+/** @deprecated Use openKeyedStoreV2; removal follows a stable deprecation period. */
 export function createSyncKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -45,6 +46,7 @@ export function createSyncKeyedStoreForPluginId<T>(
   );
 }
 
+/** @deprecated Use openKeyedStoreV2; removal follows a stable deprecation period. */
 export function createSyncKeyedStore<T>(
   { pluginId, namespace, maxEntries, overflowPolicy, defaultTtlMs, env }: PreparedKeyedStoreOptions,
   assertActive?: () => void,
@@ -66,6 +68,7 @@ export function createSyncKeyedStore<T>(
     }
   };
   return {
+    /** @deprecated Await openKeyedStoreV2().register(). */
     register(key, value, opts) {
       warnLegacyUse("register");
       pluginStateRegister({
@@ -73,6 +76,7 @@ export function createSyncKeyedStore<T>(
         ...prepareRegisterParams(key, value, defaultTtlMs, opts),
       });
     },
+    /** @deprecated Await openKeyedStoreV2().registerIfAbsent(). */
     registerIfAbsent(key, value, opts) {
       warnLegacyUse("registerIfAbsent");
       return pluginStateRegisterIfAbsent({
@@ -80,6 +84,7 @@ export function createSyncKeyedStore<T>(
         ...prepareRegisterParams(key, value, defaultTtlMs, opts),
       });
     },
+    /** @deprecated Use openKeyedStoreV2().observe() and compareAndApply(). */
     update(key, updateValue, opts) {
       warnLegacyUse("update", "openKeyedStoreV2().observe() and compareAndApply()");
       assertActive?.();
@@ -100,6 +105,7 @@ export function createSyncKeyedStore<T>(
         },
       });
     },
+    /** @deprecated Use openKeyedStoreV2().observe() and compareAndApply(). */
     deleteIf(key, predicate) {
       warnLegacyUse("deleteIf", "openKeyedStoreV2().observe() and compareAndApply()");
       assertActive?.();
@@ -119,6 +125,7 @@ export function createSyncKeyedStore<T>(
       // SAFETY: The namespace's JSON value type is selected by the caller.
       return pluginStateLookup({ ...scope, key: validateKey(key, "lookup") }) as T | undefined;
     },
+    /** @deprecated Await openKeyedStoreV2().lookupMany(). */
     lookupMany(keys) {
       warnLegacyUse("lookupMany");
       // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
@@ -126,11 +133,13 @@ export function createSyncKeyedStore<T>(
         Result<T | undefined, PluginStateStoreError>
       >;
     },
+    /** @deprecated Await openKeyedStoreV2().consume(). */
     consume(key) {
       warnLegacyUse("consume");
       // SAFETY: The consumed row retains this namespace's caller-selected JSON type.
       return pluginStateConsume({ ...scope, key: validateKey(key, "consume") }) as T | undefined;
     },
+    /** @deprecated Await openKeyedStoreV2().delete(). */
     delete(key) {
       warnLegacyUse("delete");
       return pluginStateDelete({ ...scope, key: validateKey(key, "delete") });
@@ -144,6 +153,7 @@ export function createSyncKeyedStore<T>(
       warnLegacyUse("count");
       return pluginStateCount(scope);
     },
+    /** @deprecated Await openKeyedStoreV2().clear(). */
     clear() {
       warnLegacyUse("clear");
       pluginStateClear(scope);
