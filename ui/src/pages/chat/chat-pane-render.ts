@@ -341,8 +341,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         placementComposer.busyMessage ??
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
           ? placementComposer.failedUnavailableMessage
-          : null) ??
-        (state.connected ? null : pendingReason),
+          : null),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||

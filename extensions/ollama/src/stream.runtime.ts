@@ -682,6 +682,8 @@ function createRawOllamaStreamFn(
           model,
           options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
         );
+        // Applied after payload hooks, so a `false` from any writer gets the model's floor.
+        const serializedBody = JSON.stringify(applyOllamaThinkingFloor(requestBody, model));
 
         // Acquire after request composition and release after guarded cleanup;
         // reversing either boundary can leak the lease or stop inference mid-stream.
@@ -703,8 +705,7 @@ function createRawOllamaStreamFn(
           init: {
             method: "POST",
             headers,
-            // Applied after payload hooks, so a `false` from any writer gets the model's floor.
-            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model)),
+            body: serializedBody,
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),

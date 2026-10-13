@@ -10,9 +10,94 @@ const authWorker = "src/agents/auth-profiles/store.worker.ts";
 const selectionSdk = "src/gateway/model-account-connect.ts";
 const githubSecrets = "src/secrets/store/secret-store-hidden-github.kernel.ts";
 const key = (file: string, name: string) => `${file}:${name}`;
+const publicationWorker = "src/state/github-publication.worker.ts";
+const publicationRequestWorker = "src/state/github-publication-request.worker.ts";
+const sharedPublication = "src/gateway/github-publication-store.worker.ts";
+const personalPublication = "src/gateway/github-personal-publication-store.worker.ts";
+const repositoryPublication = "src/gateway/github-repository-publication-store.worker.ts";
+const publicationLifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
+const publicationDeletion = "src/state/github-personal-publication-lifecycle.ts";
+const guardedTables = new Set([
+  "secret_store_entries",
+  "github_publication_requests",
+  "github_personal_publication_requests",
+  "github_repository_publication_requests",
+  "github_publication_session_lifecycles",
+]);
+
+// Schema owners create/rebuild tables and v18 adds a column; no publication row-DML exception.
+const publicationWriters = new Map<string, readonly string[]>([
+  [
+    key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
+    [
+      key(sharedPublication, "insertGitHubPublicationRequest"),
+      key(personalPublication, "insertPersonalGitHubPublicationInDatabase"),
+    ],
+  ],
+  ...(
+    [
+      [sharedPublication, "insertGitHubPublicationRequest"],
+      [personalPublication, "insertPersonalGitHubPublicationInDatabase"],
+      [repositoryPublication, "insertRepositoryGitHubPublicationInDatabase"],
+    ] as const
+  ).map(([file, name]): [string, string[]] => [
+    key(file, name),
+    [key(publicationRequestWorker, "githubPublications.insert/write")],
+  ]),
+  ...[
+    "markSharedGitHubPublicationReportedInDatabase",
+    "claimGitHubPublicationExecutionInDatabase",
+    "deferGitHubPublicationRequestsInDatabase",
+    "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
+  ].map((name): [string, string[]] => [
+    key(sharedPublication, name),
+    [key(publicationWorker, "sharedMutation")],
+  ]),
+  [
+    key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
+    [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
+  ],
+  ...[
+    "claimPersonalGitHubPublicationInDatabase",
+    "writePersonalGitHubPublicationInDatabase",
+    "requirePersonalGitHubPublicationConfirmationInDatabase",
+    "markPersonalGitHubPublicationReportedInDatabase",
+  ].map((name): [string, string[]] => [
+    key(personalPublication, name),
+    [key(publicationWorker, "personalMutation")],
+  ]),
+  ...[
+    "bindRepositoryGitHubPublicationCheckpointInDatabase",
+    "failRepositoryGitHubPublicationPreparationInDatabase",
+    "writeRepositoryGitHubPublicationInDatabase",
+    "claimRepositoryGitHubPublicationInDatabase",
+    "markRepositoryGitHubPublicationReportedInDatabase",
+    "failStaleRepositoryGitHubPublicationInDatabase",
+    "deferRepositoryGitHubPublicationClaimsInDatabase",
+  ].map((name): [string, string[]] => [
+    key(repositoryPublication, name),
+    [key(publicationWorker, "repositoryMutation")],
+  ]),
+]);
 
 // Exact edges, not worker-file exemptions: every new entry needs an owner audit.
 const callers = new Map<string, readonly string[]>([
+  ...publicationWriters,
+  ...["shared", "personal", "repository"].map((kind): [string, string[]] => [
+    key(publicationWorker, `${kind}Mutation`),
+    [
+      key(publicationWorker, `githubPublications.${kind}`),
+      key(publicationWorker, "githubPublications.maintenance"),
+    ],
+  ]),
+  [
+    key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase"),
+    [key(publicationWorker, "sharedMutation")],
+  ],
+  [
+    key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
+    [key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand")],
+  ],
   [key(accounts, "writeRecord"), [key(accounts, "writeProfile"), key(accounts, "writeLinks")]],
   [
     key(accounts, "writeProfile"),
@@ -86,6 +171,8 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
+  ...[...publicationWriters.keys()].map((id): [string, number] => [id, 1]),
+  [key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"), 2],
   [key(accounts, "writeRecord"), 1],
   [key(accounts, "renameUserProfileAuthLinks"), 1],
   [key(accounts, "mergeUserModelAccounts"), 2],
@@ -123,6 +210,17 @@ const sinks = new Map<string, number>([
   ],
 ]);
 
+const repeatedEdges = new Map([
+  [
+    `${key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")}<-${key(publicationWorker, "sharedMutation")}`,
+    3,
+  ],
+  ...["shared", "repository"].map((kind): [string, number] => [
+    `${key(publicationWorker, `${kind}Mutation`)}<-${key(publicationWorker, "githubPublications.maintenance")}`,
+    2,
+  ]),
+]);
+
 function operation(node: ts.Node): string {
   const scope: string[] = [];
   let property: string | undefined;
@@ -141,7 +239,7 @@ function operation(node: ts.Node): string {
       property ??= parent.name.text;
     }
   }
-  return scope.length ? scope.toReversed().join("/") : (property ?? "<module>");
+  return [property, ...scope.toReversed()].filter(Boolean).join("/") || "<module>";
 }
 
 /** Extend the existing worker-ratchet semantic snapshot; no second compiler or runtime guard. */
@@ -230,31 +328,63 @@ export function inspectPersonalCredentialWriters(
         ["insertInto", "updateTable", "deleteFrom"].includes(node.expression.name.text)
       ) {
         let table = node.arguments[0];
-        if (table && ts.isIdentifier(table)) {
-          const declaration = checker.getSymbolAtLocation(table)?.valueDeclaration?.resolve();
-          if (declaration && ts.isVariableDeclaration(declaration)) {
-            table = declaration.initializer;
+        const seen = new Set<ts.Node>();
+        while (table && !seen.has(table)) {
+          seen.add(table);
+          if (ts.isIdentifier(table)) {
+            const declaration = checker.getSymbolAtLocation(table)?.valueDeclaration?.resolve();
+            if (declaration && ts.isVariableDeclaration(declaration)) {
+              const loop = declaration.parent.parent;
+              table =
+                declaration.initializer ?? (ts.isForOfStatement(loop) ? loop.expression : table);
+              continue;
+            }
+          } else if (ts.isAsExpression(table) || ts.isParenthesizedExpression(table)) {
+            table = table.expression;
+            continue;
+          } else if (
+            ts.isCallExpression(table) &&
+            ts.isPropertyAccessExpression(table.expression) &&
+            table.expression.name.text === "filter"
+          ) {
+            // noLib snapshots cannot infer Array.filter; its source still bounds the table set.
+            table = table.expression.expression;
+            continue;
           }
+          break;
         }
-        if (table && ts.isStringLiteralLikeNode(table) && table.text === "secret_store_entries") {
+        const tableType =
+          (!table || !ts.isStringLiteralLikeNode(table)) && node.arguments[0]
+            ? checker.getTypeAtLocation(node.arguments[0])
+            : undefined;
+        const tables =
+          table && ts.isStringLiteralLikeNode(table)
+            ? [table.text]
+            : table && ts.isArrayLiteralExpression(table)
+              ? table.elements.filter(ts.isStringLiteralLikeNode).map((element) => element.text)
+              : (tableType?.isUnionType() ? tableType.getTypes() : tableType ? [tableType] : [])
+                  .filter((type) => type.isStringLiteralType())
+                  .map((type) => type.value);
+        const guarded = tables.filter((name) => guardedTables.has(name));
+        if (guarded.length) {
           const id = key(file, operation(node));
           const count = (sinkCounts.get(id) ?? 0) + 1;
           sinkCounts.set(id, count);
           if (count > (sinks.get(id) ?? 0)) {
             fail(
               node,
-              "unreviewed secret_store_entries writer; enter the personal credential owner or audit a nonpersonal/maintenance exclusion",
+              `unreviewed ${guarded.join("/")} writer; enter the authority owner or audit a maintenance exclusion`,
             );
           }
         }
       }
       if (
         (ts.isStringLiteralLikeNode(node) || ts.isTemplateHead(node)) &&
-        /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?secret_store_entries\b/i.test(
+        /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`[]?(?:secret_store_entries|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/i.test(
           node.text,
         )
       ) {
-        fail(node, "raw secret_store_entries write bypasses the reviewed credential sinks");
+        fail(node, "raw authority-table write bypasses the reviewed writer sinks");
       }
       if (
         (ts.isIdentifier(node) || ts.isStringLiteral(node)) &&
@@ -302,8 +432,15 @@ export function inspectPersonalCredentialWriters(
         const edge = `${target}<-${caller}`;
         const count = (edgeCounts.get(edge) ?? 0) + 1;
         edgeCounts.set(edge, count);
-        if (!directCall || !approvedCallers.get(target)?.includes(caller) || count > 1) {
-          fail(node, `unreviewed personal credential writer reference to ${target} from ${caller}`);
+        if (
+          !directCall ||
+          !approvedCallers.get(target)?.includes(caller) ||
+          count > (repeatedEdges.get(edge) ?? 1)
+        ) {
+          const owner = target.includes("publication")
+            ? "GitHub publication"
+            : "personal credential";
+          fail(node, `unreviewed ${owner} writer reference to ${target} from ${caller}`);
         }
       }
     }
