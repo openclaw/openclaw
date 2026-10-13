@@ -72,7 +72,7 @@ import {
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
 export async function admitChatSend(params: ChatSendAdmissionParams) {
-  const { request, session, respond, context, client } = params;
+  const { request, session, respond, context, client, diagnostics } = params;
   const { p, turnKind } = request;
   const requestIdentity = request.goalOperation?.requestFingerprint ?? request.requestIdentity;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
@@ -405,13 +405,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       // End row consumption before joining the native writer; retain FIFO and recheck authority.
       await pendingPlacementRead();
     }
-    if (refreshPlacement) {
-      return commitChatWorkAdmission(acpMeta);
-    }
+    return refreshPlacement ? commitChatWorkAdmission(acpMeta) : undefined;
   };
 
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
+    using workPhase = diagnostics?.scope("detail.admission.work");
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       agentId,
       scope: storePath,
@@ -419,8 +418,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       identities: [sessionKey, backingSessionId],
       storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
       revalidateAllowed: async () => {
+        using _ = diagnostics?.scope("detail.admission.revalidate");
         if (!restartSafeRequest) {
-          return commitChatWorkAdmission(null);
+          return await commitChatWorkAdmission(null);
         }
         const latest = await withCurrentChatSendSession({
           session,
@@ -432,7 +432,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           cfg: latest.cfg,
           entries: [{ agentId, sessionKey: latest.canonicalKey, entry: latest.entry }],
         });
-        return commitChatWorkAdmission(acpMeta ?? null);
+        return await commitChatWorkAdmission(acpMeta ?? null);
       },
       onInterrupt: (reason) => {
         const stopReason = isAgentRunRestartAbortReason(reason) ? "restart" : "rpc";
@@ -449,6 +449,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
       },
     });
+    workPhase?.finish();
     retainedRequestConflict = await consumeChatSendCurrent(params, () =>
       resolveChatSendRequestConflict(params, retryComparison),
     );

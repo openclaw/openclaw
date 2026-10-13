@@ -1446,13 +1446,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "conflictingSubagentRunVersions",
-          "conflictingSubagentRegistrationCohort",
-          "writeSubagentRunValuesInDatabase",
-        ],
+        operations: ["writeSubagentRunValuesInDatabase"],
         evidence:
-          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Registration cohort reads have only the registry persistence worker caller at subagent-registry.store.worker.ts:182. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the batch write kernel after the host FIFO owner plans from committed receipts. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
       },
     ],
   ],

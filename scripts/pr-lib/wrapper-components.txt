@@ -1282,7 +1282,9 @@ src/logging/structured-authorization-code.ts
 src/logging/subsystem.ts
 src/logging/timestamps.ts
 src/llm/types.ts
+src/media/inbound-media-uri.ts
 src/media/media-facts.ts
+src/media/parse-output.ts
 src/media/staged-inputs.ts
 src/memory-host-sdk/host/config-utils.ts
 src/memory/root-memory-files.ts
@@ -1919,8 +1921,10 @@ src/utils/absolute-deadline.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/delivery-context.shared.ts
+src/utils/directive-tags.ts
 src/utils/fetch-timeout.ts
 src/utils/github-login.ts
+src/utils/inline-reply-tags.ts
 src/utils/message-channel-constants.ts
 src/utils/message-channel-core.ts
 src/utils/parse-json-compat.ts
@@ -2334,6 +2338,7 @@ src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
+src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts

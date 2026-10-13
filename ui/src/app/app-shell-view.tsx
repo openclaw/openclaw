@@ -159,23 +159,26 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
         </Show>
         <Show when={view().collapsedControls}>
           <div class="shell-chrome-controls" onMouseDown={beginNativeWindowDrag}>
-            <openclaw-tooltip
-              prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-            >
-              <button
-                type="button"
-                class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
-                aria-label={t("nav.expand")}
-                aria-expanded="false"
-                data-env-avatar={
-                  view().config.environment
-                    ? view().config.assistantIdentity.name.charAt(0)
-                    : undefined
-                }
-                onClick={() => props.host.viewCallbacks.toggleSidebar()}
-                ref={createLitContentRef(() => icons.panelLeftOpen)}
-              />
-            </openclaw-tooltip>
+            {/* Native hosts retain their window-control expand action; web uses the rail. */}
+            <Show when={view().nativeWebChrome || legacyMacChrome()}>
+              <openclaw-tooltip
+                prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
+              >
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
+                  aria-label={t("nav.expand")}
+                  aria-expanded="false"
+                  data-env-avatar={
+                    view().config.environment
+                      ? view().config.assistantIdentity.name.charAt(0)
+                      : undefined
+                  }
+                  onClick={() => props.host.viewCallbacks.toggleSidebar()}
+                  ref={createLitContentRef(() => icons.panelLeftOpen)}
+                />
+              </openclaw-tooltip>
+            </Show>
             <Show when={!view().railAvailable}>
               <LitRouteHost
                 renderValue={() =>
