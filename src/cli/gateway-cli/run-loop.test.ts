@@ -1273,7 +1273,10 @@ describe("runGatewayLoop", () => {
         const { close, exited } = await mocks.createSignaledLoopHarness();
         close.mockRejectedValueOnce(new Error("Agent database native retirement failed"));
         captureSignal("SIGUSR2")();
-        await expect(exited).resolves.toBe(0);
+        // The generation exits with the recorded failure (nonzero) while the
+        // schtasks handoff still publishes the replacement; exit 0 would
+        // misreport a failed close as a clean restart.
+        await expect(exited).resolves.toBe(1);
         mocks.expectRestartHandoffCall({
           restartKind: "full-process",
           reason: undefined,
@@ -1304,6 +1307,27 @@ describe("runGatewayLoop", () => {
       });
     } finally {
       delete process.env.OPENCLAW_SUPERVISOR_MODE;
+    }
+  });
+
+  it("terminates a failed restart close when the schtasks replacement cannot be established", async () => {
+    testLoop.setPlatform("win32");
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+    mocks.restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+      mode: "failed",
+      detail: "task helper could not be created",
+    });
+    try {
+      await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, runtime, exited } = await mocks.createSignaledLoopHarness();
+        close.mockRejectedValueOnce(new Error("Agent database native retirement failed"));
+        captureSignal("SIGUSR2")();
+        await expect(exited).resolves.toBe(1);
+        expect(mocks.writeGatewayRestartHandoff).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      });
+    } finally {
+      delete process.env.OPENCLAW_WINDOWS_TASK_NAME;
     }
   });
 
