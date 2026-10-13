@@ -294,7 +294,11 @@ export async function prepareHarnessContextEnginePrompt(
     };
   }
   return runWithHarnessSourceFence(params, async () => {
-    const preassemblyMessages = params.messages.slice();
+    // Windowing and replay hooks can leave orphaned results before assembly.
+    const pipelineMessages = params.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
+      : params.messages;
+    const preassemblyMessages = pipelineMessages.slice();
     // Repair before the final byte bound: synthetic results also consume budget.
     // Keep both operations inside the retained source-authority fence.
     const prepareAssembly = (assembled: AssembleResult) =>
@@ -311,11 +315,14 @@ export async function prepareHarnessContextEnginePrompt(
     let bounded: AssembleResult;
     try {
       bounded = prepareAssembly(
-        await assembleHarnessContextEngineWithinSourceScope(params, contextEngine),
+        await assembleHarnessContextEngineWithinSourceScope(
+          { ...params, messages: pipelineMessages },
+          contextEngine,
+        ),
       );
     } catch (error) {
       params.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
-      bounded = prepareAssembly({ messages: initial.messages, estimatedTokens: 0 });
+      bounded = prepareAssembly({ messages: pipelineMessages, estimatedTokens: 0 });
     }
     const authority = bounded.promptAuthority ?? "assembled";
     return {

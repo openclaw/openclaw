@@ -20,6 +20,7 @@ import {
   type MemoryPromptSectionParams,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
+import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
@@ -63,6 +64,75 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
+  it("repairs windowed engine input and independently repairs engine output", async () => {
+    const evictedCall = textMessage("assistant", "", 2);
+    if (evictedCall.role !== "assistant") {
+      throw new Error("Expected assistant fixture");
+    }
+    evictedCall.content = [{ type: "toolCall", id: "evicted_call", name: "exec", arguments: {} }];
+    const currentRequest = textMessage("user", "Current request", 4);
+    const messages: AgentMessage[] = [
+      textMessage("user", "Old request", 1),
+      evictedCall,
+      textMessage("user", "Middle request", 3),
+      currentRequest,
+      {
+        role: "toolResult",
+        toolCallId: "evicted_call",
+        toolName: "exec",
+        content: [{ type: "text", text: "Late result from evicted history" }],
+        isError: false,
+        timestamp: 5,
+      },
+    ];
+    const original = JSON.stringify(messages);
+    const windowed = limitHistoryTurns(messages, 1);
+    expect(windowed).toEqual(messages.slice(3));
+    const output = textMessage("assistant", "", 6);
+    if (output.role !== "assistant") {
+      throw new Error("Expected assistant fixture");
+    }
+    output.content = [{ type: "toolCall", id: "engine_call", name: "exec", arguments: {} }];
+    const assemble = vi.fn(
+      async ({ messages: input }: Parameters<ContextEngine["assemble"]>[0]) => {
+        expect(input).toEqual([currentRequest]);
+        return {
+          messages: [...input, output],
+          estimatedTokens: 0,
+          promptAuthority: "preassembly_may_overflow" as const,
+        };
+      },
+    );
+    const warn = vi.fn();
+    const result = await prepareHarnessContextEnginePrompt({
+      ...sessionParams,
+      modelId: "test-model",
+      messages: windowed,
+      contextEngine: createContextEngine({ assemble }),
+      promptBudget: {
+        contextTokens: 100_000,
+        reserveTokens: 0,
+        systemPrompt: "system",
+        prompt: "next",
+      },
+      repairToolUseResultPairing: true,
+      isOpenAIResponsesApi: true,
+      warn,
+    });
+    expect(assemble).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.unwindowedContextEngineMessagesForPrecheck).toEqual([currentRequest]);
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "engine_call",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    expect(JSON.stringify(messages)).toBe(original);
+    expect(windowed).toEqual(messages.slice(3));
+  });
+
   it.each(["absent", "assembled", "fallback"] as const)(
     "repairs the final tool conversation when the engine is %s",
     async (mode) => {
