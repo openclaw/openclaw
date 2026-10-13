@@ -62,30 +62,32 @@ it("web_search preserves provider HTTP 403 guidance without exposing the respons
   expect(JSON.stringify(result)).not.toContain(API_KEY);
 });
 
-it("web_search preserves a provider timeout and its effective budget without private diagnostics", async () => {
-  const cause = Object.assign(new Error(BODY), { name: "TimeoutError", timeoutMs: 90_000 });
-  mocks.endpoint.mockRejectedValueOnce(cause);
-  mocks.runWebSearch.mockReset().mockImplementationOnce((params: RunWebSearchParams) =>
-    executeWebSearchCandidates({
-      ...params,
-      candidates: [provider],
-      allowFallback: false,
-    }),
-  );
+it.each([
+  { timeoutMs: 90_000, message: "Search timed out after 90s." },
+  { timeoutMs: 1_250, message: "Search timed out after 1250ms." },
+  { timeoutMs: undefined, message: "Search timed out." },
+  { timeoutMs: 0, message: "Search timed out." },
+  { timeoutMs: BODY, message: "Search timed out." },
+])(
+  "web_search preserves a provider timeout with budget $timeoutMs without private diagnostics",
+  async ({ timeoutMs, message }) => {
+    const cause = Object.assign(new Error(BODY), { name: "TimeoutError", timeoutMs });
+    mocks.endpoint.mockRejectedValueOnce(cause);
 
-  const result = await createWebSearchTool({ config })?.execute("search-timeout", {
-    query: "synthetic query",
-  });
+    const result = await createWebSearchTool({ config })?.execute("search-timeout", {
+      query: "synthetic query",
+    });
 
-  expect(result?.details).toMatchObject({
-    kind: "error",
-    provider: "perplexity",
-    message: expect.stringContaining("Search timed out after 90s."),
-  });
-  expect(JSON.stringify(result)).not.toContain("configuration");
-  expect(JSON.stringify(result)).not.toContain(BODY);
-  expect(JSON.stringify(result)).not.toContain(API_KEY);
-});
+    expect(result?.details).toMatchObject({
+      kind: "error",
+      provider: "perplexity",
+      message: expect.stringContaining(message),
+    });
+    expect(JSON.stringify(result)).not.toContain("configuration");
+    expect(JSON.stringify(result)).not.toContain(BODY);
+    expect(JSON.stringify(result)).not.toContain(API_KEY);
+  },
+);
 
 it("web_search keeps connection failures distinct from deadline expiry", async () => {
   mocks.endpoint.mockRejectedValueOnce(new Error("fetch failed"));

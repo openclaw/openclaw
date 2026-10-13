@@ -16,6 +16,7 @@ export class WebSearchProviderError extends Error {
   /** Model-facing diagnostics contain no upstream response body or credentials. */
   toResult(): RunWebSearchResult {
     const status = diagnosticHttpStatusCode(this.cause);
+    let message: string;
     if (!status && isSignalTimeoutReason(this.cause)) {
       // Only a numeric budget crosses the boundary; never parse upstream diagnostic prose.
       const timeoutMs: unknown =
@@ -26,26 +27,21 @@ export class WebSearchProviderError extends Error {
         typeof timeoutMs === "number" && Number.isSafeInteger(timeoutMs) && timeoutMs > 0
           ? ` after ${timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`}`
           : "";
-      return {
-        provider: this.provider,
-        result: {
-          error: "provider_error",
-          message: `Search timed out${bound}. Try again later or choose another provider.`,
-          docs: "https://docs.openclaw.ai/tools/web",
-        },
-      };
+      message = `Search timed out${bound}. Try again later or choose another provider.`;
+    } else {
+      const hint =
+        status === "401" || status === "403"
+          ? "Check this search provider's credentials and access, or choose another provider."
+          : status === "429"
+            ? "Check this search provider's quota or try again later."
+            : "Check this search provider's configuration and connection, or choose another provider.";
+      message = `Search failed${status ? ` (HTTP ${status})` : ""}. ${hint}`;
     }
-    const hint =
-      status === "401" || status === "403"
-        ? "Check this search provider's credentials and access, or choose another provider."
-        : status === "429"
-          ? "Check this search provider's quota or try again later."
-          : "Check this search provider's configuration and connection, or choose another provider.";
     return {
       provider: this.provider,
       result: {
         error: "provider_error",
-        message: `Search failed${status ? ` (HTTP ${status})` : ""}. ${hint}`,
+        message,
         docs: "https://docs.openclaw.ai/tools/web",
       },
     };
