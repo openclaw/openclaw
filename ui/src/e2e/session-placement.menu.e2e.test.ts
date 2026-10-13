@@ -189,6 +189,67 @@ suite.define(() => {
     },
   );
 
+  it("disables Move while workspace results settle and enables it after refresh", async () => {
+    const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const session = remoteSession();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.startup", "sessions.move", "environments.list"],
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+      sessionKey,
+      historyMessages: [{ role: "assistant", content: "The release notes are ready for review." }],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            ...session,
+            placement: { ...session.placement, workspaceResultReconciling: true },
+          },
+        ]),
+        "environments.list": catalog,
+      },
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const menu = await openMenu(page, "sidebar");
+      const action = menu.getByRole("menuitem", { name: "Move session…", exact: true });
+      await action.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const proof = createControlUiE2eArtifactDir("session-placement-settlement");
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [action], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(proof, "settling-workspace-menu.png"), frame.png);
+      }
+      expect(await action.isDisabled()).toBe(true);
+      expect(await action.getAttribute("title")).toBe("Finalizing worker workspace");
+      expect(await gateway.getRequests("sessions.move")).toHaveLength(0);
+      await page.keyboard.press("Escape");
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "placement", sessionKey });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(1);
+      const ready = (await openMenu(page, "sidebar")).getByRole("menuitem", {
+        name: "Move session…",
+        exact: true,
+      });
+      await expect.poll(() => ready.isDisabled()).toBe(false);
+      await ready.click();
+      await page.locator('[data-value="gateway"]').click();
+      await gateway.deferNext("sessions.move");
+      await page.getByRole("button", { name: "Move session", exact: true }).click();
+      expect((await gateway.waitForRequest("sessions.move")).params).toEqual({
+        key: sessionKey,
+        agentId: "main",
+        expected: { generation: 4, environmentId: "worker:notes", ownerEpoch: 7 },
+        target: { kind: "gateway" },
+      });
+      await gateway.resolveDeferred("sessions.move", { ok: true });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps a local busy refusal visible without stopping or replaying work", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();

@@ -82,6 +82,14 @@ export function sessionPlacementActionReason(
         : "sessionsView.finishingSessionMove",
     );
   }
+  if (
+    action === "move" &&
+    row.placement?.state === "active" &&
+    row.placement.workspaceResultReconciling &&
+    !(row.placement.runner?.kind === "device" && row.placement.runner.status === "offline")
+  ) {
+    return t("sessionsView.syncingCloudFilesDetail");
+  }
   if (action === "dispatch" && row.hasActiveRun) {
     return t("sessionsView.moveLocalSessionBusy");
   }

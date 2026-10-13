@@ -79,6 +79,59 @@ function fixture(row: GatewaySessionRow, fallbackAgentId = "main") {
     run: () => dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, row)),
   };
 }
+it("waits for workspace settlement before offering a move", async () => {
+  const row = { ...activePlacementSession(), sessionId: "settling-session" };
+  row.placement.workspaceResultReconciling = true;
+  const { run, request, state } = fixture(row);
+  const blocked = run();
+  await blocked;
+  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(state.lastError).toContain("Finalizing worker workspace");
+  expect(request).not.toHaveBeenCalled();
+
+  row.placement.workspaceResultReconciling = false;
+  const moving = run();
+  await chooseProfile();
+  submit();
+  await moving;
+  expect(request).toHaveBeenCalledWith(
+    "sessions.move",
+    expect.objectContaining({
+      expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
+    }),
+  );
+});
+
+it("rechecks workspace settlement after choosing the destination", async () => {
+  const row = { ...activePlacementSession(), sessionId: "settling-session" };
+  const { run, request, state } = fixture(row);
+  const moving = run();
+  await chooseProfile();
+  row.placement.workspaceResultReconciling = true;
+  submit();
+  await moving;
+  expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  expect(state.lastError).toContain("Finalizing worker workspace");
+});
+
+it("retains explicit offline-device abandonment with a pending workspace result", async () => {
+  const row = { ...activePlacementSession(), sessionId: "settling-session" };
+  row.placement.workspaceResultReconciling = true;
+  row.placement.runner = { kind: "device", status: "offline" };
+  const { run, request } = fixture(row);
+  const moving = run();
+  answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+  await moving;
+  expect(request).toHaveBeenCalledWith("sessions.move", {
+    key: row.key,
+    agentId: "main",
+    expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
+    target: { kind: "gateway" },
+    abandonSource: true,
+  });
+  expect(request).not.toHaveBeenCalledWith("environments.list", expect.anything());
+});
+
 function localRow(): GatewaySessionRow {
   return {
     key: "agent:main:policy",
