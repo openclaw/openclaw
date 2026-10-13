@@ -27,6 +27,7 @@ import {
   prepareTelegramHtmlTextSplitter,
   type TelegramHtmlTextSplitter,
 } from "./format-html.js";
+import { parseHtmlAttrs } from "./rich-blocks-html.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export { escapeTelegramHtml } from "./format-html.js";
@@ -303,69 +304,99 @@ function renderSupportedTelegramHtml(html: string): string {
   return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
-/**
- * Downgrades escaped rich-contract block tags (see agentPrompt
- * "markdown_telegram_rich") into their Telegram-HTML caption equivalents. Rich
- * messages render those tags as native blocks, but media captions stay on the
- * Telegram HTML contract, where unsupported tags arrive escaped and surface as
- * literal `<ul>`/`<li>` text. List markers follow the rich plain-text
- * projection (`• `/`N. `/`[x] `), asides become blockquotes, and dividers drop
- * exactly like the rich plain-text fallback does.
- */
-export function downgradeEscapedRichBlockTags(html: string): string {
-  if (!html.includes("&lt;")) {
-    return html;
+/** Project rich block islands onto the caption contract before HTML escaping. */
+function downgradeRichBlockTags(text: string, markdown: boolean): string {
+  if (!text.includes("<")) {
+    return text;
   }
-  let listMarker: (() => string) | undefined;
-  ESCAPED_HTML_TAG_PATTERN.lastIndex = 0;
-  return transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
-    text.replace(
-      ESCAPED_HTML_TAG_PATTERN,
-      (match: string, closing: string, name: string, attrs: string) => {
-        if (closing) {
-          if (name === "ul" || name === "ol") {
-            listMarker = undefined;
-            return "";
-          }
-          if (name === "aside") {
-            return "</blockquote>";
-          }
-          if (name === "li") {
-            return "";
-          }
-          return match;
+  const codeRegions = markdown ? findCodeRegions(text) : [];
+  const lists: Array<{ name: string; next: number }> = [];
+  const items: Array<{ marker: number }> = [];
+  const parts: string[] = [];
+  let codeDepth = 0;
+  let cursor = 0;
+  let lineStart = true;
+  let trailingBoundary = -1;
+  const append = (value: string) => {
+    parts.push(value);
+    if (value) {
+      trailingBoundary = -1;
+      lineStart = value.endsWith("\n");
+    }
+  };
+  const boundary = () => {
+    if (!lineStart) {
+      append("\n");
+      trailingBoundary = parts.length - 1;
+    }
+  };
+  for (const tag of tokenizeHtmlTags(text)) {
+    append(text.slice(cursor, tag.start));
+    cursor = tag.end;
+    if (isInsideCode(tag.start, codeRegions)) {
+      append(tag.raw);
+      continue;
+    }
+    if (tag.name === "code" || tag.name === "pre") {
+      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+      append(tag.raw);
+      continue;
+    }
+    if (codeDepth > 0) {
+      append(tag.raw);
+      continue;
+    }
+    switch (tag.name) {
+      case "ul":
+      case "ol":
+        boundary();
+        if (tag.closing) {
+          lists.pop();
+        } else {
+          const start = tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
+          lists.push({ name: tag.name, next: Number.isInteger(start) && start > 0 ? start : 1 });
         }
-        switch (name) {
-          case "ul":
-            listMarker = () => "• ";
-            return "";
-          case "ol": {
-            const start = Number.parseInt(
-              /(?:^|\s)start\s*=\s*"(\d+)"/.exec(attrs)?.[1] ?? "1",
-              10,
-            );
-            let value = Number.isFinite(start) && start > 0 ? start : 1;
-            listMarker = () => `${value++}. `;
-            return "";
-          }
-          case "li":
-            return listMarker?.() ?? "• ";
-          case "aside":
-            return "<blockquote>";
-          case "hr":
-            return "";
-          case "input":
-            return /\btype\s*=\s*"checkbox"/.test(attrs)
-              ? /\bchecked\b/.test(attrs)
-                ? "[x] "
-                : "[ ] "
-              : match;
-          default:
-            return match;
+        break;
+      case "li":
+        if (tag.closing) {
+          items.pop();
+        } else {
+          boundary();
+          const list = lists.at(-1);
+          append("  ".repeat(Math.max(0, lists.length - 1)));
+          items.push({ marker: parts.length });
+          append(list?.name === "ol" ? `${list.next++}. ` : "• ");
         }
-      },
-    ),
-  );
+        break;
+      case "input": {
+        const attrs = parseHtmlAttrs(tag.raw);
+        if (!tag.closing && attrs.get("type") === "checkbox") {
+          const marker = attrs.has("checked") ? "[x] " : "[ ] ";
+          const item = items.at(-1);
+          if (item) {
+            parts[item.marker] = marker;
+          } else {
+            append(marker);
+          }
+        } else {
+          append(tag.raw);
+        }
+        break;
+      }
+      case "aside":
+        append(tag.closing ? "</blockquote>" : "<blockquote>");
+        break;
+      case "hr":
+        break;
+      default:
+        append(tag.raw);
+    }
+  }
+  append(text.slice(cursor));
+  if (trailingBoundary >= 0) {
+    parts[trailingBoundary] = "";
+  }
+  return parts.join("");
 }
 
 export function renderTelegramHtmlText(
@@ -376,14 +407,13 @@ export function renderTelegramHtmlText(
     downgradeRichPromptTags?: boolean;
   } = {},
 ): string {
-  if (options.textMode === "html") {
-    const html = escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
-    return options.downgradeRichPromptTags === true ? downgradeEscapedRichBlockTags(html) : html;
+  if (options.downgradeRichPromptTags === true) {
+    text = downgradeRichBlockTags(text, options.textMode !== "html");
   }
-  const rendered = markdownToTelegramHtml(text, { tableMode: options.tableMode });
-  return options.downgradeRichPromptTags === true
-    ? downgradeEscapedRichBlockTags(rendered)
-    : rendered;
+  if (options.textMode === "html") {
+    return escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
+  }
+  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
 }
 
 function normalizeTelegramLegacyHtmlTables(html: string): string {

@@ -461,82 +461,44 @@ describe("file references", () => {
     expect(result).toContain('title="C.sh"');
   });
 
-  it("downgrades escaped rich-prompt block tags in captions into readable Telegram HTML", () => {
-    const markdown = [
-      "Screenshot summary:",
-      "",
-      "<ul>",
-      "<li><b>Scope</b>: two files</li>",
-      "<li>owner changed</li>",
-      "</ul>",
-      "",
-      "<hr/>",
-      "",
-      "<ol>",
-      "<li>first step</li>",
-      "<li>second step</li>",
-      "</ol>",
-      "",
-      '<aside>source: <a href="https://example.test/log">build log</a></aside>',
-    ].join("\n");
-    const downgraded = renderTelegramHtmlText(markdown, {
-      downgradeRichPromptTags: true,
-    });
-    expect(downgraded).toContain("<b>Scope</b>: two files");
-    expect(downgraded).toContain("• owner changed");
-    expect(downgraded).toContain("1. first step");
-    expect(downgraded).toContain("2. second step");
-    expect(downgraded).toContain(
-      '<blockquote>source: <a href="https://example.test/log">build log</a></blockquote>',
-    );
-    expect(downgraded).not.toContain("&lt;ul&gt;");
-    expect(downgraded).not.toContain("&lt;li&gt;");
-    expect(downgraded).not.toContain("&lt;aside&gt;");
-    expect(downgraded).not.toContain("&lt;hr");
-    // Without the caption downgrade the escaped rich tags keep surfacing as
-    // literal text (pre-existing behavior for every non-caption consumer).
-    const untouched = renderTelegramHtmlText(markdown);
-    expect(untouched).toContain("&lt;ul&gt;");
-    expect(untouched).toContain("&lt;li&gt;");
+  it.each([
+    ["compact", "<ul><li>Hero image</li><li>Countdown</li></ul>", "• Hero image\n• Countdown"],
+    [
+      "nested",
+      "<ol><li>Parent<ul><li>Child</li></ul></li><li>Next</li></ol>",
+      "1. Parent\n  • Child\n2. Next",
+    ],
+    [
+      "checkbox attributes",
+      `<ol start='3'><li>First</li><li><input type='checkbox' checked/>Done</li><li><input type=checkbox />Pending</li><li>Last</li></ol>`,
+      "3. First\n[x] Done\n[ ] Pending\n6. Last",
+    ],
+    [
+      "quoted angle brackets and inline formatting",
+      `<ul><li><b>Scope</b></li><li><input title="a > b" type=checkbox checked/>Done</li></ul><hr/><aside>Read <a href="https://example.test">more</a></aside>`,
+      '• <b>Scope</b>\n[x] Done\n<blockquote>Read <a href="https://example.test">more</a></blockquote>',
+    ],
+    [
+      "literal HTML code",
+      "<pre><code><ul><li>literal</li></ul></code></pre>",
+      "<pre><code>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</code></pre>",
+    ],
+    ["plain caption", "A plain caption  \n", "A plain caption  \n"],
+  ])("renders %s captions without leaking rich blocks", (_name, input, expected) => {
+    expect(
+      renderTelegramHtmlText(input, { textMode: "html", downgradeRichPromptTags: true }),
+    ).toBe(expected);
   });
 
-  it("keeps ordered-list and checkbox markers aligned with the rich plain-text projection", () => {
-    const markdown = [
-      '<ol start="3">',
-      "<li>retry later</li>",
-      "</ol>",
-      "",
-      "<ul>",
-      '<li><input type="checkbox" checked/>ship it</li>',
-      '<li><input type="checkbox"/>follow up</li>',
-      "</ul>",
-    ].join("\n");
-    const downgraded = renderTelegramHtmlText(markdown, {
-      downgradeRichPromptTags: true,
-    });
-    expect(downgraded).toContain("3. retry later");
-    expect(downgraded).toContain("[x] ship it");
-    expect(downgraded).toContain("[ ] follow up");
-    expect(downgraded).not.toContain("&lt;input");
-  });
-
-  it("leaves escaped rich tags inside code regions untouched while downgrading captions", () => {
-    const markdown = ["```html", "<ul><li>literal sample</li></ul>", "```", "", "done"].join("\n");
-    const downgraded = renderTelegramHtmlText(markdown, {
-      downgradeRichPromptTags: true,
-    });
-    expect(downgraded).toContain("&lt;ul&gt;&lt;li&gt;literal sample&lt;/li&gt;&lt;/ul&gt;");
-  });
-
-  it("downgrades author-authored escaped rich tags on the prepared-html caption path too", () => {
-    const authored = "<ul><li>plain line</li></ul>";
-    const downgraded = renderTelegramHtmlText(authored, {
-      textMode: "html",
-      downgradeRichPromptTags: true,
-    });
-    expect(downgraded).toBe("• plain line");
-    expect(renderTelegramHtmlText(authored, { textMode: "html" })).toBe(
-      "&lt;ul&gt;&lt;li&gt;plain line&lt;/li&gt;&lt;/ul&gt;",
-    );
+  it("downgrades Markdown captions without changing literal code or non-caption rendering", () => {
+    const input = "<ul><li>**Scope**</li><li>Next</li></ul>\n\n`<li>literal</li>`";
+    const html = renderTelegramHtmlText(input, { downgradeRichPromptTags: true });
+    expect(html).toBe("• <b>Scope</b>\n• Next\n\n<code>&lt;li&gt;literal&lt;/li&gt;</code>");
+    expect(renderTelegramHtmlText(input)).toContain("&lt;ul&gt;");
+    expect(
+      renderTelegramHtmlText("```html\n<ul><li>literal</li></ul>\n```", {
+        downgradeRichPromptTags: true,
+      }),
+    ).toBe('<pre><code class="language-html">&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n</code></pre>');
   });
 });
