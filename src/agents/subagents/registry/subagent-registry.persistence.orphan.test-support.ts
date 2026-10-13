@@ -60,7 +60,9 @@ export function registerSubagentOrphanTaskCases({
     await testing.sweepOnceForTests();
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.outcome).toMatchObject({
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.outcome,
+    ).toMatchObject({
       status: "error",
       // Attribution must name the persisted owning boot on every platform;
       // exact host/process wording depends on authoritative kernel boot IDs.

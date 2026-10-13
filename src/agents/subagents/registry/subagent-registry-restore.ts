@@ -36,15 +36,12 @@ import {
 } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { settleRestoredRequesterTurns } from "./subagent-registry-restore-requester.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRestoredSubagentRunHeldByAnotherOwner } from "./subagent-restore-resume-ownership.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import {
-  loadSubagentSessionEntry,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 const restoredQueuedFailureSettlementClaims = new WeakMap<object, object>();
 
@@ -446,21 +443,7 @@ export function createSubagentRegistryRestorer(config: {
         );
         continue;
       }
-      // Orphan recovery owns aborted sessions and exact still-running retired
-      // executions. Completed sessions must resume normal settlement and delivery.
-      if (
-        sessionEntry?.abortedLastRun === true ||
-        isRetiredSubagentSessionOwner(entry, sessionEntry)
-      ) {
-        continue;
-      }
-      if (
-        entry.execution.status !== "queued" &&
-        entry.execution.endedAt === undefined &&
-        resolveSubagentRunOrphanReason({ entry, includeStaleUnended: true })
-      ) {
-        // The sweeper owns active restored orphans so it can attribute a
-        // gateway death and publish a requester-visible terminal outcome.
+      if (isRestoredSubagentRunHeldByAnotherOwner(entry, sessionEntry)) {
         continue;
       }
       resumeRun(runId);

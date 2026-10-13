@@ -14,11 +14,16 @@ import {
   resolveSubagentOrphanAttribution,
   resolveSubagentRunLastActivityMs,
 } from "./subagent-orphan-attribution.js";
-import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentCompletionRequest,
+  SubagentRecoveryCurrent,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
   resolveSubagentRunOrphanReason,
+  type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
 
 const LOST_CONTEXT_ERROR = "subagent run lost active execution context";
@@ -38,17 +43,57 @@ export async function reconcileStaleActiveSubagentRun(params: {
    * anything learned before it describes a row we may no longer own.
    */
   isCurrent: () => boolean;
+  /**
+   * The caller's execution authority, carried into every completion request so
+   * the controller re-asserts it while it holds the terminal lock and again at
+   * publication — not only before this helper was entered.
+   */
+  recoveryCurrent: SubagentRecoveryCurrent;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
 }): Promise<void> {
-  const { entry, now, runId } = params;
+  const { entry, now, recoveryCurrent, runId } = params;
   const accountId = entry.requesterOrigin?.accountId;
   const runStartedAtMs = entry.execution.startedAt ?? entry.createdAt;
-  const sessionEntry = await loadSubagentSessionEntry({
-    childSessionKey: entry.childSessionKey,
-  });
+  // Session reads cross the worker, so the selection that chose this row has to
+  // survive the await. Retiring here is ordinary: a later sweep re-evaluates.
+  const retiredRead = new Error("subagent orphan sweep lost its selected run");
+  const assertReadCurrent = () => {
+    if (!params.isCurrent()) {
+      throw retiredRead;
+    }
+  };
+  let observation: {
+    orphanReason: SubagentRunOrphanReason | null;
+    sessionEntry: Awaited<ReturnType<typeof loadSubagentSessionEntry>>;
+  };
+  try {
+    assertReadCurrent();
+    // One scoped read serves both consumers. The deferred classification
+    // already carries the recorded child owner, which raw session keys such as
+    // "global" need before an agent id can be resolved at all.
+    const classification = resolveSubagentRunOrphanReason({ entry });
+    observation =
+      typeof classification === "object" && classification !== null
+        ? await classification.read(assertReadCurrent)
+        : {
+            orphanReason: classification,
+            sessionEntry: await loadSubagentSessionEntry({
+              childSessionKey: entry.childSessionKey,
+              childAgentId: entry.childAgentId,
+              assertCurrent: assertReadCurrent,
+            }),
+          };
+    assertReadCurrent();
+  } catch (error) {
+    if (error === retiredRead) {
+      return;
+    }
+    throw error;
+  }
+  const { orphanReason, sessionEntry } = observation;
   // A fresh persisted terminal state is the child's authoritative outcome.
   // Resolve it before crash attribution so a later gateway death cannot
   // rewrite a real failure, timeout, or kill as an orphan diagnosis.
@@ -60,6 +105,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
       {
         runId,
         expectedEntry: entry,
+        recoveryCurrent,
         startedAt: persistedCompletion.startedAt,
         endedAt: persistedCompletion.endedAt,
         outcome: persistedCompletion.outcome,
@@ -96,14 +142,13 @@ export async function reconcileStaleActiveSubagentRun(params: {
   });
   const attributedError = attribution ? formatSubagentOrphanErrorMessage(attribution) : undefined;
 
-  const orphanReason = resolveSubagentRunOrphanReason({ entry });
   // Every orphan settles through canonical completion; missing session
   // metadata never permits direct row or attachment pruning.
-
   await params.completeSubagentRunWithRecovery(
     {
       runId,
       expectedEntry: entry,
+      recoveryCurrent,
       // An attributed death ended when the run died, not when it was found.
       endedAt: attribution?.diedAtMs ?? now,
       outcome: {

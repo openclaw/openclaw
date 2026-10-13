@@ -160,33 +160,11 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     vi.clearAllMocks();
   });
 
-  it("notifies the spawning session instead of silently pruning a run that said nothing", async () => {
-    const { entry, completeSubagentRunWithRecovery, runs, sweeper } = createHarness();
-
-    await sweeper.sweepOnce();
-    sweeper.reset();
-
-    expect(completeSubagentRunWithRecovery).toHaveBeenCalledTimes(1);
-    const [completion, source] = completeSubagentRunWithRecovery.mock.calls[0]!;
-    expect(source).toBe("sweeper-orphaned-by-gateway-death");
-    // sendFarewell is what carries the outcome back to the requester session.
-    expect(completion.sendFarewell).toBe(true);
-    expect(completion.expectedEntry).toBe(entry);
-    expect(completion.recoverInterrupted).toBe(true);
-    expect(completion.outcome.status).toBe("error");
-    expect(completion.outcome.error).toContain("the host rebooted under it");
-    expect(completion.outcome.error).toContain("boot-minus-5 ended without a clean stop");
-    expect(completion.outcome.error).toContain("no output recorded in the run registry");
-    expect(completion.outcome.error).not.toContain("lost active execution context");
-    // The row is completed rather than deleted out from under the requester.
-    expect(runs.has("orphaned-run")).toBe(true);
-  });
-
   it("ends the run at its death, not at the reap that found it", async () => {
     const { completeSubagentRunWithRecovery, sweeper } = createHarness();
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     const [completion] = completeSubagentRunWithRecovery.mock.calls[0]!;
     // No last-activity evidence beyond the start, so the death is bounded by
@@ -201,7 +179,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     });
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     const [completion] = completeSubagentRunWithRecovery.mock.calls[0]!;
     expect(completion.endedAt).toBe(GATEWAY_RESTARTED_AT);
@@ -219,7 +197,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     });
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     const [completion] = completeSubagentRunWithRecovery.mock.calls[0]!;
     expect(completion.endedAt).toBe(RUN_DIED_AT);
@@ -240,7 +218,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     const { entry, completeSubagentRunWithRecovery, runs, sweeper } = createHarness();
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     expect(completeSubagentRunWithRecovery).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -261,7 +239,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     const { entry, completeSubagentRunWithRecovery, runs, sweeper } = createHarness();
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     expect(completeSubagentRunWithRecovery).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -283,7 +261,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     });
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     // Captured output is not a terminal outcome. Pass the exact output-bearing
     // row to canonical recovery; that owner controls payload replacement.
@@ -333,7 +311,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
       runs.set(entry.runId, successor);
       release();
       await sweep;
-      sweeper.reset();
+      await sweeper.reset();
 
       expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
       expect(runs.get(entry.runId)).toBe(successor);
@@ -350,7 +328,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
       entry.execution = { ...entry.execution, endedAt: RUN_DIED_AT };
       release();
       await sweep;
-      sweeper.reset();
+      await sweeper.reset();
 
       expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
       expect(entry.execution.outcome).toBeUndefined();
@@ -379,7 +357,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     const { completeSubagentRunWithRecovery, sweeper } = createHarness();
 
     await sweeper.sweepOnce();
-    sweeper.reset();
+    await sweeper.reset();
 
     expect(completeSubagentRunWithRecovery).toHaveBeenCalledTimes(1);
     const [completion, source] = completeSubagentRunWithRecovery.mock.calls[0]!;

@@ -14,9 +14,11 @@ import { randomUUID } from "node:crypto";
  *  - `createSubagentRegistryCompletionRuntime` — the retry/admission wrapper.
  *  - `SubagentLifecycleController` — the real terminal-completion lock, the
  *    real `expectedEntry` identity guard, and the real terminal-effect chain.
- *  - `persistSubagentRunsToDisk` / `loadSubagentRegistryFromSqlite` — the real
- *    SQLite state store, in a temp `OPENCLAW_STATE_DIR`. Final effects are read
- *    back from the database file, not from memory.
+ *  - `persistRegistryFixture` / `loadSubagentRegistryFromSqlite` — the real
+ *    SQLite state store, in a temp `OPENCLAW_STATE_DIR`. These seed and read
+ *    the committed projection directly; every write the code under test makes
+ *    goes through the real `mutateSubagentRuns` owner inside the controller.
+ *    Final effects are read back from the database file, not from memory.
  *  - `recordGatewayBootStart` / `readGatewayBootLifecycleSegments` — the real
  *    boot-lifecycle tables that drive crash attribution.
  *
@@ -40,7 +42,14 @@ import { randomUUID } from "node:crypto";
  *                 memory AND in SQLite, with no notification and no cleanup.
  *  3. released  — the row is deleted while the completion is queued. Nothing
  *                 may be persisted or delivered.
- *  4. history-read race — the boot-history read now runs on the shared-state
+ *  4. resumed   — the SAME row acquires a live execution context while the
+ *                 completion is queued. `expectedEntry` still identifies its
+ *                 owner, so only the execution-authority fence can stop the
+ *                 terminal write, the notification and the cleanup.
+ *  5. queued    — the SAME run is republished as queued while the completion
+ *                 is queued. The republished row is the same owner, so the
+ *                 controller would still admit it; nothing may be written.
+ *  6. history-read race — the boot-history read now runs on the shared-state
  *                 read worker, so the sweeper yields before it has decided
  *                 anything. A successor takes the runId during that real
  *                 worker round trip. The inspected row must be abandoned
@@ -66,17 +75,18 @@ const { createSubagentRegistryCompletionRuntime } =
   await import("../src/agents/subagents/registry/subagent-registry-completion-runtime.js");
 const { reconcileStaleActiveSubagentRun } =
   await import("../src/agents/subagents/registry/subagent-registry-sweeper-orphan.js");
-const {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  persistSubagentRunsToDiskAsyncOrThrow,
-} = await import("../src/agents/subagents/registry/subagent-registry-state.js");
 const { getLatestSubagentRunByChildSessionKeyFromRuns } =
   await import("../src/agents/subagents/registry/subagent-registry-queries.js");
-const { loadSubagentRegistryFromSqlite } =
-  await import("../src/agents/subagents/registry/subagent-registry.store.sqlite.js");
+// The registry's own committed-projection fixture writer and reader. The
+// `persistSubagentRunsToDisk*` family this harness used is gone from
+// `origin/main`: the lifecycle controller persists through `mutateSubagentRuns`
+// now, and these are the surviving direct-to-SQLite seams.
+const { loadSubagentRegistryFromSqlite, persistRegistryFixture } =
+  await import("../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
 const { loadGatewayBootSegmentsForAttribution } =
   await import("../src/agents/subagents/registry/subagent-orphan-attribution.js");
+const { copySubagentRunRuntimeOwner, isSameSubagentRunOwner } =
+  await import("../src/agents/subagents/registry/subagent-run-generation.js");
 
 type SubagentRunRecord =
   import("../src/agents/subagents/registry/subagent-registry.types.js").SubagentRunRecord;
@@ -148,23 +158,14 @@ type EdgeRecorder = {
 };
 
 function createController(runs: Map<string, SubagentRunRecord>, edges: EdgeRecorder) {
-  const resumedRuns = new Set<string>();
-  const persist = (...runIds: string[]) => {
-    persistSubagentRunsToDisk(runs, runIds);
-  };
-  const persistOrThrow = (...runIds: string[]) => {
-    persistSubagentRunsToDiskOrThrow(runs, runIds);
-  };
+  // Resume bookkeeping is keyed by run runtime identity, not by run id.
+  const resumedRuns = new Set<object>();
   // Mirrors the production wiring in src/agents/subagents/registry/subagent-registry.ts.
   const controller = new SubagentLifecycleController({
     runs,
     resumedRuns,
     subagentAnnounceTimeoutMs: 60_000,
     getRuntimeConfig: () => ({}) as never,
-    persist,
-    persistOrThrow,
-    persistAsyncOrThrow: (context, callbacks, ...runIds) =>
-      persistSubagentRunsToDiskAsyncOrThrow(runs, runIds, { context, ...callbacks }),
     clearPendingLifecycleError: () => {},
     countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: (key, matches) =>
@@ -267,7 +268,9 @@ function readDurableRun(runId: string): SubagentRunRecord | undefined {
   return loadSubagentRegistryFromSqlite().get(runId);
 }
 
-async function runScenario(ownership: "current" | "replaced" | "released"): Promise<void> {
+type OrphanOwnershipScenario = "current" | "replaced" | "released" | "resumed" | "queued";
+
+async function runScenario(ownership: OrphanOwnershipScenario): Promise<void> {
   console.log(`\n== scenario: ${ownership} ==`);
   const now = Date.now();
   const deadBootStartedAt = now - 3_600_000;
@@ -308,7 +311,7 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
   const { controller, runtime, retryTimers } = createController(runs, edges);
 
   // Seed the durable row exactly as a crashed Gateway would have left it.
-  persistSubagentRunsToDisk(runs, [runId]);
+  persistRegistryFixture(runs, [runId]);
   const seeded = readDurableRun(runId);
   check(
     "stale active run is durably present before recovery",
@@ -320,6 +323,14 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
 
   const successor = ownership === "replaced" ? createSuccessorRun(runId, now - 10_000) : undefined;
   let successorDurableBefore: SubagentRunRecord | undefined;
+  // The live-execution registry the sweeper consults; membership here is what
+  // "the same run came back to life" means to the orphan path.
+  const liveRunContexts = new Set<string>();
+  const isSelectionCurrent = () =>
+    runs.get(runId) === entry &&
+    typeof entry.execution.endedAt !== "number" &&
+    entry.execution.status !== "queued" &&
+    !liveRunContexts.has(runId);
 
   // Hold the real terminal completion lock so the orphan completion queues
   // behind it, then change ownership while it waits.
@@ -339,14 +350,37 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
     runId,
     entry,
     now,
-    isCurrent: () => runs.get(runId) === entry && typeof entry.execution.endedAt !== "number",
+    isCurrent: isSelectionCurrent,
+    recoveryCurrent: {
+      prepare: async () => isSelectionCurrent(),
+      isHostCurrent: () => !liveRunContexts.has(runId),
+    },
     completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
   });
 
   await queued;
-  if (ownership === "replaced" && successor) {
+  let sameOwnerQueuedDurableBefore: SubagentRunRecord | undefined;
+  if (ownership === "resumed") {
+    // The child was dispatched again. The row is untouched and still the
+    // inspected one, so nothing but execution authority distinguishes it.
+    liveRunContexts.add(runId);
+  } else if (ownership === "queued") {
+    const requeued = copySubagentRunRuntimeOwner(entry, {
+      ...entry,
+      execution: { ...entry.execution, status: "queued" as const },
+    });
+    runs.set(runId, requeued);
+    persistRegistryFixture(runs, [runId]);
+    sameOwnerQueuedDurableBefore = readDurableRun(runId);
+    check(
+      "requeued row is the same owner the completion would still admit",
+      sameOwnerQueuedDurableBefore?.execution.status === "queued" &&
+        isSameSubagentRunOwner(requeued, entry),
+      { status: sameOwnerQueuedDurableBefore?.execution.status },
+    );
+  } else if (ownership === "replaced" && successor) {
     runs.set(runId, successor);
-    persistSubagentRunsToDisk(runs, [runId]);
+    persistRegistryFixture(runs, [runId]);
     successorDurableBefore = readDurableRun(runId);
     check(
       "successor is durably installed while the completion is queued",
@@ -363,9 +397,12 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
   // Terminal effects continue asynchronously after the completion resolves.
   // The control waits for them; the negative cases wait the same wall-clock
   // budget so "nothing happened" is a settled observation, not an early read.
+  // Terminal writes publish a replacement row rather than mutating the
+  // inspected one in place, so the control reads the published owner.
+  const publishedRun = () => runs.get(runId);
   const settleDeadline = Date.now() + 5_000;
   while (Date.now() < settleDeadline) {
-    if (ownership === "current" && typeof entry.cleanupCompletedAt === "number") {
+    if (ownership === "current" && typeof publishedRun()?.cleanupCompletedAt === "number") {
       break;
     }
     await new Promise<void>((resolve) => {
@@ -375,28 +412,33 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
 
   const durable = readDurableRun(runId);
   if (ownership === "current") {
-    check("in-memory row went terminal", entry.execution.status === "terminal", {
-      status: entry.execution.status,
+    const published = publishedRun();
+    const publishedError = published?.execution.outcome?.error;
+    check("published row went terminal", published?.execution.status === "terminal", {
+      status: published?.execution.status,
     });
     check(
+      "published row is still the inspected run's own owner",
+      isSameSubagentRunOwner(published, entry),
+    );
+    check(
       "recorded error is the crash attribution, not the generic lost-context text",
-      typeof entry.execution.outcome?.error === "string" &&
-        entry.execution.outcome.error.includes("ended without a clean stop"),
-      { error: entry.execution.outcome?.error },
+      typeof publishedError === "string" && publishedError.includes("ended without a clean stop"),
+      { error: publishedError },
     );
     check(
       "attribution reports recorded-output PRESENCE, never a message count",
-      typeof entry.execution.outcome?.error === "string" &&
-        entry.execution.outcome.error.includes("no output recorded in the run registry") &&
-        !/assistant messages? recorded/.test(entry.execution.outcome.error),
-      { error: entry.execution.outcome?.error },
+      typeof publishedError === "string" &&
+        publishedError.includes("no output recorded in the run registry") &&
+        !/assistant messages? recorded/.test(publishedError),
+      { error: publishedError },
     );
     check(
       "restart interval is described from last recorded activity, not as asserted downtime",
-      typeof entry.execution.outcome?.error === "string" &&
-        entry.execution.outcome.error.includes("after the run's last recorded activity") &&
-        !entry.execution.outcome.error.includes("gateway absent"),
-      { error: entry.execution.outcome?.error },
+      typeof publishedError === "string" &&
+        publishedError.includes("after the run's last recorded activity") &&
+        !publishedError.includes("gateway absent"),
+      { error: publishedError },
     );
     check("durable SQLite row is terminal", durable?.execution.status === "terminal", {
       status: durable?.execution.status,
@@ -404,15 +446,16 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
     check(
       "durable SQLite row carries the attributed error",
       typeof durable?.execution.outcome?.error === "string" &&
-        durable.execution.outcome.error === entry.execution.outcome?.error,
+        durable.execution.outcome.error === publishedError,
+      { durable: durable?.execution.outcome?.error, published: publishedError },
     );
     check("requester was notified exactly once", edges.announce === 1, edges);
-    check("cleanup dispatched", typeof entry.cleanupCompletedAt === "number", {
-      cleanupCompletedAt: entry.cleanupCompletedAt,
+    check("cleanup dispatched", typeof published?.cleanupCompletedAt === "number", {
+      cleanupCompletedAt: published?.cleanupCompletedAt,
     });
-    console.log(`  attributed error: ${entry.execution.outcome?.error}`);
+    console.log(`  attributed error: ${publishedError}`);
   } else {
-    const label = ownership === "replaced" ? "successor" : "released";
+    const label = ownership === "replaced" ? "successor" : ownership;
     check(
       `${label}: inspected row was not mutated in memory`,
       entry.execution.status === "running",
@@ -454,9 +497,26 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
         "durable successor row is byte-identical to its pre-recovery snapshot",
         JSON.stringify(durable) === JSON.stringify(successorDurableBefore),
       );
+    } else if (ownership === "queued") {
+      check(
+        "queued: durable row stayed queued and was never written to a terminal state",
+        durable?.execution.status === "queued" &&
+          durable.execution.outcome === undefined &&
+          durable.endedReason === undefined &&
+          durable.cleanupCompletedAt === undefined,
+        {
+          status: durable?.execution.status,
+          outcome: durable?.execution.outcome,
+          endedReason: durable?.endedReason,
+        },
+      );
+      check(
+        "queued: durable row is byte-identical to its pre-recovery snapshot",
+        JSON.stringify(durable) === JSON.stringify(sameOwnerQueuedDurableBefore),
+      );
     } else {
       check(
-        "released: durable row was never written to a terminal state",
+        `${label}: durable row was never written to a terminal state`,
         durable?.execution.status === "running" &&
           durable.execution.outcome === undefined &&
           durable.endedReason === undefined &&
@@ -468,7 +528,7 @@ async function runScenario(ownership: "current" | "replaced" | "released"): Prom
         },
       );
       check(
-        "released: durable row is byte-identical to its pre-recovery snapshot",
+        `${label}: durable row is byte-identical to its pre-recovery snapshot`,
         JSON.stringify(durable) === JSON.stringify(seeded),
       );
     }
@@ -522,24 +582,30 @@ async function runHistoryReadRaceScenario(): Promise<void> {
     contextEngineEnded: 0,
   };
   const { controller, runtime, retryTimers } = createController(runs, edges);
-  persistSubagentRunsToDisk(runs, [runId]);
+  persistRegistryFixture(runs, [runId]);
   check(
     "stale active run is durably present before recovery",
     readDurableRun(runId)?.execution.status === "running",
   );
 
+  const isSelectionCurrent = () =>
+    runs.get(runId) === entry && typeof entry.execution.endedAt !== "number";
   const completion = reconcileStaleActiveSubagentRun({
     runId,
     entry,
     now,
-    isCurrent: () => runs.get(runId) === entry && typeof entry.execution.endedAt !== "number",
+    isCurrent: isSelectionCurrent,
+    recoveryCurrent: {
+      prepare: async () => isSelectionCurrent(),
+      isHostCurrent: () => true,
+    },
     completeSubagentRunWithRecovery: runtime.completeSubagentRunWithRecovery,
   });
   // No completion lock is held here: the helper has not reached completion yet.
   // It is suspended on the history read, which is the window under test.
   const successor = createSuccessorRun(runId, now - 10_000);
   runs.set(runId, successor);
-  persistSubagentRunsToDisk(runs, [runId]);
+  persistRegistryFixture(runs, [runId]);
   const successorDurableBefore = readDurableRun(runId);
   check(
     "successor is durably installed while the history read is in flight",
@@ -584,6 +650,8 @@ try {
   await runScenario("current");
   await runScenario("replaced");
   await runScenario("released");
+  await runScenario("resumed");
+  await runScenario("queued");
   await runHistoryReadRaceScenario();
 } finally {
   rmSync(stateDir, { recursive: true, force: true });

@@ -351,6 +351,22 @@ export function createSubagentRegistrySweeper(params: {
           const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
+            // Selection stays live across every await the orphan path takes.
+            // Row identity is part of it, so this cannot outlive publication.
+            const isSelectionCurrent = () => {
+              try {
+                readScope.assertRunCurrent(entry);
+              } catch {
+                return false;
+              }
+              return (
+                typeof entry.execution.endedAt !== "number" &&
+                entry.execution.status !== "queued" &&
+                !entry.killIntent &&
+                !entry.killReconciliation &&
+                !getAgentRunContext(runId)
+              );
+            };
             await reconcileStaleActiveSubagentRun({
               runId,
               entry,
@@ -358,20 +374,19 @@ export function createSubagentRegistrySweeper(params: {
               // Combines main's reentrancy guard (gateway owner, state-worker
               // write source, and row identity) with the same re-selection
               // conditions this path's own check already covered, re-read
-              // after the orphan path's one async boot-history read.
-              isCurrent: () => {
-                try {
-                  readScope.assertRunCurrent(entry);
-                } catch {
-                  return false;
-                }
-                return (
-                  typeof entry.execution.endedAt !== "number" &&
-                  entry.execution.status !== "queued" &&
-                  !entry.killIntent &&
-                  !entry.killReconciliation &&
-                  !getAgentRunContext(runId)
-                );
+              // after the orphan path's own asynchronous reads.
+              isCurrent: isSelectionCurrent,
+              recoveryCurrent: {
+                // Admission and each retry re-assert full live selection: a row
+                // that acquired an execution context or was queued while we
+                // waited for the terminal lock belongs to its new owner.
+                prepare: async () =>
+                  (await readScope.completionCurrent.prepare()) && isSelectionCurrent(),
+                // Publication replaces the row, so the fence that has to
+                // survive it is the gateway owner, the state-worker write
+                // source, and the absence of a live context for this run.
+                isHostCurrent: () =>
+                  readScope.completionCurrent.isHostCurrent() && !getAgentRunContext(runId),
               },
               completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
             });

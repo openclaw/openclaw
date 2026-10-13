@@ -64,17 +64,6 @@ import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-que
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import {
-  readInterruptedUpdateCandidate,
-  readUpdateRunStatusInDatabase,
-  readUpdateRunHistoryStatusInDatabase,
-  readUpdateRunRecord,
-  readUpdateRuns,
-} from "../infra/update-run-read.kernel.js";
-import {
-  inspectUpdateRunReconciliation,
-  readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.read.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import {
   pluginBlobLookupInDatabase,
@@ -114,6 +103,10 @@ import type {
   OpenClawStateReadReply,
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
+import {
+  executeUpdateRunsRead,
+  isUpdateRunsReadCommand,
+} from "./openclaw-state-read.update-runs.kernel.js";
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
@@ -358,56 +351,8 @@ serveOwnedWorkerTasks(
                 }),
               };
             }
-            if (command.type === "updateRuns.get") {
-              return {
-                type: command.type,
-                run: tableExists(db, "update_runs")
-                  ? readUpdateRunRecord(db, command.runId)
-                  : undefined,
-              };
-            }
-            if (command.type === "updateRuns.list") {
-              return {
-                type: command.type,
-                runs: readUpdateRuns(db, command.input),
-              };
-            }
-            if (command.type === "updateRuns.reconciliationCandidates") {
-              return {
-                type: command.type,
-                candidates: readUpdateRunReconciliationCandidates(db, command.input),
-              };
-            }
-            if (command.type === "updateRuns.reconciliationCandidate") {
-              const run = tableExists(db, "update_runs")
-                ? readUpdateRunRecord(db, command.runId)
-                : undefined;
-              return {
-                type: command.type,
-                candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
-              };
-            }
-            if (command.type === "updateRuns.status") {
-              return {
-                type: command.type,
-                status: runSqliteDeferredTransactionSync(db, () =>
-                  readUpdateRunStatusInDatabase(db),
-                ),
-              };
-            }
-            if (command.type === "updateRuns.historyStatus") {
-              return {
-                type: command.type,
-                status: runSqliteDeferredTransactionSync(db, () =>
-                  readUpdateRunHistoryStatusInDatabase(db),
-                ),
-              };
-            }
-            if (command.type === "updateRuns.interruptedCandidate") {
-              return {
-                type: command.type,
-                run: readInterruptedUpdateCandidate(db),
-              };
+            if (isUpdateRunsReadCommand(command)) {
+              return executeUpdateRunsRead(db, command);
             }
             if (command.type === "exec-approvals.read") {
               return {
