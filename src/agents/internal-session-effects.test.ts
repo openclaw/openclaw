@@ -9,17 +9,174 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/transcript-write-context.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { claimAgentSessionWriter } from "./embedded-agent-runner/run/session-bootstrap.js";
+import { createEmbeddedRunSessionPromptState } from "./embedded-agent-runner/run/session-prompt-state.js";
+import { prepareTerminalWithSettledTurnFinalization } from "./embedded-agent-runner/run/settled-turn-finalization.js";
+import { createSettledFinalizationTestInput } from "./embedded-agent-runner/run/settled-turn-finalization.test-support.js";
+import { EmptySettledTurnFinalizationError } from "./harness/settled-turn-finalization-outcome.js";
 import {
   createInternalSessionEffectsCleanup,
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
 } from "./internal-session-effects.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
+
+function emptyFinalizationHarness() {
+  const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "" }] });
+  return {
+    id: "internal-session-finalization-test",
+    label: "Internal session finalization test",
+    supports: () => ({ supported: true as const }),
+    runAttempt: async () => {
+      throw new Error("runAttempt is not used by this finalization fixture");
+    },
+    finalizeSettledTurn: async () => {
+      throw new EmptySettledTurnFinalizationError({
+        assistant,
+        usage: assistant.usage,
+      });
+    },
+  };
+}
+
+function createSettledToolUseAttempt(target: { sessionId: string; sessionFile: string }) {
+  const assistant = buildEmbeddedRunnerAssistant({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "call-write", name: "write", arguments: {} }],
+  });
+  const messagesSnapshot = [
+    assistant,
+    {
+      role: "toolResult",
+      toolCallId: "call-write",
+      toolName: "write",
+      isError: false,
+      content: [{ type: "text", text: "Note saved" }],
+      timestamp: 1,
+    },
+  ] as never;
+  const attempt = makeEmbeddedRunnerAttempt({
+    terminal: { kind: "ok" },
+    sessionIdUsed: target.sessionId,
+    sessionFileUsed: target.sessionFile,
+    assistantTexts: [],
+    messagesSnapshot,
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
+    toolMetas: [{ toolCallId: "call-write", toolName: "write", isError: false, replaySafe: false }],
+    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    settledTurnFinalizationContext: {
+      source: "openclaw-transcript",
+      messages: Object.freeze([...messagesSnapshot]),
+    },
+  });
+  return { ...attempt, successfulNestedToolNames: ["write"] };
+}
+
+async function createInternalFallbackFixture(input: {
+  dir: string;
+  runId: string;
+  replacementWriterRunId?: string;
+}) {
+  const storePath = path.join(input.dir, "sessions.json");
+  const target = await prepareInternalSessionEffectsSession({
+    agentId: "main",
+    cwd: input.dir,
+    runId: input.runId,
+    storePath,
+  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    input.runId,
+    "main",
+    "settled-finalization-internal-session-test",
+  );
+  const admittedRunContext = await admission.admit("embedded");
+  const writer = await claimAgentSessionWriter({
+    admittedRunContext,
+    config: {},
+    runId: input.runId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+  } as never);
+  if (!writer) {
+    throw new Error("internal session writer was not claimed");
+  }
+  const writerFence = {
+    expectedLifecycleRevision: writer.expectedLifecycleRevision,
+    expectedWriterRunId: writer.expectedWriterRunId,
+  };
+  if (input.replacementWriterRunId) {
+    const replaced = await applySessionEntryOperation(
+      {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      },
+      {
+        kind: "fields",
+        expected: {
+          sessionId: target.sessionId,
+          lifecycleRevision: writer.expectedLifecycleRevision,
+        },
+        patch: { activeWriterRunId: input.replacementWriterRunId },
+      },
+      { skipMaintenance: true },
+    );
+    expect(replaced?.activeWriterRunId).toBe(input.replacementWriterRunId);
+  }
+  const attempt = createSettledToolUseAttempt(target);
+  const request = createSettledFinalizationTestInput(attempt, admittedRunContext);
+  // This fixture exercises transcript custody, not bundled provider policy loading.
+  // Keep terminal metadata on a synthetic provider so the test remains hermetic.
+  request.terminalBase.provider = "test-provider";
+  request.terminalBase.model = "test-model";
+  request.terminalBase.activeErrorContext = { provider: "test-provider", model: "test-model" };
+  request.initial.sessionIdUsed = target.sessionId;
+  request.initial.sessionFileUsed = target.sessionFile;
+  request.terminalBase.runParams = {
+    ...request.terminalBase.runParams,
+    agentId: target.agentId,
+    config: {},
+    runId: input.runId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sourceReplyDeliveryMode: "automatic",
+    terminalReplyExpectation: "required",
+    trigger: "user",
+  } as never;
+  request.finalization.preparedAttempt = {
+    ...request.finalization.preparedAttempt,
+    admittedRunContext,
+    agentId: target.agentId,
+    config: {},
+    runId: input.runId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+    workspaceDir: input.dir,
+  } as never;
+  request.finalization.sessionTarget = target;
+  request.finalization.sessionWriterFence = writerFence;
+  request.finalization.harness = emptyFinalizationHarness() as never;
+  return { admission, request, target, writerFence };
+}
 
 describe("internal session effects", () => {
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-internal-session-effects-");
@@ -244,6 +401,114 @@ describe("internal session effects", () => {
       }
     },
   );
+
+  it("persists settled-turn fallback into a claimed internal-effects session and cleanup removes it", async () => {
+    const dir = tempDirs.make();
+    await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => {
+      const runId = "skill-workshop-review:internal-fallback-success";
+      const errors: unknown[] = [];
+      const cleanup = createInternalSessionEffectsCleanup({
+        enabled: true,
+        agentId: "main",
+        runId,
+        storePath: path.join(dir, "sessions.json"),
+        onError: (error) => errors.push(error),
+      });
+      const fixture = await createInternalFallbackFixture({ dir, runId });
+      cleanup.track(fixture.target);
+      fixture.request.finalization.sessionWriterFence = undefined;
+      const state = await createEmbeddedRunSessionPromptState({
+        runParams: {
+          admittedRunContext: fixture.request.finalization.preparedAttempt.admittedRunContext,
+          config: {},
+          runId,
+          sessionId: fixture.target.sessionId,
+          sessionKey: fixture.target.sessionKey,
+          sessionFile: fixture.target.sessionFile,
+          sessionTarget: { ...fixture.target, ...fixture.writerFence },
+          workspaceDir: dir,
+          prompt: "finish the internal review",
+          timeoutMs: 60_000,
+        },
+        sessionAgentId: fixture.target.agentId,
+        resolvedSessionKey: fixture.target.sessionKey,
+        lifecycleGeneration: "test-generation",
+        onInterrupt: () => {},
+      });
+      try {
+        const result = await state.withSessionWriterContext(() =>
+          prepareTerminalWithSettledTurnFinalization(fixture.request),
+        );
+
+        expect(result.attempt.assistantTranscriptOwned).toBe(true);
+        expect(result.attempt.assistantTranscriptIdempotencyKey).toBe(
+          `${runId}:settled-finalization-fallback`,
+        );
+        await expect(loadTranscriptEvents(fixture.target)).resolves.toContainEqual(
+          expect.objectContaining({
+            message: expect.objectContaining({
+              idempotencyKey: `${runId}:settled-finalization-fallback`,
+              role: "assistant",
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  type: "text",
+                  text: expect.stringContaining("The tool run finished"),
+                }),
+              ]),
+            }),
+            type: "message",
+          }),
+        );
+        await cleanup.cleanup();
+        expect(errors).toEqual([]);
+        expect(loadExactSessionEntry(fixture.target)).toBeUndefined();
+        await expect(loadTranscriptEvents(fixture.target)).resolves.toEqual([]);
+      } finally {
+        await state[Symbol.asyncDispose]();
+        fixture.admission.close();
+      }
+    });
+  });
+
+  it("rejects settled-turn fallback after a genuine internal-effects writer replacement", async () => {
+    const dir = tempDirs.make();
+    await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => {
+      const fixture = await createInternalFallbackFixture({
+        dir,
+        runId: "skill-workshop-review:internal-fallback-replaced",
+        replacementWriterRunId: "replacement-review-run",
+      });
+      fixture.request.finalization.sessionWriterFence = undefined;
+      const state = await createEmbeddedRunSessionPromptState({
+        runParams: {
+          admittedRunContext: fixture.request.finalization.preparedAttempt.admittedRunContext,
+          config: {},
+          runId: "skill-workshop-review:internal-fallback-replaced",
+          sessionId: fixture.target.sessionId,
+          sessionKey: fixture.target.sessionKey,
+          sessionFile: fixture.target.sessionFile,
+          sessionTarget: { ...fixture.target, ...fixture.writerFence },
+          workspaceDir: dir,
+          prompt: "finish the internal review",
+          timeoutMs: 60_000,
+        },
+        sessionAgentId: fixture.target.agentId,
+        resolvedSessionKey: fixture.target.sessionKey,
+        lifecycleGeneration: "test-generation",
+        onInterrupt: () => {},
+      });
+      try {
+        await expect(
+          state.withSessionWriterContext(() =>
+            prepareTerminalWithSettledTurnFinalization(fixture.request),
+          ),
+        ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
+      } finally {
+        await state[Symbol.asyncDispose]();
+        fixture.admission.close();
+      }
+    });
+  });
 
   it("hard-deletes the hidden entry and transcript rows", async () => {
     const dir = tempDirs.make();

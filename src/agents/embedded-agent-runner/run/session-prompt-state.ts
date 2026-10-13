@@ -208,17 +208,35 @@ export async function createEmbeddedRunSessionPromptState(input: {
       return existingWriterFence ?? initialWriter?.committedFence;
     },
     withSessionWriterContext: <T>(run: () => Promise<T>): Promise<T> => {
-      const withContext = () =>
-        initialWriter && !initialWriter.committedFence
+      const withContext = () => {
+        if (initialWriter && !initialWriter.committedFence) {
+          return withOwnedSessionTranscriptWrites(
+            {
+              sessionTarget: initialTarget,
+              initialWriter,
+              withTranscriptWrite: initialWriter.withTranscriptWrite,
+            },
+            run,
+          );
+        }
+        const durableFence = existingWriterFence ?? initialWriter?.committedFence;
+        const durableTarget =
+          durableFence && activeSessionTarget
+            ? { ...activeSessionTarget, ...durableFence }
+            : undefined;
+        // Isolated finalization and other post-attempt work can resolve a fresh
+        // physical target. Keep the admitted durable writer fence ambient so that
+        // nested transcript writers inherit it instead of reopening unfenced.
+        return durableTarget
           ? withOwnedSessionTranscriptWrites(
               {
-                sessionTarget: initialTarget,
-                initialWriter,
-                withTranscriptWrite: initialWriter.withTranscriptWrite,
+                sessionTarget: durableTarget,
+                withTranscriptWrite: async (write) => write(),
               },
               run,
             )
           : runWithoutOwnedSessionTranscriptWrites(run);
+      };
       return initialOwner ? initialOwner.run(withContext) : withContext();
     },
     recordOutputLimitNotice: async (toolCallId: string | undefined) => {

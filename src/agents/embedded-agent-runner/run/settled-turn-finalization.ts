@@ -8,6 +8,7 @@ import { captureSessionWriterDeliveryRead } from "../../../auto-reply/reply/sess
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
   type SessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
@@ -625,12 +626,17 @@ async function persistSettledToolFallbackTranscript(input: {
       return undefined;
     }
     input.assertActive();
-    const fencedTarget = {
+    // Resolving the storage target can drop the caller's portable writer fence;
+    // re-inherit the ambient admitted claim before opening a nested write owner.
+    const fencedTarget = withOwnedSessionTranscriptWriterFence({
       ...resolvedTarget,
       sessionId: input.sessionId,
       expectedLifecycleRevision: target?.expectedLifecycleRevision,
       expectedWriterRunId: target?.expectedWriterRunId,
-    };
+    });
+    const resolvedHasWriterFence =
+      fencedTarget.expectedLifecycleRevision !== undefined ||
+      fencedTarget.expectedWriterRunId !== undefined;
     // A completed parent is irrelevant, but this child must still own the
     // fallback at the synchronous commit edge, including after queued writes.
     const result = await withOwnedSessionTranscriptWrites(
@@ -653,7 +659,7 @@ async function persistSettledToolFallbackTranscript(input: {
     }
     input.assertActive();
     if (!result.ok) {
-      if (hasWriterFence || result.code === "session-rebound") {
+      if (resolvedHasWriterFence || result.code === "session-rebound") {
         throw new SessionTranscriptWriterClaimReboundError();
       }
       log.warn(
