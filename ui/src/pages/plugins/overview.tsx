@@ -314,6 +314,30 @@ export function renderPluginDeclaredCapabilities(
   );
 }
 
+export function renderPluginContentCapabilities(params: {
+  contracts: Readonly<Record<string, readonly string[]>> | undefined;
+  uiCapabilities?: readonly PluginUiCapability[];
+  skillsSection?: JSX.Element;
+  skills: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; onOpen?: () => void }>;
+  mcpServers: readonly string[];
+  mcpServerDetails?: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"];
+}): JSX.Element {
+  return (
+    <>
+      {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
+      {params.skillsSection ??
+        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
+          <Icon name="bookOpenText" />
+        ))}
+      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
+        <Icon name="wrench" />
+      ))}
+      {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails)}
+    </>
+  );
+}
+
 export function renderPluginAskAction(onAsk?: () => void, primary = true) {
   return onAsk ? (
     <button

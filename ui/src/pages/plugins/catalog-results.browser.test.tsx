@@ -9,7 +9,7 @@ import {
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
-import { renderArtTile } from "./consent-dialog.tsx";
+import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginMcpServers } from "./overview.tsx";
@@ -196,11 +196,21 @@ it.each([
       () => (
         <>
           {whiteBackground ? (
-            renderArtTile("official", "Official", { iconUrl: icon, whiteBackground })
+            <PluginArtTile
+              slug="official"
+              name="Official"
+              iconUrl={icon}
+              whiteBackground={whiteBackground}
+            />
           ) : (
             <>
               <span class="installed-plugins-card__art">
-                {renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground })}
+                <PluginArtTile
+                  slug="demo"
+                  name="Demo"
+                  iconUrl={icon}
+                  whiteBackground={whiteBackground}
+                />
               </span>
               {renderPluginDetailShell({
                 id: "demo",
@@ -210,7 +220,14 @@ it.each([
                 onBack: vi.fn(),
                 identity: <></>,
                 panel: <></>,
-                icon: renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground }),
+                icon: (
+                  <PluginArtTile
+                    slug="demo"
+                    name="Demo"
+                    iconUrl={icon}
+                    whiteBackground={whiteBackground}
+                  />
+                ),
               })}
             </>
           )}
