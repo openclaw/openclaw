@@ -15,15 +15,19 @@ let setMattermostRuntime: typeof import("../runtime.js").setMattermostRuntime;
 let hasMattermostThreadParticipationWithPersistence: typeof import("./thread-participation.js").hasMattermostThreadParticipationWithPersistence;
 let recordMattermostThreadParticipation: typeof import("./thread-participation.js").recordMattermostThreadParticipation;
 
-function setRuntime(openKeyedStore: (options: OpenKeyedStoreOptions) => unknown): void {
+function setRuntime(openKeyedStoreV2: (options: OpenKeyedStoreOptions) => unknown): void {
   setMattermostRuntime({
-    state: { openKeyedStore },
+    state: { openKeyedStoreV2 },
     logging: { getChildLogger: () => ({ warn() {} }) },
   } as unknown as PluginRuntime);
 }
 
 function setPersistentRuntime(): void {
-  setRuntime((options) => stateRuntime.createPluginStateKeyedStoreForTests("mattermost", options));
+  setRuntime((options) =>
+    stateRuntime.createPluginStateKeyedStoreV2ForTests("mattermost", options, {
+      assertCurrent() {},
+    }),
+  );
 }
 
 describe("mattermost thread participation", () => {

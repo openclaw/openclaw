@@ -20,8 +20,10 @@ import {
   commitAcpSessionMutation,
   prepareAcpSessionMutation,
 } from "./session-meta-worker-mutation.js";
-import type { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
-import type { AcpSessionMutationSource } from "./session-meta-write.types.js";
+import type {
+  AcpSessionMutationParams,
+  AcpSessionMutationSource,
+} from "./session-meta-write.types.js";
 
 export function acquireAcpMemorySession(params: AcpSessionEntryReadInput, create = false) {
   const assertCurrent = () => params.assertCurrent?.();
@@ -96,7 +98,7 @@ async function prepareBoundMemoryAcpSessionEntryRead(
 }
 
 export async function upsertMemoryAcpSessionMeta(
-  params: Parameters<typeof upsertAcpSessionMetaNative>[0],
+  params: AcpSessionMutationParams,
 ): Promise<SessionEntry | null> {
   const binding = await acquireAcpMemorySession(params, true);
   if (!binding) {
@@ -112,7 +114,7 @@ export async function upsertMemoryAcpSessionMeta(
 }
 
 async function upsertBoundMemoryAcpSessionMeta(
-  params: Parameters<typeof upsertAcpSessionMetaNative>[0],
+  params: AcpSessionMutationParams,
   binding: SessionActorStorageBinding,
 ): Promise<SessionEntry | null> {
   const captured = await captureAcpSessionReadContext(params);

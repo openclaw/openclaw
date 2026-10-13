@@ -235,54 +235,62 @@ describe("SessionManager selected memory actor", () => {
     expect(manager.getEntry(entryId)).toMatchObject({ message: { content: "accepted" } });
   });
 
-  it("reads an unbound missing session without creation and creates only on its first append", async () => {
-    const env = { OPENCLAW_STATE_DIR: "/synthetic/session-manager-unbound" };
-    const options = {
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-    };
-    registryOwners.push(options);
-    const target = {
-      agentId: "main",
-      storePath: options.path,
-      env,
-      sessionKey: "agent:main:dashboard:incognito-unbound",
-      sessionId: "unbound",
-    };
-    expect(
-      await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
-    ).toEqual([]);
-    const manager = await SessionManager.openAsync(target);
-    expect(manager.getEntries()).toEqual([]);
-    const bounded = await SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 });
-    const context = await SessionManager.openModelContextAsync(target);
-    expect(bounded.getEntries()).toEqual([]);
-    expect(context.buildSessionContext().messages).toEqual([]);
-    expect(context.isPersisted()).toBe(false);
-    expect(memorySessionActorOwners.read(options)).toBeUndefined();
-    const first = makeUserMessage("unbound first", 1);
-    const writer = await SessionManager.openAsync(target);
-    await writer.appendMessageAsync(first);
-    await manager.reloadPersistedTranscriptAsync();
-    await bounded.reloadPersistedTranscriptAsync();
-    expect(manager.buildSessionContext().messages).toEqual([first]);
-    expect(bounded.buildSessionContext().messages).toEqual([first]);
-    const owner = memorySessionActorOwners.read(options)!;
-    expect(owner.readSession(target.sessionKey, authority)?.entry).toMatchObject({
-      sessionId: target.sessionId,
-      incognito: true,
-    });
-    const second = makeUserMessage("manager second", 2);
-    await manager.appendMessageAsync(second);
-    await bounded.reloadPersistedTranscriptAsync();
-    expect(bounded.buildSessionContext().messages).toEqual([first, second]);
-    expect(
-      await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
-    ).toEqual([first, second]);
-    expect(() => SessionManager.open(target)).toThrow(/Async/);
-    memorySessionActorOwners.closeDatabase(options);
-    await expect(manager.reloadPersistedTranscriptAsync()).rejects.toThrow(/closed/);
-  });
+  it.each(["agent:main:dashboard:incognito-unbound", "agent:main:dashboard:ordinary-unbound"])(
+    "opens and reopens unbound %s at an explicit memory path without SQLite",
+    async (sessionKey) => {
+      const env = { OPENCLAW_STATE_DIR: "/synthetic/session-manager-unbound" };
+      const options = {
+        agentId: "main",
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+      };
+      registryOwners.push(options);
+      const target = {
+        agentId: "main",
+        storePath: options.path,
+        env,
+        sessionKey,
+        sessionId: "unbound",
+      };
+      expect(
+        await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
+      ).toEqual([]);
+      const manager = await SessionManager.openAsync(target);
+      expect(manager.getEntries()).toEqual([]);
+      const bounded = await SessionManager.openBoundedAsync(target, {
+        maxBytes: 4096,
+        maxEvents: 5,
+      });
+      const context = await SessionManager.openModelContextAsync(target);
+      expect(bounded.getEntries()).toEqual([]);
+      expect(context.buildSessionContext().messages).toEqual([]);
+      expect(context.isPersisted()).toBe(false);
+      expect(memorySessionActorOwners.read(options)).toBeUndefined();
+      const first = makeUserMessage("unbound first", 1);
+      const writer = await SessionManager.openAsync(target);
+      await writer.appendMessageAsync(first);
+      const reopened = await SessionManager.openAsync(target);
+      expect(reopened.buildSessionContext().messages).toEqual([first]);
+      await manager.reloadPersistedTranscriptAsync();
+      await bounded.reloadPersistedTranscriptAsync();
+      expect(manager.buildSessionContext().messages).toEqual([first]);
+      expect(bounded.buildSessionContext().messages).toEqual([first]);
+      const owner = memorySessionActorOwners.read(options)!;
+      expect(owner.readSession(target.sessionKey, authority)?.entry).toMatchObject({
+        sessionId: target.sessionId,
+        incognito: true,
+      });
+      const second = makeUserMessage("manager second", 2);
+      await manager.appendMessageAsync(second);
+      await bounded.reloadPersistedTranscriptAsync();
+      expect(bounded.buildSessionContext().messages).toEqual([first, second]);
+      expect(
+        await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
+      ).toEqual([first, second]);
+      expect(() => SessionManager.open(target)).toThrow(/Async/);
+      memorySessionActorOwners.closeDatabase(options);
+      await expect(manager.reloadPersistedTranscriptAsync()).rejects.toThrow(/closed/);
+    },
+  );
 
   it("keeps the owner after the opening caller releases and releases operation handles on failure", async () => {
     const { actor, target, run, owner, storage } = await fixture("operation-lifetime");

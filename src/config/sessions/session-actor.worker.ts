@@ -22,6 +22,7 @@ import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorOperations,
@@ -231,7 +232,8 @@ export function createSessionActorWorker(
     });
   const prepareEntryPatch = (database: OpenClawAgentDatabase, sessionKey: string) => {
     const before = retainedState(database, sessionKey);
-    if (!before?.hot.entry) {
+    const selected = before?.entryRows.get(sessionKey);
+    if (!before?.hot.entry || !selected) {
       return undefined;
     }
     const previousEntry = before.hot.entry;
@@ -274,6 +276,16 @@ export function createSessionActorWorker(
       }
     };
     return {
+      snapshot: () =>
+        captureSessionEntrySnapshot({
+          entry: structuredClone(previousEntry),
+          row: {
+            ...structuredClone(selected.row),
+            window: before.window ? structuredClone(before.window) : null,
+            member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
+            board_present: before.hasBoard ? 1 : 0,
+          },
+        }),
       transcript: {
         sessionId: previousEntry.sessionId,
         watermark: { ...before.hot.transcript.watermark },

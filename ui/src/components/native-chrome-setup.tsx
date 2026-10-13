@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { NativeChromeExtensionSetupAction } from "../app/native-chrome-setup.ts";
 import type { LegacyChromeInstallResult } from "../app/native-device-settings.ts";
 import { projectNativeDeviceSettings } from "../lib/reactive/application-native.ts";
@@ -9,8 +9,7 @@ import { ChromeSetupStatus, type ChromeSetupStatusProps } from "./chrome-setup-s
 import "./native-chrome-setup.css";
 
 const resetOnDisconnect = new WeakMap<HTMLElement, () => void>();
-type Props = { autoInspect: boolean };
-function NativeChromeSetupContent(props: Props, host: HTMLElement) {
+function NativeChromeSetupContent(_: object, host: HTMLElement) {
   const capability = useOptionalApplication()?.nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : undefined;
   const browser = () => projection?.read()?.browser;
@@ -43,19 +42,8 @@ function NativeChromeSetupContent(props: Props, host: HTMLElement) {
     if (projection?.read()?.device.platform !== "macos") {
       return [];
     }
-    return [
-      ...(capability.installChromeExtension ? ["install" as const] : []),
-      ...(props.autoInspect && capability.chromeExtensionStatus ? ["inspect" as const] : []),
-    ];
+    return capability.installChromeExtension ? ["install"] : [];
   });
-  const needsInstall = () => {
-    const installation = state().result?.installation ?? state().legacyResult;
-    return (
-      !installation ||
-      !installation.nativeHostRegistered ||
-      (installation.installedProfiles ?? installation.discoveredProfiles) === 0
-    );
-  };
   const setup = async (action: NativeChromeExtensionSetupAction) => {
     if (!host.isConnected || !capability || pending || !actions().includes(action)) {
       return;
@@ -87,7 +75,7 @@ function NativeChromeSetupContent(props: Props, host: HTMLElement) {
       if (isCurrent()) {
         setState((value) => ({
           ...value,
-          failed: props.autoInspect && action === "inspect" ? "inspection" : "setup",
+          failed: "setup",
         }));
       }
     } finally {
@@ -97,21 +85,6 @@ function NativeChromeSetupContent(props: Props, host: HTMLElement) {
       }
     }
   };
-  createEffect(
-    () => props.autoInspect && Boolean(browser()),
-    (inspect) => {
-      if (!inspect) {
-        return undefined;
-      }
-      const refresh = () => void setup("inspect");
-      window.addEventListener("focus", refresh);
-      refresh();
-      return () => {
-        window.removeEventListener("focus", refresh);
-        reset();
-      };
-    },
-  );
   const visibleActions = () =>
     (
       [
@@ -119,11 +92,7 @@ function NativeChromeSetupContent(props: Props, host: HTMLElement) {
         ["inspect", "chromeExtensionRefresh"],
         ["verify", "chromeExtensionVerify"],
       ] as const
-    ).filter(
-      ([action]) =>
-        actions().includes(action) &&
-        (action !== "install" || !props.autoInspect || needsInstall()),
-    );
+    ).filter(([action]) => actions().includes(action));
   return (
     <Show when={browser()}>
       <div class="native-chrome-setup">
@@ -153,7 +122,7 @@ function NativeChromeSetupContent(props: Props, host: HTMLElement) {
   );
 }
 
-defineSolidBridge<Props>("openclaw-native-chrome-setup", NativeChromeSetupContent, {
-  properties: { autoInspect: { default: false, attribute: "auto-inspect" } },
+defineSolidBridge("openclaw-native-chrome-setup", NativeChromeSetupContent, {
+  properties: {},
   disconnected: (host) => resetOnDisconnect.get(host)?.(),
 });

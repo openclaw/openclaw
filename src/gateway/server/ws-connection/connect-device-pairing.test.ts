@@ -31,10 +31,14 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../../state/openclaw-state-db.js";
 import { readUserGitHubConnectionAsync } from "../../../state/user-github-connections.js";
 import { disconnectedUserGitHubConnection } from "../../../state/user-github-connections.kernel.js";
 import { updateUserGitHubConnection } from "../../../state/user-github-connections.test-support.js";
+import { publishUserProfilesChange } from "../../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
 import {
@@ -330,12 +334,16 @@ describe("gateway connect pairing exemptions", () => {
       const stateDb = openOpenClawStateDatabase();
       const db = stateDb.db;
       // The old merge writer moved identities to the person and left the owner tombstone.
-      db.prepare(
-        "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
-      ).run(person.id);
-      db.prepare(
-        "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
-      ).run(person.id);
+      runOpenClawStateWriteTransaction(() => {
+        db.prepare(
+          "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
+        ).run(person.id);
+        db.prepare(
+          "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
+        ).run(person.id);
+        publishUserProfilesChange(db, "gateway-owner", person.id);
+      });
+
       started.ws.close();
       const logPath = path.join(path.dirname(stateDb.path), "owner-repair.log");
       setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });

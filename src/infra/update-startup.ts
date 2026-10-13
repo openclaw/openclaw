@@ -458,6 +458,7 @@ async function runGatewayUpdateCheckOwned(
     if (!isCurrent()) {
       return;
     }
+    lifecycle.installStatus = installStatus;
     lifecycle.publicationGeneration += 1;
     if (!update) {
       updateCampaign.clear();

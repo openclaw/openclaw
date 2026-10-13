@@ -21,7 +21,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
-const container = createComposerContainer();
+let container: ReturnType<typeof createComposerContainer>;
 const audience = {
   role: "assistant",
   content: "Which audience?",
@@ -39,6 +39,7 @@ const terminal = (runId: string) => ({
 });
 beforeEach(() => {
   installTranscriptDomMocks();
+  container = createComposerContainer();
   document.body.append(container);
 });
 afterEach(() => {

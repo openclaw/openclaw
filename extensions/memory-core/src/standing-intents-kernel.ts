@@ -42,6 +42,10 @@ export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
   lifecycleDeadlines.delete(db);
 }
 
+export function getStandingIntentLifecycleDeadline(db: DatabaseSync): number | null {
+  return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
+}
+
 export function hasNoActiveStandingIntents(db: DatabaseSync): boolean {
   return lifecycleDeadlines.get(db)?.hasActiveIntents === false;
 }

@@ -10,6 +10,7 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
@@ -278,12 +279,20 @@ export class ChatTranscriptRenderer {
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
           element.addEventListener("click", capture, true);
           onCleanup(() => element.removeEventListener("click", capture, true));
-          return (
+          const content = () => (
             <TranscriptMediaDisconnect value={this.mediaDisconnect}>
               <SolidContentPresentation value={active}>
                 <TranscriptRows snapshot={snapshot()} />
               </SolidContentPresentation>
             </TranscriptMediaDisconnect>
+          );
+          // Keep the session root independent while retaining its application capabilities.
+          return (
+            <Show when={snapshot().applicationContext} fallback={content()} keyed>
+              {(application) => (
+                <ApplicationProvider value={application}>{content()}</ApplicationProvider>
+              )}
+            </Show>
           );
         }, element),
       );

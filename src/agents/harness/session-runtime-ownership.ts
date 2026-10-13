@@ -13,6 +13,8 @@ import { AgentHarnessPreflightError } from "./errors.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "./types.js";
 
+export class SessionRuntimeOwnershipChanged extends AgentHarnessPreflightError {}
+
 type SessionRuntimeOwnershipReadParams = {
   config?: OpenClawConfig;
   agentId?: string;
@@ -68,7 +70,7 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
       entry?.sessionId !== sessionId ||
       resolveSessionPinnedHarnessId(entry) !== harnessId
     ) {
-      throw new AgentHarnessPreflightError(
+      throw new SessionRuntimeOwnershipChanged(
         "Native session ownership changed while reading its runtime. Reattach the original native session before retrying.",
       );
     }

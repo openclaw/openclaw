@@ -42,8 +42,8 @@ type AgentEmojiPickerProps = {
   disabled: boolean;
   onSelect: (emoji: string) => void;
 };
-export type AgentEmojiPicker = SolidBridgeElement<AgentEmojiPickerProps>;
-export const AgentEmojiPicker = defineSolidBridge<AgentEmojiPickerProps>(
+type AgentEmojiPicker = SolidBridgeElement<AgentEmojiPickerProps>;
+defineSolidBridge<AgentEmojiPickerProps>(
   "openclaw-agent-emoji-picker",
   (props) => {
     const [query, setQuery] = createSignal("");

@@ -1,9 +1,7 @@
-import { cleanup, render } from "@solidjs/testing-library";
-import { nothing, render as renderLit } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { renderHubTabs } from "../hub-tabs.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { HubTabs } from "./hub-tabs.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import hubStyles from "../../styles/hub-tabs.css?inline";
@@ -16,7 +14,7 @@ it("keeps hub typography, selected ink, and compact height when native defaults 
   styles.textContent = [baseStyles, settingsStyles, hubStyles, tabsStyles].join("\n");
   document.head.append(styles);
   const [active, setActive] = createSignal("messages");
-  const view = render(() => (
+  const view = mountSolid(() => (
     <section class="shell--settings">
       <HubTabs
         id="parity"
@@ -96,7 +94,7 @@ afterEach(() => {
     .splice(0)
     .toReversed()
     .forEach((dispose) => dispose());
-  cleanup();
+  cleanupSolid();
   hosts.splice(0).forEach((host) => host.remove());
   vi.restoreAllMocks();
 });
@@ -110,7 +108,7 @@ function shadow() {
   return host.attachShadow({ mode: "closed" });
 }
 
-function mountShadowHub(root: ShadowRoot, renderer: "lit" | "solid", id: string) {
+function mountShadowHub(root: ShadowRoot, id: string) {
   const container = document.createElement("div");
   root.append(container);
   const onSelect = vi.fn();
@@ -125,22 +123,15 @@ function mountShadowHub(root: ShadowRoot, renderer: "lit" | "solid", id: string)
     panelId: `${id}-panel`,
     onSelect,
   };
-  let unmount: () => void;
-  if (renderer === "solid") {
-    const view = render(() => createComponent(HubTabs, props), { container });
-    flush();
-    unmount = view.unmount;
-  } else {
-    renderLit(renderHubTabs(props), container);
-    unmount = () => renderLit(nothing, container);
-  }
+  const view = mountSolid(() => createComponent(HubTabs, props), { container });
+  flush();
   let disposed = false;
   const dispose = () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    unmount();
+    view.unmount();
     container.remove();
   };
   disposers.push(dispose);
@@ -163,43 +154,40 @@ function expectSkin(container: HTMLElement) {
 }
 
 describe("native hub shadow styles", () => {
-  it.each(["lit", "solid"] as const)(
-    "keeps %s tab skins and one keyboard owner through closed-shadow ancestor moves",
-    async (renderer) => {
-      const first = shadow();
-      const second = shadow();
-      const moved = mountShadowHub(first, renderer, "moved");
-      const retained = mountShadowHub(first, renderer, "retained");
-      await Promise.resolve();
-      const tab = expectSkin(moved.container);
-      expectSkin(retained.container);
-      expect(sheets(first)).toHaveLength(2);
+  it("keeps tab skins and one keyboard owner through closed-shadow ancestor moves", async () => {
+    const first = shadow();
+    const second = shadow();
+    const moved = mountShadowHub(first, "moved");
+    const retained = mountShadowHub(first, "retained");
+    await Promise.resolve();
+    const tab = expectSkin(moved.container);
+    expectSkin(retained.container);
+    expect(sheets(first)).toHaveLength(2);
 
-      second.append(moved.container);
-      await Promise.resolve();
-      expect(expectSkin(moved.container)).toBe(tab);
-      expect(sheets(first)).toHaveLength(2);
-      expect(sheets(second)).toHaveLength(2);
-      moved.container
-        .querySelector("#moved-tab-second")!
-        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      expect(moved.onSelect).toHaveBeenCalledExactlyOnceWith("second");
+    second.append(moved.container);
+    await Promise.resolve();
+    expect(expectSkin(moved.container)).toBe(tab);
+    expect(sheets(first)).toHaveLength(2);
+    expect(sheets(second)).toHaveLength(2);
+    moved.container
+      .querySelector("#moved-tab-second")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(moved.onSelect).toHaveBeenCalledExactlyOnceWith("second");
 
-      const observed = vi.spyOn(MutationObserver.prototype, "observe");
-      const unrelated = document.createElement("div");
-      second.append(unrelated);
-      await Promise.resolve();
-      const activeSheets = sheets(second);
-      unrelated.append(document.createElement("span"));
-      await Promise.resolve();
-      expect(observed).not.toHaveBeenCalled();
-      expect(sheets(second)).toEqual(activeSheets);
+    const observed = vi.spyOn(MutationObserver.prototype, "observe");
+    const unrelated = document.createElement("div");
+    second.append(unrelated);
+    await Promise.resolve();
+    const activeSheets = sheets(second);
+    unrelated.append(document.createElement("span"));
+    await Promise.resolve();
+    expect(observed).not.toHaveBeenCalled();
+    expect(sheets(second)).toEqual(activeSheets);
 
-      retained.dispose();
-      expect(sheets(first)).toHaveLength(0);
-      expect(sheets(second)).toHaveLength(2);
-      moved.dispose();
-      expect(sheets(second)).toHaveLength(0);
-    },
-  );
+    retained.dispose();
+    expect(sheets(first)).toHaveLength(0);
+    expect(sheets(second)).toHaveLength(2);
+    moved.dispose();
+    expect(sheets(second)).toHaveLength(0);
+  });
 });

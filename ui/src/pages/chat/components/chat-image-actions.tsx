@@ -1,9 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html } from "lit";
-import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+
+let nextMenuId = 0;
 
 function imageDownloadFileName(title: string, mimeType: string): string {
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
@@ -52,11 +54,11 @@ async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
   }
 }
 
-export function renderChatImageActions(title: string, readOriginalBlob: () => Promise<Blob>) {
+export function ChatImageActions(props: { title: string; readOriginalBlob: () => Promise<Blob> }) {
   const download = async () => {
     try {
-      const blob = await readOriginalBlob();
-      downloadImageBlob(blob, imageDownloadFileName(title, blob.type));
+      const blob = await props.readOriginalBlob();
+      downloadImageBlob(blob, imageDownloadFileName(props.title, blob.type));
     } catch {
       showToast({ message: t("chat.imageLightbox.downloadFailed") });
     }
@@ -67,7 +69,7 @@ export function renderChatImageActions(title: string, readOriginalBlob: () => Pr
       if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
         throw new Error("image clipboard is unavailable");
       }
-      const png = readOriginalBlob().then(convertImageBlobToPng);
+      const png = props.readOriginalBlob().then(convertImageBlobToPng);
       void png.catch(() => {});
       await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
       showToast({ message: t("common.copied") });
@@ -75,41 +77,43 @@ export function renderChatImageActions(title: string, readOriginalBlob: () => Pr
       showToast({ message: t("chat.imageLightbox.copyFailed") });
     }
   };
-  return html`
-    <wa-dropdown
+  const id = `chat-image-actions-${++nextMenuId}`;
+  return (
+    <Menu
+      id={id}
       class="chat-image-actions"
+      triggerClass="chat-image-action"
       placement="bottom-end"
-      aria-label=${t("chat.imageLightbox.actions")}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        if (event.detail.item.value === "copy") {
-          void copy();
-        } else if (event.detail.item.value === "download") {
-          void download();
-        }
+      label={t("chat.imageLightbox.actions")}
+      triggerAttributes={{ title: t("chat.imageLightbox.actions") }}
+      trigger={<Icon name="moreHorizontal" />}
+      items={[
+        {
+          id: "copy",
+          label: t("chat.imageLightbox.copy"),
+          class: "session-menu__item",
+          icon: (
+            <span class="session-menu__icon">
+              <Icon name="copy" />
+            </span>
+          ),
+          content: <span class="session-menu__text">{t("chat.imageLightbox.copy")}</span>,
+        },
+        {
+          id: "download",
+          label: t("chat.imageLightbox.download"),
+          class: "session-menu__item",
+          icon: (
+            <span class="session-menu__icon">
+              <Icon name="download" />
+            </span>
+          ),
+          content: <span class="session-menu__text">{t("chat.imageLightbox.download")}</span>,
+        },
+      ]}
+      onSelect={(item) => {
+        void (item.id === "copy" ? copy() : download());
       }}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.actions")}
-        aria-label=${t("chat.imageLightbox.actions")}
-      >
-        ${icons.moreHorizontal}
-      </button>
-      ${(
-        [
-          ["copy", "chat.imageLightbox.copy", icons.copy],
-          ["download", "chat.imageLightbox.download", icons.download],
-        ] as const
-      ).map(
-        ([value, label, icon]) => html`
-          <wa-dropdown-item class="session-menu__item" value=${value}>
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-            <span class="session-menu__text">${t(label)}</span>
-          </wa-dropdown-item>
-        `,
-      )}
-    </wa-dropdown>
-  `;
+    />
+  );
 }

@@ -184,7 +184,7 @@ describe("standing intents", () => {
     let worker = bindSqliteWorkerBackend(undefined, context);
     const match = (prompt = "release", nowMs = 1_000) =>
       worker.execute({ type: "match", input: prepareStandingIntentMatch({ prompt, nowMs })! });
-    const empty = { kind: "result", value: [] };
+    const empty = { kind: "result", value: [], nextDueAt: Infinity };
     const row = {
       id: "release",
       description: "Review the release.",
@@ -210,7 +210,7 @@ describe("standing intents", () => {
       expect(match()).toEqual(empty);
       expect(observation.queries).toEqual([]);
       worker.execute({ type: "create", input: row });
-      expect(match("unrelated")).toEqual(empty);
+      expect(match("unrelated")).toEqual({ ...empty, nextDueAt: row.expires_at });
       expect(match()).toMatchObject({
         kind: "result",
         value: [{ id: row.id, status: "done", fireCount: 1 }],

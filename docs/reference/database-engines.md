@@ -60,8 +60,8 @@ on SQLite until the future `openclaw database port` tool is available; selecting
 PostgreSQL refuses the existing store instead of copying, replacing, or ignoring
 its data. Omitting `database` preserves the SQLite default, so ordinary updates
 require no configuration or data migration. The port command remains disabled;
-enablement requires a published release containing PostgreSQL-aware backup,
-update recovery, and target engine admission.
+enablement depends on PostgreSQL-aware backup, update recovery, target engine
+admission, and the offline port orchestration and verification work.
 
 ## Isolation and durability
 
@@ -151,6 +151,14 @@ admission behavior. The installed driver owns this check; a candidate cannot
 repair an older driver. See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
+
+Startup checks the fixed `recovery/database-port/manifest.json` under the selected
+state directory before CLI config snapshots and again after acquiring fresh
+Gateway or embedded-writer custody. An absent manifest or valid completed
+manifest permits startup. An incomplete, unreadable, malformed, or unknown
+manifest refuses startup and identifies the recovery artifact. These checks do
+not open a database. The port command and its recovery actions are not yet
+available; keep the manifest and its captured originals intact.
 
 Fresh stores bootstrap from generated PostgreSQL DDL at the current store schema
 version. PostgreSQL forward migrations are not available until schema lockstep
