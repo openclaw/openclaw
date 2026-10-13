@@ -105,8 +105,10 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
   let inlineCode = createInlineCodeState();
   let fence: FenceScanState = {};
   // Speech-only Markdown must not change the code ownership of later visible text.
-  const trackVisibleText = (text: string): string => {
-    const code = buildCodeSpanIndex(text, inlineCode, fence);
+  const trackVisibleText = (
+    text: string,
+    code = buildCodeSpanIndex(text, inlineCode, fence),
+  ): string => {
     inlineCode = code.inlineState;
     fence = code.fenceState;
     return text;
@@ -142,22 +144,24 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
           pending = input.slice(tagStart);
           break;
         }
+        const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
+        const keepTag = tag === "other";
         let insideCode = false;
         if (!insideHiddenTextBlock) {
           const segment = input.slice(index, tagEnd + 2);
           const code = buildCodeSpanIndex(segment, inlineCode, fence);
           insideCode = code.isInside(tagStart - index);
-          output += trackVisibleText(input.slice(index, tagStart));
+          // A tag can be the trailing text that prevents a fence from closing.
+          output += trackVisibleText(
+            input.slice(index, keepTag ? tagEnd + 2 : tagStart),
+            insideCode || keepTag ? code : undefined,
+          );
         }
 
-        const rawTag = input.slice(tagStart, tagEnd + 2);
-        const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
         if (tag === "hidden-open") {
           insideHiddenTextBlock = true;
         } else if (tag === "hidden-close") {
           insideHiddenTextBlock = false;
-        } else if (tag === "other" && !insideHiddenTextBlock) {
-          output += trackVisibleText(rawTag);
         } else if (tag === "tts" && !insideHiddenTextBlock && !insideCode) {
           const body = /^\s*tts\s*:([\s\S]*)$/i.exec(input.slice(tagStart + 2, tagEnd))?.[1];
           if (body !== undefined) {
