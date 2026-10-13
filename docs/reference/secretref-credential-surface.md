@@ -112,6 +112,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 - `database.postgres.connection`
 
+#### `diagnostics`
+
+- `diagnostics.otel.headers.*`
+
 #### `gateway`
 
 - `gateway.auth.password`

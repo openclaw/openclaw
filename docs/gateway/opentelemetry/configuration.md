@@ -50,7 +50,10 @@ paths.
       protocol: "http/protobuf",
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
       metricNamePrefix: "acme.", // optional; include the separator
-      headers: { "x-collector-token": "..." },
+      headers: {
+        // Plain string or SecretRef (env, file, exec, store).
+        "x-collector-token": { source: "env", provider: "default", id: "OTEL_COLLECTOR_TOKEN" },
+      },
       traces: true,
       metrics: true,
       logs: true,

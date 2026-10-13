@@ -141,6 +141,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     "agents.entries.*.memory.search.remote.apiKey",
     "cron.webhookToken",
     "database.postgres.connection",
+    "diagnostics.otel.headers.*",
     "gateway.auth.token",
     "gateway.auth.password",
     "gateway.remote.password",

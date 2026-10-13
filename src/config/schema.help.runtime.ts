@@ -412,7 +412,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "diagnostics.otel.protocol":
     'OTel transport protocol for telemetry export. Only "http/protobuf" is accepted; run "openclaw doctor --fix" to repair a persisted legacy "grpc" value or get source-specific manual-edit guidance.',
   "diagnostics.otel.headers":
-    "Additional HTTP request headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
+    "Additional HTTP request headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Values accept plain strings or SecretRefs; keep tokens in SecretRefs and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
   "diagnostics.otel.metricNamePrefix":

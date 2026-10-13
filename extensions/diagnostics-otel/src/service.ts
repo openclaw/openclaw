@@ -162,6 +162,26 @@ type DiagnosticsOtelState = {
   retireExporterRoutes?: (preserveFailures?: boolean) => void;
 };
 
+// The runtime snapshot resolves SecretRef header values to strings. A value that
+// is still an object never reached the snapshot, so drop it rather than send it.
+function resolveOtelHeaders(
+  headers: Record<string, unknown> | undefined,
+  warn: (message: string) => void,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const resolved: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value === "string") {
+      resolved[name] = value;
+    } else {
+      warn(`diagnostics-otel: header ${name} has no resolved value; it is not sent`);
+    }
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let state: DiagnosticsOtelState = {};
   let preserveExporterRoutesOnNextStop = false;
@@ -347,7 +367,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const endpoint = hasOwnedOtlpSignal
         ? normalizeOptionalString(otel.endpoint ?? sharedEnvEndpoint)
         : undefined;
-      const headers = otel.headers ?? undefined;
+      const headers = resolveOtelHeaders(otel.headers, (message) => ctx.logger.warn(message));
       const serviceName =
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
       const sampleRate = asFiniteNumberInRange(otel.sampleRate, { min: 0, max: 1 });
