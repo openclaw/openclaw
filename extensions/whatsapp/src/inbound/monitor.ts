@@ -12,7 +12,7 @@ import {
   createWhatsAppGroupMetadataCacheOwner,
   type WhatsAppGroupMetadataCache,
 } from "./group-metadata-cache.js";
-import { closeInboundMonitorSocket } from "./lifecycle.js";
+import { closeInboundMonitorSocket, holdInboundUntilIntake, takeHeldInbound } from "./lifecycle.js";
 import { createWhatsAppMessageDeliveryCoordinator } from "./message-delivery.js";
 import { createWebSendApi } from "./send-api.js";
 import { createWhatsAppAttachedSocketSession } from "./socket-session.js";
@@ -125,17 +125,23 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
       return meta?.participants?.length ? meta : undefined;
     },
   });
+  holdInboundUntilIntake(sock);
   try {
     await waitForWaConnection(sock, { timeoutMs: socketTiming.connectTimeoutMs });
   } catch (error) {
     closeInboundMonitorSocket(sock);
     throw error;
   }
-  return attachWebInboxToSocket({
-    ...options,
-    socketTiming,
-    sock,
-    recentMessageKeys,
-    baileysGroupMetaCache,
-  });
+  try {
+    return await attachWebInboxToSocket({
+      ...options,
+      socketTiming,
+      sock,
+      recentMessageKeys,
+      baileysGroupMetaCache,
+    });
+  } catch (error) {
+    takeHeldInbound(sock);
+    throw error;
+  }
 }

@@ -13,6 +13,7 @@ import {
   type WhatsAppConnectionOwnerLease,
 } from "./connection-owner.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
+import { holdInboundUntilIntake } from "./inbound/lifecycle.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import { getWhatsAppChannelRuntime } from "./runtime.js";
@@ -580,6 +581,7 @@ export class WhatsAppConnectionController {
         ...(params.getMessage ? { getMessage: params.getMessage } : {}),
         ...(params.cachedGroupMetadata ? { cachedGroupMetadata: params.cachedGroupMetadata } : {}),
       });
+      holdInboundUntilIntake(sock);
       this.throwIfSetupStopped();
       await this.waitForSetupStep(
         waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs }),
