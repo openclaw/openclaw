@@ -89,7 +89,7 @@ function collectFutureToolResults(
     }
     const role = (candidate as { role?: unknown }).role;
     // Text-only assistant interruptions do not own the following tool results.
-    if (role === "assistant" && extractToolCallsFromAssistant(candidate).length > 0) {
+    if (candidate.role === "assistant" && extractToolCallsFromAssistant(candidate).length > 0) {
       break;
     }
     const content = (candidate as { content?: unknown }).content;

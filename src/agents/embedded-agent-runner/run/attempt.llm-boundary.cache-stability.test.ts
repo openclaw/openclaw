@@ -343,7 +343,7 @@ describe("prompt-cache boundary regressions", () => {
           errorMessage: "private provider diagnostic",
           __openclaw: { runId: "first-run", itemId: "first-item" },
         };
-        const messages: AgentMessage[] = [
+        const messages = [
           user("First question"),
           failed,
           ...(contentKind === "completed-tool"
@@ -363,7 +363,7 @@ describe("prompt-cache boundary regressions", () => {
             api,
             provider: failed.provider,
             model: failed.model,
-            content: [{ type: "text", text: "Recovered reply." }],
+            content: [{ type: "text" as const, text: "Recovered reply." }],
             __openclaw: { runId: "recovered-run", itemId: "recovered-item" },
           },
           staged,
