@@ -55,8 +55,35 @@ function findBackup() {
     .map((name) => path.join(path.dirname(shared), name))[0]!;
 }
 
-function readManifest() {
-  return readSessionSqliteMigrationManifest(listSessionSqliteMigrationManifestPaths(env)[0]!)!;
+function readTarget() {
+  return readSessionSqliteMigrationManifest(listSessionSqliteMigrationManifestPaths(env)[0]!)!
+    .targets[0]!;
+}
+
+/** Record a verified pre-migration backup and mark the run finished, as a completed update would. */
+async function prepareCompletedBackup() {
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: () => {},
+  });
+  try {
+    await maintenance.run(() =>
+      backupDoctorMigrationDatabases({
+        env,
+        pendingDatabasePaths: [shared],
+        databasePaths: [shared],
+      }),
+    );
+    const manifestPath = listSessionSqliteMigrationManifestPaths(env)[0]!;
+    const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
+    for (const target of manifest.targets) {
+      target.validationBeforeArchive = "passed";
+    }
+    manifest.completedAt = new Date(Date.now() - 600_000).toISOString();
+    writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+  } finally {
+    await maintenance.close();
+  }
 }
 
 describe("Doctor NOCOW recovery-identity reconciliation", () => {
@@ -73,32 +100,9 @@ describe("Doctor NOCOW recovery-identity reconciliation", () => {
   });
 
   it("keeps a recorded recovery original retirable after a NOCOW rewrite", async () => {
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => {},
-    });
-    try {
-      await maintenance.run(() =>
-        backupDoctorMigrationDatabases({
-          env,
-          pendingDatabasePaths: [shared],
-          databasePaths: [shared],
-        }),
-      );
-      // Equivalent to completeDoctorMigrationBackups: mark the run finished and validated.
-      const manifestPath = listSessionSqliteMigrationManifestPaths(env)[0]!;
-      const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
-      for (const target of manifest.targets) {
-        target.validationBeforeArchive = "passed";
-      }
-      manifest.completedAt = new Date(Date.now() - 600_000).toISOString();
-      writeSessionSqliteMigrationManifest({ manifestPath, manifest });
-    } finally {
-      await maintenance.close();
-    }
-
+    await prepareCompletedBackup();
     const backupPath = findBackup();
-    const recorded = readManifest().targets[0]!.plannedMoves[0]!.artifact!.identity;
+    const recorded = readTarget().plannedMoves[0]!.artifact!.identity;
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env });
     expect(preview.artifacts.find((item) => item.path === backupPath)).toMatchObject({
       outcome: "candidate",
@@ -117,7 +121,7 @@ describe("Doctor NOCOW recovery-identity reconciliation", () => {
     );
 
     // Doctor re-records the relocated identity, so the original stays an eligible candidate.
-    const rewritten = readManifest().targets[0]!;
+    const rewritten = readTarget();
     const liveBackup = fs.lstatSync(backupPath, { bigint: true });
     expect(String(liveBackup.ino)).not.toBe(recorded.ino);
     expect(rewritten.plannedMoves[0]!.artifact!.identity).toMatchObject({
@@ -136,5 +140,28 @@ describe("Doctor NOCOW recovery-identity reconciliation", () => {
       outcome: "candidate",
       reason: "producer-verified-original",
     });
+  });
+
+  it("does not rebind a destination database that was replaced before the rewrite", async () => {
+    await prepareCompletedBackup();
+    const recordedDestination = readTarget().databaseIdentity;
+
+    // Replace the recorded database with a different valid database before the NOCOW rewrite.
+    const replacement = path.join(root, "replacement.sqlite");
+    seedDatabase(replacement);
+    fs.renameSync(replacement, shared);
+    expect(String(fs.lstatSync(shared, { bigint: true }).ino)).not.toBe(recordedDestination!.ino);
+
+    const result = await repairDoctorSqliteNoCow({
+      paths: [shared],
+      stateDir: root,
+      env,
+      assertCurrent: () => {},
+    });
+    const notes = [...result.changes, ...result.warnings].join("\n");
+    expect(notes).toContain("Rewrote SQLite store directory with NOCOW");
+    expect(notes).toContain("not the recorded destination");
+    // The destination binding stays with the verified generation, so cleanup still rejects it.
+    expect(readTarget().databaseIdentity).toEqual(recordedDestination);
   });
 });

@@ -440,7 +440,7 @@ export async function repairDoctorSqliteNoCow(params: {
         result.warnings.push(
           ...reconcileNoCowRecoveryIdentities({
             env: params.env,
-            rewrittenPaths: files,
+            previousIdentities: inventory,
             assertCurrent: params.assertCurrent,
           }),
         );

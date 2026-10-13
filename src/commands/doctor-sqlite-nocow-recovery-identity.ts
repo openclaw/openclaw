@@ -14,21 +14,34 @@ import {
  * Doctor owns both the rewrite and the manifest, so after a verified rewrite it re-records the
  * new identity for the recovery originals and destination databases it relocated.
  *
- * An artifact is re-recorded only when the rewritten copy still carries the recorded content
- * (`size` and `sha256`), and the destination database only after the rewrite's own WAL-aware
- * snapshot and integrity verification established the replacement. Anything that cannot be
- * proven is left untouched and reported, so cleanup stays conservative rather than weakened.
+ * A record is refreshed only when the file being rewritten is the exact generation the manifest
+ * recorded: its pre-exchange device/inode must still equal the recorded identity. This keeps the
+ * destination binding intact — a valid database that merely replaced the recorded pathname is not
+ * adopted. For a recovery original the rewrite's own copy is additionally required to carry the
+ * recorded content (`size` and `sha256`); a destination database relies on the rewrite's verified
+ * WAL-aware snapshot and integrity check. Anything that cannot be proven is left untouched and
+ * reported, so cleanup stays conservative rather than weakened.
  */
 export function reconcileNoCowRecoveryIdentities(params: {
   env: NodeJS.ProcessEnv;
-  rewrittenPaths: readonly string[];
+  previousIdentities: ReadonlyMap<string, Pick<fs.BigIntStats, "dev" | "ino">>;
   assertCurrent: () => void;
 }): string[] {
-  const rewritten = new Set(params.rewrittenPaths.map(canonicalMigrationFilePath));
-  if (rewritten.size === 0) {
+  const previous = new Map<string, { dev: string; ino: string }>();
+  for (const [pathname, stat] of params.previousIdentities) {
+    previous.set(canonicalMigrationFilePath(pathname), {
+      dev: String(stat.dev),
+      ino: String(stat.ino),
+    });
+  }
+  if (previous.size === 0) {
     return [];
   }
   const warnings: string[] = [];
+  const matchesRecordedGeneration = (pathname: string, dev: string, ino: string) => {
+    const pre = previous.get(canonicalMigrationFilePath(pathname));
+    return pre !== undefined && pre.dev === dev && pre.ino === ino;
+  };
   for (const manifestPath of listSessionSqliteMigrationManifestPaths(params.env)) {
     const manifest = readSessionSqliteMigrationManifest(manifestPath);
     if (!manifest) {
@@ -38,7 +51,15 @@ export function reconcileNoCowRecoveryIdentities(params: {
     for (const target of manifest.targets) {
       for (const move of [...target.completedMoves, ...target.plannedMoves]) {
         const artifact = move.artifact;
-        if (!artifact || !rewritten.has(canonicalMigrationFilePath(move.archivePath))) {
+        if (!artifact || !previous.has(canonicalMigrationFilePath(move.archivePath))) {
+          continue;
+        }
+        if (
+          !matchesRecordedGeneration(move.archivePath, artifact.identity.dev, artifact.identity.ino)
+        ) {
+          warnings.push(
+            `NOCOW recovery identity left unchanged for ${move.archivePath}: the rewritten file is not the recorded generation`,
+          );
           continue;
         }
         try {
@@ -60,10 +81,16 @@ export function reconcileNoCowRecoveryIdentities(params: {
           );
         }
       }
+      const databaseIdentity = target.databaseIdentity;
+      if (!databaseIdentity || !previous.has(canonicalMigrationFilePath(target.sqlitePath))) {
+        continue;
+      }
       if (
-        !target.databaseIdentity ||
-        !rewritten.has(canonicalMigrationFilePath(target.sqlitePath))
+        !matchesRecordedGeneration(target.sqlitePath, databaseIdentity.dev, databaseIdentity.ino)
       ) {
+        warnings.push(
+          `NOCOW destination identity left unchanged for ${target.sqlitePath}: the rewritten database is not the recorded destination`,
+        );
         continue;
       }
       try {
