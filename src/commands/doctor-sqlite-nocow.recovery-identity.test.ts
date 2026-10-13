@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -89,12 +90,19 @@ function retire() {
 }
 
 describe("Doctor NOCOW recovery identities", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     root = tempDirs.make("openclaw-nocow-recovery-");
     shared = path.join(root, "state", "openclaw.sqlite");
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
     seedDatabase(shared);
     fixture = createDoctorNoCowToolFixture(root);
+    const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const tools = vi.mocked(spawnSync).getMockImplementation()!;
+    vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+      command === process.execPath
+        ? native.spawnSync(command, args, options)
+        : tools(command, args, options),
+    );
   });
   afterEach(() => {
     vi.restoreAllMocks();
