@@ -14,6 +14,7 @@ import {
 import { findLegacyConfigRuleIssues } from "../config/legacy.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
@@ -107,6 +108,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }),
   );
   const { snapshot, baseConfig: baseCfg } = preflight;
+  if (!snapshot.exists || snapshot.valid) {
+    // Doctor bypasses the CLI config guard; plugin register() reads this snapshot through
+    // api.runtime.config.current() and throws while nothing is published.
+    await loadPinnedRuntimeConfigAsync(async () => ({ config: snapshot.runtimeConfig }));
+  }
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,

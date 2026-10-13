@@ -394,8 +394,8 @@ async function executeDoctorLint(
     };
   }
 
-  await loadPinnedRuntimeConfigAsync(async () => ({ config: snapshot.config }));
-  const cfg = captureRuntimeConfig(snapshot.config);
+  await loadPinnedRuntimeConfigAsync(async () => ({ config: snapshot.runtimeConfig }));
+  const cfg = captureRuntimeConfig(snapshot.runtimeConfig);
   const sourceEnv = { ...stateView.sourceEnv };
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const ctx: HealthCheckContext = {

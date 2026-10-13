@@ -2,16 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
+import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { writePlugin } from "../plugins/loader.test-fixtures.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnv } from "../test-utils/env.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import { warmDoctorConfigFlow } from "./doctor-config-flow-warmup.test-support.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -189,6 +193,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             input.sourceConfigBeforeMigrations ?? config,
           ),
           config,
+          runtimeConfig: config,
           sourceConfig: config,
           valid: legacyIssues.length === 0,
           warnings: [],
@@ -218,7 +223,14 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
 }
 
 describe("doctor config flow", () => {
-  beforeAll(() => warmDoctorConfigFlow(collectDoctorWarnings));
+  beforeAll(async () => {
+    await warmDoctorConfigFlow(collectDoctorWarnings);
+    clearRuntimeConfigSnapshot();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
   beforeEach(() => {
     terminalNoteMock.mockClear();
@@ -421,6 +433,63 @@ describe("doctor config flow", () => {
         }),
       }),
     );
+  });
+
+  it.each([
+    {
+      name: "lets plugin registration read a valid loaded config",
+      config: { gateway: { mode: "local" } },
+      exists: true,
+      mode: "local",
+      record: { status: "loaded" },
+    },
+    {
+      name: "lets plugin registration read default config when no config file exists",
+      config: {},
+      exists: false,
+      mode: undefined,
+      record: { status: "loaded" },
+    },
+    {
+      name: "leaves an invalid loaded config unpublished for plugin registration",
+      config: { gateway: { bind: "localhost" } },
+      exists: true,
+      mode: undefined,
+      record: {
+        status: "error",
+        error: expect.stringContaining("Runtime config is not prepared"),
+      },
+    },
+  ])("$name", async ({ config, exists, mode, record }) => {
+    await withTempHome(async (home) => {
+      const plugin = writePlugin({
+        id: "config-reader",
+        dir: path.join(home, "config-reader"),
+        registration: `if (api.runtime.config.current().gateway?.mode !== ${JSON.stringify(mode)}) throw new Error("unexpected runtime config");`,
+      });
+      let registry: ReturnType<typeof loadPluginRegistryHandle> | undefined;
+      // Doctor preview checks are the first step that can load and register plugins.
+      collectDoctorPreviewNotesParamsMock.mockImplementationOnce(() => {
+        registry = withEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () =>
+          loadPluginRegistryHandle({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [plugin.id],
+                load: { paths: [plugin.file] },
+                slots: { memory: "none" },
+              },
+            },
+          }),
+        );
+      });
+
+      await (await runConfig({ config, exists, preflightMode: "issues" }))[Symbol.asyncDispose]();
+
+      expect(registry?.plugins).toContainEqual(
+        expect.objectContaining({ id: plugin.id, ...record }),
+      );
+    });
   });
 
   it("does not refresh gateway before writing a config-only auth repair", async () => {
