@@ -29,6 +29,7 @@ import { createOAuthManager } from "./oauth-manager.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { withPersonalAuthProfileStore } from "./personal-store.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
@@ -214,11 +215,19 @@ describe("createOAuthManager", () => {
         },
       });
 
-      const resolved = await manager.resolveOAuthAccess({
-        store: ensureAuthProfileStore(agentDir, { profileId }),
-        profileId,
-        credential,
-        agentDir,
+      const resolved = await withPersonalAuthProfileStore(profileId, async (personalStore) => {
+        await personalStore.read();
+        const readPrepared = personalStore.readCurrentCredential;
+        const result = await manager.resolveOAuthAccess({
+          personalStore,
+          store: ensureAuthProfileStore(agentDir, { profileId }),
+          profileId,
+          credential,
+          agentDir,
+        });
+        expect(readPrepared).toThrow("Personal model account authority is unavailable");
+        expect(personalStore.readCurrentCredential()).toEqual(reconnected);
+        return result;
       });
       expect(resolved?.apiKey).toBe("reconnected-access");
       expect(readUserModelAuthProfile(profileId)?.credential).toEqual(reconnected);
