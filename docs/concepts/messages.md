@@ -138,6 +138,8 @@ Once a turn is durably accepted, an unexpected failure before its answer produce
 
 A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
 
+When delivery of the current input's reply is pending, OpenClaw waits for its outcome before sending a replacement answer or failure message.
+
 With the OpenClaw runtime, an assistant turn that errors or is aborted after producing partial text, without tool calls, appears as a short failure marker in the next model request. Its unfinished text is not replayed, and the stored failed turn stays unchanged. Empty and placeholder-only failures remain excluded; failed tool calls keep their existing pairing rules. The marker does not establish whether an earlier action completed.
 
 ## Streaming, chunking, and batching

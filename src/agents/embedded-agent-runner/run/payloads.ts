@@ -188,6 +188,10 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply = true;
       return;
     }
+    // Unresolved delivery retains custody; it cannot authorize a replacement answer or error.
+    if (sourceReplyDeliveryState === "pending") {
+      return;
+    }
     const nonEmptyAssistantTexts = assistantTexts
       .map((text) =>
         sanitizeUserFacingText(sanitizeAssistantVisibleText(text), { errorContext: false }),
@@ -403,7 +407,11 @@ export function buildEmbeddedRunPayloads(params: {
         hasCompletedMessagingToolDeliveryEvidence(params))) &&
     !params.isHeartbeatTrigger &&
     !params.runAborted;
-  if (params.lastToolError && !respectIntentionalSilence) {
+  if (
+    params.lastToolError &&
+    !respectIntentionalSilence &&
+    params.sourceReplyDeliveryState !== "pending"
+  ) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
     // Report the lifecycle status instead of a tool failure.
     const isRestartStatus = params.runStopReason === "restart";
