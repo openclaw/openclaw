@@ -134,7 +134,7 @@ export function withSessionManagerWrite<T>(
   manager: Pick<SessionManagerCore, "getSessionTarget" | "getSessionId">,
   write: (admission?: SessionManagerWriteAdmission) => T | Promise<T>,
 ): Promise<T> {
-  return runSessionManagerWrite(manager, () => withSessionManagerDatabaseWrite(manager, write));
+  return trackAsyncWork(() => withSessionManagerDatabaseWrite(manager, write));
 }
 
 async function withSessionManagerDatabaseWrite<T>(
@@ -145,7 +145,7 @@ async function withSessionManagerDatabaseWrite<T>(
   assertOwner?.();
   const target = manager.getSessionTarget();
   if (!target) {
-    return await write();
+    return runSessionManagerWrite(manager, async () => write());
   }
   const identity = { ...target };
   const assertTranscript = captureOwnedTranscriptWriteAssertion(identity);
@@ -171,27 +171,29 @@ async function withSessionManagerDatabaseWrite<T>(
         const storage = actor.storage!;
         const selected = { ...incognitoBinding, actor, storage };
         const database = createSessionManagerMemoryDatabase(selected);
-        return withSessionManagerMemoryBinding(manager, selected, async () => {
-          assertManager();
-          try {
-            return await write({ database, options: selected.database, assertCurrent });
-          } finally {
-            const next = manager.getSessionTarget();
-            if (
-              next &&
-              next.sessionKey === identity.sessionKey &&
-              next.sessionId !== identity.sessionId
-            ) {
-              const replacement = await storage.acquire(next.sessionKey);
-              installSessionManagerIncognitoBinding(manager, {
-                ...incognitoBinding,
-                actor: replacement,
-                storage: replacement.storage!,
-                target: next,
-              });
+        return runSessionManagerWrite(manager, () =>
+          withSessionManagerMemoryBinding(manager, selected, async () => {
+            assertManager();
+            try {
+              return await write({ database, options: selected.database, assertCurrent });
+            } finally {
+              const next = manager.getSessionTarget();
+              if (
+                next &&
+                next.sessionKey === identity.sessionKey &&
+                next.sessionId !== identity.sessionId
+              ) {
+                const replacement = await storage.acquire(next.sessionKey);
+                installSessionManagerIncognitoBinding(manager, {
+                  ...incognitoBinding,
+                  actor: replacement,
+                  storage: replacement.storage!,
+                  target: next,
+                });
+              }
             }
-          }
-        });
+          }),
+        );
       },
     );
   }
@@ -214,40 +216,44 @@ async function withSessionManagerDatabaseWrite<T>(
         );
       },
     };
-    // Retain the original incarnation before yielding; no actor lookup or native fallback follows.
+    // Retain accepted work before either queue; admission may close while it waits.
     return await actor.sessions.withSharedState(() =>
       withRetainedSessionManagerIncognitoActor(manager, () =>
-        runOpenClawAgentWriteAdmission(
-          options,
-          () => {
-            actor.assertCurrent();
-            assertManager();
-            return write({ database, options, assertCurrent });
-          },
-          true,
-          undefined,
-          undefined,
-          "session-manager.write",
+        runSessionManagerWrite(manager, () =>
+          runOpenClawAgentWriteAdmission(
+            options,
+            () => {
+              actor.assertCurrent();
+              assertManager();
+              return write({ database, options, assertCurrent });
+            },
+            true,
+            undefined,
+            undefined,
+            "session-manager.write",
+          ),
         ),
       ),
     );
   }
-  return await runOpenClawAgentWriteAdmission(
-    options,
-    () =>
-      withOpenClawAgentDatabaseRuntime(
-        options,
-        (database) => {
-          assertManager();
-          // Each native kernel or worker command still validates live authority at commit.
-          return write({ database, options, assertCurrent });
-        },
-        assertCurrent,
-      ),
-    true,
-    undefined,
-    undefined,
-    "session-manager.write",
+  return await runSessionManagerWrite(manager, () =>
+    runOpenClawAgentWriteAdmission(
+      options,
+      () =>
+        withOpenClawAgentDatabaseRuntime(
+          options,
+          (database) => {
+            assertManager();
+            // Each native kernel or worker command still validates live authority at commit.
+            return write({ database, options, assertCurrent });
+          },
+          assertCurrent,
+        ),
+      true,
+      undefined,
+      undefined,
+      "session-manager.write",
+    ),
   );
 }
 

@@ -850,7 +850,7 @@ it("lets another session write between actor appends while retaining manager ord
           .appendMessageAsync(makeUserMessage("third", 3))
           .then(() => order.push("follower"));
         await upsertSessionEntryCore(
-          { ...target, sessionId: "other", sessionKey: "agent:main:other" },
+          { ...target, sessionKey: "agent:main:other" },
           { sessionId: "other", updatedAt: 1 },
         );
         expect(order).toEqual([]);
@@ -862,7 +862,11 @@ it("lets another session write between actor appends while retaining manager ord
       await follower;
       expect(order).toEqual(["batch", "follower"]);
       const messages = manager.getEntries().filter((entry) => entry.type === "message");
-      expect(messages.map((entry) => entry.message.content)).toEqual(["first", "second", "third"]);
+      expect(messages.map((entry) => entry.message)).toMatchObject([
+        { role: "user", content: "first" },
+        { role: "user", content: "second" },
+        { role: "user", content: "third" },
+      ]);
       expect(messages[1]?.parentId).toBe(messages[0]?.id);
       expect(messages[2]?.parentId).toBe(messages[1]?.id);
     },
