@@ -147,7 +147,7 @@ const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
     resolveCompileCacheRespawnLauncher(),
     ...process.argv.slice(2),
   ];
-  if (foregroundGateway && process.execve) {
+  if (foregroundGateway && process.platform !== "win32" && process.execve) {
     process.execve(process.execPath, [process.execPath, ...args], env);
   }
   return runRespawnedChild(process.execPath, args, env);

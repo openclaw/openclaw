@@ -146,7 +146,7 @@ const compileCacheRespawnEnv =
 if (compileCacheRespawnEnv) {
   const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
   // External supervisors require the serving Gateway to retain its listener PID.
-  if (process.execve && isForegroundGatewayRunArgv(process.argv)) {
+  if (process.platform !== "win32" && process.execve && isForegroundGatewayRunArgv(process.argv)) {
     process.execve(process.execPath, [process.execPath, ...args], compileCacheRespawnEnv);
   }
   const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");

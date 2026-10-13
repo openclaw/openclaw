@@ -1799,6 +1799,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.each([
     "owned",
     "inherited",
+    "inherited-windows",
     "direct",
     "foreign",
     "source",
@@ -1861,7 +1862,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          const a = resolveA();
          const b = resolveB();
          assert.deepEqual(a, b, "separate built helpers must share the launcher fact");
-         const cachedWorkers = ["owned", "inherited", "direct", "source"].includes(${JSON.stringify(mode)});
+         const cachedWorkers = ["owned", "inherited", "inherited-windows", "direct", "source"].includes(${JSON.stringify(mode)});
          if (cachedWorkers) {
            assert.equal(parentDirectory, null);
            assert.ok(a.NODE_COMPILE_CACHE);
@@ -1906,6 +1907,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       );
       args.unshift("--import", pathToFileURL(preload).href);
     }
+    if (mode === "inherited-windows") {
+      const preload = path.join(fixtureRoot, "windows-execve.mjs");
+      await fs.writeFile(
+        preload,
+        `Object.defineProperty(process, "platform", { value: "win32" });
+         process.execve = () => { throw new Error("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"); };`,
+      );
+      args.unshift("--import", pathToFileURL(preload).href);
+    }
     const result = spawnSync(testNodeExecPath, args, {
       cwd: fixtureRoot,
       env: launcherEnv({
@@ -1919,7 +1929,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         NODE_COMPILE_CACHE:
           mode === "cache-empty"
             ? ""
-            : mode === "inherited"
+            : mode === "inherited" || mode === "inherited-windows"
               ? path.join(tmpRoot, "inherited")
               : undefined,
         // This negative control must retain its foreign first enable in the same

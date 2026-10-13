@@ -95,7 +95,7 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
     });
     if (env) {
       const args = [...process.execArgv, params.currentFile, ...process.argv.slice(2)];
-      if (process.execve) {
+      if (process.platform !== "win32" && process.execve) {
         process.execve(process.execPath, [process.execPath, ...args], env);
       }
       const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
