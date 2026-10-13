@@ -276,6 +276,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         stdout,
         warn,
         ...installPlan,
+        ...(restoreServiceCli
+          ? { workingDirectory: existingManagedCommand?.workingDirectory }
+          : {}),
       });
     },
     // Failed installation must not carry a misleading linger warning (#107033).

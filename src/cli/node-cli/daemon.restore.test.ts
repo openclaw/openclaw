@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 const service = createMockGatewayService();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observed = { revision: "observed", definition: "failed-node", stored: false };
+const workingDirectory = "/retained/node-workspace";
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 vi.mock("../../daemon/node-service.js", () => ({ resolveNodeService: () => service }));
@@ -55,6 +56,7 @@ beforeEach(() => {
   vi.mocked(service.isLoaded).mockResolvedValue(true);
   vi.mocked(service.readCommand).mockResolvedValue({
     programArguments: ["/failed/node", "/failed/openclaw.mjs", "node", "run"],
+    workingDirectory,
   });
 });
 
@@ -137,6 +139,7 @@ it.each([
       pin: pinned ? { runtime, path: cli.executable } : undefined,
       requireDefinitionMatch: true,
     });
+    expect(installed?.workingDirectory).toBe(workingDirectory);
     expect(installed?.environment?.OPENCLAW_SQLITE_LIBRARY).toBe(cli.sqliteLibrary ?? undefined);
     expect(process.env.OPENCLAW_SQLITE_LIBRARY).toBe("/controller/libsqlite3.dylib");
   },
