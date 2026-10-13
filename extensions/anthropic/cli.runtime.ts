@@ -68,7 +68,8 @@ type ClaudeCliTurn = {
 type ClaudeCliSession = {
   handle: CliBackendLiveSessionHandle;
   capability?: CliBackendLiveSessionCapability;
-  transport?: ReturnType<typeof createClaudeCliTransport>;
+  transport?: Awaited<ReturnType<typeof createClaudeCliTransport>>;
+  transportStartup?: ReturnType<typeof createClaudeCliTransport>;
   currentTurn?: ClaudeCliTurn;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasInputLifecycle: boolean;
@@ -368,7 +369,10 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
       fingerprint: capability?.fingerprint ?? randomUUID(),
       isIdle: () => !session.closed && !session.currentTurn,
       close: (_reason, error) => closeSession(session, error),
-      waitForExit: () => session.transport?.waitForExit() ?? Promise.resolve(),
+      waitForExit: async () => {
+        const transport = session.transport ?? (await session.transportStartup);
+        await transport?.waitForExit();
+      },
     },
   };
   sessions.set(session.handle, session);
@@ -421,7 +425,7 @@ export async function* executeClaudeCli(
     capability?.activate(session.handle);
     if (!session.transport) {
       const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
-      session.transport = createClaudeCliTransport({
+      session.transportStartup = createClaudeCliTransport({
         context,
         args,
         secretInput,
@@ -465,8 +469,18 @@ export async function* executeClaudeCli(
           };
         },
         onError: (error) => session.handle.close("abort", error),
+      }).then((transport) => {
+        session.transport = transport;
+        if (session.closed) {
+          transport.close();
+        }
+        return transport;
       });
-      await session.transport.initialize();
+      const transport = await session.transportStartup;
+      if (session.closed) {
+        throw turn.error ?? new Error("Claude CLI closed during startup.");
+      }
+      await transport.initialize();
     }
     context.assertCurrent?.();
     if (session.closed || session.currentTurn !== turn) {
@@ -490,7 +504,7 @@ export async function* executeClaudeCli(
     }
   } catch (error) {
     session.handle.close("abort", error);
-    throw error;
+    throw turn.error ?? error;
   } finally {
     turn.controller.abort();
     context.abortSignal?.removeEventListener("abort", abort);

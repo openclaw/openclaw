@@ -4,6 +4,8 @@ import type { ManagedRunStdin } from "../types.js";
 /** Keep direct children and service relays on the same observable stdin lifecycle. */
 export function createManagedChildStdin(
   stream: Writable | null | undefined,
+  end: () => void = () => stream?.end(),
+  onWriteError?: (error: Error) => void,
 ): ManagedRunStdin | undefined {
   if (!stream) {
     return undefined;
@@ -35,7 +37,9 @@ export function createManagedChildStdin(
     },
     write(data, callback) {
       if (destroyed || ended || !stream.writable) {
-        callback?.(new Error("stdin is not writable"));
+        const error = Object.assign(new Error("stdin is not writable"), { code: "EPIPE" });
+        callback?.(error);
+        onWriteError?.(error);
         return;
       }
       try {
@@ -47,7 +51,7 @@ export function createManagedChildStdin(
     end() {
       ended = true;
       try {
-        stream.end();
+        end();
       } catch {
         // Closing an already-failed child pipe is best effort.
       }
