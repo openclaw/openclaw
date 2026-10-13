@@ -2692,9 +2692,16 @@ rows are ignored and replaced by the normal resumable refresh, without a schema
 migration. Checkpoint and partition replacement remain atomic.
 
 Usage-bearing transcript publications schedule advancement through the existing
-usage worker queue, coalescing nearby publications for 100 ms. User and metadata
-rows join the next usage scan. Overview reads flush and await pending publication
-batches so a completed turn's usage is visible immediately. Startup and topology changes backfill in bounded batches,
+usage worker queue. Each dirty session waits for 30 seconds without another
+usage publication or an active agent turn. Its oldest pending change survives
+back-to-back turns: after five minutes, it can refresh in the next idle gap.
+A turn starting during a refresh may overlap its already-admitted bounded batch.
+User and metadata rows join the next usage scan. Cost and overview reads flush
+and await pending publication batches, bypassing the idle delay, so a completed
+turn's usage is visible immediately. Goal budgets and provider billing limits
+use their own current accounting, independently of this display projection.
+Shutdown cancels pending delays without flushing; committed transcripts remain
+the source of truth. Startup and topology changes backfill in bounded batches,
 yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
