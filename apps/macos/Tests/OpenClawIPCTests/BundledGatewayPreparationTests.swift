@@ -1217,13 +1217,11 @@ struct BundledGatewayPreparationTests {
     @Test func `bundled setup reuses a newer managed Node package without updating it`() async throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let state = home.appendingPathComponent("state")
         try await TestIsolation.withIsolatedState(
             launchAgentHomeDirectory: home,
-            env: ["OPENCLAW_STATE_DIR": state.path],
             defaults: [cliInstallPolicyKey: "exact", postAppUpdateReceiptKey: nil])
         {
-            let fixture = try Fixture(home: home, stateDirectory: state)
+            let fixture = try Fixture(home: home)
             defer { fixture.remove() }
             try "2026.10.2\n".write(
                 to: fixture.root.appendingPathComponent("version"), atomically: false, encoding: .utf8)
