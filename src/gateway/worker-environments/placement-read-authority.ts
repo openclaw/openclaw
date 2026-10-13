@@ -91,6 +91,38 @@ export function retainSessionPlacementRead(
   readers.add(reader);
   owner.placementReaders.set(sessionId, readers);
   return {
+    prepareRead(this: void): Promise<void> | undefined {
+      assertUsable();
+      const pending = [...owner.pending].filter(
+        (change): change is Extract<ClaimChange, { kind: "claim" }> =>
+          change.kind === "claim" && change.sessionId === sessionId,
+      );
+      const settlements = pending.flatMap((change) =>
+        change.nativeSettlement ? [change.nativeSettlement] : [],
+      );
+      if (
+        reader.revoked ||
+        pending.some((change) => change.indeterminate) ||
+        settlements.length !== pending.length
+      ) {
+        throw new Error(`Session ${sessionId} placement authority changed`);
+      }
+      if (settlements.length === 0) {
+        return undefined;
+      }
+      // Join the existing native owner; callers must release synchronous readers first.
+      return Promise.all(settlements).then((outcomes) => {
+        assertUsable();
+        if (reader.revoked) {
+          throw new Error(`Session ${sessionId} placement authority changed`);
+        }
+        for (const outcome of outcomes) {
+          if (outcome.kind !== "completed") {
+            throw outcome.error;
+          }
+        }
+      });
+    },
     current(this: void) {
       assertUsable();
       // Result, ACK, and journal writes leave this read's execution target unchanged.

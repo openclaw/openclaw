@@ -47,6 +47,8 @@ gh issue view <issue> --repo openclaw/openclaw \
 
 ## Review and publish
 
+- Before committing or landing nontrivial code: fresh review through permitted workflow; resolve actionable findings unless user opts out. Actionable = likely or high-impact; decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with one-line reason.
+
 - Nontrivial code commit/landing: `$autoreview`; resolve verified actionable findings. Review-only: independent pass only when requested, no extra mandatory CLI pass.
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
 - Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
@@ -59,5 +61,6 @@ gh issue view <issue> --repo openclaw/openclaw \
 
 - Never remove worktree holding live session cwd, including yours or subdirectories. Child `cd`/cwd override does not move parent. Retain until owner exits/releases cwd; report path.
 - Verified outcome → remove task logs, receipts, proof archives, `.crabbox`, scratch, finished worktrees via [native closeout](references/landing.md#recovery-and-closeout). No retention/archive/export/handoff just for removal.
+- Remove created worktrees once work/PR lands, unless immediately needed next; never remove a live-cwd worktree.
 - Every task: findings in chat/stdout; files only for deliverables/tool/proof/recovery needs, state purpose/reuse. Pre-merge proof mandatory; optional follow-ups never hold completion.
 - Preserve requested deliverables/retention, unfinished source + necessary recovery state, active/live/unknown owners, credentials, agent state, shared dependencies.

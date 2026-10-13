@@ -617,7 +617,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
   protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;

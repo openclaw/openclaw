@@ -72,7 +72,7 @@ async function openDashboard(page: Page): Promise<void> {
 describeControlUiE2e("Control UI dashboard A2UI", () => {
   beforeAll(async () => {
     if (!process.env.OPENCLAW_A2UI_BUNDLE_DIR?.trim()) {
-      execFileSync(process.execPath, ["extensions/canvas/scripts/bundle-a2ui.mjs"], {
+      execFileSync(process.execPath, ["--import", "./scripts/tsx.mjs", "scripts/bundle-a2ui.mts"], {
         cwd: process.cwd(),
         stdio: "inherit",
       });

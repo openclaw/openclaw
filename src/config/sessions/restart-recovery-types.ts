@@ -28,14 +28,26 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
   captured?: true;
   payloads?: Array<{ mediaUrls?: string[]; visible?: boolean }>;
   payloadsTruncated?: true;
+  /** Classification facts only; raw terminal text and errors are never retained here. */
+  meta?: {
+    terminalReply?: { disposition: "silent" };
+    yielded?: true;
+    continuationPending?: true;
+    aborted?: true;
+    error?: true;
+  };
+  requesterContinuationSettled?: true;
   deliveryStatus?: {
     status: "failed" | "partial_failed" | "sent" | "suppressed";
     resultCount?: number;
     errorMessage?: string;
+    /** Producer reason, capped to 256 characters by the receipt owner. */
+    reason?: string;
     payloadOutcomes?: Array<{
       index: number;
       status: "failed" | "sent" | "suppressed";
       sentBeforeError?: boolean;
+      reason?: string;
     }>;
   };
   messagingToolSentTargets?: Array<{

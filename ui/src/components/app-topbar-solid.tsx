@@ -19,7 +19,7 @@ type Props = {
 };
 
 /** Narrow-viewport header; the desktop sidebar owns navigation. */
-export const AppTopbar = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-app-topbar",
   (props, host) => {
     host.style.display = "contents";

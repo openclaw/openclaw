@@ -48,7 +48,13 @@ suite.define(() => {
           cases: [
             {
               match: { sessionKey },
-              response: { messages: historyMessages, sessionId: "uncached" },
+              response: {
+                messages: historyMessages,
+                sessionId: "uncached",
+                hasMore: true,
+                nextOffset: 40,
+                totalMessages: 2040,
+              },
             },
             {
               match: { sessionKey: sourceKey },
@@ -59,7 +65,7 @@ suite.define(() => {
             },
           ],
         };
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           sessionKey: navigation === "direct" ? sessionKey : sourceKey,
           methodResponses: {
             "chat.history": responses,
@@ -125,6 +131,7 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
+        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
         await writeFile(
           path.join(suite.artifactDir, "uncached-load-" + navigation + "-frames.json"),
