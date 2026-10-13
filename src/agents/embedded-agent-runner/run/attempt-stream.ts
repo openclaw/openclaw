@@ -212,6 +212,7 @@ export function installEmbeddedAttemptStreamGuards(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
+            `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );

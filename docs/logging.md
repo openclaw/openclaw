@@ -1065,7 +1065,10 @@ without final statistics. An aborted call does not prove the backend released
 its slot. No additional server polling is performed.
 
 Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
-session's previous request) and `promptTokens` when reported by the provider.
+session's previous request), `responseId`, `sessionId`, and `promptTokens` when
+reported by the provider. The previous/current wire summaries include the
+requested `serviceTier` so tier switches can be distinguished from cache loss
+on an unchanged route.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
 other request parameters. It names the first differing segment or `prefix-match`
@@ -1073,12 +1076,22 @@ when the previous prefix is unchanged. A match does not prove provider cache
 availability or retention. Unsupported transports and missing baselines report
 `unavailable`.
 
-Only hashes are retained, within the existing 512-entry diagnostic tracker.
+Prompt content is retained only as hashes, within the existing 512-entry
+diagnostic tracker.
 History comparison keeps the first 512 message hashes and one remaining-tail
 hash. A changed tail reports `message-tail:512`; a growing or shrinking tail
 reports `unverified-after:512` because its earlier prefix cannot be verified.
 Background sessions sharing a provider cache key keep separate diagnostic
 baselines. No prompt content or digest values appear in these warnings.
+
+OpenAI service-tier rejection and downgrade records include the requested model,
+account route, run/session IDs, original requested tier, and final wire-request
+tier. Terminal responses also include the served tier, response ID/model, total
+input tokens (including cached input), and cached tokens when reported. Each
+downgraded request is logged even when the account-catalog observation is
+unchanged. Join its response ID to a prompt-cache warning to inspect the same
+completion; a downgrade alone does not prove a cache miss. These are raw file-log
+fields and follow the usual redaction rules at egress.
 
 ### Console styles
 

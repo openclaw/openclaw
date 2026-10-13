@@ -281,8 +281,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
           ? processStreamOptions.resolveServiceTier(responseTier, tier)
           : (responseTier ?? tier);
       },
-      onServiceTier: (responseTier) =>
-        responsesServiceTierObserver.observe(options, requestedTier, responseTier),
+      onServiceTier: (responseTier, response) =>
+        responsesServiceTierObserver.observe(options, requestedTier, responseTier, response),
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,

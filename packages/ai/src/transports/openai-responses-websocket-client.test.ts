@@ -383,7 +383,16 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     );
     expect((await stream.result()).stopReason).toBe("stop");
     expect(transportState.websocketRequests[0]?.service_tier).toBe("ultrafast");
-    expect(observations).toEqual([{ requestedTier: "ultrafast", responseTier: "default" }]);
+    expect(observations).toEqual([
+      {
+        requestedTier: "ultrafast",
+        responseTier: "default",
+        responseId: "resp_tier",
+        responseModel: completed.response.model,
+        inputTokens: completed.response.usage.input_tokens,
+        cachedTokens: completed.response.usage.input_tokens_details?.cached_tokens,
+      },
+    ]);
   });
 
   it.each(["after-output", "registered-hook", "active-hook"] as const)(
