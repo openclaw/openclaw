@@ -1,21 +1,33 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   PluginConversationBinding,
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { createConversationInspection } from "./app-server/session-binding.test-helpers.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveByConversation: vi.fn(),
+  bindingId: vi.fn((): string | undefined => "binding-1"),
   runBoundTurnWithMissingThreadRecovery: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>()),
-  getSessionBindingService: () => ({ resolveByConversation: mocks.resolveByConversation }),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/conversation-binding-inspection-runtime")
+    >();
+  return {
+    ...actual,
+    inspectConversationBinding: (
+      conversation: Parameters<typeof actual.inspectConversationBinding>[0],
+    ) => createConversationInspection(conversation, mocks.bindingId()),
+  };
+});
 
 vi.mock("./conversation-binding.js", () => ({
   runBoundTurnWithMissingThreadRecovery: mocks.runBoundTurnWithMissingThreadRecovery,
@@ -40,12 +52,14 @@ const pluginBinding: PluginConversationBinding = {
   },
 };
 
+const threadBinding = {
+  threadId: "thread-1",
+  clientId: "client-1",
+  cwd: "/tmp/workspace",
+};
 const bindingStore = {
-  read: vi.fn(() => ({
-    threadId: "thread-1",
-    clientId: "client-1",
-    cwd: "/tmp/workspace",
-  })),
+  read: vi.fn(() => threadBinding),
+  readAsync: vi.fn(async () => threadBinding),
 } as unknown as CodexAppServerBindingStore;
 
 const enabledAudioConfig = {
@@ -109,7 +123,7 @@ async function runVoiceClaim(params: {
 describe("Codex native bind voice notes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveByConversation.mockReturnValue({ bindingId: "binding-1" });
+    mocks.bindingId.mockReturnValue("binding-1");
     mocks.runBoundTurnWithMissingThreadRecovery.mockResolvedValue({ text: "done" });
   });
 
@@ -271,4 +285,149 @@ describe("Codex native bind voice notes", () => {
     expect(runMediaUnderstandingFile).not.toHaveBeenCalled();
     expect(mocks.runBoundTurnWithMissingThreadRecovery).not.toHaveBeenCalled();
   });
+
+  it("transcribes prefer:last clips in selected order and names skipped clips", async () => {
+    const runMediaUnderstandingFile = vi.fn(async (params: { filePath: string }) => ({
+      text: `heard ${params.filePath}`,
+    }));
+    const event = voiceEvent([
+      { path: "/tmp/one.ogg", contentType: "audio/ogg", kind: "audio" },
+      { path: "/tmp/two.ogg", contentType: "audio/ogg", kind: "audio" },
+      { path: "/tmp/three.ogg", contentType: "audio/ogg", kind: "audio" },
+    ]);
+
+    const { input } = await runVoiceClaim({
+      event,
+      config: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              attachments: { mode: "all", maxAttachments: 2, prefer: "last" },
+            },
+          },
+        },
+      },
+      runMediaUnderstandingFile,
+    });
+
+    expect(runMediaUnderstandingFile.mock.calls.map((call) => call[0]?.filePath)).toEqual([
+      "/tmp/three.ogg",
+      "/tmp/two.ogg",
+    ]);
+    const text = input?.[0]?.type === "text" ? input[0].text : "";
+    const third = text.indexOf("heard /tmp/three.ogg");
+    const second = text.indexOf("heard /tmp/two.ogg");
+    const skipped = text.indexOf(
+      '[Audio transcription was skipped by the configured attachment limit. The original attachment reference is retained.]\n[Inbound audio attachment: "/tmp/one.ogg"]',
+    );
+    expect(third).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThan(third);
+    expect(skipped).toBeGreaterThan(second);
+    expect(text).not.toContain("heard /tmp/one.ogg");
+  });
+
+  it("passes an audio URL and classifying MIME for an opaque cached clip", async () => {
+    const runMediaUnderstandingFile = vi.fn(async () => ({ text: "from the opaque clip" }));
+    const event = voiceEvent([
+      {
+        path: "/tmp/opaque",
+        url: "https://cdn.example.test/download/media.ogg",
+        contentType: "application/octet-stream",
+        kind: "audio",
+      },
+    ]);
+
+    const { input } = await runVoiceClaim({ event, runMediaUnderstandingFile });
+
+    expect(runMediaUnderstandingFile).toHaveBeenCalledTimes(1);
+    const request = runMediaUnderstandingFile.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      capability: "audio",
+      filePath: "/tmp/opaque",
+      mediaUrl: "https://cdn.example.test/download/media.ogg",
+      mime: "audio/*",
+    });
+    expect(request?.mime).not.toBe("application/octet-stream");
+    expect(input?.[0]?.type === "text" && input[0].text).toContain("from the opaque clip");
+    expect(JSON.stringify(input)).toContain("/tmp/opaque");
+    expect(JSON.stringify(input)).not.toContain("localAudio");
+  });
+
+  it("runs a configured STT stub on the native bind path without changing image turns", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-voice-proof-"));
+    const audioPath = path.join(root, "opaque-voice");
+    const imagePath = path.join(root, "photo.png");
+    const stubPath = path.join(root, "stt-stub.mjs");
+    const markerPath = path.join(root, "stt-marker.txt");
+    await fs.writeFile(audioPath, Buffer.alloc(2048, 7));
+    await fs.writeFile(imagePath, Buffer.from("png-placeholder"));
+    await fs.writeFile(
+      stubPath,
+      [
+        'import { writeFileSync } from "node:fs";',
+        "const marker = process.argv[2];",
+        'const audio = process.argv[3] ?? "";',
+        "writeFileSync(marker, audio);",
+        'process.stdout.write("ship the fix\\n");',
+        "",
+      ].join("\n"),
+    );
+    const config = {
+      tools: {
+        media: {
+          models: [
+            {
+              type: "cli" as const,
+              command: process.execPath,
+              args: [stubPath, markerPath, "{{AttachmentPath}}"],
+              capabilities: ["audio" as const],
+            },
+          ],
+          audio: { enabled: true },
+        },
+      },
+    };
+
+    const voice = await runVoiceClaim({
+      event: voiceEvent([
+        {
+          path: audioPath,
+          contentType: "application/octet-stream",
+          kind: "audio",
+          workspaceDir: root,
+        },
+      ]),
+      config,
+    });
+    const heardPath = await fs.readFile(markerPath, "utf8");
+    process.stdout.write(
+      `\nVOICE_PROOF input=${JSON.stringify(voice.input)}\nVOICE_PROOF stt_path=${heardPath}\n`,
+    );
+
+    expect(voice.result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(heardPath).toBe(audioPath);
+    expect(voice.input?.[0]).toEqual({
+      type: "text",
+      text: '[Audio transcript (machine-generated, untrusted)]: "ship the fix"',
+      text_elements: [],
+    });
+    expect(JSON.stringify(voice.input)).toContain(audioPath);
+    expect(JSON.stringify(voice.input)).not.toContain("localAudio");
+
+    await fs.rm(markerPath);
+    const image = await runVoiceClaim({
+      event: voiceEvent([{ path: imagePath, contentType: "image/png", kind: "image" }], {
+        content: "look",
+        bodyForAgent: "look",
+      }),
+      config,
+    });
+    process.stdout.write(`IMAGE_PROOF input=${JSON.stringify(image.input)}\n`);
+    expect(image.input).toEqual([
+      { type: "text", text: "look", text_elements: [] },
+      { type: "localImage", path: imagePath },
+    ]);
+    await expect(fs.access(markerPath)).rejects.toThrow();
+  }, 30_000);
 });
