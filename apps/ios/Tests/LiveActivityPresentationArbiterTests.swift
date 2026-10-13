@@ -4,7 +4,12 @@ import Testing
 
 struct LiveActivityPresentationArbiterTests {
     @Test func `voice sample buffer quantizes clamps and stays bounded`() {
-        var buffer = LiveActivityVoiceSampleBuffer(capacity: 3)
+        var buffer = LiveActivityVoiceSampleBuffer()
+
+        for sample in UInt8(0)..<24 {
+            buffer.append(sample)
+        }
+        #expect(buffer.payload == Array(UInt8(0)..<24))
 
         for level in [-1.0, 0.25, 0.5, 2.0] {
             if let sample = LiveActivityVoiceSampleBuffer.quantize(level) {
@@ -12,7 +17,7 @@ struct LiveActivityPresentationArbiterTests {
             }
         }
 
-        #expect(buffer.payload == [64, 128, 255])
+        #expect(buffer.payload == Array(UInt8(4)..<24) + [0, 64, 128, 255])
         #expect(LiveActivityVoiceSampleBuffer.quantize(.infinity) == nil)
         buffer.reset()
         #expect(buffer.payload == nil)

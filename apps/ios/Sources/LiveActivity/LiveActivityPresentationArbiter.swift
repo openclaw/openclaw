@@ -8,12 +8,8 @@ struct LiveActivityPresentationRequest: Equatable {
 }
 
 struct LiveActivityVoiceSampleBuffer {
+    private static let capacity = 24
     private(set) var values: [UInt8] = []
-    let capacity: Int
-
-    init(capacity: Int = 24) {
-        self.capacity = max(capacity, 1)
-    }
 
     var payload: [UInt8]? {
         self.values.isEmpty ? nil : self.values
@@ -27,8 +23,8 @@ struct LiveActivityVoiceSampleBuffer {
 
     mutating func append(_ sample: UInt8) {
         self.values.append(sample)
-        if self.values.count > self.capacity {
-            self.values.removeFirst(self.values.count - self.capacity)
+        if self.values.count > Self.capacity {
+            self.values.removeFirst(self.values.count - Self.capacity)
         }
     }
 
