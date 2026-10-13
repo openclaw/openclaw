@@ -6548,6 +6548,109 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(JSON.stringify(steps)).not.toContain("--clobber");
 });
 
+it("hands this run's signed Linux inputs to the publisher when bundles are already public", () => {
+  const steps = readWorkflow(".github/workflows/linux-app-release.yml").jobs.publish
+    .steps as WorkflowStep[];
+  const publisher = expectDefined(
+    steps.find(
+      ({ name }) =>
+        name === "Publish immutable bundles, canonical Linux channel, and legacy mirror",
+    ),
+    "one publisher",
+  );
+  const localInputs = publisher.env?.LOCAL_INPUTS;
+  if (typeof localInputs !== "string") {
+    throw new Error("Linux publisher must select its local inputs from validate_release");
+  }
+  // The Ubuntu runner's Bash expands an empty array under `set -u`; macOS /bin/bash 3.2 does not.
+  const bash = expectDefined(
+    ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/usr/bin/bash", "/bin/bash"].find(
+      (binary) =>
+        existsSync(binary) &&
+        spawnSync(binary, ["--noprofile", "--norc", "-c", "((BASH_VERSINFO[0] >= 5))"]).status ===
+          0,
+    ),
+    "Bash 5 (on macOS: brew install bash)",
+  );
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-linux-publisher-"));
+  try {
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    const calls = path.join(root, "publish-args");
+    writeFileSync(
+      path.join(bin, "node"),
+      `#!/bin/bash
+if [[ "$1" == scripts/linux-updater-manifest.mjs ]]; then
+  printf '%s\\n' "$FIXTURE_STATUS"
+else
+  printf '%s\\n' "$@" > "$FIXTURE_CALLS"
+fi
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(path.join(bin, "gh"), '#!/bin/sh\nprintf "%s\\n" "$TAG_SHA"\n', {
+      mode: 0o755,
+    });
+    writeFileSync(path.join(bin, "sha256sum"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const run = (alreadyPublished: string, status: object, desktop = "false") => {
+      rmSync(calls, { force: true });
+      const result = spawnSync(bash, ["--noprofile", "--norc", "-c", publisher.run ?? ""], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          FIXTURE_CALLS: calls,
+          FIXTURE_STATUS: JSON.stringify(status),
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_STEP_SUMMARY: devNull,
+          RUNNER_TEMP: root,
+          RELEASE_TAG: "v2026.10.3",
+          TAG_SHA: "a".repeat(40),
+          WORKFLOW_SHA: "b".repeat(40),
+          WORKFLOW_REF: "main",
+          WORKFLOW_FULL_REF: "refs/heads/main",
+          REQUEST_RUN_ID: "43",
+          REQUEST_RUN_ATTEMPT: "1",
+          MINISIGN_BINARY_SHA256: "c".repeat(64),
+          DESKTOP_TEST_BUNDLES: desktop,
+          LOCAL_INPUTS: String(
+            runInNewContext(localInputs.replace(/^\$\{\{|\}\}$/gu, ""), {
+              needs: { validate_release: { outputs: { already_published: alreadyPublished } } },
+            }),
+          ),
+        },
+      });
+      return {
+        status: result.status,
+        stderr: result.stderr,
+        args: existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : undefined,
+      };
+    };
+    const complete = { state: "published", assetsComplete: true };
+    const localArgs = [
+      "--assets",
+      "dist/release",
+      "--signature",
+      "dist/input/linux/signatures/OpenClaw-2026.10.3-amd64.AppImage.sig",
+    ];
+    // An interrupted publication leaves complete public bundles while the
+    // run's signed Windows manifest exists only in its local inputs.
+    const resumed = run("false", complete);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(resumed.args?.join(" ")).toContain(localArgs.join(" "));
+    const reused = run("true", complete);
+    expect(reused.status, reused.stderr).toBe(0);
+    expect(reused.args).not.toContain("--assets");
+    const fresh = run("false", { state: "pending", assetsComplete: false });
+    expect(fresh.args?.join(" ")).toContain(localArgs.join(" "));
+    const desktop = run("false", complete, "true");
+    expect(desktop.status).toBe(1);
+    expect(desktop.args).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("detaches Linux mirror-only writers from both completed core finalizers", () => {
   const linux = readWorkflow(".github/workflows/linux-app-release.yml");
   for (const event_name of ["push", "pull_request", "workflow_run", "workflow_dispatch"]) {
