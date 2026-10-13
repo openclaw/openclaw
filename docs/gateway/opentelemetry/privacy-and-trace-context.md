@@ -74,6 +74,23 @@ listeners only — including any in-process plugin subscribed through
 `onInternalDiagnosticEvent` in the Plugin SDK — not the public untrusted
 diagnostic projection.
 
+The fingerprint identifies the loaded skill bundle, not the exact bytes a
+particular delivery served: it is computed once at delivery preparation per
+loaded bundle (through the same bundle digest that backs resource delivery
+integrity) and every `skill.used` emission looks that retained field up. It
+is operator telemetry only — the fingerprint is never served to the model,
+and whether a delivery's served bytes exactly match the loaded bundle is
+delivery integrity's existing behavior, not this attribute's concern. A
+disclosed staleness race follows from that contract: an edit to a skill's
+source files after its bundle loaded is picked up by the skill watcher
+(`skills.load.watch`, on by default) within seconds, the reload recomputes
+the revision, and materialization is revision-keyed, so later deliveries carry
+the new fingerprint — but spans emitted between the edit and its reload
+carry the previously loaded bundle's fingerprint, and an active delivery
+keeps its generation's identity for the turn. Routes that run without a
+watcher (for example the cron snapshot path, `watch: false`) carry the
+previously loaded identity until their next reload.
+
 The fingerprint is emitted only while tracing is active: `skill.used` events on
 an install with no active tracing consumer (for example a metrics-only
 install) omit `skillFingerprint`, including when a skill's retained snapshot
