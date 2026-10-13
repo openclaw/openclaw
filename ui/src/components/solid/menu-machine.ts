@@ -55,11 +55,16 @@ export type MenuBinding = {
   content(): Record<string, unknown>;
 };
 
+export type MenuNavigationOptions = {
+  ids?: MenuProps["ids"];
+};
+
 export function useMenuMachine(
   overlay: Overlay,
   direction: () => "ltr" | "rtl",
   onSelect: (value: string) => void,
   parent?: MenuService,
+  options: MenuNavigationOptions = {},
 ): MenuBinding {
   let lastPointerX: number | undefined;
   let focusFromKeyboard = false;
@@ -107,6 +112,26 @@ export function useMenuMachine(
       },
       actions: {
         ...machine.implementations?.actions,
+        highlightFirstItem(params) {
+          // Opening must keep Zag's queued highlight aligned with native initial focus.
+          if (params.event.type !== "HOME") {
+            const initial = [
+              ...overlay.surface.querySelectorAll<HTMLElement>(
+                "[data-initial-focus][data-menu-item]",
+              ),
+            ].find(
+              (item) =>
+                item.closest('[role="menu"]') === overlay.surface &&
+                !item.matches(":disabled") &&
+                item.getAttribute("aria-disabled") !== "true",
+            );
+            if (initial) {
+              params.context.set("highlightedValue", initial.getAttribute("data-value"));
+              return;
+            }
+          }
+          machine.implementations?.actions?.highlightFirstItem?.(params);
+        },
         reposition() {},
         focusTrigger() {},
         focusMenu() {},
@@ -127,6 +152,7 @@ export function useMenuMachine(
   };
   const props: MenuProps = {
     id: overlay.id,
+    ids: options.ids,
     getRootNode: () => {
       // The connector reads initial props before the DOM refs are bound.
       const surface = overlay.surface;

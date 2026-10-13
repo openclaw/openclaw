@@ -17,6 +17,60 @@ import { Menu, type MenuItem } from "./menu.tsx";
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
+  it("reopens at the selected item with a custom root trigger and preserves navigation", async () => {
+    const [selected, setSelected] = createSignal("alpha");
+    const choices = [
+      { id: "alpha", label: "Alpha" },
+      { id: "beta", label: "Beta" },
+      { id: "gamma", label: "Gamma" },
+    ];
+    const view = mountMenu({
+      get triggerAttributes() {
+        return { id: "provider-trigger", "data-value": selected(), "aria-busy": "false" };
+      },
+      get items() {
+        return choices.map<MenuItem>((choice) => ({
+          ...choice,
+          type: "radio",
+          checked: choice.id === selected(),
+          attributes: { "data-initial-focus": choice.id === selected() ? "" : undefined },
+        }));
+      },
+      onSelect: (entry) => setSelected(entry.id),
+    });
+    const button = view.getByRole("button", { name: "People" });
+    expect(button.id).toBe("provider-trigger");
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    expect(button.getAttribute("aria-controls")).toBe(surface().id);
+    expect(surface().getAttribute("aria-labelledby")).toBe("provider-trigger");
+    button.focus();
+    await userEvent.keyboard("{Enter}");
+    await phase(surface(), "open");
+    expect(document.activeElement).toBe(item("Alpha"));
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    flush();
+    await phase(surface(), "hidden");
+    expect(button.getAttribute("data-value")).toBe("beta");
+    expect(document.activeElement).toBe(button);
+    await userEvent.keyboard("{Enter}");
+    await phase(surface(), "open");
+    expect(item("Beta").getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement).toBe(item("Beta"));
+    await userEvent.keyboard("{Home}");
+    expect(document.activeElement).toBe(item("Alpha"));
+    await userEvent.keyboard("{End}");
+    expect(document.activeElement).toBe(item("Gamma"));
+    await userEvent.keyboard("{Escape}");
+    await phase(surface(), "hidden");
+    expect(document.activeElement).toBe(button);
+    await userEvent.keyboard("{ArrowUp}");
+    await phase(surface(), "open");
+    expect(document.activeElement).toBe(item("Gamma"));
+    await userEvent.keyboard("{Escape}");
+    await phase(surface(), "hidden");
+    expect(document.activeElement).toBe(button);
+  });
+
   it.each(["ArrowDown", "ArrowUp"])(
     "skips disabled submenu triggers when opened with %s",
     async (key) => {

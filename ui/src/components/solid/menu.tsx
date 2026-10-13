@@ -41,8 +41,10 @@ export type MenuProps = {
   triggerClass?: string;
   triggerAttributes?: Pick<
     JSX.HTMLAttributes<HTMLButtonElement>,
-    "title" | "style" | "tabindex" | "aria-hidden"
+    "title" | "style" | "tabindex" | "aria-hidden" | "aria-busy"
   > & {
+    /** Stable for this mount, like the menu id. */
+    id?: string;
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
   placement?: OverlayPlacement;
@@ -79,6 +81,9 @@ export function Menu(props: BranchProps): JSX.Element {
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const identity = untrack(() => ({
     id: props.id,
+    triggerId: props.parent
+      ? `${props.id}:trigger`
+      : (props.triggerAttributes?.id ?? `${props.id}:trigger`),
     parent: props.parent,
     binding: props.parentBinding,
     root: props.root,
@@ -135,7 +140,9 @@ export function Menu(props: BranchProps): JSX.Element {
     }
   };
   onSettled(() => overlay.bindSurface(surface));
-  const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service);
+  const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service, {
+    ids: { trigger: identity.triggerId },
+  });
   const [opened, setOpened] = createSignal(false);
   let openPublication = 0;
   const syncOpen = (open: boolean) => {
@@ -244,7 +251,7 @@ export function Menu(props: BranchProps): JSX.Element {
           overlay.bindTrigger(node);
         }}
         type="button"
-        id={`${identity.id}:trigger`}
+        id={identity.triggerId}
         class={[
           identity.parent ? "oc-menu-item oc-menu-item--submenu" : "oc-menu-trigger",
           props.triggerClass,
