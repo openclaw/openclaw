@@ -76,9 +76,7 @@ describe("catalog session menu", () => {
     await menu.updateComplete;
 
     menu.querySelector<CatalogMenuItem>('[data-value="viewer"]')!.click();
-    await menu.updateComplete;
-
-    expect(order).toEqual(["viewer", "close"]);
+    await waitForSolid(() => expect(order).toEqual(["viewer", "close"]));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
