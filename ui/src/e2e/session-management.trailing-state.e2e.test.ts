@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -17,12 +17,10 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 async function seedPullRequestSummary(page: Page, key: string, state: "open" | "merged") {
-  await page.evaluate(
-    (summary) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime: { context: { sessions: SessionCapability } };
-      };
-      app.runtime.context.sessions.setPullRequestSummary(summary.key, {
+  await evaluateControlUiContext(
+    page,
+    (context, summary) => {
+      context.sessions.setPullRequestSummary(summary.key, {
         numbers: [1],
         state: summary.state,
       });

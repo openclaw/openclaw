@@ -65,7 +65,7 @@ async function startHttpHarness(options?: {
   const dispatchInbound =
     options?.onDispatch ??
     (async (message) => {
-      taskStore.completeNext(message.contextId, `echo: ${message.text}`, message.peerName);
+      taskStore.complete(message.taskId, `echo: ${message.text}`);
     });
   const handler = createA2aHttpHandler({
     config,
@@ -141,6 +141,7 @@ async function startHttpHarness(options?: {
 
 function sendRequest(options?: {
   id?: string | number;
+  taskId?: string;
   contextId?: string;
   messageId?: string;
   text?: string;
@@ -153,6 +154,7 @@ function sendRequest(options?: {
     method: options?.method ?? "SendMessage",
     params: {
       message: {
+        ...(options?.taskId ? { taskId: options.taskId } : {}),
         ...(options?.messageId ? { messageId: options.messageId } : {}),
         ...(options?.contextId ? { contextId: options.contextId } : {}),
         role: "ROLE_USER",
@@ -162,6 +164,30 @@ function sendRequest(options?: {
     },
   };
 }
+
+describe("A2A message replay", () => {
+  it("returns the existing task for a peer message ID before and after completion", async () => {
+    const dispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch: dispatch });
+    const request = sendRequest({ messageId: "same-message", returnImmediately: true });
+    const first = (await (await harness.post(request)).json()) as {
+      result: { task: { id: string; contextId: string; status: { state: string } } };
+    };
+    const replay = await (await harness.post(request)).json();
+    expect(replay).toEqual(first);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    harness.taskStore.fail(first.result.task.id, "provider unavailable");
+    expect(await (await harness.post(request)).json()).toMatchObject({
+      result: { task: { id: first.result.task.id, status: { state: "TASK_STATE_FAILED" } } },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    const otherPeer = (await (await harness.post(request, "beta-secret")).json()) as typeof first;
+    expect(otherPeer.result.task.id).not.toBe(first.result.task.id);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("A2A HTTP agent discovery", () => {
   it("serves both public discovery paths with the canonical bounded v1.0 card", async () => {
@@ -400,8 +426,8 @@ describe("A2A HTTP authentication and request limits", () => {
     const harness = await startHttpHarness();
     const taskA = harness.taskStore.create("ctx-large-a", "alpha");
     const taskB = harness.taskStore.create("ctx-large-b", "alpha");
-    harness.taskStore.completeNext(taskA.contextId, "a".repeat(600 * 1024), "alpha");
-    harness.taskStore.completeNext(taskB.contextId, "b".repeat(600 * 1024), "alpha");
+    harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
+    harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
     const stringifySpy = vi.spyOn(JSON, "stringify");
 
     const response = await harness.post([
@@ -479,6 +505,33 @@ describe("A2A JSON-RPC protocol boundary", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ id: "bad", error: { code: errorCode } });
+  });
+
+  it.each([
+    ["CreateTaskPushNotificationConfig", -32003],
+    ["SetTaskPushNotificationConfig", -32003],
+    ["GetTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfigs", -32003],
+    ["DeleteTaskPushNotificationConfig", -32003],
+    ["SendStreamingMessage", -32004],
+    ["SubscribeToTask", -32004],
+    ["GetExtendedAgentCard", -32004],
+    ["UnknownTaskPushNotificationConfig", -32601],
+  ])("rejects %s with capability-specific error %s", async (method, code) => {
+    const onDispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch });
+    const createTask = vi.spyOn(harness.taskStore, "create");
+    const response = await harness.post({ jsonrpc: "2.0", id: "capability", method });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      jsonrpc: "2.0",
+      id: "capability",
+      error: { code, message: expect.any(String) },
+    });
+    expect(onDispatch).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
   });
 
   it("executes batch notifications without returning notification response entries", async () => {
@@ -572,6 +625,64 @@ describe("A2A JSON-RPC protocol boundary", () => {
         },
       },
     });
+  });
+});
+
+describe("A2A SendMessage task references", () => {
+  it.each([
+    ["unknown", -32001],
+    ["foreign", -32001],
+    ["owned", -32004],
+    ["conflicting context", -32602],
+  ])("rejects %s task references without new work", async (kind, code) => {
+    const onDispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch });
+    const referenced =
+      kind === "unknown"
+        ? undefined
+        : harness.taskStore.create("existing-context", kind === "foreign" ? "beta" : "alpha");
+    const before = referenced && structuredClone(referenced);
+    const create = vi.spyOn(harness.taskStore, "create");
+
+    const response = await harness.post(
+      sendRequest({
+        taskId: referenced?.id ?? "missing",
+        contextId: kind === "conflicting context" ? "other-context" : undefined,
+        returnImmediately: true,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ error: { code } });
+    expect(create).not.toHaveBeenCalled();
+    expect(onDispatch).not.toHaveBeenCalled();
+    if (referenced) {
+      expect(harness.taskStore.get(referenced.id)).toEqual(before);
+    }
+  });
+
+  it("accepts a context-only follow-up as a new task", async () => {
+    const harness = await startHttpHarness();
+    const original = harness.taskStore.create("shared-context", "alpha");
+    harness.taskStore.complete(original.id, "original reply");
+
+    const response = await harness.post(
+      sendRequest({ contextId: original.contextId, text: "follow up" }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      result: {
+        task: {
+          id: expect.not.stringMatching(original.id),
+          contextId: original.contextId,
+          status: { state: "TASK_STATE_COMPLETED" },
+          artifacts: [{ parts: [{ text: "echo: follow up" }] }],
+        },
+      },
+    });
+    expect(harness.taskStore.get(original.id)?.artifacts[0]?.parts).toEqual([
+      { text: "original reply" },
+    ]);
   });
 });
 

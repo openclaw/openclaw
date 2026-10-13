@@ -50,14 +50,18 @@ Talk, realtime voice, and managed-room code paths use the shared file logger for
 
 Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
 and transcript deltas use `debug`. Model-fetch starts and successful responses
-under one second also use `debug`. Non-2xx responses and responses taking at least
-one second remain at `info`; transport failures remain warnings. The existing
+also use `debug`, regardless of duration. Non-2xx responses remain at `info`;
+transport failures remain warnings. The existing
 [model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
 promote transport details to `info` when enabled.
 
-Secret egress request audit records remain at `info`, including successful
-forwarding. Their structured fields record the proxy outcome without request
+Secret egress forwarding without credential substitution uses `debug`. Refusals
+and credential substitutions remain at `info`, and certificate failures remain
+warnings. Their structured fields record the proxy outcome without request
 payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
+Code Mode and Tool Search catalog preparation summaries also use `debug`.
+[Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
+preparations, and model calls independently of log levels.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 

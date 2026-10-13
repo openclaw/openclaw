@@ -127,6 +127,8 @@ function recordDiagnosticEvent(
       }
       return;
     case "diagnostic.phase.completed":
+    case "secret.egress":
+    case "tool.catalog":
     case "gateway.rpc":
     case "gateway.http.cancelled":
     case "diagnostic.gc":

@@ -18,7 +18,7 @@ import {
 import {
   insertGitHubPublicationSessionLifecycle,
   readGitHubPublicationSessionLifecycle,
-} from "../state/github-publication-session-lifecycles.js";
+} from "../state/github-publication-session-lifecycles.worker.js";
 import type {
   SharedGitHubPublicationAcceptedSnapshot,
   SharedGitHubPublicationInsert,

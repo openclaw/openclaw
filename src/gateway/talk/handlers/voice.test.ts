@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { assertNoRetainedSessionSharingReads } from "../../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -244,7 +245,11 @@ describe("Talk voice RPC ownership", () => {
       clearAgentRunContext(authority.operationalRunInstance.runId);
     }
     clientVoiceSessionTesting.reset();
-    await state.cleanup();
+    try {
+      assertNoRetainedSessionSharingReads();
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it.each(["talk.voice.set"])(

@@ -59,8 +59,13 @@ message, including subagent waits—not the sum of worker runtimes. It stays on
 the same clock across handoffs and resumes. If the loaded history cannot identify
 the complete request, the timer is omitted instead of estimating a total.
 Child activity also stays visible when a turn ends without a handoff. Until the
-subagent list is available, the existing working indicator remains as a fallback.
-The parent's own working indicator remains visible while the parent is actively
+subagent list is available, or when only ordinary child sessions remain, the
+existing working indicator remains as a fallback. Its wait clock measures the
+current idle interval from the parent’s latest recorded run end, even if the
+handoff is outside loaded history. A later parent update starts a new idle
+interval; this is not the original request duration or a child’s runtime. Child
+activity without a completed parent turn does not invent a parent wait.
+The parent’s own working indicator remains visible while the parent is actively
 working. There is no additional waiting-status line above the composer. Once
 everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
 successful `sessions_yield` leaves no marker in the transcript, and its private

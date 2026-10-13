@@ -5,7 +5,7 @@ import {
   type RouteMatch,
   type Router,
 } from "@openclaw/uirouter";
-import { html, nothing, type LitElement } from "lit";
+import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
@@ -16,9 +16,12 @@ import {
 } from "../lib/sessions/route-navigation.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { pages as chatPages } from "../pages/chat/route.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
-import "./router-outlet.ts";
+import {
+  disposeRouterOutlets,
+  mountRouterOutlet,
+  settleRouterOutlet,
+  type MountedRouterOutlet,
+} from "./router-outlet.test-support.tsx";
 
 // The fixture supplies its own page renderer; retain the registered route's ownership policy.
 vi.mock("../pages/chat/chat-page.ts", () => ({}));
@@ -36,12 +39,7 @@ type TestModule = {
   renderOwnerKey?: (match: OwnerMatch, settled: OwnerMatch | undefined) => string | undefined;
 };
 type TestRouter = Router<RouteId, TestContext, TestModule, ChatRouteData>;
-type RouterOutletElement = LitElement &
-  ControlUiReadinessOutlet & {
-    router?: TestRouter;
-    retryContext?: TestContext;
-    retentionScope?: object;
-  };
+type RouterOutletElement = MountedRouterOutlet;
 
 function location(pathname: string, search = ""): RouteLocation {
   return { pathname, search, hash: "" };
@@ -52,15 +50,11 @@ function sessionData(sessionKey: string, face: "chat" | "dashboard"): ChatRouteD
 }
 
 function createOutlet(router: TestRouter): RouterOutletElement {
-  const outlet = document.createElement("openclaw-router-outlet") as RouterOutletElement;
-  outlet.router = router;
-  outlet.retryContext = {};
-  document.body.append(outlet);
-  return outlet;
+  return mountRouterOutlet({ router, retryContext: {} });
 }
 
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
-  await settleLitElement(outlet);
+  await settleRouterOutlet(outlet);
 }
 
 function ownedRenderer(teardown: () => Promise<void>) {
@@ -96,6 +90,7 @@ async function routeModule(
 }
 
 afterEach(() => {
+  disposeRouterOutlets();
   Reflect.deleteProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__");
   document.body.replaceChildren();
 });
@@ -304,7 +299,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       ],
     });
     const outlet = createOutlet(router);
-    outlet.retentionScope = scope;
+    outlet.setInputs({ retentionScope: scope });
     await router.navigate("chat", {});
     await settleOutlet(outlet);
     const appView = outlet.querySelector("mcp-app-view")!;
@@ -312,7 +307,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     await settleOutlet(outlet);
 
     scope = { key: 2 };
-    outlet.retentionScope = scope;
+    outlet.setInputs({ retentionScope: scope });
     await settleOutlet(outlet);
     expect(teardown).toHaveBeenCalledOnce();
     expect(appView.isConnected).toBe(true);
@@ -375,12 +370,12 @@ describe("openclaw-router-outlet chat ownership", () => {
       ],
     });
     const outlet = createOutlet(router);
-    outlet.retentionScope = scope;
+    outlet.setInputs({ retentionScope: scope });
     const destination = location("/dashboard/main/pending-story-12345678");
     const navigation = router.navigate("dashboard", {}, undefined, destination);
     await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
     scope = { key: 2 };
-    outlet.retentionScope = scope;
+    outlet.setInputs({ retentionScope: scope });
     await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(2));
     expect(loader.mock.calls[1]?.[1].location).toEqual(destination);
     oldResult.resolve(sessionData(sessionKey, "chat"));
@@ -422,13 +417,13 @@ describe("openclaw-router-outlet chat ownership", () => {
       ],
     });
     const outlet = createOutlet(router);
-    outlet.retentionScope = scope;
+    outlet.setInputs({ retentionScope: scope });
     await router.navigate("chat", {});
     await settleOutlet(outlet);
     const dashboardNavigation = router.navigate("dashboard", {});
     await settleOutlet(outlet);
     scope = { key: 2 };
-    outlet.retentionScope = scope;
+    outlet.setInputs({ retentionScope: scope });
     await settleOutlet(outlet);
     const homeNavigation = router.navigate("home", {});
     dashboardModule.resolve(await routeModule("dashboard", render));
@@ -504,7 +499,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     await settleOutlet(outlet);
     const appView = outlet.querySelector("mcp-app-view");
     await second.navigate("chat", {});
-    outlet.router = second;
+    outlet.setInputs({ router: second });
     await settleOutlet(outlet);
     expect(outlet.querySelector("mcp-app-view")).not.toBe(appView);
     expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
