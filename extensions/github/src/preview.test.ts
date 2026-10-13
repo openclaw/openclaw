@@ -803,6 +803,113 @@ describe("loadControlUiGitHubPreview", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it.each(["issue", "pull"] as const)(
+    "conditionally revalidates %s metadata and retires validators after an error",
+    async (kind) => {
+      let version = 1;
+      let unavailable = false;
+      const itemHeaders: (string | null)[] = [];
+      const commitsHeaders: (string | null)[] = [];
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/repos/openclaw/openclaw")) {
+          return publicRepository();
+        }
+        const commits = url.includes("/commits");
+        const etag = `"${commits ? "commits" : "item"}-${version}"`;
+        const validator = new Headers(init?.headers).get("If-None-Match");
+        (commits ? commitsHeaders : itemHeaders).push(validator);
+        if (unavailable) {
+          return githubJson({}, 404);
+        }
+        if (validator === etag) {
+          return new Response(null, { status: 304 });
+        }
+        const response = githubJson(
+          commits
+            ? [{ commit: { message: "No co-authors" } }]
+            : previewPayload({ title: `Version ${version}`, user: { login: "octocat" } }),
+        );
+        response.headers.set("etag", etag);
+        return response;
+      });
+      const target = previewTarget(940001, kind);
+      const identity = managedIdentity(`conditional-${kind}`);
+      const load = (refresh = false) =>
+        loadControlUiGitHubPreview(target, identity, fetchMock, refresh);
+      const first = await load();
+      const before = fetchMock.mock.calls.length;
+      expect(await load()).toEqual(first);
+      expect(fetchMock).toHaveBeenCalledTimes(before);
+      expect(await load(true)).toEqual(first);
+      version = 2;
+      expect(await load(true)).toMatchObject({ title: "Version 2" });
+      expect(await load(true)).toMatchObject({ title: "Version 2" });
+      unavailable = true;
+      await expect(load(true)).rejects.toMatchObject({ statusCode: 404 });
+      unavailable = false;
+      expect(await load(true)).toMatchObject({ title: "Version 2" });
+      expect(itemHeaders).toEqual([null, '"item-1"', '"item-1"', '"item-2"', '"item-2"', null]);
+      expect(commitsHeaders).toEqual(
+        kind === "pull"
+          ? [null, '"commits-1"', '"commits-1"', '"commits-2"', '"commits-2"', null]
+          : [],
+      );
+    },
+  );
+
+  it("does not reuse representations across transports, token rotations, or anonymous fallback", async () => {
+    const target = previewTarget(940002);
+    const validators: (string | null)[] = [];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (requestUrl(input).endsWith("/repos/openclaw/openclaw")) {
+        return publicRepository();
+      }
+      validators.push(new Headers(init?.headers).get("If-None-Match"));
+      const response = githubJson(previewPayload({ user: { login: "octocat" } }));
+      response.headers.set("etag", '"item"');
+      return response;
+    });
+    const identity = {
+      ...managedIdentity("representation-isolation"),
+      optionalAuth: true as const,
+    };
+    await loadControlUiGitHubPreview(target, identity, fetchMock);
+    const rotated = { ...identity, token: "rotated-fixture-token" };
+    await loadControlUiGitHubPreview(target, rotated, fetchMock);
+    const secondTransport: typeof fetch = (input, init) => fetchMock(input, init);
+    await loadControlUiGitHubPreview(target, identity, secondTransport);
+    const normal = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) =>
+      new Headers(init?.headers).has("Authorization") ? githubJson({}, 401) : normal(input, init),
+    );
+    await loadControlUiGitHubPreview(target, identity, fetchMock, true);
+    fetchMock.mockImplementation(normal);
+    await loadControlUiGitHubPreview(target, identity, fetchMock, true);
+    expect(validators).toEqual([null, null, null, null, null]);
+  });
+
+  it("rechecks visibility after a conditional item response", async () => {
+    let repositoryReads = 0;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (requestUrl(input).endsWith("/repos/openclaw/openclaw")) {
+        return ++repositoryReads === 4 ? githubJson({ private: true }) : publicRepository();
+      }
+      if (new Headers(init?.headers).has("If-None-Match")) {
+        return new Response(null, { status: 304 });
+      }
+      const response = githubJson(previewPayload({ user: { login: "octocat" } }));
+      response.headers.set("etag", '"item"');
+      return response;
+    });
+    const target = previewTarget(940003);
+    const identity = managedIdentity("conditional-private");
+    await loadControlUiGitHubPreview(target, identity, fetchMock);
+    await expect(
+      loadControlUiGitHubPreview(target, identity, fetchMock, true),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it("does not let a failed older request replace an explicit refresh", async () => {
     const started = createDeferred<void>();
     const older = createDeferred<Response>();
