@@ -308,6 +308,17 @@ facts in one statement per bounded batch. Batches share the existing read
 transaction; journal and result-claim checks consume those same snapshot facts.
 Optional columns come from admitted schema facts and refresh with that owner.
 
+Placement retirement checks the inventory once at startup, then checks only IDs
+changed by placement receipts or session identity mutations. Clean idle passes
+perform no retirement reads. Unknown evidence and failed cleanup remain pending
+for the existing minute sweep. Config, store topology, and uncertain session
+storage publications request a fresh inventory scan. Retirement predicates and
+remote environment teardown keep their existing authority checks.
+
+Skills discovery shares installed-plugin inventory facts across the workspaces in
+one worker scan. Each new scan starts with a fresh plugin cache, so installed
+plugin changes remain visible without rereading the same index for every agent.
+
 Shared-state read operations retain their admission revision through their
 synchronous domain read. ACP metadata reuses at most 128 rows per connection
 under that revision; writer receipts, schema changes, and close

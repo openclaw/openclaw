@@ -19,10 +19,10 @@ let restoreDialogPolyfill: () => void;
 
 type Modal = HTMLElementTagNameMap["openclaw-modal-dialog"];
 const modalTransitionEvents = {
-  opening: "wa-show",
-  opened: "wa-after-show",
-  closing: "wa-hide",
-  closed: "wa-after-hide",
+  opening: "overlay-show",
+  opened: "overlay-after-show",
+  closing: "overlay-hide",
+  closed: "overlay-after-hide",
 } as const;
 
 function commitRender(element: { updateComplete: Promise<unknown> }) {
@@ -305,6 +305,9 @@ describe("openclaw-modal-dialog", () => {
         const { modal } = await renderModal();
 
         showToast({ message: "Saved" });
+        await commitRender(appHost);
+        await vi.dynamicImportSettled();
+        flush();
         expect(appHost.parentElement).toBe(modal.getOverlayContainer());
         const hidden = action === "hide" ? afterModalHidden(modal) : undefined;
         modal[action]();

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -226,8 +226,10 @@ it("rearms parked retention from a committed worker history write", async () => 
       const clock = createGatewaySchedulerClock(now);
       const scheduler = createTestGatewayScheduler(clock.clock);
       try {
+        await captureRuntimeConfigAsyncReader()();
         startCronMaintenance(scheduler);
         await clock.advanceBy(5_000);
+        expect(scheduler.nextWakeAtMs).toBeNull();
         await recordCronRun({
           storeKey: "/synthetic/cron/jobs.json",
           jobId: "expired",

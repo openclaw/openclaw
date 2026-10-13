@@ -262,7 +262,7 @@ onDevicePairSetupChange((path) => {
 });
 
 /** Remove retained setup outcomes independently of status requests or later pairings. */
-export async function pruneExpiredDevicePairSetupCompletions(
+async function pruneExpiredDevicePairSetupCompletions(
   params: { nowMs?: number; baseDir?: string } = {},
 ): Promise<number> {
   return await withLock(async () => {

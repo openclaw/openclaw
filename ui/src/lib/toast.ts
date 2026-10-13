@@ -231,12 +231,12 @@ export function showToast(options: ToastOptions): boolean {
       if (event.target !== modal.owner) {
         return;
       }
-      modal.owner.removeEventListener("wa-after-hide", handoff);
+      modal.owner.removeEventListener("overlay-after-hide", handoff);
       queueMicrotask(() =>
         (activeModalToastLayer()?.container ?? restingToastLayer())?.append(host),
       );
     };
-    modal.owner.addEventListener("wa-after-hide", handoff);
+    modal.owner.addEventListener("overlay-after-hide", handoff);
   }
   host.show(options);
   return true;

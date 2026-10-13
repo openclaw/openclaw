@@ -56,6 +56,7 @@ describe("plugin lifecycle CLI transport", () => {
       message: "lifecycle busy",
       retryable: true,
       retryAfterMs: 600_000,
+      details: { mutationAccepted: false },
     });
     mocks.call.mockRejectedValue(busy);
     const gateway = await resolvePluginLifecycleGateway();
@@ -67,6 +68,66 @@ describe("plugin lifecycle CLI transport", () => {
     ).rejects.toBe(busy);
     expect(mocks.call).toHaveBeenCalledOnce();
     await expect(waitForSignalExitBarriers()).resolves.toBeUndefined();
+  });
+
+  it("finishes a plugin mutation after an explicit pre-admission refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      const applied = { runtime: { operationId: "after-contention", generation: 3 } };
+      mocks.call
+        .mockRejectedValueOnce(
+          new GatewayClientRequestError({
+            code: "UNAVAILABLE",
+            message: "plugin lifecycle busy",
+            retryable: true,
+            retryAfterMs: 1_000,
+            details: { mutationAccepted: false },
+          }),
+        )
+        .mockResolvedValueOnce(applied);
+      const gateway = await resolvePluginLifecycleGateway();
+      const outcome = gateway!("plugins.setEnabled", { pluginId: "demo", enabled: false }).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcome).toEqual(applied);
+      expect(mocks.call).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an unaccepted retry before dispatching another request", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.call.mockRejectedValue(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "plugin lifecycle busy",
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: { mutationAccepted: false },
+        }),
+      );
+      const gateway = await resolvePluginLifecycleGateway();
+      let settled = false;
+      const outcome = gateway!("plugins.reload", {
+        plugins: [{ pluginId: "demo" }],
+        waitForDrain: true,
+      })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await waitForSignalExitBarriers();
+      expect(await outcome).toMatchObject({ name: "AbortError" });
+      expect(mocks.call).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("selects offline execution only when no local owner exists", async () => {
@@ -117,13 +178,25 @@ describe("plugin lifecycle CLI transport", () => {
     });
   });
 
-  it("propagates a lost reply without retrying a possibly committed mutation", async () => {
-    const failure = new Error("connection lost");
-    mocks.call.mockRejectedValue(failure);
-    const gateway = await resolvePluginLifecycleGateway();
-    await expect(gateway?.("plugins.uninstall", { pluginId: "demo" })).rejects.toBe(failure);
-    expect(mocks.call).toHaveBeenCalledOnce();
-  });
+  it.each(["lost-reply", "missing-admission-fact", "admitted"])(
+    "does not replay an uncertain plugin mutation (%s)",
+    async (outcome) => {
+      const failure =
+        outcome === "lost-reply"
+          ? new Error("connection lost")
+          : new GatewayClientRequestError({
+              code: "UNAVAILABLE",
+              message: "plugin operation unavailable",
+              retryable: true,
+              retryAfterMs: 1_000,
+              ...(outcome === "admitted" ? { details: { mutationAccepted: true } } : {}),
+            });
+      mocks.call.mockRejectedValue(failure);
+      const gateway = await resolvePluginLifecycleGateway();
+      await expect(gateway?.("plugins.uninstall", { pluginId: "demo" })).rejects.toBe(failure);
+      expect(mocks.call).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([{ method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] } }])(
     "retries $method consent using the inspected artifact's exact token",

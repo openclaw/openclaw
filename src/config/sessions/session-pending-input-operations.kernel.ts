@@ -149,6 +149,7 @@ export function mutatePendingInput(
             );
           }
         }
+        // Native SDK completion uses only "complete"; stage and finish execute in workers.
         if (input.kind === "stage") {
           const snapshot = readPendingInputStage(current, input, row);
           if (!isDeepStrictEqual(snapshot, input.expected)) {
