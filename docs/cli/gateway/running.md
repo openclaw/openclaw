@@ -19,6 +19,7 @@ openclaw gateway run   # equivalent, explicit form
 
 <AccordionGroup>
   <Accordion title="Startup behavior">
+    - Agent requests wait for the current startup model runtime publication, including when a config refresh replaces the initial publication while startup is still preparing authentication.
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
     - Startup automatically applies rule-based, prompt-free legacy-key migrations to eligible invalid single-file configs, including in non-interactive service runs. It writes only after full validation, including plugins, and keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer version are excluded. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
     - If automatic migration cannot make the config valid, an interactive terminal can offer to run `openclaw doctor --fix` and retry startup once after consent. Non-interactive runs print the command instead. If the repaired config is still invalid, startup remains stopped.

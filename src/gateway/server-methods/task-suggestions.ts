@@ -43,7 +43,7 @@ import {
   listTaskSuggestions,
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { listWorkerProfiles } from "./environments.js";
+import { listWorkerProfiles } from "./environments.profiles.js";
 import {
   retainForwardedSessionMutationAuthorization,
   withSessionMutationCommitGuard,

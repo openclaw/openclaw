@@ -364,7 +364,8 @@ Available flags:
   and message text may still be present.
 - `OPENCLAW_DEBUG_SSE=events`: emit first-event and stream-completion timing.
 - `OPENCLAW_DEBUG_SSE=peek`: also emit the first five redacted SSE event
-  payloads, capped per event.
+  payloads, capped per event, on transports that support payload peeking.
+  Responses transports remain metadata-only.
 - `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
   including bounded activation facts, the final visible surface, and names of
   provider-native tools filtered because code mode owns the tool surface.
@@ -377,8 +378,8 @@ enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
-uses `debug` by default. Responses with a non-2xx status or at least one second
-of elapsed time remain at `info`, and transport failures remain warnings.
+uses `debug` by default. Responses with a non-2xx status remain at `info`,
+and transport failures remain warnings.
 `[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
 at `debug` (or `info` with the targeted flags), rather than as provider failures.
 The requesting layer owns the final cancellation or timeout outcome; an SDK can
@@ -387,6 +388,19 @@ reasons and failures without a caller abort remain warnings.
 Elapsed time includes local-service preparation and waiting for response headers,
 but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
+
+Embedded model requests attach the raw `sessionKey`, `runId`, numbered
+`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+use lossless JSON escaping so control characters cannot forge log lines; their
+values are not redacted. The request sequence
+continues across same-run retries. Fetch response logs include the HTTP
+`httpRequestId` when supplied by the provider. Responses SSE and WebSocket
+`stream_start` / `stream_done` logs record the actual requested tier and
+`max_output_tokens`; completion also records the response ID, served tier,
+provider-reported output and reasoning token counts, stream duration, total
+request elapsed time, and terminal/incomplete reason. Unknown usage stays
+`unknown`, not zero. These metadata fields contain no prompt or response text;
+raw identifiers are retained locally and follow normal redaction at log egress.
 
 `[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
 reports dropping invalidated thinking from replay. It includes the mismatch

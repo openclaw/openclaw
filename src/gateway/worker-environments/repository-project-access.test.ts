@@ -62,6 +62,7 @@ describe("prepared repository source access", () => {
       return {
         project,
         setupRecipe: undefined,
+        recipe: { source: "none", inputs: {}, env: {} },
         assertCurrent: () => {
           if (!identityCurrent) {
             throw new Error("Repository identity changed");

@@ -142,6 +142,12 @@ Post-install Doctor also accepts older updaters, including `2026.8.2`, that do n
 provide an update run ID. Its commands retain invocation-specific custody without
 requiring an environment-variable workaround.
 
+When the installed `2026.9.2` updater runs the candidate's early Doctor check,
+shared-state and agent schema changes are rehearsed on private copies. Plugin
+inspection cannot publish native admission metadata to live state during this
+check. A refused rehearsal leaves live database schemas unchanged for package
+rollback; successful checks defer migration to the fresh post-core updater.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic

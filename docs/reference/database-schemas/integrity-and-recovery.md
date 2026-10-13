@@ -37,6 +37,16 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
+Schema identity covers the application version, canonical SQL definitions,
+and the admission policy revision. Commit and build
+IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
+the policy revision for migrations or schema-version changes not reflected in canonical
+SQL, and for changes to validation rules or serialized admission facts.
+Updating from an older seal-identity format requires one full validation;
+subsequent compatible builds reuse the new seal. Managed drain followed by an
+interrupt uses ordinary close and can publish a seal once its writers settle.
+Forced termination before successful close cannot certify the database.
+
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
 preflight, or integrity verification. It also avoids a post-ready verification

@@ -458,8 +458,7 @@ export {
 } from "./codex-app-server.test-fixtures.js";
 
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
-  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
+  return createThreadStartResult(threadId, options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test");
 }
 
 export function createAppServerHarness(
@@ -469,7 +468,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
-    persistedThreads?: string[];
+    persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -609,6 +608,7 @@ export function createStartedThreadHarness(
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  persistedThread?: ReturnType<typeof threadStartResult> & { thread: { model?: string | null } },
 ) {
   return createAppServerHarness(
     async (method, params, requestOptions) => {
@@ -617,8 +617,6 @@ export function createResumeHarness(
         return override;
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; a different id is rejected as
-        // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
           ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
@@ -627,7 +625,7 @@ export function createResumeHarness(
       }
       return defaultAttemptHarnessResponse(method);
     },
-    { persistedThreads: [threadId] },
+    { persistedThreads: [persistedThread ?? threadId] },
   );
 }
 

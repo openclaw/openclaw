@@ -48,6 +48,7 @@ export function prepareEmbeddedRunTerminal(input: {
   mergeToolMedia?: ReturnType<typeof createPendingToolMediaCarry>["merge"];
   runParams: RunEmbeddedAgentInternalParams;
   replyDeliveryState?: ReplyDeliveryState;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
   currentAttemptCompletedAssistant?: AssistantMessage;
   provider: string;
@@ -67,6 +68,10 @@ export function prepareEmbeddedRunTerminal(input: {
 }) {
   const { runParams, attempt } = input;
   const replyDeliveryState = resolveSourceReplyDelivery(attempt, input.replyDeliveryState);
+  const sourceReplyDeliveryState = resolveSourceReplyDelivery(
+    attempt,
+    input.sourceReplyDeliveryState ?? input.replyDeliveryState,
+  );
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
     attempt.terminal,
   );
@@ -213,8 +218,8 @@ export function prepareEmbeddedRunTerminal(input: {
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
-    didDeliverSourceReplyViaMessageTool: replyDeliveryState === "delivered",
-    sourceReplyDeliveryState: replyDeliveryState,
+    didDeliverSourceReplyViaMessageTool: sourceReplyDeliveryState === "delivered",
+    sourceReplyDeliveryState,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
     agentId: runParams.agentId,
     runId: runParams.runId,
@@ -229,7 +234,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const mergeToolMedia = input.mergeToolMedia ?? mergeAttemptToolMediaPayloads;
   // Pending source custody also holds terminal media; committed mirrors and earlier inputs stay.
   const payloadsWithToolMedia =
-    replyDeliveryState === "pending"
+    sourceReplyDeliveryState === "pending"
       ? payloads
       : mergeToolMedia(
           {
@@ -250,7 +255,7 @@ export function prepareEmbeddedRunTerminal(input: {
           runParams.admittedRunContext?.operationalRunInstance,
         );
   const recoveredFinalAssistantTextAfterPromptTimeout =
-    replyDeliveryState === "missing" &&
+    sourceReplyDeliveryState === "missing" &&
     timedOutDuringPrompt &&
     !timeoutFinal &&
     ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)

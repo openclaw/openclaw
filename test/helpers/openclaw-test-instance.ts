@@ -585,7 +585,7 @@ async function waitForGatewayReady(
             error,
           };
         }
-        // The 60-second desktop wait cannot exceed this bound at its existing 10ms cadence.
+        // Bound retained diagnostics even when callers extend the startup budget.
         if (probes.length < 8192) {
           probes.push({
             ...lastProbe,
@@ -600,13 +600,22 @@ async function waitForGatewayReady(
         signal?.removeEventListener("abort", abortProbe);
       }
 
-      const delayMs = Math.min(10, timeoutMs - (Date.now() - startedAt));
+      // Agent-launched fixtures can inherit the secret proxy: a closed listener
+      // must not produce a stream of proxied refusals at a fixed 10ms cadence.
+      const delayMs = Math.min(
+        10 * 2 ** Math.min(attempts - 1, 6),
+        500,
+        timeoutMs - (Date.now() - startedAt),
+      );
       if (delayMs > 0) {
-        await sleep(delayMs);
+        await sleep(delayMs, signal);
       }
     }
     signal?.throwIfAborted();
     throw startupError(`timeout waiting for gateway readiness on port ${port}`);
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw error;
   } finally {
     record?.({
       probe: "GET /readyz",

@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import {
   createAnthropicMessagesTransportStreamFn,
@@ -16,7 +19,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { attachModelProviderRequestTransport } from "../provider-request-config.js";
 import { closeProviderTransportDispatcherPool } from "../provider-transport-dispatcher-pool.js";
 import type { StreamFn } from "../runtime/index.js";
-import { runEmbeddedSessionFork, wrapStreamFnWithSessionFork } from "./session-fork.js";
+import {
+  recordEmbeddedSessionForkMessage,
+  runEmbeddedSessionFork,
+  wrapStreamFnWithSessionFork,
+} from "./session-fork.js";
 
 const context: Context = {
   systemPrompt: "Stable instructions",
@@ -34,7 +41,7 @@ const model: Model = {
   maxTokens: 1000,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
-const identity = { agentId: "main", sessionId: "fork-test" };
+const identity = { agentId: "main", sessionId: "fork-test", runId: "fork-parent" };
 
 function transport(payloads: Record<string, unknown>[], tools: unknown[]): StreamFn {
   return async (requestModel, requestContext, options) => {
@@ -109,6 +116,40 @@ function responsesBody(): string {
 }
 
 describe("prepared session fork provider boundary", () => {
+  it("keeps fork snapshots without retaining completed parent contexts or payload hooks", async () => {
+    const callers = new AsyncLocalStorage<object>();
+    const references: WeakRef<object>[] = [];
+    const payloads: Record<string, unknown>[] = [];
+
+    async function completeParent() {
+      const caller = { turn: "completed" };
+      const parentContext = structuredClone(context);
+      const onPayload = (payload: unknown) => {
+        expect(callers.getStore()).toBe(caller);
+        return payload;
+      };
+      references.push(new WeakRef(caller), new WeakRef(parentContext), new WeakRef(onPayload));
+      const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+      await callers.run(caller, async () => {
+        await (await parent(model, parentContext, { onPayload })).result();
+      });
+    }
+
+    try {
+      await completeParent();
+      const control = new WeakRef({ unowned: true });
+      // End the creation job before GC; retain the real expiry timer and enabled ALS.
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+      await expect(fork()).resolves.toBe("Answer");
+      expect(payloads).toHaveLength(2);
+    } finally {
+      callers.disable();
+    }
+  });
+
   function guardedTransport(
     beforeDns?: () => void,
     api: "openai-responses" | "anthropic-messages" = "openai-responses",
@@ -378,6 +419,34 @@ describe("prepared session fork provider boundary", () => {
         assertCurrent: () => {},
       }),
     ).rejects.toThrow("Session forks do not support provider API bedrock-converse-stream");
+  });
+
+  it("does not restore cleared context when an old publication arrives", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+    const message = await (await parent(model, context, {})).result();
+    cleanupSessionResources(identity.sessionId);
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, message);
+    await expect(fork()).rejects.toThrow("requires a parent turn");
+    expect(payloads).toHaveLength(1);
+  });
+
+  it("retires optional replay if a published message cannot be retained", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+    await (await parent(model, context, {})).result();
+    expect(() =>
+      recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+        role: "toolResult",
+        toolCallId: "lookup",
+        toolName: "lookup",
+        content: [],
+        isError: false,
+        timestamp: 2,
+        details: { callback: () => {} },
+      }),
+    ).not.toThrow();
+    await expect(fork()).rejects.toThrow("requires a parent turn");
   });
 
   it("does not re-enter the parent's one-shot prepared payload hook", async () => {

@@ -92,7 +92,11 @@ export function createCrabboxWarmImageManager(dependencies: {
       key,
       (record) =>
         hasNoProviderObligations(record) &&
-        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs),
+        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs) &&
+        !(
+          record.recipePreparationAtMs !== undefined &&
+          Date.now() < record.recipePreparationAtMs + policy.refreshAfterMs
+        ),
     );
 
   const lookupLease = (id: string) => openStore().lookupLease(id);
@@ -228,11 +232,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (remaining() <= 0) {
         break;
       }
-      if (
-        value.captureUnsupported &&
-        hasNoProviderObligations(value) &&
-        !isCrabboxCaptureRefusalRetained(value, policy.refreshAfterMs)
-      ) {
+      if (hasNoProviderObligations(value)) {
         await deleteEmptyProfile(key);
         continue;
       }
@@ -298,7 +298,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           await deleteImage(context, key, current, remaining, image.checkpointId);
         }
         if (generation === "image") {
-          // A retained refusal marker is display-only and never holds a capacity slot.
+          // Retained diagnostics are display-only and never hold a capacity slot.
           await openStore().deleteIf(key, hasNoProviderObligations);
         }
       }
@@ -618,8 +618,12 @@ export function createCrabboxWarmImageManager(dependencies: {
       }
       return undefined;
     },
-    markPrepared: (id: string, baseCommit: string, assertOwnerCurrent?: () => void) =>
-      openStore().markPrepared(id, baseCommit, assertOwnerCurrent),
+    markPrepared: (
+      ...args: Parameters<ReturnType<typeof openCrabboxWarmImageStore>["markPrepared"]>
+    ) => openStore().markPrepared(...args),
+    noteRecipePreparation: (
+      ...args: Parameters<ReturnType<typeof openCrabboxWarmImageStore>["noteRecipePreparation"]>
+    ) => openStore().noteRecipePreparation(...args),
     markEnrolled: (id: string, assertOwnerCurrent?: () => void) =>
       openStore().markEnrolled(id, assertOwnerCurrent),
 

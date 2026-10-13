@@ -464,6 +464,11 @@ describe("application shell pairing access", () => {
     { name: "legacy unadvertised", auth: null, canPair: true },
     { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },
     { name: "write-only", auth: { role: "operator", scopes: ["operator.write"] }, canPair: false },
+    {
+      name: "pairing-only",
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      canPair: false,
+    },
     { name: "explicitly ungranted", auth: { role: "operator", scopes: [] }, canPair: false },
     {
       name: "disconnected",
@@ -483,7 +488,7 @@ describe("application shell pairing access", () => {
     if (scenario.nextAuth) {
       snapshot.hello = { auth: scenario.nextAuth } as ApplicationGatewaySnapshot["hello"];
       const sidebar = await renderSidebar();
-      expect(sidebar.canPairDevice).toBe(true);
+      expect(sidebar.canPairDevice).toBe(false);
       sidebar.onPairMobile?.();
       expect(openDevicePairSetup).toHaveBeenCalledOnce();
     }
@@ -491,7 +496,7 @@ describe("application shell pairing access", () => {
 
   it.each([false, true])("keeps the lazy pairing dialog visible (failed: %s)", async (failed) => {
     const { shell, renderSidebar, container } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-mobile-secret",
     });
     const loadRenderer = vi.fn();
@@ -576,7 +581,7 @@ describe("application shell pairing access", () => {
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     const schedule = vi.spyOn(window, "setTimeout");
     const { container, renderPairingDialog } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-mobile-secret",
     });
     document.body.append(container);
@@ -604,7 +609,7 @@ describe("application shell pairing access", () => {
   it("expires a node setup link from the pairing clock", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
     const { container, renderSidebar, refresh } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
       setupCode: "pair-node-secret",
       access: "node",
       expiresAtMs: 5_000,

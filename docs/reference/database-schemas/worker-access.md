@@ -395,7 +395,12 @@ visibility, membership, and conversation authority that the destination worker
 cannot validate. These changes add no schema, retention, or update migration.
 
 Cold session creation uses the existing session-entry worker for requested-key
-and parent lookups. Personal default selection reads profile links and its selected
+and parent lookups. The Gateway's `snapshot` timing includes scope preparation and
+its writer-queue reservation before the worker read; it does not clone the session
+store. That reservation preserves earlier queued writes when adopting an existing
+key and protects shared-store discovery from concurrent cold registration. Creation
+commits acquire their own writer admission and revalidate current authority.
+Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential
 authority still applies at the creation effect. Default cron loads resolve their
 saved partition in the same worker operation that loads the jobs. A queued load
@@ -6362,6 +6367,12 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Transcript rewrite preparation and publication copy mutable view containers while
+retaining already-owned string values, so old tool results and image payloads do
+not require another full byte copy on the main thread. Prepared views remain
+independently mutable. Opaque structured-cloneable SDK data retains native snapshot
+semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with

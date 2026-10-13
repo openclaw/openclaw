@@ -109,6 +109,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
   context.eventState = { seq: 0 };
+  context.modelCallSequence = { value: 0 };
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -231,8 +232,7 @@ export function claimAgentRunContext(
         currentOwners.preserveAfterRelease = false;
       }
       if (options.onClearRequested) {
-        currentOwners.clearListeners ??= new Map();
-        currentOwners.clearListeners.set(claimId, options.onClearRequested);
+        (currentOwners.clearListeners ??= new Map()).set(claimId, options.onClearRequested);
       }
     } else {
       state.owners.set(runId, {

@@ -13,6 +13,7 @@ import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -31,6 +32,7 @@ const entrypoints = [
 const preparedCli = createPreparedVitestCliFixture(
   repoRoot,
   entrypoints.map(({ script }) => script),
+  { prepareWorkerArtifacts: true },
 );
 let fixtureReceipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -106,7 +108,7 @@ registerHooks({load(url, context, nextLoad) {
         const result = await lifetime.track(
           runNodeScript(
             [...args, "--help"],
-            { ...process.env, NODE_OPTIONS: `--import=${preload}` },
+            testRunnerFixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
             10_000,
             { signal, requireProcessTreeExit: process.platform !== "win32" },
           ),
@@ -142,7 +144,7 @@ registerHooks({ load(url, context, nextLoad) {
         const result = await lifetime.track(
           runNodeScript(
             [path.join(preparedCli.root, "scripts/run-vitest.mjs")],
-            { ...preparedCli.env(process.env), NODE_OPTIONS: `--import=${preload}` },
+            { ...preparedCli.env(testRunnerFixtureEnv()), NODE_OPTIONS: `--import=${preload}` },
             10_000,
             { signal, requireProcessTreeExit: process.platform !== "win32" },
           ),
@@ -218,7 +220,7 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
             args.push("--openclaw-trailer-repro");
           }
         }
-        const env = { ...process.env };
+        const env = testRunnerFixtureEnv();
         for (const key of Object.keys(env)) {
           if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
             delete env[key];
@@ -344,7 +346,7 @@ fs.readFileSync = (file, ...args) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];
@@ -440,7 +442,7 @@ cp.spawn = (bin, args, options) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];
@@ -464,7 +466,11 @@ syncBuiltinESMExports();
             ? path.join(root, "custom.config.ts")
             : "test/vitest/vitest.e2e.config.ts",
         ],
-        { cwd: repoRoot, env: { ...env, CI: "1" }, stdio: ["ignore", "pipe", "pipe"] },
+        {
+          cwd: repoRoot,
+          env: preparedCli.env({ ...env, CI: "1" }),
+          stdio: ["ignore", "pipe", "pipe"],
+        },
       );
       let output = "";
       child.stdout.on("data", (chunk) => {
@@ -592,7 +598,7 @@ it("case ${index}", () => {
 });`,
         );
       }
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];
