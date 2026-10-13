@@ -216,6 +216,7 @@ export function createFollowupRunner(
         ...defaults.opts,
         sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+        resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
       const decision = await withAgentTurnCompletion(

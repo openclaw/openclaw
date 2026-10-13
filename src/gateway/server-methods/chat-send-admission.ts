@@ -203,7 +203,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     if (context.workerSessionPlacementService !== placementService) {
       throw new Error("Worker placement owner changed during chat admission; retry.");
     }
-    if (placementService && preparedPlacement?.sessionId !== admittedSessionId) {
+    if (
+      restartSafeRequest &&
+      !context.getRuntimeConfig().cloudWorkers?.requiredProfile &&
+      placementService &&
+      preparedPlacement?.sessionId !== admittedSessionId
+    ) {
       return withRestartSafeChatPlacement(placementService, admittedSessionId, (prepared) =>
         commitChatWorkAdmission(acpMeta, prepared),
       );
@@ -223,6 +228,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     }
     let refreshPlacement = false;
     await withCurrentChatSendRetry(params, pendingAttemptId, (latestSession, comparison) => {
+      const currentConfig = context.getRuntimeConfig();
       retryComparison = comparison;
       params.assertCurrent?.();
       const retainedRequestConflict = resolveChatSendRequestConflict(params, retryComparison);
@@ -314,17 +320,24 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       if (context.workerSessionPlacementService !== placementService) {
         throw new Error("Worker placement owner changed during chat admission; retry.");
       }
-      if (placementService && preparedPlacement?.sessionId !== admittedSessionId) {
+      if (
+        restartSafeRequest &&
+        !currentConfig.cloudWorkers?.requiredProfile &&
+        placementService &&
+        preparedPlacement?.sessionId !== admittedSessionId
+      ) {
         // A fresh Goal can select a new incarnation. Release this synchronous
         // reader before awaiting placement facts and rechecking admission.
         refreshPlacement = true;
         return;
       }
-      const placement = preparedPlacement?.facts.current();
+      const placement = currentConfig.cloudWorkers?.requiredProfile
+        ? undefined
+        : preparedPlacement?.facts.current();
       restartSafeAdmission = resolveRestartSafeChatAdmission({
         activeRunScopeKey,
         agentId,
-        cfg: latestSession.cfg,
+        cfg: currentConfig,
         clientRunId,
         context,
         entry: latestEntry,

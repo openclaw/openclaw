@@ -87,6 +87,33 @@ prepare_baseline_successor() (
 prepare_baseline_refresh() { prepare_baseline_materialize initial "$@"; }
 prepare_baseline_signing_request() { prepare_baseline_materialize request "$@"; }
 
+revalidate_baseline_publication() (
+  local pr="$1" observation="$2" source="$3" artifacts="${4:-.local}"
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+  source "$artifacts/prep-context.env" || return 1
+  resolve_prep_publication_target "$pr" "$source" "$artifacts" || return 1
+  verify_prep_head_extends_hosted_head "$PREP_PUBLICATION_LEASE_SHA" "$source" || return 1
+  if [ "$PREP_PUBLICATION_LEASE_SHA" != "$PR_HEAD_SHA_BEFORE" ]; then
+    local result retained=false
+    local PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSHED_FROM_SHA=""
+    local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
+    for result in "$artifacts/prepare-push-result.env" "$artifacts/prepare-sync-result.env"; do
+      [ -e "$result" ] || [ -L "$result" ] || continue
+      read_prep_publication_result "$result" || return 1
+      [ "$PUSH_PREP_HEAD_SHA" != "$PREP_PUBLICATION_LEASE_SHA" ] || retained=true
+    done
+    if [ "$retained" != true ]; then
+      echo "Baseline admission requires the native publication result for hosted head $PREP_PUBLICATION_LEASE_SHA." >&2
+      echo "Retain preparation evidence and recover the completed publication result before retrying." >&2
+      return 1
+    fi
+  fi
+  # Only a native receipt can advance hosted authority beyond the incoming head.
+  # The local candidate alone does not prove that this workflow published it.
+  revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" \
+    "$PREP_PUBLICATION_LEASE_SHA" "$PREP_PUBLICATION_LEASE_SHA"
+)
+
 recover_correction_continuation() (
   local pr="$1" facts observation incoming head_ref root helper
   shift
@@ -202,8 +229,7 @@ prepare_baseline_materialize() (
   observation=$(cat .local/pr-meta.json) || return 1
   [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
   require_baseline_source() {
-    revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" \
-      "$PR_HEAD_SHA_BEFORE" "$PR_HEAD_SHA_BEFORE" || return 1
+    revalidate_baseline_publication "$pr" "$observation" "$expected" || return 1
     # The initial snapshot and create owner already validate the signed review.
     # After the live observation compare exact bytes, never replay that history.
     printf '%s' "$snapshot" | node "$helper" check-source "$pr" "$expected" "$source_directory" \
@@ -269,7 +295,7 @@ prepare_baseline_signing_continue() (
   [[ "$request" =~ ^[0-9a-f]{40}$ ]] && [ -n "$commit" ] || return 2
   # Inspect the exact request/response before entry can recover any journal.
   enter_worktree "$pr" false true || return 1
-  local helper root prepared target source binding state observation incoming head_ref
+  local helper root prepared target source binding state observation archive
   helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
   root=$(repo_root) || return 1
   mark_pr_operation_side_effects_started
@@ -279,9 +305,8 @@ prepare_baseline_signing_continue() (
   binding=$(printf '%s' "$prepared" | jq -er .binding) || return 1
   state=$(printf '%s' "$prepared" | jq -er .state) || return 1
   observation=$(cat .local/pr-meta.json) || return 1
-  incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
-  head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
-  revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+  archive=$(printf '%s' "$prepared" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
+  revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   printf '%s' "$prepared" | node "$helper" check-signing \
     "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1

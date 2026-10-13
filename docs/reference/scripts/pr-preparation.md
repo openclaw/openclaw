@@ -64,3 +64,20 @@ repeat continuation with the same request OID and signed commit after resolving
 the reported condition. It resumes only that target, without new timestamps or
 another signing request. After installation, complete fresh correction review
 and native gate qualification before publication.
+
+Baseline admission also supports a candidate already published by native
+`prepare-push` or `prepare-sync`. Its verified publication receipts identify the
+expected hosted head while the original incoming review stays unchanged.
+Signing continuation and interrupted transition recovery validate those receipts
+from the retained source evidence, including after active preparation metadata
+has been retired. A matching local and hosted head without a publication receipt
+does not authorize baseline admission. Installation preserves the verified
+publication receipts for later successors and publication, while retiring the
+previous candidate's review and gate authority.
+
+The source must extend the recorded hosted head. A distinct GitHub commit alias
+with an identical tree is insufficient for a new baseline parent. Admission also
+requires a native push or sync result for the selected hosted head: `prep.env`
+alone records completed publication but is retired when the baseline changes.
+These conditions refuse before changing the source or creating a request. Retain
+the evidence and resolve the reported publication or ancestry condition first.

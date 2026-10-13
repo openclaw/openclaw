@@ -1008,6 +1008,17 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
   return snapshot;
 }
 
+/** Observation can evict live stores before their retained activation roster is refreshed. */
+export function hasActiveSecretsRuntimeAuthStorePath(databasePath: string): boolean {
+  return (
+    activeSnapshot?.authStores.some(
+      (entry) =>
+        entry.databasePath === databasePath ||
+        (entry.owner.kind === "resolved" && entry.owner.sharedDatabasePath === databasePath),
+    ) ?? false
+  );
+}
+
 /** Reuse resolved owners when only Control UI presentation changed. */
 export function prepareSecretsRuntimeDisplaySnapshot(
   params: Omit<

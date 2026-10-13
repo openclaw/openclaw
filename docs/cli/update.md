@@ -734,8 +734,10 @@ When `--timeout` is omitted, current CLI and RPC finalization do not add an aggr
 activation deadline. Explicit operator limits and inherited activation allowances
 still apply; older or unrecognized handoffs retain their existing finite-deadline
 behavior. Checks, ownership admission, readiness, recovery, and cleanup retain
-their own bounds. An explicit `--timeout <seconds>` limits each finalization phase
-and its child commands. Admission and config phases scale with shared SQLite state.
+their own bounds. An explicit `--timeout <seconds>` supplies one overall budget from update admission
+through activation, readiness, and recovery, including native service commands.
+Expiry reports `update-activation-timeout` or pending recovery; it does not start
+another recovery phase. Outstanding writers retain ownership until they settle.
 
 After activation or rollback is verified, obsolete package and launcher backup
 trees share a five-minute cleanup budget. Expiry retains the remaining backups
@@ -762,10 +764,9 @@ its own post-restart inspection warning even though the target ran checks inline
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin
 installation and update work have no default deadline when `--timeout` is omitted;
-explicit operator limits and older caller allowances still apply. When an aggregate
-activation budget is present, it uses the measured database sizes, observed candidate startup, plugin
-count, and the caller's step allowance. Migrated finalization preserves explicit or
-inherited allowances. Aggregate expiry reports `update-activation-timeout` and
+explicit operator limits and older caller allowances still apply. An explicit `--timeout` remains the overall budget across these checks and migrated
+finalization. Older inherited activation allowances use measured database sizes,
+observed candidate startup, and plugin count. Aggregate expiry reports `update-activation-timeout` and
 retains ownership until writers settle; it does not authorize rollback or restart.
 Use `openclaw update status` and Doctor for recovery guidance.
 
@@ -777,7 +778,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                                                       |
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                                           |
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                                        |
-| `--timeout <seconds>`                            | Optional per-step deadline in seconds. Omit to let package installation, deferred lifecycle scripts, and candidate Doctor finish without a work deadline. Checks and recovery retain their own bounds.                                                                                                                                                                              |
+| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Omit to let package installation, deferred lifecycle scripts, and candidate Doctor finish without a work deadline; checks and recovery retain their own bounds.                                                                                                  |
 | `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of canary/readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                                     |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                                                 |
@@ -915,7 +916,7 @@ freshness or dependencies. Those checks run when you apply the update; use
 
 | Flag                    | Default | Description                                                  |
 | ----------------------- | ------- | ------------------------------------------------------------ |
-| `--timeout <seconds>`   | Unset   | Optional deadline for each update step in seconds.           |
+| `--timeout <seconds>`   | Unset   | Optional overall update budget in seconds.                   |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
 
 ## Detailed topics

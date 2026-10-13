@@ -619,7 +619,7 @@ subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
   }
 });
 
-export function getSubagentSessionReadLookup(runs: Map<string, SubagentRunRecord>) {
+export function getSubagentSessionReadLookup(runs: ReadonlyMap<string, SubagentRunRecord>) {
   return runs instanceof SubagentRunMap ? runs.readLookup : new SubagentSessionReadLookup(runs);
 }
 

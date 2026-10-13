@@ -78,6 +78,7 @@ type PendingRecovery = {
 };
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
+const STARTUP_PUBLICATION_ATTEMPTS = 4;
 
 function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
   return {
@@ -117,6 +118,13 @@ function matchesInspectionPath(
 
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
+
+export class AgentDatabaseStartupSupersededError extends Error {
+  constructor(agentId: string, subject: "startup" | "secrets") {
+    super(`Agent ${agentId} ${subject} preparation was superseded`);
+    this.name = "AgentDatabaseStartupSupersededError";
+  }
+}
 
 /** Startup owns readers until the Gateway adopts them; only the Gateway activates agents. */
 class AgentDatabaseStartupAdmission {
@@ -488,7 +496,25 @@ class AgentDatabaseStartupAdmission {
                 await previous;
                 assertCurrent();
                 this.publishingAgentId = agentId;
-                await activation.publishAgent(input);
+                // Retry only publication; opening and migration have already completed.
+                for (let attempt = 1; ; attempt++) {
+                  try {
+                    await activation.publishAgent(input);
+                    break;
+                  } catch (error) {
+                    if (
+                      !(error instanceof AgentDatabaseStartupSupersededError) ||
+                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
+                    ) {
+                      throw error;
+                    }
+                    log.warn("agent database startup preparation was superseded; retrying", {
+                      agentId,
+                      attempt,
+                    });
+                    await assertNotDeleted();
+                  }
+                }
                 phase("publication");
                 await assertNotDeleted();
               });
