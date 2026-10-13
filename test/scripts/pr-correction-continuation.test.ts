@@ -50,6 +50,10 @@ describePosix("published correction continuation through the canonical wrapper",
     // Publish through the real owner to a private Git remote. GitHub is the only
     // external adapter; the fixture does not manufacture publication receipts.
     f.git(f.repo, "config", `url.${f.repo}.insteadOf`, "https://github.com/fixture/repo.git");
+    writeFileSync(
+      f.local("pr-meta.env"),
+      `${readFileSync(f.local("pr-meta.env"), "utf8")}PR_HEAD_REPO_URL=https://github.com/fixture/repo\n`,
+    );
     const published = f.git(f.worktree, "rev-parse", "HEAD");
     const stamp = spawnSync(
       "bash",

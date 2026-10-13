@@ -43,7 +43,7 @@ function inventory(archive) {
   return Object.fromEntries(
     fs
       .readdirSync(archive)
-      .sort()
+      .toSorted()
       .map((name) => [name, digest(readRegular(join(archive, name)))]),
   );
 }
@@ -266,7 +266,7 @@ function run(command, pr, root, lockRef, lockOid, args) {
       throw new Error("Invalid correction continuation journal.");
     }
     same(
-      Object.keys(journal).sort(),
+      Object.keys(journal).toSorted(),
       ["branch", "continuation", "mode", "pr", "source", "target", "version"],
       "Invalid correction continuation journal fields.",
     );
