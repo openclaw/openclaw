@@ -18,6 +18,14 @@ export type SqliteWorkerRequestCustodyDescriptor = {
   request: Int32Array<SharedArrayBuffer>;
 };
 
+export type SqliteWorkerExecutionAuthority = {
+  logical: Int32Array<SharedArrayBuffer>;
+  native: Int32Array<SharedArrayBuffer>;
+  physicalIdentity: string;
+  incarnation: string;
+  birthtime?: string;
+};
+
 export type SqliteWorkerAdmissionRequest = {
   stage: "open" | "prepare" | "transaction" | "commit";
   facts: unknown;
@@ -87,6 +95,7 @@ export type SqliteWorkerRequest = {
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];
