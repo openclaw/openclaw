@@ -34,7 +34,6 @@ import {
   type searchKeyword,
   type searchPathKeyword,
 } from "./manager-search.js";
-import { assertMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 
 type KeywordParameters = Omit<Parameters<typeof searchKeyword>[0], "db">;
@@ -61,7 +60,6 @@ export type MemorySearchWorkerInput =
       | {
           kind: "index-read";
           command: MemoryIndexReadCommand;
-          fileIdentity: MemoryShadowConnection["fileIdentity"];
         }
       | ({ kind: "recall-metadata" } & MemoryRecallQuery)
       | {
@@ -125,9 +123,6 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     }
     return { kind: "recall-metadata", ...result.value };
   }
-  if (request.kind === "index-read") {
-    assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
-  }
   const target = { agentId: request.agentId, path: request.databasePath };
   const opened =
     request.kind === "vector-load"
@@ -159,7 +154,6 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       };
     }
     if (request.kind === "index-read") {
-      assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
       const read = () => readMemoryIndex(db, request.command);
       return {
         kind: "index-read",

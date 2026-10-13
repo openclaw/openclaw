@@ -965,6 +965,9 @@ export async function createOpenClawTestInstance(
         onError,
         onSpawnCleanup: (cleanup) => {
           constructionCleanup = cleanup;
+          void cleanup.catch(() => {
+            acceptingWork = false;
+          });
         },
       });
       owned = {

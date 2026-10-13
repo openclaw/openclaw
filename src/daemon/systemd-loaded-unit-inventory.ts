@@ -46,7 +46,10 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-async function hasManager(scope: "user" | "system", env: GatewayServiceEnv): Promise<boolean> {
+export async function hasSystemdManager(
+  scope: "user" | "system",
+  env: GatewayServiceEnv,
+): Promise<boolean> {
   if (scope === "system") {
     return Boolean(env.DBUS_SYSTEM_BUS_ADDRESS) || (await exists("/run/systemd/system"));
   }
@@ -121,7 +124,7 @@ export async function listLoadedSystemdUnits(
   scope: "user" | "system",
   env: GatewayServiceEnv,
 ): Promise<LoadedSystemdUnit[]> {
-  if (!(await hasManager(scope, env))) {
+  if (!(await hasSystemdManager(scope, env))) {
     return [];
   }
   const run = (args: string[]) =>
