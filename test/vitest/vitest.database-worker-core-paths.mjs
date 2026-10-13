@@ -568,6 +568,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugins.test.ts",
   "src/boards/board-generated-identity.test.ts",
   "src/boards/board-store.test.ts",
+  "src/boards/sqlite-board-source-authority.test.ts",
   "src/boards/sqlite-board-store.batching.test.ts",
   "src/boards/sqlite-board-store.incognito.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",

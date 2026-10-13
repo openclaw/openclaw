@@ -17,6 +17,7 @@ import { SqliteBoardStore } from "./sqlite-board-store.js";
 async function fixture() {
   const cfg = rolePolicyConfig();
   const client = roleClient("view", "board-member");
+  const memberId = client.authenticatedUserId!;
   const source = { agentId: "main", sessionKey: "agent:main:board-source" };
   replaceSessionEntrySync(source, {
     sessionId: "source-session",
@@ -24,7 +25,7 @@ async function fixture() {
     visibility: "read-only",
     createdActor: { type: "human", source: "profile", id: "creator" },
   });
-  await addSessionMember(source, { identityId: "board-member", addedBy: "creator" });
+  await addSessionMember(source, { identityId: memberId, addedBy: "creator" });
   const target = { agentId: "target", sessionKey: "agent:target:board" };
   replaceSessionEntrySync(target, { sessionId: "target-session", updatedAt: 1 });
   const store = new SqliteBoardStore({ resolveSession: () => target });
@@ -43,12 +44,12 @@ async function fixture() {
       { ...target, name, content: { kind: "html", html: name } },
       { assertCurrent: authorization.assertCurrent },
     );
-  return { source, target, store, authorize, authorization, write };
+  return { source, target, store, memberId, authorize, authorization, write };
 }
 
 it("uses retained source facts for every Board mutation and agrees with cold authorization after revocation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { source, target, store, authorize, authorization, write } = await fixture();
+    const { source, target, store, memberId, authorize, authorization, write } = await fixture();
     try {
       const host = observeHostDataSql();
       try {
@@ -73,7 +74,7 @@ it("uses retained source facts for every Board mutation and agrees with cold aut
       } finally {
         host.restore();
       }
-      await removeSessionMember(source, "board-member");
+      await removeSessionMember(source, memberId);
       await expect(write("denied")).rejects.toThrow();
       const cold = await authorize();
       try {
@@ -92,12 +93,12 @@ it("uses retained source facts for every Board mutation and agrees with cold aut
 
 it("finishes an admitted cross-database write after source revocation and denies the next write", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { source, target, store, authorization, write } = await fixture();
+    const { source, target, store, memberId, authorization, write } = await fixture();
     let revoked = false;
     const interception = probe.admission(admission, (request, grant, admit) => {
       if (request.stage === "transaction" && !revoked) {
         revoked = true;
-        removeSessionMemberSync(source, "board-member");
+        removeSessionMemberSync(source, memberId);
       }
       admit(request, grant);
     });
