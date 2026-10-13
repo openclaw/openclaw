@@ -82,6 +82,20 @@ export function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaIm
   };
 }
 
+/** Sandbox staging publishes one workspace copy; the media URI is only an alias. */
+export function preferStagedSandboxImagePath(fact: MediaFact, ref: MediaImageRef): MediaImageRef {
+  if (fact.staged !== true || !fact.path || fact.path.startsWith("media://")) {
+    return ref;
+  }
+  return {
+    ...ref,
+    raw: fact.path,
+    type: "path",
+    resolved: fact.path,
+    aliases: [...new Set([fact.path, ...ref.aliases])],
+  };
+}
+
 // Guards for transports that cannot carry attachments (paired-node CLI): only
 // facts that will actually hydrate an image count; described/remote-only facts
 // whose hydration is suppressed must not block text-only prompts.
