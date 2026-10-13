@@ -88,40 +88,60 @@ describe("preserved Claude turns", () => {
       await reply(3, "announce:v1:agent:main:subagent:child:run-2");
 
       const context = await loadCliSessionPromptContext(resumed);
-      expect(context.unseenTurns).toEqual([
-        {
-          source: "subagent_announce",
-          prompt: annotateInterSessionPromptText("Child result: CHILD_RESULT_7f3a9c", completion),
-          reply: "reply-1",
-        },
-        { source: "subagent_announce", reply: "reply-3" },
-      ]);
+      expect(context.preservedTurnsContext).toContain(
+        JSON.stringify([
+          {
+            source: "subagent_announce",
+            prompt: annotateInterSessionPromptText("Child result: CHILD_RESULT_7f3a9c", completion),
+            reply: "reply-1",
+          },
+          { source: "subagent_announce", reply: "reply-3" },
+        ]),
+      );
+      expect(context.preservedTurnsContext).toContain("Verify current and time-sensitive facts");
       expect(context.sessionGapContext).toBeUndefined();
       expect(
-        (await loadCliSessionPromptContext({ ...resumed, nativeSessionId: undefined })).unseenTurns,
+        (await loadCliSessionPromptContext({ ...resumed, nativeSessionId: undefined }))
+          .preservedTurnsContext,
       ).toBeUndefined();
 
       const withheld = await loadCliSessionPromptContext({
         ...resumed,
         rawTranscriptReseedReason: "auth-unknown",
       });
-      expect(withheld.unseenTurns).toBeUndefined();
+      expect(withheld.preservedTurnsContext).toBeUndefined();
       expect(withheld.sessionGapContext).toBe(
         '[OpenClaw: 5 messages recorded in this chat since your last reply here (possibly already in this session) from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:08.000Z, using "claude-cli/test-model". Their contents are not included here.]',
       );
 
       // The next ordinary reply means the bound session has now seen them.
       await turn(4, "What did the review find?");
-      expect((await loadCliSessionPromptContext(resumed)).unseenTurns).toBeUndefined();
+      expect((await loadCliSessionPromptContext(resumed)).preservedTurnsContext).toBeUndefined();
 
       // The newest eight are carried; older ones stay in saved history.
       for (let index = 5; index < 14; index++) {
         await reply(index, `announce:v1:agent:main:subagent:child:run-${index}`);
       }
-      const newest = (await loadCliSessionPromptContext(resumed)).unseenTurns;
-      expect(newest?.map((unseen) => unseen.reply)).toEqual(
-        Array.from({ length: 8 }, (_, offset) => `reply-${offset + 6}`),
-      );
+      await appendTranscriptMessage(target, {
+        eventId: "long-completion",
+        message: {
+          ...buildAssistantMessage({
+            model: { api: "cli", provider: "claude-cli", id: "test-model" },
+            content: [{ type: "text", text: "```" + "x".repeat(3_000) }],
+            stopReason: "stop",
+            usage: buildUsageWithNoCost({}),
+          }),
+          __openclaw: { runId: "announce:long" },
+        },
+      });
+      const newest = (await loadCliSessionPromptContext(resumed)).preservedTurnsContext;
+      expect(newest).not.toContain('"reply":"reply-6"');
+      for (let index = 7; index < 14; index++) {
+        expect(newest).toContain(`"reply":"reply-${index}"`);
+      }
+      expect(newest).toContain("`\u200b``");
+      expect(newest).toContain("…[truncated]");
+      expect(newest).not.toContain("x".repeat(2_000));
     } finally {
       admission.close();
     }

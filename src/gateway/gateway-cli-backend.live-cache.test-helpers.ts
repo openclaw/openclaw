@@ -8,7 +8,6 @@ import { expect } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
-import { getCliSessionBinding } from "../agents/cli-session.js";
 import { computeCacheHitRate } from "../agents/live-cache-test-support.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -16,8 +15,6 @@ import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/sessio
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { sleep } from "../utils/sleep.js";
-import { findCarriedCompletion } from "./cli-announce-carried-completion.test-helpers.js";
-import { resolveClaudeCliSessionFilePathAsync } from "./cli-session-history.claude.js";
 import type { GatewayClient } from "./client.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
@@ -355,7 +352,7 @@ export async function verifyCliBackendAnnounceOrdering({
     sessionId: announceEntry.sessionId,
     sessionKey: announceSessionKey,
   });
-  const { parentReplyIndex, completionReplyIndex, completionReply } = await waitFor(async () => {
+  const { parentReplyIndex, completionReplyIndex } = await waitFor(async () => {
     const announceHistory = await loadCliSessionHistoryMessages({ sessionTarget });
     const assistantReplies = announceHistory.flatMap((message) => {
       const record = message as { role?: unknown; content?: unknown };
@@ -373,7 +370,6 @@ export async function verifyCliBackendAnnounceOrdering({
       ? {
           parentReplyIndex: observedParentReplyIndex,
           completionReplyIndex: observedCompletionReplyIndex,
-          completionReply: assistantReplies[observedCompletionReplyIndex] ?? "",
         }
       : undefined;
   });
@@ -386,92 +382,4 @@ export async function verifyCliBackendAnnounceOrdering({
   });
   expect(parentReplyIndex).toBeGreaterThanOrEqual(0);
   expect(completionReplyIndex).toBeGreaterThan(parentReplyIndex);
-  return { sessionKey: announceSessionKey, completionReply };
-}
-
-/**
- * A completion handoff resumes the requester's bound Claude session when only prompt
- * content drifted, or runs in its own session when its MCP projection hashes differently.
- * Either way the requester's next turn resumes the bound session and owes that completion
- * as quoted context, but only when the requester's history account boundary is known; an
- * opaque login must withhold it. Read from Claude's own transcript for that session, the
- * record the model resumes.
- */
-export async function verifyCliBackendAnnounceContinuity({
-  client,
-  announce,
-  requestTimeoutMs,
-  logStep,
-}: {
-  client: GatewayClient;
-  announce: { sessionKey: string; completionReply: string };
-  requestTimeoutMs: number;
-  logStep: (step: string, details?: Record<string, unknown>) => void;
-}) {
-  const binding = () =>
-    getCliSessionBinding(loadGatewaySessionEntryReadOnly(announce.sessionKey).entry, "claude-cli");
-  const boundCliSessionId = () => binding()?.sessionId;
-  const boundBefore = boundCliSessionId();
-  if (!boundBefore) {
-    throw new Error("CLI announce probe has no bound Claude session");
-  }
-  const historyAuthorized =
-    loadGatewaySessionEntryReadOnly(announce.sessionKey).entry?.cliHistoryBoundary?.state ===
-    "known";
-  const followUp = await client.request(
-    "agent",
-    {
-      sessionKey: announce.sessionKey,
-      idempotencyKey: `cli-announce-continuity-${randomUUID()}`,
-      deliver: false,
-      timeout: 240,
-      message: "Do not call any tools. Quote, verbatim, the last update you sent me.",
-    },
-    { expectFinal: true, timeoutMs: requestTimeoutMs },
-  );
-  expect(boundCliSessionId()).toBe(boundBefore);
-  const transcriptPath = await resolveClaudeCliSessionFilePathAsync({ cliSessionId: boundBefore });
-  if (!transcriptPath) {
-    throw new Error(`Claude transcript for bound session ${boundBefore} was not found`);
-  }
-  // Claude's record text is read verbatim; the matcher also tolerates collapsed whitespace.
-  const userTexts = (await fs.readFile(transcriptPath, "utf8")).split("\n").flatMap((line) => {
-    const record = line.trim()
-      ? (JSON.parse(line) as { type?: unknown; message?: { content?: unknown } })
-      : undefined;
-    return record?.type === "user"
-      ? [
-          extractTextFromChatContent(record.message?.content, {
-            joinWith: "",
-            normalizeText: (text) => text,
-          }) ?? "",
-        ]
-      : [];
-  });
-  // The handoff resumes this session when only prompt content drifted, or runs in its own
-  // session when its MCP projection hashes differently. The follow-up turn owes the
-  // completion record either way; a resumed handoff may therefore be quoted twice.
-  const completionResumedBoundSession = userTexts.some((text) =>
-    text.startsWith("[Inter-session message]"),
-  );
-  // Tool-result rows have no text; the follow-up prompt is the last user turn with text.
-  const followUpInput = userTexts.findLast((text) => text.trim().length > 0) ?? "";
-  const carried = findCarriedCompletion(followUpInput, announce.completionReply);
-  logStep("announce-continuity:resumed", {
-    boundCliSessionId: boundBefore,
-    userTurns: userTexts.length,
-    historyAuthorized,
-    completionResumedBoundSession,
-    carriedCompletion: carried !== undefined,
-    followUpReply: extractPayloadText(followUp.result),
-  });
-  if (!historyAuthorized) {
-    expect(
-      userTexts.find((text) => findCarriedCompletion(text, announce.completionReply)),
-      "an unowned login must not replay the completion exchange",
-    ).toBeUndefined();
-    expect(followUpInput).toContain("recorded in this chat since your last reply here");
-    return;
-  }
-  expect(carried, "follow-up input lacks the completion record").toBeDefined();
 }

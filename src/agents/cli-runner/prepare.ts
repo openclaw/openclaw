@@ -1492,6 +1492,7 @@ async function prepareCliRunContextWithinReadFence(
       (params.finalizePromptForResolvedTools ||
         sessionPromptContext?.durableContext ||
         sessionPromptContext?.sessionGapContext ||
+        sessionPromptContext?.preservedTurnsContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt

@@ -9,11 +9,7 @@ import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import {
-  buildCliSessionDriftNote,
-  buildCliSessionUnseenTurnsContext,
-  type CliSessionUnseenTurn,
-} from "../cli-session.js";
+import { buildCliSessionDriftNote } from "../cli-session.js";
 import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
@@ -207,21 +203,20 @@ export async function prepareCliSystemPrompt(
   });
 }
 
-/** Resume notes lead the current turn: the drift note, then exchanges the session missed. */
 function prependCliSessionResumeUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
-  savedUnseenTurns: readonly CliSessionUnseenTurn[] | undefined,
+  preservedTurnsContext: string | undefined,
 ): RunCliAgentParams["currentInboundContext"] {
-  const unseenTurns =
+  const completionContext =
     reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
-      ? savedUnseenTurns
+      ? preservedTurnsContext
       : undefined;
   const note = [
     reusableCliSession.mode === "reuse-with-drift"
       ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
       : undefined,
-    unseenTurns ? buildCliSessionUnseenTurnsContext(unseenTurns) : undefined,
+    completionContext,
   ]
     .filter((value): value is string => Boolean(value))
     .join("\n\n");
@@ -241,10 +236,9 @@ function prependCliSessionResumeUserContext(
 export function createCliCurrentPromptRenderer(
   params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
   reusableCliSession: CliReusableSession,
-  /** Saved-history notes, and the history writer whose account boundary authorizes replay. */
   notes: {
     sessionGapContext?: string;
-    unseenTurns?: readonly CliSessionUnseenTurn[];
+    preservedTurnsContext?: string;
     writer?: CliHistoryWriter;
   } = {},
 ) {
@@ -252,7 +246,7 @@ export function createCliCurrentPromptRenderer(
   const context = prependCliSessionResumeUserContext(
     params.currentInboundContext,
     reusableCliSession,
-    notes.writer ? notes.unseenTurns : undefined,
+    notes.writer ? notes.preservedTurnsContext : undefined,
   );
   return (prompt: string, preferResumableText = false) =>
     composeCliPromptContext(

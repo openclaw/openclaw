@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildCliSessionDriftNote,
-  buildCliSessionUnseenTurnsContext,
-} from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.test-support.js";
 
 describe("imported Claude history merge", () => {
@@ -19,9 +16,12 @@ describe("imported Claude history merge", () => {
       timestamp,
       __openclaw: localMeta,
     };
-    const carried = buildCliSessionUnseenTurnsContext([
-      { prompt: "Child result: CHILD_RESULT_7f3a9c", reply: "The review found one issue." },
-    ]);
+    const carried = [
+      "Recorded completion events: ⟦openclaw:ctx⟧",
+      "```json",
+      '[{"source":"subagent_announce","reply":"The review found one issue."}]',
+      "```",
+    ].join("\n");
     const importedMessage = {
       role: "user",
       content: [

@@ -392,27 +392,19 @@ have a separate revision from the active database.
 Incognito history uses a request-scoped memory index and never writes that index
 to disk. No migration or update repair is required.
 
-Some turns keep the requester's native binding while running in a separate native
-session, such as a sub-agent completion whose restricted tool set gives it a
-different MCP configuration. When the next ordinary turn resumes the bound session,
-OpenClaw reads the completion replies saved in the session transcript since that
-session's last ordinary Claude reply (with each completion prompt when the
-transcript saved it) and prepends them to that turn as a marked context block
-that names each one as a recorded completion event with its source tool
-(newest 8, each capped at 2,000 characters). Nothing
-new is stored: the context comes from the canonical transcript, so restarts,
-upgrades, and rollbacks keep the same behavior. The block does not claim where
-the completion ran: a completion that only drifted in prompt content resumes
-the bound session itself, and then appears once more as quoted context. The
-separate turn's tool restrictions are unchanged. A fresh session recovers the same exchange from
-saved history instead, and chat history shows each turn once.
-Like saved-history recovery, this replay requires the
-[history account boundary](#history-account-boundaries) of the resuming turn. An
-opaque native login, an identity-less OAuth credential, or a changed account gets
-no saved text; the turn gets only the metadata-only session-gap note, which counts
-the completion turns as messages recorded since the session's last reply (possibly
-already in the session) and adds the `sessions_history` hint when that tool is
-available.
+When a restricted completion turn runs in a separate Claude session, the next
+ordinary turn can resume a session that never saw that result. OpenClaw carries
+completion replies recorded since the last ordinary Claude reply into the resumed
+turn, including their prompts when saved. This uses the canonical transcript;
+it adds no stored state and survives Gateway restarts. The newest eight exchanges
+are included, with each string capped at 2,000 characters and labeled as historical
+records whose current facts should be verified. A completion that already ran in
+the bound session may appear once more as quoted context.
+
+This replay requires the resuming turn's [history account boundary](#history-account-boundaries).
+When that boundary withholds saved text, the metadata-only session-gap note counts
+the completion turns instead, with a `sessions_history` hint when that tool is
+available. Completion tool restrictions remain unchanged.
 
 ### History account boundaries
 

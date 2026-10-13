@@ -30,20 +30,15 @@ export function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
 }
 
-/** Bounds one string exactly as a context JSON block renders it. */
-export function sanitizeContextJsonString(value: string): string {
-  return neutralizeMarkdownFences(
-    truncateWithMarker(value, MAX_CONTEXT_JSON_STRING_CHARS, {
-      marker: "…[truncated]",
-      reserve: 14,
-      trimEnd: true,
-    }),
-  );
-}
-
 function sanitizeContextJsonValue(value: unknown): unknown {
   if (typeof value === "string") {
-    return sanitizeContextJsonString(value);
+    return neutralizeMarkdownFences(
+      truncateWithMarker(value, MAX_CONTEXT_JSON_STRING_CHARS, {
+        marker: "…[truncated]",
+        reserve: 14,
+        trimEnd: true,
+      }),
+    );
   }
   if (Array.isArray(value)) {
     return value.map(sanitizeContextJsonValue);
