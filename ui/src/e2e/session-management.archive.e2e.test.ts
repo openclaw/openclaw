@@ -618,20 +618,24 @@ suite.define(() => {
       }
 
       const selectedRow = rowFor(selected.key);
-      await gateway.setMethodResponse("sessions.describe", {
-        session: { ...selectedWithoutDerivedTitle, archived: true, archivedAt, archivedBy },
-      });
+      await gateway.deferNext("sessions.patch", { key: selected.key, archived: true });
       await selectedRow.hover();
       await selectedRow.click({ button: "right" });
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",
+          exact: true,
         }),
       );
       await waitForPatch(
         gateway,
         (params) => params.key === selected.key && params.archived === true,
       );
+      // Hover reads must not see the future archived state before the mutation.
+      await gateway.setMethodResponse("sessions.describe", {
+        session: { ...selectedWithoutDerivedTitle, archived: true, archivedAt, archivedBy },
+      });
+      await gateway.resolveDeferred("sessions.patch");
       const archiveToast = page.locator("openclaw-toast-host .app-toast");
       await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
       const archivedSession = await gateway.getSessionRow(selected.key);
@@ -705,11 +709,21 @@ suite.define(() => {
 
       await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archiveToast.waitFor({ state: "detached" });
+      await gateway.deferNext("sessions.patch", { key: selected.key, archived: false });
       await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
       await waitForPatch(
         gateway,
         (params) => params.key === selected.key && params.archived === false,
       );
+      await gateway.setMethodResponse("sessions.describe", {
+        session: {
+          ...selectedWithoutDerivedTitle,
+          archived: false,
+          archivedAt: null,
+          archivedBy: null,
+        },
+      });
+      await gateway.resolveDeferred("sessions.patch");
       const restoredSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
