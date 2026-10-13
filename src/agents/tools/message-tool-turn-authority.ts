@@ -38,6 +38,11 @@ export function createMessageToolTurnAuthority(params: {
   ) {
     channels.push(requester.channel);
   }
+  const assertCurrent = () => {
+    if (token?.trim() && (!lookup || !resolveMessageActionTurnCapability(lookup))) {
+      throw new Error("message action turn capability is no longer active");
+    }
+  };
   return {
     captureCaller: (
       signal: AbortSignal | undefined,
@@ -46,14 +51,39 @@ export function createMessageToolTurnAuthority(params: {
       if (signal?.aborted) {
         throw createAbortError("Message send aborted");
       }
-      const assertCurrent = capture();
-      assertCurrent?.();
-      return composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+      const assertCaller = capture();
+      assertCaller?.();
+      const checkSource = (assertSource: () => void) => {
         assertSource();
         if (signal?.aborted) {
           throw createAbortError("Message action aborted");
         }
+      };
+      return Object.assign(composeSessionSourceAssertion([assertCaller], checkSource), {
+        assertScopeCurrent: () =>
+          checkSource(() => (assertCaller?.assertScopeCurrent ?? assertCaller)?.()),
       });
+    },
+    captureActionCurrent: (
+      assertCaller: SessionSourceAssertion,
+      assertScheduledCurrent?: () => void,
+      assertDashboardReadCurrent?: () => void,
+    ) => {
+      const checkAction = (assertSources: () => void) => {
+        assertCurrent();
+        assertSources();
+        assertDashboardReadCurrent?.();
+      };
+      return Object.assign(
+        composeSessionSourceAssertion([assertCaller, assertScheduledCurrent], checkAction),
+        {
+          assertScopeCurrent: () =>
+            checkAction(() => {
+              (assertCaller.assertScopeCurrent ?? assertCaller)();
+              assertScheduledCurrent?.();
+            }),
+        },
+      );
     },
     beginInvocation: (action: string) => {
       const authorization = resolve();
@@ -88,10 +118,6 @@ export function createMessageToolTurnAuthority(params: {
             ...(origin?.kind === "local" ? {} : { channels }),
           }
         : undefined,
-    assertCurrent: () => {
-      if (token?.trim() && (!lookup || !resolveMessageActionTurnCapability(lookup))) {
-        throw new Error("message action turn capability is no longer active");
-      }
-    },
+    assertCurrent,
   };
 }

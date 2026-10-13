@@ -161,6 +161,7 @@ async function runBoundInProcessGatewayCall<T>(
   assertCallerCurrent?: () => void,
   revalidateOnCompletion = true,
   completion?: CronMutationCompletion,
+  assertResultCurrent?: (result: T) => void,
 ): Promise<T> {
   const assertCurrent = (afterDispatch = false) => {
     boundGateway?.assertCurrent();
@@ -173,7 +174,12 @@ async function runBoundInProcessGatewayCall<T>(
     const result = completion
       ? await completion.run(() => run(boundGateway?.resolve))
       : await run(boundGateway?.resolve);
-    assertCurrent(true);
+    if (assertResultCurrent) {
+      boundGateway?.assertCurrent();
+      assertResultCurrent(result);
+    } else {
+      assertCurrent(true);
+    }
     return result;
   } catch (error) {
     assertCurrent(true);
@@ -220,6 +226,7 @@ async function callAgentToolGatewayRequestBound<T>(
       scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>,
     ) => Promise<T>;
   },
+  acceptsWriteResult?: (request: AgentToolGatewayRequest, result: unknown) => boolean,
 ): Promise<T> {
   const method = request.method;
   const assertDispatchCurrent = request.assertDispatchCurrent;
@@ -238,6 +245,20 @@ async function callAgentToolGatewayRequestBound<T>(
         })
       : undefined;
   assertCurrent?.();
+  const assertResultCurrent =
+    acceptsWriteResult && revalidateOnCompletion && !completion
+      ? (result: T) => {
+          if (!acceptsWriteResult(request, result)) {
+            assertCurrent?.();
+            return;
+          }
+          // The send owner's receipt survives its own transcript write. Keep all
+          // live bindings; the next dispatch still prepares the full source.
+          (assertCallerCurrent?.assertScopeCurrent ?? assertCallerCurrent)?.(method);
+          assertDispatchCurrent?.();
+          request.signal?.throwIfAborted();
+        }
+      : undefined;
   const boundGateway = resolveGatewayContext
     ? bindInProcessGatewayContext(method, resolveGatewayContext)
     : undefined;
@@ -288,6 +309,8 @@ async function callAgentToolGatewayRequestBound<T>(
         }),
       assertCurrent,
       revalidateOnCompletion,
+      undefined,
+      assertResultCurrent,
     );
   }
   const syntheticScopeMode: "minimum" | "exact" =
@@ -366,6 +389,7 @@ async function callAgentToolGatewayRequestBound<T>(
     assertCurrent,
     revalidateOnCompletion,
     completion,
+    assertResultCurrent,
   );
 }
 
@@ -375,6 +399,8 @@ export function bindAgentToolGatewayRequest(options?: {
   hostedOnly?: boolean;
   /** Submitted writes retain their outcome; every dispatch still checks the caller. */
   revalidateOnCompletion?: boolean;
+  /** Only a concrete owner-confirmed write receipt can use result-scope validation. */
+  acceptsWriteResult?: (request: AgentToolGatewayRequest, result: unknown) => boolean;
 }): AgentToolGatewayRequestCaller {
   const scope = getPluginRuntimeGatewayRequestScope();
   const resolver =
@@ -397,6 +423,8 @@ export function bindAgentToolGatewayRequest(options?: {
         (!resolver && !admitted) ||
           (options?.hostedOnly === true && admitted?.localEmbedded === true),
         options?.revalidateOnCompletion,
+        undefined,
+        options?.acceptsWriteResult,
       ),
     );
 }

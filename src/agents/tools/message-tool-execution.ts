@@ -9,7 +9,6 @@ import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gat
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -19,7 +18,10 @@ import {
 } from "../../infra/outbound/message-account-selection.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
-import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
+import {
+  hasAcceptedMessageActionResult,
+  hasSettledMessageSendReceipt,
+} from "../../infra/outbound/message-action-result-acceptance.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
 import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-reply-mirror.js";
@@ -273,18 +275,12 @@ function* createMessageToolSteps(
         throw new Error("message action turn capability is no longer active");
       }
       const scheduled = messageActionAuthorization.scheduled;
-      const assertActionCurrent = composeSessionSourceAssertion(
-        [
-          assertCaller,
-          (scheduledRead ?? scheduledWrite)
-            ? (scheduled?.assertSourceCurrent ?? scheduled?.assertCurrent)
-            : scheduled?.assertCurrent,
-        ],
-        (assertSources) => {
-          turnAuthority.assertCurrent();
-          assertSources();
-          assertDashboardReadCurrent?.();
-        },
+      const assertActionCurrent = turnAuthority.captureActionCurrent(
+        assertCaller,
+        (scheduledRead ?? scheduledWrite)
+          ? (scheduled?.assertSourceCurrent ?? scheduled?.assertCurrent)
+          : scheduled?.assertCurrent,
+        assertDashboardReadCurrent,
       );
       assertActionCurrent();
       if (options?.sourceReplyOnly) {
@@ -692,7 +688,11 @@ function* createMessageToolSteps(
               ),
             })
           ) {
-            assertActionCurrent();
+            if (hasSettledMessageSendReceipt(result)) {
+              assertActionCurrent.assertScopeCurrent();
+            } else {
+              assertActionCurrent();
+            }
           }
           const messageDelivery = embeddedMessageDelivery.projectEmbeddedMessageDeliveryFact(
             result,

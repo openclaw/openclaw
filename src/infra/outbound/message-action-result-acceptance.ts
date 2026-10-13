@@ -13,6 +13,29 @@ import {
 } from "./message-action-contracts.js";
 import { isDeliveredCurrentSourceReplyAsync } from "./source-reply-mirror.js";
 
+/** A concrete send receipt may survive its own transcript mirror, never an unknown outcome. */
+export function hasSettledMessageSendReceipt(params: {
+  action: unknown;
+  dryRun?: unknown;
+  payload: unknown;
+  toolResult?: unknown;
+}): boolean {
+  if (params.action !== "send" || params.dryRun === true) {
+    return false;
+  }
+  const toolDelivery = projectPluginMessageDeliveryFact(params.toolResult);
+  if (toolDelivery && (toolDelivery.status !== "settled" || toolDelivery.partialDelivery)) {
+    return false;
+  }
+  const delivery = projectPluginMessageDeliveryFact(params.payload);
+  return Boolean(
+    delivery?.status === "settled" &&
+    !delivery.partialDelivery &&
+    delivery.primaryPlatformMessageId &&
+    delivery.primaryPlatformMessageId.toLowerCase() !== "unknown",
+  );
+}
+
 export function hasAcceptedMessageActionResult(
   result: MessageActionResult,
   acceptOwnerConfirmedMutation = false,

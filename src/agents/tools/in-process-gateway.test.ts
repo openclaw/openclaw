@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureCronMutationCommit } from "../../cron/mutation-completion.js";
@@ -11,6 +12,7 @@ import {
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
 import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
@@ -625,6 +627,68 @@ describe("built-in Gateway foreground authority", () => {
     mocks.dispatch.mockReset().mockResolvedValue({ ok: true });
     mocks.callGateway.mockReset();
     mocks.callGatewayTool.mockReset();
+  });
+
+  it("retains an accepted send across source changes without admitting the next effect", async () => {
+    let sourceFresh = true;
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "accepted-send-source",
+      "main",
+      "accepted-message-result",
+      () => {
+        if (!sourceFresh) {
+          throw new Error("requester source snapshot changed");
+        }
+      },
+    );
+    const payload = { ok: true, messageId: "accepted-message" };
+    const assertDispatchCurrent = vi.fn();
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+      options.sessionMutationCommitGuard();
+      sourceFresh = false;
+      return payload;
+    });
+    try {
+      await withGatewayToolCallerIdentity(
+        createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: await admission.admit("embedded"),
+          agentId: "main",
+          sessionKey: "agent:main:requester",
+        }),
+        async () => {
+          const request = bindAgentToolGatewayRequest({
+            acceptsWriteResult: (input, result) =>
+              input.method === "message.action" &&
+              asOptionalRecord(input.params)?.action === "send" &&
+              hasAcceptedMessageActionResult({
+                kind: "send",
+                channel: "telegram",
+                action: "send",
+                to: "synthetic-recipient",
+                handledBy: "plugin",
+                payload: result,
+                dryRun: false,
+              }),
+          });
+          const send = () =>
+            request({
+              method: "message.action",
+              params: { action: "send" },
+              assertDispatchCurrent,
+            });
+          await expect(send()).resolves.toBe(payload);
+          expect(mocks.dispatch).toHaveBeenCalledOnce();
+          expect(assertDispatchCurrent).toHaveBeenCalled();
+          mocks.dispatch.mockClear();
+          await expect(send()).rejects.toThrow(/authority.*no longer active/i);
+          expect(mocks.dispatch).not.toHaveBeenCalled();
+          expect(mocks.callGateway).not.toHaveBeenCalled();
+        },
+      );
+    } finally {
+      admission.close();
+    }
   });
 
   it.each(["dispatch", "commit"] as const)(

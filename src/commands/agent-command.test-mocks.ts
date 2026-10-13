@@ -258,9 +258,11 @@ vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(),
-}));
+// mock-isolation: Keep network transport disabled; use real in-process handlers and error classification.
+vi.mock("../gateway/call.js", async () => {
+  const { isGatewayTransportError } = await import("../gateway/transport-error.js");
+  return { callGateway: vi.fn(), isGatewayTransportError };
+});
 
 vi.mock("../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",

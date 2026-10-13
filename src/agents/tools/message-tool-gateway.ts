@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -6,6 +7,7 @@ import type { ConversationReadInvocationOrigin } from "../../channels/plugins/co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withMessageActionInvocationConfig } from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionGateway } from "../../infra/outbound/message-action-contracts.js";
+import { hasSettledMessageSendReceipt } from "../../infra/outbound/message-action-result-acceptance.js";
 import type {
   OutboundGatewayRequest,
   OutboundGatewayRequestContext,
@@ -62,6 +64,17 @@ export function createMessageToolGateway(
           () =>
             bindAgentToolGatewayRequest({
               revalidateOnCompletion: !invocation?.preserveWriteOutcome,
+              acceptsWriteResult: (request, payload) => {
+                if (request.method !== "message.action") {
+                  return false;
+                }
+                const actionParams = asOptionalRecord(request.params);
+                return hasSettledMessageSendReceipt({
+                  action: actionParams?.action,
+                  dryRun: actionParams?.dryRun,
+                  payload,
+                });
+              },
             }),
         )
       : undefined;

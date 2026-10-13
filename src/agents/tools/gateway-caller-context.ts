@@ -190,28 +190,28 @@ type AdmittedGatewayToolCallerParams = {
 function composeReceiptAuthority(
   ...predicates: Array<ReceiptAuthority | undefined>
 ): ((() => boolean) & ReceiptAuthority) | undefined {
-  const checks = predicates.filter(
-    (predicate, index): predicate is ReceiptAuthority =>
-      predicate !== undefined && predicates.indexOf(predicate) === index,
+  const checks = [...new Set(predicates)].filter(
+    (predicate): predicate is ReceiptAuthority => predicate !== undefined,
   );
-  return checks.length === 0
-    ? undefined
-    : Object.assign(
-        () => {
-          let active = true;
-          for (const check of checks) {
-            try {
-              active = check() !== false && active;
-            } catch {
-              active = false;
-            }
-          }
-          return active;
-        },
-        composeSessionSourceAssertion(
-          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
-        ),
-      );
+  const assertions = checks.map((check) => captureGatewayToolReceiptAssertion(check));
+  if (checks.length === 0) {
+    return undefined;
+  }
+  return Object.assign(
+    () =>
+      checks.reduce((active, check) => {
+        try {
+          return check() !== false && active;
+        } catch {
+          return false;
+        }
+      }, true),
+    composeSessionSourceAssertion(assertions),
+    {
+      assertScopeCurrent: () =>
+        assertions.forEach((assertion) => (assertion.assertScopeCurrent ?? assertion)()),
+    },
+  );
 }
 
 /** Preserve boolean refusal across the receipt owner's prepared assertion. */
@@ -225,10 +225,11 @@ export function captureGatewayToolReceiptAssertion(
     }
   };
   const prepare = receipt.prepareSessionSource?.bind(receipt);
+  const assertScopeCurrent = receipt.assertScopeCurrent?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
-    assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
+    assertScopeCurrent: assertScopeCurrent ? () => assertAllowed(assertScopeCurrent()) : undefined,
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
     ...(prepare
       ? {
@@ -411,9 +412,7 @@ export function resolveGatewayPersonalToolParticipant(
 }
 
 /** Capture the admitted run and worker owner, independently of optional audit collection. */
-export function captureGatewayToolCallerAssertion(
-  boundMethod?: string,
-): ((method?: string) => void) | undefined {
+export function captureGatewayToolCallerAssertion(boundMethod?: string) {
   const caller = getGatewayToolCallerIdentity();
   if (!caller?.operationalRunInstance) {
     return undefined;
@@ -428,35 +427,34 @@ export function captureGatewayToolCallerAssertion(
       throw new Error("Automation caller authority is no longer active.");
     }
   };
-  const assertCurrent = composeSessionSourceAssertion(
-    [
+  const receipt = isCurrent ? captureGatewayToolReceiptAssertion(isCurrent) : undefined;
+  const checkReceipt = (assertReceipt: () => void) => {
+    try {
+      if (!isCurrent || signals.some((signal) => signal.aborted)) {
+        throw new Error("agent tool caller authority is no longer active");
+      }
+      assertReceipt();
+    } catch {
+      throw new Error("agent tool caller authority is no longer active");
+    }
+    assertMethod(boundMethod);
+  };
+  const bindReceiptAssertion = (receiptCheck: SessionSourceAssertion | undefined) => {
+    const assertion = composeSessionSourceAssertion([
       selection?.assertCurrent,
       caller.operatorAuthority?.assertCurrent,
-      composeSessionSourceAssertion(
-        isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
-        (assertReceipt) => {
-          try {
-            if (!isCurrent || signals.some((signal) => signal.aborted)) {
-              throw new Error("agent tool caller authority is no longer active");
-            }
-            assertReceipt();
-          } catch {
-            throw new Error("agent tool caller authority is no longer active");
-          }
-        },
-      ),
-    ],
-    (assertSources) => {
-      assertSources();
-      assertMethod(boundMethod);
-    },
-  );
-  return Object.assign((method = boundMethod) => {
-    assertCurrent();
-    if (method !== boundMethod) {
-      assertMethod(method);
-    }
-  }, assertCurrent);
+      composeSessionSourceAssertion([receiptCheck], checkReceipt),
+    ]);
+    return Object.assign((method = boundMethod) => {
+      assertion();
+      if (method !== boundMethod) {
+        assertMethod(method);
+      }
+    }, assertion);
+  };
+  return Object.assign(bindReceiptAssertion(receipt), {
+    assertScopeCurrent: bindReceiptAssertion(receipt?.assertScopeCurrent ?? receipt),
+  });
 }
 
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */
