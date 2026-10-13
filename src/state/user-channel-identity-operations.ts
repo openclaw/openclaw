@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
@@ -338,6 +339,10 @@ async function prepareUserProfileAuthority(
   );
 }
 
+const profileAdmissionService = createLazyRuntimeModule(
+  () => import("../infra/sqlite-writer-admission-service.js"),
+);
+
 async function prepareUserProfileAuthorityRead<Profile extends { profileId: string }>(
   profileId: string,
   options: IdentityOptions,
@@ -348,8 +353,18 @@ async function prepareUserProfileAuthorityRead<Profile extends { profileId: stri
   includeProfile?: boolean,
 ) {
   const context = captureAuthorityContext(options);
+  const { runSqliteProfileAdmission } = await profileAdmissionService();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const read = await captureUserProfileAuthorityRead(context.admission, undefined, dependency);
+    const settled = await runSqliteProfileAdmission({
+      kind: "read-current-settled-facts",
+      authority: read.transferSettled(profileId),
+    });
+    context.admission.assertCurrent();
+    read.assertSettled(profileId);
+    if (settled !== "current") {
+      continue;
+    }
     const profileRevision = readUserProfileVersion();
     const profile = await readProfile(context);
     context.admission.assertCurrent();
@@ -362,6 +377,18 @@ async function prepareUserProfileAuthorityRead<Profile extends { profileId: stri
     const sourceProfiles = [profileId, profile.profileId];
     const isCurrent = read.bind(sourceProfiles);
     if (isCurrent) {
+      const bound = await runSqliteProfileAdmission({
+        kind: "assert-bound-revision",
+        authority: isCurrent.transferable,
+      });
+      context.admission.assertCurrent();
+      if (
+        bound !== "current" ||
+        !isCurrent() ||
+        (includeProfile && profileRevision !== readUserProfileVersion())
+      ) {
+        continue;
+      }
       return {
         ...profile,
         isCurrent: includeProfile

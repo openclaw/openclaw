@@ -287,6 +287,15 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     return { integrity: { identity, revision, epoch: 0n, proof: proofFor() } };
   };
 
+  const publishCreatedIdentity = (record: IdentityRecord, identity: DatabasePathIdentity) => {
+    // Pre-creation integrity cannot certify the newly bound physical file.
+    Atomics.add(new BigInt64Array(record.generation.integrity.revision), 0, 1n);
+    records.delete(record.identity.key);
+    record.identity = identity;
+    record.generation.integrity.identity = identity;
+    records.set(identity.key, record);
+  };
+
   const known = (pathname: string) =>
     recordsByPath.get(pathname) ?? recordsByPath.get(resolveDatabasePath({ path: pathname }));
   const bindPath = (record: IdentityRecord, pathname: string) => {
@@ -380,10 +389,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       });
       if (record) {
-        records.delete(record.identity.key);
-        record.identity = identity;
-        record.generation.integrity.identity = identity;
-        records.set(identity.key, record);
+        publishCreatedIdentity(record, identity);
       }
     }
     if (!record) {
@@ -511,10 +517,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
-          records.delete(previous.identity.key);
-          previous.identity = identity;
-          previous.generation.integrity.identity = identity;
-          records.set(identity.key, previous);
+          publishCreatedIdentity(previous, identity);
           record = previous;
         } else {
           invalidate(previous);
