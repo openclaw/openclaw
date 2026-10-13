@@ -52,6 +52,16 @@ generation. Registration resources remain held through admitted work and cleanup
 `dispose()` runs after the final claim releases, including any bounded idle
 retention between runs.
 
+Use `api.runContext` to share JSON-compatible, per-run data between a plugin's
+admitted agent hooks and its Gateway service registrations. Values are keyed by
+run ID, plugin ID, and namespace, so separate prepared-runtime registrations of
+the same plugin can exchange admission metadata without sharing closure state.
+Scoped hooks can access this data while their invocation is admitted; merely
+loading a plugin for inspection does not grant access, and retired registrations
+cannot read or write it. Terminal agent-event handlers can still read the data;
+the host clears it after those handlers settle. This does not grant scoped hooks
+permission to steer runs, inject prompts, or emit process-global events.
+
 Creating a configured or standalone publication does not enable this ownership.
 Existing root registries and raw SDK host registrations keep their original owner;
 borrowing an already managed generation preserves that source's ownership.

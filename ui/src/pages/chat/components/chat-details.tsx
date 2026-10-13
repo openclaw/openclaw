@@ -1,4 +1,3 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { Portal } from "@solidjs/web";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -70,9 +69,6 @@ export const ChatDetails = defineSolidBridge<Props>(
     };
     const hide = () => {
       progressMenu?.overlay.request(false);
-      for (const menu of surface.querySelectorAll<WaDropdown>("wa-dropdown")) {
-        menu.open = false;
-      }
       if (panel?.matches(":popover-open")) {
         panel.hidePopover?.();
       }
@@ -110,8 +106,7 @@ export const ChatDetails = defineSolidBridge<Props>(
         opened() &&
         (!docked() || panel.contains(document.activeElement)) &&
         !event.defaultPrevented &&
-        !progressMenu?.overlay.open &&
-        ![...surface.querySelectorAll<WaDropdown>("wa-dropdown")].some((menu) => menu.open)
+        !progressMenu?.overlay.open
       ) {
         event.preventDefault();
         close(true);

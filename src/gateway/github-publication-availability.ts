@@ -21,7 +21,7 @@ import {
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { LruCache } from "../infra/lru-cache.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { prepareGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -45,7 +45,15 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-w
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 // Discovery only: publication resolves Git afresh. Registry/lifecycle guards retire facts early.
-const worktreeTargets = new LruCache<{ expiresAt: number; assertCurrent: () => void }>(256);
+const worktreeTargets = createStaleWhileRevalidateCache<{
+  supported: boolean;
+  assertCurrent: () => void;
+}>({
+  maxEntries: 256,
+  maxPending: Number.POSITIVE_INFINITY,
+  ttlMs: 15_000,
+  cacheable: (target) => target.supported,
+});
 
 function publicationConfigSnapshot() {
   const active = getActiveSecretsRuntimeConfigSnapshot();
@@ -648,27 +656,25 @@ export async function hasSupportedGitHubPublicationTarget(
   };
   assertWorktreeCurrent();
   const key = `${context.admission.databasePath}\0${owner.worktree.id}`;
-  const cached = worktreeTargets.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    try {
-      cached.assertCurrent();
-      return true;
-    } catch {
-      // The current read may select a replacement owner; qualify its Git facts again.
-    }
-  }
-  worktreeTargets.delete(key);
-  const repository = await prepareGitHubPublicationRepositoryIdentity({
-    worktree: owner.worktree,
-    assertCurrent: assertWorktreeCurrent,
-  });
-  assertWorktreeCurrent();
-  const supported = isSupportedGitHubOrigin(repository.originUrl);
-  if (supported) {
-    worktreeTargets.set(key, {
-      expiresAt: Date.now() + 15_000,
+  const load = async () => {
+    // Share repository facts, not the initiating reader's connection authority.
+    const repository = await prepareGitHubPublicationRepositoryIdentity({
+      worktree: owner.worktree,
       assertCurrent: owner.assertRegistryCurrent,
     });
+    return {
+      supported: isSupportedGitHubOrigin(repository.originUrl),
+      assertCurrent: owner.assertRegistryCurrent,
+    };
+  };
+  let target = await worktreeTargets.read(key, load, { allowStale: false });
+  try {
+    target.value.assertCurrent();
+  } catch {
+    // A registry revision retires facts before their discovery TTL expires.
+    worktreeTargets.deleteValue(target.value);
+    target = await worktreeTargets.read(key, load, { allowStale: false });
   }
-  return supported;
+  assertWorktreeCurrent();
+  return target.value.supported;
 }

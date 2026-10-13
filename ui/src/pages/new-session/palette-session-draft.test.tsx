@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { html } from "lit";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,22 +9,35 @@ import type { AgentSelectElement } from "../../components/agent-select.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { SolidController } from "../../lit/solid-controller-host.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import {
+  PaletteSessionAttachments,
+  PaletteSessionAuxiliary,
+  PaletteSessionControls,
+  PaletteSessionRecovery,
+} from "./palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PALETTE_PREFERENCE_KEY, PREFS_MIGRATION_KEY } from "./preferences.ts";
 
-class PaletteDraftHost extends OpenClawLightDomElement {
-  context: ApplicationContext | undefined;
+class PaletteDraftHost extends ControllerHost {
+  readonly element = document.createElement("div");
+  readonly ownerDocument = document;
+  readonly querySelector = this.element.querySelector.bind(this.element);
+  readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
+  private readonly updatedControllers = new Set<SolidController>();
+  private readonly unmount: () => void;
+  readonly context: ApplicationContext;
   paletteOpen = true;
   readonly started = vi.fn();
-  readonly attachmentReady = createDeferred();
   readonly settingsReady = createDeferred();
   readonly coldOutcome = createDeferred();
   observeColdSubmission = false;
-  override updated() {
+  private updated() {
     const remember = this.querySelector<HTMLInputElement>(
       ".palette-session-settings__remember input",
     );
@@ -35,21 +48,78 @@ class PaletteDraftHost extends OpenClawLightDomElement {
     if (this.observeColdSubmission && (!this.draft.messageLocked || this.draft.submitting)) {
       this.coldOutcome.resolve();
     }
-    if (this.querySelector('.chat-attachment-loading[data-state="ready"]')) {
-      this.attachmentReady.resolve();
-    }
   }
   readonly draft = new PaletteSessionDraft(
     this,
     () => ({ context: this.context, open: this.paletteOpen }),
     { onClose: () => this.started() },
   );
-  override render() {
-    return html`<textarea aria-label="Palette prompt" .value=${this.draft.message}></textarea
-      >${this.draft.renderControls()}${this.draft.renderRecovery()}${this.draft.renderAuxiliary()}${this.draft.renderAttachments()}`;
+  constructor(context: ApplicationContext) {
+    super();
+    this.context = context;
+    document.body.append(this.element);
+    const mounted = mountSolid(
+      () => {
+        const [revision, setRevision] = createSignal({}, { ownedWrite: true });
+        const unsubscribe = this.subscribe(() => setRevision({}));
+        const recovery = createMemo(() => {
+          revision();
+          return this.draft.recoveryAction;
+        });
+        const message = createMemo(() => {
+          revision();
+          return this.draft.message;
+        });
+        createEffect(revision, () => {
+          for (const controller of this.updatedControllers) {
+            controller.hostUpdated?.();
+          }
+          this.updated();
+        });
+        onCleanup(() => {
+          unsubscribe();
+          this.disconnect();
+        });
+        return (
+          <>
+            <textarea aria-label="Palette prompt" value={message()} />
+            <PaletteSessionControls draft={this.draft} revision={revision()} />
+            <Show when={recovery()}>
+              {(onOpen) => <PaletteSessionRecovery onOpen={onOpen()} />}
+            </Show>
+            <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
+            <PaletteSessionAttachments draft={this.draft} revision={revision()} />
+          </>
+        );
+      },
+      { container: this.element },
+    );
+    this.unmount = mounted.unmount;
+    this.connect();
+  }
+
+  override addController(controller: SolidController) {
+    this.updatedControllers.add(controller);
+    super.addController(controller);
+  }
+
+  override removeController(controller: SolidController) {
+    this.updatedControllers.delete(controller);
+    super.removeController(controller);
+  }
+
+  override get updateComplete() {
+    return super.updateComplete.then(() => {
+      flush();
+      return true;
+    });
+  }
+
+  remove() {
+    this.unmount();
+    this.element.remove();
   }
 }
-customElements.define("test-palette-session-draft", PaletteDraftHost);
 
 async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const fixture = createDraftFixture(options);
@@ -75,9 +145,7 @@ async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
     navigate: vi.fn(),
   });
   Object.assign(context.placementStartup, { start: vi.fn() });
-  const host = document.createElement("test-palette-session-draft") as PaletteDraftHost;
-  host.context = context;
-  document.body.append(host);
+  const host = new PaletteDraftHost(context);
   host.draft.open();
   await host.updateComplete;
   await host.updateComplete;
@@ -85,6 +153,7 @@ async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
 }
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   localStorage.clear();
   sessionStorage.clear();
@@ -114,7 +183,9 @@ describe("PaletteSessionDraft", () => {
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
     await host.updateComplete;
     expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull();
-    await host.attachmentReady.promise;
+    await waitForSolid(() => {
+      expect(host.querySelector('.chat-attachment-loading[data-state="ready"]')).not.toBeNull();
+    });
     host.observeColdSubmission = true;
     host.draft.submitCold();
     await host.updateComplete;
@@ -675,9 +746,7 @@ describe("palette-only remembered settings", () => {
         fixture.select().onSelect("other");
         await fixture.host.updateComplete;
         fixture.host.remove();
-        replacement = document.createElement("test-palette-session-draft") as PaletteDraftHost;
-        replacement.context = fixture.context;
-        document.body.append(replacement);
+        replacement = new PaletteDraftHost(fixture.context);
         replacement.draft.open();
         const current = replacement;
         await vi.waitFor(() =>
