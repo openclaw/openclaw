@@ -56,7 +56,8 @@ const RESPONDER_NOT_ALLOWED_NOTE = "This agent does not accept answers from that
 type CardOutcome = Omit<ClickClackQuestionResolution, "expected_version">;
 
 function characterCount(value: string): number {
-  return [...value].length;
+  // Match ClickClack's Unicode code point limits, not grapheme clusters.
+  return Array.from(value).length;
 }
 
 function hasLength(value: string, min: number, max: number): boolean {
@@ -65,7 +66,7 @@ function hasLength(value: string, min: number, max: number): boolean {
 }
 
 function truncateNote(value: string): string {
-  const characters = [...value.trim()];
+  const characters = Array.from(value.trim());
   return characters.length <= MAX_NOTE_LENGTH
     ? characters.join("")
     : `${characters.slice(0, MAX_NOTE_LENGTH - 1).join("")}…`;
@@ -228,7 +229,7 @@ async function settleOpenCard(params: {
   // Finished records stay readable briefly, which covers the finalizer and a
   // watch that sees the card right after the question ended.
   const record = await questionGatewayRuntime.getQuestion({
-    cfg: params.lifetime.cfg as OpenClawConfig,
+    cfg: params.lifetime.cfg,
     questionId: params.questionId,
   });
   if (record?.status !== "pending") {
@@ -353,7 +354,7 @@ export async function deliverClickClackQuestionPrompt(params: {
   }
   // A card is an upgrade over the text prompt, so a failed read keeps the text.
   const record = await questionGatewayRuntime
-    .getQuestion({ cfg: lifetime.cfg as OpenClawConfig, questionId })
+    .getQuestion({ cfg: lifetime.cfg, questionId })
     .catch(() => null);
   const question = record ? buildClickClackQuestionSpec(record) : null;
   if (!record || !question || lifetime.abortSignal.aborted) {
@@ -470,7 +471,7 @@ async function forwardSubmittedCard(params: {
     (await responderMayAnswer({ lifetime, message, responder })) &&
     !lifetime.abortSignal.aborted;
   const gateway = {
-    cfg: lifetime.cfg as OpenClawConfig,
+    cfg: lifetime.cfg,
     questionId,
     senderId: `clickclack:${responder.id}`,
     clientDisplayName: `ClickClack question (${responder.id})`,
@@ -603,7 +604,7 @@ export async function reconcileClickClackQuestions(params: {
           continue;
         }
         const record = await questionGatewayRuntime.getQuestion({
-          cfg: lifetime.cfg as OpenClawConfig,
+          cfg: lifetime.cfg,
           questionId,
         });
         if (record?.status === "pending") {

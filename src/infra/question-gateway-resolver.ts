@@ -246,8 +246,8 @@ export async function resolveQuestionAnswersOverGateway(
     if (terminal) {
       return { status: "already-terminal", reason: terminal };
     }
-    if (readQuestionErrorReason(error) === "QUESTION_INVALID_ANSWER") {
-      return { status: "invalid", message: (error as Error).message };
+    if (error instanceof Error && readQuestionErrorReason(error) === "QUESTION_INVALID_ANSWER") {
+      return { status: "invalid", message: error.message };
     }
     throw error;
   }
