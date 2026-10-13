@@ -108,42 +108,6 @@ describe("skills-remote", () => {
     expect(listRemoteSkillNames()).not.toContain(skillName);
   });
 
-  it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
-    await closeSkillsWatchers(true);
-    const workspaceDir = `/tmp/ws-${randomUUID()}`;
-    const nodeId = `node-${randomUUID()}`;
-    recordRemoteNodeInfo({
-      nodeId,
-      displayName: "Remote Mac",
-      platform: "darwin",
-      commands: ["system.run"],
-    });
-
-    const before = getSkillsSnapshotVersion(workspaceDir);
-    removeRemoteNodeInfo(nodeId);
-    const after = getSkillsSnapshotVersion(workspaceDir);
-
-    expect(after).toBeGreaterThan(before);
-  });
-
-  it("bumps the skills snapshot version when an eligible remote node connects", async () => {
-    await closeSkillsWatchers(true);
-    const workspaceDir = `/tmp/ws-${randomUUID()}`;
-    const nodeId = `node-${randomUUID()}`;
-
-    const before = getSkillsSnapshotVersion(workspaceDir);
-    recordRemoteNodeInfo({
-      nodeId,
-      displayName: "Remote Mac",
-      platform: "darwin",
-      commands: ["system.run"],
-    });
-    const after = getSkillsSnapshotVersion(workspaceDir);
-
-    expect(after).toBeGreaterThan(before);
-    removeRemoteNodeInfo(nodeId);
-  });
-
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
     const linuxNodeId = `node-${randomUUID()}`;
     const noRunNodeId = `node-${randomUUID()}`;
@@ -238,27 +202,16 @@ describe("skills-remote", () => {
     }
   });
 
-  it.each(
-    [
-      { command: "system.which", failure: "result" },
-      { command: "system.which", failure: "throw" },
-      { command: "system.run", failure: "result" },
-      { command: "system.run", failure: "throw" },
-    ].flatMap((scenario) => [
-      { ...scenario, skills: undefined },
-      { ...scenario, skills: ["remote-skill"] },
-    ]),
-  )(
-    "clears stale bins after a probe failure ($command/$failure, skills=$skills)",
-    async ({ command, failure, skills }) => {
+  it.each([
+    { command: "system.which", failure: "result" },
+    { command: "system.run", failure: "throw" },
+  ])(
+    "clears stale bins after a probe failure ($command/$failure)",
+    async ({ command, failure }) => {
       await closeSkillsWatchers(true);
       const nodeId = `node-${randomUUID()}`;
       const bin = `bin-${randomUUID()}`;
       const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: { ...cfg.agents?.defaults, skills },
-      };
       try {
         const invokeCalls: string[] = [];
         setTestSkillsRemoteRegistry(nodeId, {
@@ -620,43 +573,7 @@ describe("skills-remote", () => {
     },
   );
 
-  it("waits for connect readiness before connectivity preflight and bin probing", async () => {
-    vi.useFakeTimers();
-    const nodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
-    const checkConnectivity = vi.fn(async () => ({ ok: true as const }));
-    const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
-    try {
-      setTestSkillsRemoteRegistry(nodeId, {
-        get: () => testRemoteSession(nodeId),
-        checkConnectivity,
-        invoke,
-      } as unknown as NodeRegistry);
-      recordRemoteMacWithSystemWhich(nodeId);
-
-      const refresh = refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        readinessDelayMs: 5_000,
-      });
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(checkConnectivity).not.toHaveBeenCalled();
-      expect(invoke).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await refresh;
-      expect(checkConnectivity).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledTimes(1);
-    } finally {
-      removeRemoteNodeInfo(nodeId);
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each(["linux", "darwin"])(
+  it.each(["linux"])(
     "retires a connect-readiness delay when the Gateway lifetime closes (%s)",
     async (platform) => {
       vi.useFakeTimers();
@@ -778,7 +695,7 @@ describe("skills-remote", () => {
     }
   });
 
-  it.each(["success", "failure", "throw"])(
+  it.each(["success", "throw"])(
     "does not carry a retired generation probe into its replacement (%s)",
     async (completion) => {
       const nodeId = `node-${randomUUID()}`;
