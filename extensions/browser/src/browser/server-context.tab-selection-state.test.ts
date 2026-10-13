@@ -21,6 +21,7 @@ import {
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
 import * as sessionTabStore from "./session-tab-store.js";
+import * as sessionTabTracking from "./session-tab-tracking.js";
 
 afterEach(async () => {
   const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
@@ -29,8 +30,6 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   volatileTabsBySession().delete("agent:main:eviction");
-  volatileTabsBySession().delete("agent:main:eviction-a");
-  volatileTabsBySession().delete("agent:main:eviction-b");
 });
 
 function mockCreatedTarget(targetId: string, finalUrl: string) {
@@ -361,32 +360,32 @@ describe("browser tab selection and ownership", () => {
     expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD3"]);
   });
 
-  afterEach(async () => {
-    volatileTabsBySession().delete("agent:main:eviction-c");
-  });
-
-  it("evicts tabs from a higher-footprint session ahead of older tabs owned by a lower-footprint session", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([]);
+  it("attributes durable tab activity across profileAliases during managed-tab eviction", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([
+      {
+        kind: "durable",
+        version: 1,
+        sessionKey: "agent:main:upgraded",
+        nativeTargetId: "OLD8",
+        profile: "chrome",
+        profileAliases: ["openclaw"],
+        profileFingerprint: "profile",
+        browserInstanceFingerprint: "browser",
+        interactionTargetKind: "native",
+        trackedAt: 9_000,
+        lastUsedAt: 9_000,
+        storageKey: "durable-old8",
+      },
+    ]);
     mockCreatedTarget("NEW", "http://127.0.0.1:3009");
-    // Session A owns 2 older tabs.
     seedVolatileTabActivity(
-      [
-        { targetId: "OLD1", lastUsedAt: 1_000 },
-        { targetId: "OLD2", lastUsedAt: 1_001 },
-      ],
-      "agent:main:eviction-a",
-    );
-    // Session B owns 6 newer tabs in the shared 8-page managed profile.
-    seedVolatileTabActivity(
-      [
-        { targetId: "OLD3", lastUsedAt: 5_000 },
-        { targetId: "OLD4", lastUsedAt: 5_001 },
-        { targetId: "OLD5", lastUsedAt: 5_002 },
-        { targetId: "OLD6", lastUsedAt: 5_003 },
-        { targetId: "OLD7", lastUsedAt: 5_004 },
-        { targetId: "OLD8", lastUsedAt: 5_005 },
-      ],
-      "agent:main:eviction-b",
+      Array.from({ length: 6 }, (_, index) => ({
+        targetId: `OLD${index + 2}`,
+        lastUsedAt: 2_000 + index,
+      })),
     );
     const closed: string[] = [];
     const cleanup = Promise.withResolvers<void>();
@@ -410,48 +409,34 @@ describe("browser tab selection and ownership", () => {
     runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     await openclaw.openTab("http://127.0.0.1:3009");
     await cleanup.promise;
-    // At the 8-page managed cap with 9 open pages, 1 page is evicted from
-    // Session B (6 open tabs, oldest OLD3) rather than Session A (2 open tabs, OLD1/OLD2).
-    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD3"]);
+    // OLD8 is recorded under legacy profile "chrome" with profileAliases: ["openclaw"]
+    // at lastUsedAt 9000, so it is preserved and OLD2 (lastUsedAt 2000) is evicted instead.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
   });
 
-  it("preserves shared target memberships and rebalances remaining session counts across multiple evictions", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([]);
+  it("ignores dashboard durable records when reading page-tab activity for eviction", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([
+      {
+        ...retainedDashboardRecord("OLD2"),
+        kind: "durable",
+        lastUsedAt: 9_999,
+      },
+    ]);
     mockCreatedTarget("NEW", "http://127.0.0.1:3009");
-    // Session A owns only OLD1 (1 tab), which Session B also touched more recently.
-    seedVolatileTabActivity([{ targetId: "OLD1", lastUsedAt: 1_000 }], "agent:main:eviction-a");
-    // Session B owns 5 tabs total: shared OLD1 plus OLD2..OLD5.
     seedVolatileTabActivity(
-      [
-        { targetId: "OLD1", lastUsedAt: 9_000 },
-        { targetId: "OLD2", lastUsedAt: 5_000 },
-        { targetId: "OLD3", lastUsedAt: 5_001 },
-        { targetId: "OLD4", lastUsedAt: 5_002 },
-        { targetId: "OLD5", lastUsedAt: 5_003 },
-      ],
-      "agent:main:eviction-b",
-    );
-    // Session C owns 4 older tabs: OLD6..OLD9.
-    seedVolatileTabActivity(
-      [
-        { targetId: "OLD6", lastUsedAt: 500 },
-        { targetId: "OLD7", lastUsedAt: 501 },
-        { targetId: "OLD8", lastUsedAt: 502 },
-        { targetId: "OLD9", lastUsedAt: 503 },
-      ],
-      "agent:main:eviction-c",
+      Array.from({ length: 6 }, (_, index) => ({
+        targetId: `OLD${index + 3}`,
+        lastUsedAt: 3_000 + index,
+      })),
     );
     const closed: string[] = [];
     const cleanup = Promise.withResolvers<void>();
-    const tenTabs = [
-      page("NEW", "http://127.0.0.1:3009"),
-      ...Array.from({ length: 9 }, (_, index) =>
-        page(`OLD${index + 1}`, `http://127.0.0.1:300${index}`),
-      ),
-    ];
     const { openclaw, runtime } = setup(async (url) => {
       if (url.includes("/json/list")) {
-        return Response.json(tenTabs);
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
       }
       if (url.includes("/json/version")) {
         return Response.json({
@@ -461,9 +446,7 @@ describe("browser tab selection and ownership", () => {
       }
       if (url.includes("/json/close/")) {
         closed.push(url);
-        if (closed.length === 2) {
-          cleanup.resolve();
-        }
+        cleanup.resolve();
         return new Response();
       }
       throw new Error("unexpected fetch: " + url);
@@ -471,14 +454,9 @@ describe("browser tab selection and ownership", () => {
     runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     await openclaw.openTab("http://127.0.0.1:3009");
     await cleanup.promise;
-    // Shared OLD1 keeps Session A's 1-tab membership and is protected.
-    // Eviction #1 picks Session B's oldest unshared tab (OLD2, 5 tabs > 4 tabs),
-    // reducing Session B to 4 remaining tabs; Eviction #2 then ties B (4) and C (4)
-    // and picks Session C's older tab (OLD6, lastUsedAt 500 < 5001).
-    expect(closed).toEqual([
-      "http://127.0.0.1:18800/json/close/OLD2",
-      "http://127.0.0.1:18800/json/close/OLD6",
-    ]);
+    // OLD2 is not retained in readBrowserDashboardTabs, and its stale dashboard
+    // durable record does not count as session page activity, so OLD2 is evicted as untracked.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
   });
 
   it("does not block opening on an ordinary managed-tab cleanup close", async () => {

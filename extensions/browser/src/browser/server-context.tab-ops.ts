@@ -98,51 +98,32 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
-type ProfileTabActivity = {
-  lastUsedByTarget: Map<string, number>;
-  sessionsByTarget: Map<string, Set<string>>;
-  tabCountBySession: Map<string, number>;
-};
-
 /**
- * Collects the freshest recorded session activity and all session memberships
- * per target for one profile. Durable records and volatile registrations both
- * carry lastUsedAt; durable native identities also fold in activity observed
- * after the record froze.
+ * Collects the freshest recorded session activity per target for one profile.
+ * Durable records and volatile registrations both carry lastUsedAt; durable
+ * native identities also fold in activity observed after the record froze.
  */
-async function readProfileTabActivity(
-  profileName: string,
-  openTargetIds?: ReadonlySet<string>,
-): Promise<ProfileTabActivity> {
+async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string, number>> {
   const profile = normalizeOptionalLowercaseString(profileName);
   const lastUsedByTarget = new Map<string, number>();
-  const sessionsByTarget = new Map<string, Set<string>>();
   const observe = (
     targetId: string,
     recordProfile: string | undefined,
     profileAliases: readonly string[] | undefined,
-    sessionKey: string | undefined,
     lastUsedAt: number,
   ) => {
     const normalizedRecordProfile = normalizeOptionalLowercaseString(recordProfile);
     if (
       !targetId ||
       !profile ||
-      (normalizedRecordProfile !== profile && !profileAliases?.includes(profile))
+      (normalizedRecordProfile !== profile &&
+        !profileAliases?.some((alias) => normalizeOptionalLowercaseString(alias) === profile))
     ) {
       return;
     }
     const previous = lastUsedByTarget.get(targetId);
     if (previous === undefined || lastUsedAt > previous) {
       lastUsedByTarget.set(targetId, lastUsedAt);
-    }
-    if (sessionKey) {
-      let sessions = sessionsByTarget.get(targetId);
-      if (!sessions) {
-        sessions = new Set<string>();
-        sessionsByTarget.set(targetId, sessions);
-      }
-      sessions.add(sessionKey);
     }
   };
   for (const record of await readDurableTabs()) {
@@ -157,100 +138,35 @@ async function readProfileTabActivity(
       record.nativeTargetId,
       record.profile,
       record.profileAliases,
-      record.sessionKey,
       Math.max(record.lastUsedAt, observedAt ?? 0),
     );
   }
-  for (const [sessionKey, sessionTabs] of volatileTabsBySession().entries()) {
+  for (const sessionTabs of volatileTabsBySession().values()) {
     for (const tab of sessionTabs.values()) {
-      observe(tab.targetId, tab.profile, undefined, sessionKey || tab.sessionKey, tab.lastUsedAt);
+      observe(tab.targetId, tab.profile, undefined, tab.lastUsedAt);
     }
   }
-  const tabCountBySession = new Map<string, number>();
-  for (const [targetId, sessions] of sessionsByTarget.entries()) {
-    if (openTargetIds && !openTargetIds.has(targetId)) {
-      continue;
-    }
-    for (const sessionKey of sessions) {
-      tabCountBySession.set(sessionKey, (tabCountBySession.get(sessionKey) ?? 0) + 1);
-    }
-  }
-  return { lastUsedByTarget, sessionsByTarget, tabCountBySession };
+  return lastUsedByTarget;
 }
 
 /**
- * Selects eviction candidates for the managed tab cap. Chrome reports CDP
- * targets most-recently-activated first, so raw /json/list order is backwards
- * for cleanup. Untracked tabs (no recorded session activity) evict first in
- * reverse CDP order; tracked tabs follow from the session(s) currently holding
- * the most open tabs in the profile (protecting shared tabs via the smallest
- * owning session's count and decrementing remaining session counts after each
- * selection), breaking ties by ascending last-use timestamp.
+ * Orders eviction candidates for the managed tab cap. Chrome reports CDP
+ * targets most-recently-activated first, so raw /json/list order is exactly
+ * backwards for cleanup: slicing from the front closes the tabs other sessions
+ * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
+ * session activity) evict first in reverse CDP order; tracked tabs follow in
+ * ascending last-use order.
  */
-function selectManagedTabEvictions(
+function orderManagedTabEvictionCandidates(
   candidates: readonly BrowserTab[],
-  activity: ProfileTabActivity,
-  excessCount: number,
+  lastUsedByTarget: ReadonlyMap<string, number>,
 ): BrowserTab[] {
-  if (excessCount <= 0 || candidates.length === 0) {
-    return [];
-  }
-  const { lastUsedByTarget, sessionsByTarget } = activity;
-  const remainingBySession = new Map(activity.tabCountBySession);
-  const remaining = candidates.toReversed();
-  const effectiveOwnerTabCount = (targetId: string): number => {
-    const sessions = sessionsByTarget.get(targetId);
-    if (!sessions || sessions.size === 0) {
-      return 1;
-    }
-    let minCount = Number.POSITIVE_INFINITY;
-    for (const sessionKey of sessions) {
-      const count = remainingBySession.get(sessionKey) ?? 1;
-      if (count < minCount) {
-        minCount = count;
-      }
-    }
-    return Number.isFinite(minCount) ? minCount : 1;
-  };
-  const compareCandidates = (left: BrowserTab, right: BrowserTab): number => {
-    const leftTracked = lastUsedByTarget.has(left.targetId);
-    const rightTracked = lastUsedByTarget.has(right.targetId);
-    if (leftTracked !== rightTracked) {
-      return leftTracked ? 1 : -1;
-    }
-    if (leftTracked && rightTracked) {
-      const countDiff =
-        effectiveOwnerTabCount(right.targetId) - effectiveOwnerTabCount(left.targetId);
-      if (countDiff !== 0) {
-        return countDiff;
-      }
-    }
-    return (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0);
-  };
-  const selected: BrowserTab[] = [];
-  while (selected.length < excessCount && remaining.length > 0) {
-    let bestIndex = 0;
-    for (let i = 1; i < remaining.length; i += 1) {
-      if (compareCandidates(remaining[i]!, remaining[bestIndex]!) < 0) {
-        bestIndex = i;
-      }
-    }
-    const [picked] = remaining.splice(bestIndex, 1);
-    if (!picked) {
-      break;
-    }
-    selected.push(picked);
-    const sessions = sessionsByTarget.get(picked.targetId);
-    if (sessions) {
-      for (const sessionKey of sessions) {
-        const current = remainingBySession.get(sessionKey) ?? 0;
-        if (current > 0) {
-          remainingBySession.set(sessionKey, current - 1);
-        }
-      }
-    }
-  }
-  return selected;
+  return candidates
+    .toReversed()
+    .toSorted(
+      (left, right) =>
+        (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
+    );
 }
 
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
@@ -419,9 +335,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         !findRetainedBrowserDashboardTab(tab.targetId, profile.name, retained),
     );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
-    const openTargetIds = new Set(pageTabs.map((tab) => tab.targetId));
-    const activity = await readProfileTabActivity(profile.name, openTargetIds);
-    for (const tab of selectManagedTabEvictions(candidates, activity, excessCount)) {
+    const lastUsedByTarget = await readProfileTabLastUsedAt(profile.name);
+    const evictionOrder = orderManagedTabEvictionCandidates(candidates, lastUsedByTarget);
+    for (const tab of evictionOrder.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
       await dispatchBrowserTabClose(
         tab.targetId,
