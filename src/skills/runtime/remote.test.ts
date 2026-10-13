@@ -730,9 +730,13 @@ describe("skills-remote", () => {
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let connId = "conn-old";
     const firstInvoke = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+    const firstInvokeStarted = createDeferred();
     const invoke = vi
       .fn()
-      .mockImplementationOnce(async () => await firstInvoke.promise)
+      .mockImplementationOnce(async () => {
+        firstInvokeStarted.resolve();
+        return await firstInvoke.promise;
+      })
       .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
     try {
       setTestSkillsRemoteRegistry(nodeId, {
@@ -755,7 +759,7 @@ describe("skills-remote", () => {
         });
 
       const failedRefresh = refresh();
-      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+      await firstInvokeStarted.promise;
       removeRemoteNodeInfo(nodeId);
       connId = "conn-new";
       recordRemoteNodeInfo({
@@ -792,9 +796,13 @@ describe("skills-remote", () => {
         pairingGeneration: "generation-a",
       });
       const retiredProbe = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+      const retiredProbeStarted = createDeferred();
       const invoke = vi
         .fn()
-        .mockImplementationOnce(async () => await retiredProbe.promise)
+        .mockImplementationOnce(async () => {
+          retiredProbeStarted.resolve();
+          return await retiredProbe.promise;
+        })
         .mockResolvedValueOnce({ ok: true as const, payload: { bins: [currentBin] } });
       try {
         setTestSkillsRemoteRegistry(nodeId, {
@@ -808,7 +816,7 @@ describe("skills-remote", () => {
           commands: session.commands,
           cfg,
         });
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await retiredProbeStarted.promise;
 
         session = { ...session, connId: "conn-b", pairingGeneration: "generation-b" };
         recordRemoteNodeInfo(session);
