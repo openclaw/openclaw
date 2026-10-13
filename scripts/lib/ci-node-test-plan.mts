@@ -69,6 +69,7 @@ import {
   TOOLING_CONFIG,
   TOOLING_LARGE_CAPACITY_TEST_FILES,
   resolveCompactNodeTestRunner,
+  resolveSelectedNodeTestRunner,
 } from "./ci-node-test-capacity.mts";
 import {
   COMPACT_EMBEDDED_BASE_GROUP_NAME,
@@ -4335,7 +4336,10 @@ export function createSelectedNodeTestShardBundles(
         canonicalFamilies,
         groupSeconds,
       ),
-    ],
+    ].map((job) => ({
+      ...job,
+      runner: resolveSelectedNodeTestRunner(job, options.runnerBackend),
+    })),
     options.runnerBackend,
   );
 }
