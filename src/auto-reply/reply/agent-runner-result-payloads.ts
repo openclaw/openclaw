@@ -8,6 +8,7 @@ import {
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   isSyntheticSourceReplyTurn,
+  resolveClaimedReplyExpectation,
   resolveReplyCompletion,
 } from "../../agents/reply-completion.js";
 import {
@@ -121,17 +122,19 @@ export async function prepareReplyAgentPayloads(state: {
     usage,
   } = accounting;
   let { activeSessionEntry, didLogHeartbeatStrip } = accounting;
-  const terminalReplyExpectation =
+  const terminalReplyExpectation = resolveClaimedReplyExpectation(
     followupRun.run.terminalReplyExpectation ??
-    resolveSourceReplyExpectation({
-      ctx: {
-        ...sessionCtx,
-        InboundEventKind: followupRun.currentInboundEventKind,
-        InputProvenance: followupRun.run.inputProvenance,
-      },
-      cfg,
-      isHeartbeat,
-    });
+      resolveSourceReplyExpectation({
+        ctx: {
+          ...sessionCtx,
+          InboundEventKind: followupRun.currentInboundEventKind,
+          InputProvenance: followupRun.run.inputProvenance,
+        },
+        cfg,
+        isHeartbeat,
+      }),
+    runResult.meta,
+  );
   const blocked =
     runResult.meta?.error?.kind === "hook_block" ||
     runResult.didSendDeterministicApprovalPrompt === true;

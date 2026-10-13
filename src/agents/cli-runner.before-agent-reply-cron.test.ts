@@ -594,6 +594,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
       expect(result.meta.agentMeta?.sessionId).toBe("");
       expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+      expect(result.meta.intentionalTerminalCompletion).toBeUndefined();
 
       const syntheticTurnLog = logInfoSpy.mock.calls
         .map(([message]) => message)
@@ -644,6 +645,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
+    expect(result.meta.intentionalTerminalCompletion).toBe("silent-claim");
     expect(prepareMock).not.toHaveBeenCalled();
     expect(executeMock).not.toHaveBeenCalled();
   });

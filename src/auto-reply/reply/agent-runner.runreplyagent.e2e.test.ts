@@ -41,6 +41,7 @@ import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import {
+  buildHandledBeforeAgentReplyMeta,
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
@@ -597,7 +598,7 @@ async function runHookBackedEmbeddedAgent(params: {
   return hookResult?.handled
     ? {
         payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-        meta: { agentMeta: {} },
+        meta: { agentMeta: {}, ...buildHandledBeforeAgentReplyMeta(hookResult.reply) },
       }
     : {
         payloads: [{ text: "model reply" }],
@@ -3475,6 +3476,52 @@ describe("runReplyAgent pending final delivery capture", () => {
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
     expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
 
+    expect(await readStoredMainSession(storePath)).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: [sourceTurnId],
+    });
+  });
+
+  it("settles a silent before_agent_reply claim of a direct turn as deliberate silence", async () => {
+    const receipt: ReplyOperationRunState = {};
+    const onDeliberateSilentTerminalReply = vi.fn();
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue({ handled: true });
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      opts: { onDeliberateSilentTerminalReply, [REPLY_OPERATION_RUN_STATE]: receipt },
+      sessionCtx: {
+        Provider: "discord",
+        ChatType: "direct",
+        OriginatingChannel: "discord",
+        OriginatingTo: "user:24680",
+        MessageSid: "discord-message-silent-claim",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId,
+      storePath,
+      text: "silent-demo-check",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    // The claim waives the direct reply instead of reporting a before_agent_run block.
+    expect(receipt.replyCompletion).toEqual({ expectation: "optional", outcome: "silent" });
+    expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
     expect(await readStoredMainSession(storePath)).toMatchObject({
       status: "done",
       abortedLastRun: false,

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
+  buildHandledBeforeAgentReplyMeta,
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
   withBeforeAgentReplyObserver,
@@ -201,5 +202,20 @@ describe("before_agent_reply runner boundary", () => {
     expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
     expect(beforeDispatch).toHaveBeenCalledOnce();
     expect(afterDispatch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("buildHandledBeforeAgentReplyMeta", () => {
+  it.each([
+    ["no reply", undefined, true],
+    ["a silent token", { text: "NO_REPLY" }, true],
+    ["blank text", { text: "  " }, true],
+    ["visible text", { text: "Hook is working." }, false],
+    ["a heartbeat acknowledgement", { text: "HEARTBEAT_OK" }, false],
+    ["media without text", { mediaUrl: "https://example.test/a.png" }, false],
+  ])("marks a claim with %s as silent: %s", (_label, reply, silent) => {
+    expect(buildHandledBeforeAgentReplyMeta(reply).intentionalTerminalCompletion).toBe(
+      silent ? "silent-claim" : undefined,
+    );
   });
 });

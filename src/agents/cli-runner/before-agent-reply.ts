@@ -1,5 +1,5 @@
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
+  buildHandledBeforeAgentReplyMeta,
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
@@ -58,13 +58,13 @@ export async function runCliBeforeAgentReply(
             }),
         });
   if (hookResult?.handled) {
-    const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
+    const handledMeta = buildHandledBeforeAgentReplyMeta(hookResult.reply);
     const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
       agentId: params.agentId,
     });
     const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
     cliBackendLog.info(
-      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
+      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(handledMeta.finalAssistantVisibleText)}`,
     );
     return {
       payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
@@ -76,8 +76,7 @@ export async function runCliBeforeAgentReply(
           model: params.model ?? "",
           ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },
-        finalAssistantVisibleText: finalText,
-        finalAssistantRawText: finalText,
+        ...handledMeta,
       },
     };
   }

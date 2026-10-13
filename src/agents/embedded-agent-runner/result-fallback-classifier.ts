@@ -136,7 +136,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (
-    params.result.meta.intentionalTerminalCompletion === "tool-batch" ||
+    params.result.meta.intentionalTerminalCompletion !== undefined ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true

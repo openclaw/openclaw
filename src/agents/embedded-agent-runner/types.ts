@@ -177,8 +177,11 @@ export type EmbeddedAgentRunMeta = {
     | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
-  /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
-  intentionalTerminalCompletion?: "tool-batch";
+  /**
+   * The turn intentionally completed without a reply: an exact, successfully settled tool
+   * batch, or a plugin's silent `before_agent_reply` claim.
+   */
+  intentionalTerminalCompletion?: "tool-batch" | "silent-claim";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */

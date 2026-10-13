@@ -57,6 +57,14 @@ export function resolveReplyCompletion(
     : { expectation, outcome: evidence === "empty" ? "silent" : evidence };
 }
 
+/** A plugin's silent `before_agent_reply` claim waives the turn's reply; model silence never does. */
+export function resolveClaimedReplyExpectation(
+  expectation: ReplyExpectation,
+  meta: { intentionalTerminalCompletion?: string } | undefined,
+): ReplyExpectation {
+  return meta?.intentionalTerminalCompletion === "silent-claim" ? "optional" : expectation;
+}
+
 /** Failure to observe a send is not proof that it is safe to generate or send another reply. */
 export async function observeReplyDelivery(
   observer: ReplyDeliveryObserver | undefined,

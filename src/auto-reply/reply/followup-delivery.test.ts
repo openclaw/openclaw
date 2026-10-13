@@ -592,6 +592,11 @@ describe("resolveFollowupDeliveryDecision", () => {
     ["unscoped outbound send", { didSendViaMessagingTool: true }, true],
     ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
     [
+      "silent plugin claim",
+      { meta: { durationMs: 0, intentionalTerminalCompletion: "silent-claim" } },
+      false,
+    ],
+    [
       "visible progress while yielded",
       {
         meta: { durationMs: 0, yielded: true },

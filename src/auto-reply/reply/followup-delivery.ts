@@ -8,6 +8,7 @@ import {
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   isSyntheticSourceReplyTurn,
+  resolveClaimedReplyExpectation,
   resolveReplyCompletion,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
@@ -196,6 +197,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     model: accounting.modelUsed,
   };
   const result = execution.outcome.result;
+  const replyExpectation = resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta);
   const pendingContinuation =
     result.meta?.yielded === true ||
     result.meta?.continuationPending === true ||
@@ -210,7 +212,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     }),
   );
   let completion = resolveReplyCompletion(
-    terminalReplyExpectation,
+    replyExpectation,
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
       : sourceReplyDelivery !== "missing"
@@ -237,7 +239,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     onDeliveredTerminalDuplicate: hasLegacyMessagingToolEvidence
       ? () => {
           if (completion.outcome !== "blocked") {
-            completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
+            completion = resolveReplyCompletion(replyExpectation, "delivered");
           }
         }
       : undefined,
