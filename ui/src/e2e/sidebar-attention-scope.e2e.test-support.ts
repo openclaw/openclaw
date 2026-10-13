@@ -223,7 +223,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
-      .locator("wa-dropdown-item[data-agent-option]")
+      .locator(".agent-select__option[data-agent-option]")
       .filter({ hasText: "All agents" })
       .click();
     await waitForCronScope(null);
@@ -260,7 +260,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       const previousCount = await cronScopeRequestCount(agentId);
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: label })
         .click();
       await expect.poll(() => cronScopeRequestCount(agentId)).toBeGreaterThan(previousCount);

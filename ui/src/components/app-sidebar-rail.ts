@@ -121,7 +121,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost, teamNewSession?: u
             title=${host.navigationView === view.id ? `${view.label} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})` : view.label}
             data-navigation-view=${view.id}
             aria-label=${view.label}
-            aria-pressed=${String(host.navigationView === view.id)}
+            aria-pressed=${String(host.navigationVisible && !host.navigationCollapsed && host.navigationView === view.id)}
             @click=${() => {
               const active = host.navigationView === view.id;
               host.navigationView = view.id;

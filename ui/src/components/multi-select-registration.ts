@@ -1,8 +1,5 @@
-import { MultiSelect } from "./multi-select.ts";
-
-if (!customElements.get("openclaw-multi-select")) {
-  customElements.define("openclaw-multi-select", MultiSelect);
-}
+import type { MultiSelect } from "./multi-select.ts";
+import "./multi-select.ts";
 
 declare global {
   interface HTMLElementTagNameMap {

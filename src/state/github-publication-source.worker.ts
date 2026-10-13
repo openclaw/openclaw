@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import type { SqliteSourceFence } from "../infra/sqlite-source-fence-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type {
   GitHubPublicationSourcePredicate,
   GitHubPublicationSourceRead,
@@ -10,6 +11,10 @@ import {
   assertGitHubPublicationSourceFacts,
   readGitHubPublicationSourceFacts,
 } from "./github-publication-source.kernel.js";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 const reservations = new WeakMap<DatabaseSync, () => void>();
 
@@ -44,17 +49,19 @@ export function createGitHubPublicationSourceWorker() {
     validated = false;
   };
   const assertPrepared = (input: GitHubPublicationSourceRead) => {
-    if (current !== input || !source?.isOpen || !destination?.isOpen) {
+    if (current !== input || (!input.memory && !source?.isOpen) || !destination?.isOpen) {
       throw new Error("GitHub publication source was not prepared.");
     }
-    return { source, destination };
+    return { source: input.memory ?? source!, destination };
   };
   return {
     prepare(input: GitHubPublicationSourceRead, db: DatabaseSync) {
       close();
-      const { physical } = input.source;
-      assertExistingDatabaseIdentity(physical.canonicalPath, physical.key, physical.birthtime);
-      source = openNodeSqliteDatabase(resolveExistingSqliteFileUri(physical.canonicalPath));
+      if (input.source) {
+        const { physical } = input.source;
+        assertExistingDatabaseIdentity(physical.canonicalPath, physical.key, physical.birthtime);
+        source = openNodeSqliteDatabase(resolveExistingSqliteFileUri(physical.canonicalPath));
+      }
       current = input;
       destination = db;
     },
@@ -62,11 +69,17 @@ export function createGitHubPublicationSourceWorker() {
       const handles = assertPrepared(input);
       return readGitHubPublicationSourceFacts(handles.source, handles.destination, input.selector);
     },
-    fence(input: GitHubPublicationSourcePredicate): SqliteSourceFence {
+    fence(input: GitHubPublicationSourcePredicate): SqliteSourceFence | undefined {
+      if (input.memory) {
+        return undefined;
+      }
       const handles = assertPrepared(input);
+      if (!source) {
+        throw new Error("GitHub publication source was not prepared.");
+      }
       let reservedSource: DatabaseSync | undefined;
       const destinationBinding = { database: handles.destination, identity: input.destination };
-      const sourceBinding = { database: handles.source, identity: input.source };
+      const sourceBinding = { database: source, identity: input.source };
       reservations.set(handles.destination, () => {
         if (!validated || !reservedSource?.isTransaction || !handles.destination.isTransaction) {
           throw new Error("GitHub publication source reservation is no longer current.");
@@ -89,4 +102,33 @@ export function createGitHubPublicationSourceWorker() {
     },
     close,
   };
+}
+
+/** Policy callbacks run before the destination transaction because they may write SQLite. */
+export function withGitHubPublicationSourceTransaction<T>(
+  database: OpenClawStateDatabase,
+  source: GitHubPublicationSourcePredicate,
+  run: () => T,
+): T {
+  const memory = source.memory;
+  if (!memory) {
+    return run();
+  }
+  requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      assertGitHubPublicationSourceFacts(memory, db, source.selector, source.expected);
+      reservations.set(db, () => {
+        if (!db.isTransaction) {
+          throw new Error("GitHub publication destination transaction is no longer current.");
+        }
+      });
+      try {
+        return run();
+      } finally {
+        reservations.delete(db);
+      }
+    },
+    { database },
+  );
 }

@@ -5,7 +5,8 @@ import {
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
@@ -64,7 +65,7 @@ it("coalesces prepared keyless refreshes without repeating prepared facts", asyn
 it.each(["ready", "preparation", "canonical deferral"] as const)(
   "publishes private repository facts or refreshes subscribers after %s preparation",
   async (failure) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const cfg = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:dashboard:incognito-fallback";
       const repository = await getSessionRepositoryWorkspaceStore().create({
@@ -74,7 +75,7 @@ it.each(["ready", "preparation", "canonical deferral"] as const)(
         branch: "private-event",
         assertCurrent: () => {},
       });
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey },
         {
           sessionId: "private-session",
@@ -257,6 +258,10 @@ it.each(["ready", "preparation", "canonical deferral"] as const)(
         detach();
         await connection.mentionInbox.dispose();
         projection.dispose();
+        memorySessionActorOwners.closeDatabase({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+        });
         vi.useRealTimers();
       }
     });

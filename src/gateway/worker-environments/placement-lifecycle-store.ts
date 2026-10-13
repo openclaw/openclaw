@@ -206,6 +206,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
               facts.sessionId,
               facts.retired,
               nativeSettlement,
+              facts.retiredIdentity,
             )
           : facts.placement
             ? stagePlacementTurnClaimWorkerPublication(

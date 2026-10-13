@@ -8,6 +8,7 @@ import { createNativeSessionBindingAuthority } from "../../agents/harness/native
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -36,8 +37,8 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
     setRuntimeConfigSnapshot({});
     const key = "agent:main:active-worker-steering";
     const policyKey = "agent:main:active-worker-policy";
-    const config = {
-      agents: { defaults: { sandbox: { mode: "all" as const } }, entries: { main: {} } },
+    const config: OpenClawConfig = {
+      agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
       tools: { sandbox: { tools: { deny: ["exec"] } } },
     };
     setRuntimeConfigSnapshot(config);

@@ -69,7 +69,7 @@ suite.define(() => {
     const pageScope = currentPage.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
-      .locator("wa-dropdown-item[data-agent-option]")
+      .locator(".agent-select__option[data-agent-option]")
       .filter({ hasText: "All agents" })
       .evaluate((item) => (item as HTMLElement).click());
     const allAgentsQuery = {

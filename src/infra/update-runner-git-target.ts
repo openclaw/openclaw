@@ -291,7 +291,12 @@ export async function withGitTargetInspectionRoot<T>(
 }
 
 type GitTargetSchemaMetadata =
-  | { status: "ok"; version?: string; schemaVersions?: OpenClawSchemaVersions }
+  | {
+      status: "ok";
+      version?: string;
+      schemaVersions?: OpenClawSchemaVersions;
+      databaseEngines?: unknown;
+    }
   | { status: "unreadable"; reason: string };
 
 export async function readGitTargetSchemaVersions(params: {
@@ -319,10 +324,12 @@ export async function readGitTargetSchemaVersions(params: {
     const manifest: unknown = JSON.parse(result.stdout);
     const schemaVersions = parsePackageOpenClawSchemaVersions(manifest);
     const version = normalizeNullableString(asNullableRecord(manifest)?.version);
+    const databaseEngines = asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines;
     return {
       status: "ok",
       ...(version ? { version } : {}),
       ...(schemaVersions ? { schemaVersions } : {}),
+      ...(databaseEngines === undefined ? {} : { databaseEngines }),
     };
   } catch (error) {
     return { status: "unreadable", reason: `target package.json unparseable: ${String(error)}` };
@@ -344,6 +351,9 @@ export async function prepareGitMutation(params: {
       ? {
           ...(target.version ? { version: target.version } : {}),
           ...(target.schemaVersions ? { schemaVersions: target.schemaVersions } : {}),
+          ...(target.databaseEngines === undefined
+            ? {}
+            : { databaseEngines: target.databaseEngines }),
         }
       : { metadataUnreadable: target.reason }),
   });

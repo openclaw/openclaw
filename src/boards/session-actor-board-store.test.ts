@@ -1,7 +1,8 @@
-import { describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
-import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
-import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
@@ -9,19 +10,38 @@ const sessionKey = "agent:main:dashboard:incognito-board";
 const target = { sessionKey };
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
+vi.mock("node:sqlite", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:sqlite")>()),
+  DatabaseSync: vi.fn(function () {
+    throw new Error("Memory Board opened SQLite");
+  }),
+}));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: vi.fn(function () {
+    throw new Error("Memory Board allocated a worker");
+  }),
+}));
+
+const env = { OPENCLAW_STATE_DIR: "/synthetic/memory-boards" };
+const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+afterEach(() => memorySessionActorOwners.reset());
+
+function storeForSession() {
+  return new SqliteBoardStore({
+    resolveSession: () => ({ agentId: "main", path: storePath, sessionKey }),
+    env,
+  });
+}
+
 async function withStore(run: (store: SqliteBoardStore) => Promise<void>) {
-  const owner = createMemorySessionActorOwner({ agentId: "main", path: ":memory:boards" });
-  onTestFinished(() => owner.close());
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    {
-      assertCurrent() {},
-      assertReadable() {},
-    },
-  );
+  const binding = (await acquireSessionActorStorage(
+    { agentId: "main", storePath, sessionKey, env },
+    { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+  ))!;
   expect(
     (
-      await actor.storage!.mutate(
+      await binding.actor.storage.mutate(
         {
           type: "session.entry.create",
           input: { entry: { sessionId: "window-1", updatedAt: 1, incognito: true } },
@@ -30,15 +50,8 @@ async function withStore(run: (store: SqliteBoardStore) => Promise<void>) {
       )
     ).kind,
   ).toBe("committed");
-  const store = new SqliteBoardStore({
-    resolveSession() {
-      throw new Error("Native Board route selected");
-    },
-  });
-  return runWithSessionActorStorage(
-    { actor, authority, agentId: "main", path: ":memory:boards" },
-    () => run(store),
-  );
+  await binding.actor.release();
+  return run(storeForSession());
 }
 
 const html = (name: string, body = "<p>hello</p>") => ({
@@ -58,6 +71,25 @@ const app = (serverName = "server") => ({
 });
 
 describe("session actor BoardStore", () => {
+  it("reads absent sessions without creating them and rejects writes", async () => {
+    const store = storeForSession();
+    expect(await store.getSnapshot(target)).toEqual({
+      sessionKey,
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    });
+    expect(await store.useWidgetDocument(target, "missing", (value) => value)).toBeUndefined();
+    expect(await store.applyOps(target, [])).toEqual({
+      sessionKey,
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    });
+    await expect(store.putWidget(html("missing"))).rejects.toMatchObject({ code: "not_found" });
+    expect(memorySessionActorOwners.list()).toEqual([]);
+  });
+
   it("serializes writes without lost widgets and consumes detached reads outside the FIFO", () =>
     withStore(async (store) => {
       const first = store.putWidget(html("one"));

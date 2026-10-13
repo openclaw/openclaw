@@ -2,19 +2,11 @@ import {
   assertExistingDatabaseIdentity,
   type DatabaseFileIdentity,
 } from "../../infra/sqlite-worker-identity.js";
-import {
-  createOpenClawAgentDatabaseClaim,
-  readOpenClawAgentDatabaseIdentity,
-  type OpenClawAgentDatabaseClaim,
-} from "../../state/openclaw-agent-db-identity.js";
-import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
-import {
-  borrowOpenClawAgentDatabase,
-  getOpenClawAgentDatabaseIfOpen,
-} from "../../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type { SessionCleanupReadResult } from "./cleanup-service-read.types.js";
 import type { ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreCandidateIdentities } from "./session-store-read-candidates.js";
@@ -39,7 +31,7 @@ export function withSessionCleanupStore<T>(
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const path = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path;
   if (isIncognitoOpenClawAgentSqlitePath(path, { agentId: target.agentId, env })) {
-    return withNativeSessionCleanupStore(
+    return withMemorySessionCleanupStore(
       target,
       { agentId: target.agentId, path, env },
       consume,
@@ -113,56 +105,57 @@ export function withSessionCleanupStore<T>(
   );
 }
 
-/** An explicit process-held selector keeps the same kernel on its original native owner. */
-async function withNativeSessionCleanupStore<T>(
+/** A memory preview retains the same actor namespace through classification and consumption. */
+async function withMemorySessionCleanupStore<T>(
   target: SessionStoreTarget,
   database: { agentId: string; path: string; env: NodeJS.ProcessEnv },
   consume: (owner: SessionCleanupStoreOwner) => Promise<T>,
   options: SessionCleanupStoreOptions,
 ): Promise<T> {
-  let nativeIncarnation: string | undefined;
-  const native: { claim?: OpenClawAgentDatabaseClaim } = {};
-  const assertCurrent = () => {
-    options.assertCurrent?.();
-    native.claim?.assertCurrent();
-    const current = getOpenClawAgentDatabaseIfOpen(database);
-    if (
-      nativeIncarnation &&
-      (!current || readOpenClawAgentDatabaseIdentity(current).incarnation !== nativeIncarnation)
-    ) {
-      throw new Error("Session cleanup changed its process-held owner");
-    }
-    if (current && !native.claim) {
-      const borrowed = borrowOpenClawAgentDatabase(database);
-      native.claim = createOpenClawAgentDatabaseClaim(current, borrowed.release);
-      nativeIncarnation = readOpenClawAgentDatabaseIdentity(current).incarnation;
-    }
-    return current;
-  };
-  try {
-    assertCurrent();
-    const { readSessionCleanupSnapshotInDatabase } =
-      await import("./cleanup-service-read.kernel.js");
-    assertCurrent();
-    const result = await consume({
-      resolved: { ...database, sessionKey: "", ownerStorePath: target.storePath },
-      assertCurrent,
-      read: async (fixMissing = false) => {
-        const current = assertCurrent();
-        if (!current) {
-          return { kind: "session-cleanup", store: {}, missing: [] };
-        }
-        // The retained native claim is the owner; do not resolve or borrow the locator again.
-        const read = readOpenClawAgentDatabase(current, (held) =>
-          readSessionCleanupSnapshotInDatabase(held, { env: database.env, fixMissing }),
-        );
-        assertCurrent();
-        return read.value;
-      },
-    });
-    assertCurrent();
-    return result;
-  } finally {
-    native.claim?.release();
+  const assertCaller = () => options.assertCurrent?.();
+  const authority = { assertCurrent: assertCaller, authorize: assertCaller };
+  const captured = captureSessionActorStorageOwner(
+    { ...database, storePath: database.path },
+    authority,
+  );
+  if (!captured) {
+    throw new Error("Session cleanup lost its memory owner selector");
   }
+  const memory = captured.owner;
+  const assertCurrent = () => {
+    captured.authority.assertCurrent();
+    memory?.assertCurrent();
+  };
+  return consume({
+    resolved: { ...database, sessionKey: "", ownerStorePath: target.storePath },
+    assertCurrent,
+    read: async (fixMissing = false) => {
+      assertCurrent();
+      const entries = memory?.listSessionEntries(captured.authority) ?? [];
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+      const missing: SessionCleanupReadResult["missing"] = [];
+      if (fixMissing && memory) {
+        // Synchronous reads share the captured owner's state without interleaved mutations.
+        for (const { sessionKey, entry } of entries) {
+          if (shouldPreserveSessionCleanupEntry(sessionKey, entry)) {
+            continue;
+          }
+          const hasMessages = memory.readStorage(
+            sessionKey,
+            { type: "session.history.message-presence", input: { sessionId: entry.sessionId } },
+            captured.authority,
+          );
+          if (hasMessages === false) {
+            missing.push({
+              sessionKey,
+              expectedEntry: entry,
+              archiveRemovedTranscript: true,
+              requiresMissingTranscript: true,
+            });
+          }
+        }
+      }
+      return { kind: "session-cleanup", store, missing };
+    },
+  });
 }

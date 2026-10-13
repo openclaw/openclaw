@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
@@ -88,15 +89,24 @@ const sharedLists = new WeakMap<
   GatewaySessionRow[],
   ReturnType<typeof shareSessionRowFacts<GatewaySessionRow>>
 >();
+const rowRevisions = new WeakMap<GatewaySessionRow[], string>();
 
-export function shareSidebarSessionRows(rows: GatewaySessionRow[]) {
+export function shareSidebarSessionRows(rows: GatewaySessionRow[], ifRowsRevision?: string) {
+  let rowsRevision = rowRevisions.get(rows);
+  if (!rowsRevision) {
+    rowsRevision = randomUUID();
+    rowRevisions.set(rows, rowsRevision);
+  }
+  if (ifRowsRevision === rowsRevision) {
+    return { sessions: [], rowsRevision, rowsUnchanged: true as const };
+  }
   let shared = sharedLists.get(rows);
   if (!shared) {
     shared = freezeJsonSnapshot(shareSessionRowFacts(rows));
     registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
     sharedLists.set(rows, shared);
   }
-  return shared;
+  return { ...shared, rowsRevision };
 }
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
@@ -196,7 +206,7 @@ export function prepareProjectedSessionPresentation(
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
   const listView = (opts: SessionsListParams) => {
-    const { source: _source, ...query } = opts;
+    const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     const key = JSON.stringify([
       client === undefined,
       sharing.cacheKey,

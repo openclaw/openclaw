@@ -404,8 +404,8 @@ export class GatewayBoardProvider implements BoardProvider {
         }
         if (
           error instanceof GatewayProtocolRequestError &&
-          error.gatewayCode === "UNAVAILABLE" &&
-          !error.retryable
+          (error.gatewayCode === "FORBIDDEN" ||
+            (error.gatewayCode === "UNAVAILABLE" && !error.retryable))
         ) {
           // A definitive rejection consumes this refresh. Only a newer event,
           // connection generation, or explicit refresh can request another one.

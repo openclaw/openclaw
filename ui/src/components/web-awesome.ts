@@ -131,15 +131,13 @@ function startDropdownLabelSync(event: Event) {
   labelDropdownMenu(dropdown);
   labelDropdownSubmenus(dropdown);
   dropdownLabelObservers.get(dropdown)?.disconnect();
-  if (typeof MutationObserver === "undefined") {
-    return;
-  }
   const observer = new MutationObserver(() => {
     labelDropdownMenu(dropdown);
     labelDropdownSubmenus(dropdown);
   });
   // Open menus can survive an in-place locale render. Watch only their light
   // DOM so translated labels stay current without observing the whole app.
+  // MutationObserver is part of the supported Control UI browser floor.
   observer.observe(dropdown, {
     attributes: true,
     attributeFilter: ["aria-label"],

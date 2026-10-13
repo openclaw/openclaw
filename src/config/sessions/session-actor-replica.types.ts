@@ -1,7 +1,4 @@
-import type {
-  AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseIncognitoIdentity,
-} from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type { SessionActorHotState, SessionActorTarget } from "./session-actor-state.types.js";
 import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
@@ -19,9 +16,6 @@ export type SessionActorEntryFacts = Pick<
   };
 
 export type FileTarget = SessionActorTarget & { database: AgentDatabaseExecutionFileIdentity };
-export type EphemeralTarget = SessionActorTarget & {
-  database: AgentDatabaseIncognitoIdentity;
-};
 export type ReplicaCell = {
   target: SessionActorTarget;
   snapshot?: SessionActorHotState;
