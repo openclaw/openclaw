@@ -1842,6 +1842,7 @@ src/state/openclaw-state-db-schema-runtime.ts
 src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
+src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts

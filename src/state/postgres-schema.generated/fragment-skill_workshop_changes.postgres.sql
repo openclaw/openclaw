@@ -1,6 +1,7 @@
 -- Generated runtime DDL; the owner supplies search_path and the transaction.
 
 CREATE TABLE "skill_workshop_changes" (
+  "cursor_id" bigint NOT NULL,
   "change_id" text COLLATE "C" NOT NULL,
   "agent_id" text COLLATE "C" NOT NULL,
   "skill_name" text COLLATE "C" NOT NULL,
@@ -17,3 +18,5 @@ CREATE TABLE "skill_workshop_changes" (
 );
 
 CREATE INDEX "idx_skill_workshop_changes_agent_time" ON "skill_workshop_changes" (("agent_id") ASC NULLS FIRST, ("created_at_ms") ASC NULLS FIRST);
+
+CREATE UNIQUE INDEX "skill_workshop_changes_cursor_id_idx" ON "skill_workshop_changes" (("cursor_id") ASC NULLS FIRST);

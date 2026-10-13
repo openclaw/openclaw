@@ -167,11 +167,23 @@ describe("interrupted canonical user replay", () => {
   });
 
   it.each([
-    { appendOnly: false, interruptedTurn: false, toolProgress: true },
-    { appendOnly: true, interruptedTurn: true, toolProgress: true, oversizedMetadata: true },
+    { appendOnly: false, interruptedTurn: false, toolProgress: true, partialText: undefined },
+    {
+      appendOnly: true,
+      interruptedTurn: true,
+      toolProgress: true,
+      oversizedMetadata: true,
+      partialText: undefined,
+    },
+    {
+      appendOnly: true,
+      interruptedTurn: true,
+      toolProgress: true,
+      partialText: "Already streamed answer",
+    },
   ])(
-    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress, oversized metadata=$oversizedMetadata)",
-    async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata }) => {
+    "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, tools=$toolProgress, oversized metadata=$oversizedMetadata, partial=$partialText)",
+    async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata, partialText }) => {
       let observedWalks = 0;
       const nativeReadFailures: unknown[] = [];
       const prepare = persistedReplay.preparePersistedCurrentUserTurn;
@@ -272,7 +284,7 @@ describe("interrupted canonical user replay", () => {
             ).toHaveLength(1);
           });
         },
-        { interruptedTurn, toolProgress, oversizedMetadata },
+        { interruptedTurn, toolProgress, oversizedMetadata, partialText },
       );
       expect(observedWalks).toBeGreaterThan(0);
       expect(nativeReadFailures).toEqual([]);

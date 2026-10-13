@@ -116,7 +116,14 @@ export function insertOperatorApprovalInDatabase(params: {
       database.db,
       stateDb
         .insertInto("operator_approvals")
-        .values({
+        .values((eb) => ({
+          cursor_id: eb
+            .selectFrom("operator_approvals")
+            .select((inner) =>
+              inner(inner.fn.coalesce(inner.fn.max<number>("cursor_id"), inner.val(0)), "+", 1).as(
+                "cursor_id",
+              ),
+            ),
           approval_id: id,
           resolution_ref: resolutionRef,
           kind: input.kind,
@@ -144,7 +151,7 @@ export function insertOperatorApprovalInDatabase(params: {
           resolver_id: null,
           consumed_at_ms: null,
           consumed_by: null,
-        })
+        }))
         .onConflict((conflict) => conflict.column("approval_id").doNothing())
         .returningAll(),
     );

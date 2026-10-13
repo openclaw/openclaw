@@ -63,6 +63,7 @@ const schemaMigrationDescriptions = {
     "prepared workers -> one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts -> original requesting authority",
+  "portable-identity-columns-v22": "ACP resume keys and receipt cursors -> portable columns",
   "predicate-columns-v21":
     "meeting transcripts and delivery retention -> derived predicate columns",
   "worker-placement-execution-mode-v8": "cloud worker placements -> execution-mode claims",
