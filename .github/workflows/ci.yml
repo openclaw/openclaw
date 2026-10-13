@@ -1357,7 +1357,10 @@ jobs:
               trust=main
               cache_mode=restore
               cache_write_allowed=true
-            elif [[ -z "$TARGET_REF" && "$CHECKOUT_REVISION" == "$WORKFLOW_REVISION" ]]; then
+            elif [[
+              ( -z "$TARGET_REF" || "$TARGET_REF" == "$WORKFLOW_REVISION" ) &&
+              "$CHECKOUT_REVISION" == "$WORKFLOW_REVISION"
+            ]]; then
               trust=workflow
               cache_mode=restore
             fi

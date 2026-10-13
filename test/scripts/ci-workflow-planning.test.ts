@@ -6630,6 +6630,26 @@ describe("ci workflow guards", () => {
         },
       },
       {
+        expected: { cache_mode: "restore", cache_write_allowed: "false", trust: "workflow" },
+        options: {
+          checkoutRevision: workflowRevision,
+          defaultRevision,
+          eventName: "workflow_dispatch" as const,
+          targetRef: workflowRevision,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "off", cache_write_allowed: "false", trust: "untrusted" },
+        options: {
+          checkoutRevision: workflowRevision,
+          defaultRevision,
+          eventName: "workflow_dispatch" as const,
+          targetRef: "release-candidate",
+          workflowRevision,
+        },
+      },
+      {
         expected: { cache_mode: "restore", cache_write_allowed: "true", trust: "main" },
         options: {
           checkoutRevision: defaultRevision,
