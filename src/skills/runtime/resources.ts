@@ -153,11 +153,20 @@ export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 1_000;
 export const SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS = 250;
 
 /**
- * Bound on in-flight telemetry walks per preparation: discovery and delivery
- * acquisitions run concurrently, but a slow or remote reader never accumulates
- * more outstanding tree reads behind abandoned observations than this.
+ * Bound on in-flight telemetry walks per preparation and per reader: discovery
+ * and delivery acquisitions run concurrently, but a slow or remote reader never
+ * accumulates more outstanding tree reads behind abandoned observations than
+ * this — including abandoned reads an earlier traced turn left in flight.
  */
 export const SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY = 8;
+
+/**
+ * In-flight telemetry walks per source reader across preparations. The reader
+ * object is process-stable per workspace/host binding, so timed-out walks one
+ * preparation abandoned still count against later preparations using the same
+ * reader and release when the underlying read settles on its own timeout.
+ */
+const readerOutstandingTelemetryWalks = new WeakMap<SkillResourceSourceReader, number>();
 
 /**
  * Stamps the retained bundle identity onto ordinary local entries at the
@@ -241,12 +250,25 @@ export async function stampLocalSkillBundleIdentities(params: {
    * timed-out observations than the bound, whether a discovery batch or a
    * delivery-time acquisition started them. The count releases only when the
    * underlying read settles — a race deadline alone never frees a slot.
+   *
+   * The bound is also shared across preparations per reader: a race deadline
+   * abandons an observation but cannot cancel the underlying read, so without
+   * a reader-scoped cap each new traced turn would start a fresh batch of
+   * telemetry walks while earlier turns' abandoned reads still hold the
+   * reader's transport. A later preparation omits identities behind that cap
+   * instead of accumulating reads; real readers release slots when their own
+   * operation timeouts settle the underlying reads.
    */
-  const tryStartBundleWalk = (): boolean => {
+  const tryStartBundleWalk = (reader: SkillResourceSourceReader): boolean => {
     if (outstandingBundleWalks >= SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
       return false;
     }
+    const readerOutstanding = readerOutstandingTelemetryWalks.get(reader) ?? 0;
+    if (readerOutstanding >= SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
+      return false;
+    }
     outstandingBundleWalks += 1;
+    readerOutstandingTelemetryWalks.set(reader, readerOutstanding + 1);
     return true;
   };
   const readBundleIdentity = async (
@@ -254,9 +276,9 @@ export async function stampLocalSkillBundleIdentities(params: {
     reader: SkillResourceSourceReader,
     budgetMs: number,
   ): Promise<AcquiredBundleIdentity | undefined> => {
-    if (!tryStartBundleWalk()) {
-      // The preparation's walk bound is full: another underlying read never
-      // starts behind it, so this telemetry observation omits.
+    if (!tryStartBundleWalk(reader)) {
+      // The preparation's or reader's walk bound is full: another underlying
+      // read never starts behind it, so this telemetry observation omits.
       return undefined;
     }
     let underlyingSettled = false;
@@ -264,6 +286,10 @@ export async function stampLocalSkillBundleIdentities(params: {
       if (!underlyingSettled) {
         underlyingSettled = true;
         outstandingBundleWalks -= 1;
+        readerOutstandingTelemetryWalks.set(
+          reader,
+          (readerOutstandingTelemetryWalks.get(reader) ?? 1) - 1,
+        );
       }
     };
     try {

@@ -645,6 +645,83 @@ it("keeps a stalled reader's discovery stall on traced turn startup under one se
   }
 });
 
+it("does not start new telemetry walks behind an earlier preparation's abandoned reads", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    // Seven more workspace-hosted bundles beside the fixture's guide, so one
+    // preparation can saturate the per-reader walk bound.
+    const extraSkills: Skill[] = [];
+    for (const name of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"]) {
+      const hostDir = path.join(f.host, "skills", name);
+      await fs.mkdir(hostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hostDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
+      );
+      const gatewayDir = path.join(f.gateway, "skills", name);
+      extraSkills.push(
+        recordSkillFileHost(
+          createCanonicalFixtureSkill({
+            name,
+            description: name,
+            filePath: path.join(gatewayDir, "SKILL.md"),
+            baseDir: gatewayDir,
+            source: "openclaw-workspace",
+          }),
+          "workspace",
+        ),
+      );
+    }
+    const snapshot = {
+      ...f.snapshot,
+      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
+      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
+    };
+    // Every walk on the owning reader stalls: the preparation deadline
+    // abandons each observation, but the underlying reads stay in flight.
+    f.skillResources.readSkillFiles.mockImplementation(() => new Promise<never>(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = stampLocalSkillBundleIdentities({
+        snapshot,
+        libraryEntries: [],
+        workspaceDir: f.gateway,
+      });
+      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
+      await first;
+      // Eight distinct stalled walks saturate the reader-scoped bound.
+      expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(
+        SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY,
+      );
+      // A later preparation on the same stalled reader must not stack more
+      // underlying reads behind the abandoned ones: the reader-scoped walk
+      // bound carries across preparations and these observations omit.
+      f.skillResources.readSkillFiles.mockClear();
+      const second = stampLocalSkillBundleIdentities({
+        snapshot,
+        libraryEntries: [],
+        workspaceDir: f.gateway,
+      });
+      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
+      const stampedSecond = await second;
+      expect(f.skillResources.readSkillFiles).not.toHaveBeenCalled();
+      const entry = stampedSecond.snapshot?.resolvedSkills?.find(
+        (skill) => skill.name === workspaceSkill.name,
+      );
+      expect(entry?.bundleFingerprint).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  } finally {
+    f.release();
+  }
+});
+
 it("walks discovered bundles concurrently under one shared preparation budget", async () => {
   const f = await fixture();
   try {
