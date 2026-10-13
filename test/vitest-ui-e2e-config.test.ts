@@ -124,6 +124,7 @@ const realGatewayFiles = [
   "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
   "chat-tts-supplement.real-gateway",
+  "chat-wait-clock.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
   "command-palette-search.real-gateway",
@@ -633,6 +634,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

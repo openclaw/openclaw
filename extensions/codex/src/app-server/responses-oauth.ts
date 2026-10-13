@@ -95,10 +95,6 @@ export async function createCodexResponsesOAuth(params: {
   const persisted =
     Boolean(await findPersistedAuthProfileCredentialAsync(params)) ||
     params.store.runtimePersistedProfileIds?.includes(params.profileId) === true;
-  const readCredential = () =>
-    persisted
-      ? findPersistedAuthProfileCredential(params)
-      : params.store.profiles[params.profileId];
   const validate = (credential: AuthProfileCredential | undefined) => {
     if (fingerprintCodexResponsesOAuth(credential) !== params.fingerprint) {
       throw new Error("ChatGPT subscription sharing identity changed; reconnect before retrying.");
@@ -155,8 +151,14 @@ export async function createCodexResponsesOAuth(params: {
       const resolvedCredential = resolved.credential;
       validate(resolvedCredential);
       lastCredential = resolvedCredential;
+      const readCredential =
+        resolved.readCurrentCredential === null
+          ? () =>
+              persisted
+                ? findPersistedAuthProfileCredential(params)
+                : params.store.profiles[params.profileId]
+          : resolved.readCurrentCredential;
       const assertCurrent = () => validateCurrent(readCredential(), resolvedCredential);
-      assertCurrent();
       return { token: resolved.apiKey, assertCurrent };
     },
   };

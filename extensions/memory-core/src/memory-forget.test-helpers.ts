@@ -4,6 +4,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -16,6 +17,7 @@ export async function createMemoryForgetFixture(prefix = "openclaw-memory-forget
   const cfg: OpenClawConfig = {
     agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
   };
+  setRuntimeConfigSnapshot(cfg);
   return {
     stateDir,
     workspaceDir,

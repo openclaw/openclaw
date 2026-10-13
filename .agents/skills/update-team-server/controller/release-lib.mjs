@@ -561,21 +561,27 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
 }
 
 function sealTree(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const pathname = join(root, entry.name);
+  const pending = [root];
+  while (pending.length) {
+    const pathname = pending.pop();
     const metadata = lstatSync(pathname);
-    if (metadata.isSymbolicLink()) continue;
-    if (metadata.isDirectory()) {
-      sealTree(pathname);
+    if (metadata.isSymbolicLink()) {
       continue;
     }
-    if (!metadata.isFile()) reject(`cannot seal unsupported release entry: ${pathname}`);
-    chmodSync(pathname, (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
-    syncPath(pathname);
+    if (metadata.isDirectory()) {
+      for (const name of readdirSync(pathname)) {
+        pending.push(join(pathname, name));
+      }
+    } else if (!metadata.isFile()) {
+      reject(`cannot seal unsupported release entry: ${pathname}`);
+    }
+    chmodSync(pathname, metadata.isDirectory() || (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
   }
-  // Publishing a directory name cannot make its unsynced descendants durable.
-  chmodSync(root, 0o555);
-  syncPath(root);
+  // GNU sync -f uses syncfs: persist all data, modes and directory entries before publication.
+  const synced = spawnSync("sync", ["-f", "--", root], { encoding: "utf8" });
+  if (synced.status !== 0) {
+    reject(`cannot sync sealed release filesystem: ${synced.error?.message ?? synced.stderr.trim()}`);
+  }
 }
 
 function makeDirectoriesOwnerWritable(root) {

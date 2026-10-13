@@ -1,6 +1,10 @@
+import { render as renderSolid } from "@solidjs/web";
 import { html, LitElement, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LitRouteHost } from "./lit-route-host.tsx";
+import { ShellLayoutOwner } from "./shell-layout-owner.ts";
 import {
   ShellLayoutController,
   shellLayoutTraits,
@@ -100,6 +104,31 @@ afterEach(() => {
 });
 
 describe("shell layout publication", () => {
+  it("publishes direct route traits through the temporary Solid-to-Lit island", async () => {
+    const content = document.createElement("main");
+    content.className = "content";
+    const layout = new ShellLayoutOwner();
+    layout.contentRef(content);
+    document.body.append(content);
+    const dispose = renderSolid(
+      () =>
+        LitRouteHost({
+          renderValue: () => html`<section ${shellLayoutTraits({ logsPage: true })}>Logs</section>`,
+        }),
+      content,
+    );
+    try {
+      await Promise.resolve();
+      flush();
+      expect(content.classList.contains("content--logs-page")).toBe(true);
+      expect(content.querySelector("section")?.textContent).toBe("Logs");
+    } finally {
+      dispose();
+      layout.hostDisconnected();
+    }
+    expect(content.classList.contains("content--logs-page")).toBe(false);
+  });
+
   it("aggregates retained pages and removes only the departing marker's facts", async () => {
     const { shell, content } = await mountShell();
     const page = createPage({ pluginEmbed: true, toolbarHeader: true });

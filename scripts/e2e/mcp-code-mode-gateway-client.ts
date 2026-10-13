@@ -119,7 +119,6 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
   assert(stateDir, "missing OPENCLAW_STATE_DIR");
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
 
   const response = await fetchJson(`${gatewayUrl.replace(/\/$/, "")}/v1/responses`, {
     method: "POST",

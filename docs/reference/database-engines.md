@@ -84,6 +84,21 @@ version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
 
+PostgreSQL catalog admission captures columns, keys, checks, and indexes from the
+server in one consistent read. These facts are separate from the anchor's SQLite
+catalog. Ordinary data commits retain schema admission; schema owners publish
+replacement facts after committed DDL. Optional SQLite WAL, checkpoint, and
+page-reclamation work does not apply to PostgreSQL. Explicit SQLite integrity,
+repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction.
+
+Runtime PostgreSQL queries run in workers. Physical open and boot migration code
+may use the synchronous `withEngineStoreAdmission` scope from
+`openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
+that scope ends does not authorize main-thread queries. Close remains available
+to settle resources. The store owner supplies `openEngineStore` with its existing
+SQLite-data decision, so partially initialized stores are also protected from an
+accidental engine switch.
+
 Back up both the local anchor and its PostgreSQL schema as a matched set. Stop
 the Gateway while taking or restoring that pair, and include the SQLite stores
 that still hold the rest of the installation. A local anchor backup alone does
@@ -97,6 +112,12 @@ version. PostgreSQL forward migrations are not available until schema lockstep
 tooling lands. A version mismatch refuses admission; restore a matching backup
 with its matching OpenClaw version, or keep the existing version until a supported
 migration exists. Never edit the schema version to bypass admission.
+
+The generated shared-state `state.postgres.sql` and `fragment-*.postgres.sql`
+files contain runtime DDL only. Their caller supplies the transaction and
+`search_path`; no second wrapped copy is generated. For manual readiness checks,
+see [applying the generated state DDL](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation).
+The agent readiness artifact remains wrapped until the agent-store cutover.
 
 PostgreSQL text cannot contain NUL characters. Values containing NUL fail with an
 engine error. Search/vector capabilities remain store-specific; selecting an
