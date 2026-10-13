@@ -48,6 +48,7 @@ export async function recordSkippedCronRuns(params: {
           state.deps.defaultAgentId,
         ),
         cronConfig: structuredClone(state.deps.cronConfig),
+        failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
         ownership: (state.store?.jobs ?? []).map((job) => ({
           jobId: job.id,
           active: isCronJobActive(job.id),

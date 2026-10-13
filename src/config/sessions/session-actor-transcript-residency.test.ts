@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readActivitySummaryBatchFromReplica } from "../../gateway/session-activity-summary-replica.js";
+import { readActivitySummarySource } from "../../gateway/session-activity-summary-source.js";
+import { readActivitySummaryBatch } from "../../gateway/session-activity-summary-source.worker.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
@@ -319,7 +321,7 @@ it("settles a resident correlation rewrite once and leaves rollback payloads unc
 });
 
 it("invalidates retained context for nonactor content and topology writer classes", async () => {
-  await withActor((f) => {
+  await withActor(async (f) => {
     const context = contextFixture(f);
     try {
       for (const change of [
@@ -418,6 +420,38 @@ it("invalidates retained context for nonactor content and topology writer classe
         }
         expect(context.replica.beginRead().install(after), change).toBe(true);
         expect(context.read(), change).toBeUndefined();
+        if (change === "rewrite" || change === "rewind" || change === "compaction") {
+          const scope = { ...f.scope, sessionId: after.entry!.sessionId };
+          const source = await readActivitySummarySource({ scope, assertCurrent() {} });
+          const canonical = readActivitySummaryBatch({ scope });
+          if (!source || !canonical) {
+            throw new Error(`Expected a summary source after ${change}`);
+          }
+          expect(source, change).toMatchObject({
+            previous: canonical.previous,
+            watermark: canonical.watermark,
+            covered: canonical.covered,
+            omitted: canonical.omitted,
+            snapshot: {
+              totalMessages: canonical.snapshot.totalMessages,
+              activeLeafEntryId: canonical.snapshot.activeLeafEntryId,
+              snapshot: { generation: canonical.snapshot.snapshot.generation },
+            },
+            page: { scannedMessages: canonical.page.scannedMessages },
+          });
+          expect(
+            source.page.events.map(({ event }) => event),
+            change,
+          ).toEqual(canonical.page.events.map(({ event }) => event));
+          expect(source.notes, change).toEqual(
+            change === "rewind"
+              ? []
+              : [
+                  `user: ${change === "rewrite" ? "Rewritten" : "Original"} question`,
+                  "assistant: Original answer",
+                ],
+          );
+        }
       }
     } finally {
       context.replica.close();

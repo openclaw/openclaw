@@ -1,7 +1,9 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import { publishRetainedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -128,6 +130,8 @@ const source = {
 } satisfies CapturedSessionEntryReadSource;
 let current: InternalSessionEntry | undefined;
 let capturedEnv: NodeJS.ProcessEnv;
+
+afterEach(assertNoRetainedSessionSharingReads);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -384,3 +388,32 @@ it.each(["current", "lifecycle", "writer"] as const)(
     }
   },
 );
+
+it("releases the fallback read when its final authority check fails", async () => {
+  mocks.patch.mockResolvedValue({ ...current });
+  mocks.read.mockImplementation(
+    async (
+      _scope,
+      assertCurrent: () => void,
+      consume: Parameters<typeof withSessionEntryReadOnlyInWorker>[2],
+    ) => {
+      const result = await consume(
+        { ok: true, value: current },
+        { kind: "file", source, assertCurrent },
+      );
+      mocks.owned.mockImplementation(() => {
+        throw new Error("Retired source after entry read");
+      });
+      assertCurrent();
+      return result;
+    },
+  );
+
+  await run("native").result;
+
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(mocks.append).not.toHaveBeenCalled();
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("Retired source after entry read"),
+  );
+});

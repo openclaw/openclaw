@@ -140,51 +140,77 @@ describe("custodian automatic setup", () => {
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("Local model is offline");
   });
 
-  it("uses the existing sign-in wizard and rechecks automatic setup after success", async () => {
-    let autoCalls = 0;
-    const request = vi.fn(async (method: string, params?: { answer?: unknown }) => {
-      if (method === "openclaw.setup.auto") {
-        return autoCalls++
-          ? result()
-          : {
-              status: "needs-sign-in",
-              alternatives: [],
-              attempts: [],
-              installedPlugins: ["codex"],
-              signIn: { authOptionId: "codex-sign-in", label: "ChatGPT" },
-            };
+  it.each(["needs-sign-in", "configured", "activated"] as const)(
+    "uses the existing sign-in wizard from %s and refreshes the card after success",
+    async (status) => {
+      let autoCalls = 0;
+      const request = vi.fn(async (method: string, params?: { answer?: unknown }) => {
+        if (method === "openclaw.setup.auto") {
+          if (autoCalls++) {
+            return result();
+          }
+          return status === "needs-sign-in"
+            ? {
+                status,
+                alternatives: [],
+                attempts: [],
+                installedPlugins: ["codex"],
+                signIn: { authOptionId: "codex-sign-in", label: "ChatGPT" },
+              }
+            : {
+                ...result(status),
+                selected: { ...selected, shared: true },
+                separateSignIn: { authOptionId: "codex-separate-sign-in", label: "ChatGPT" },
+              };
+        }
+        if (method === "openclaw.setup.auth.start") {
+          return { sessionId: "auth-session", done: false };
+        }
+        if (method === "wizard.next") {
+          return params?.answer
+            ? { done: true, status: "done" }
+            : {
+                done: false,
+                step: { id: "confirm", type: "confirm", message: "Finish signing in?" },
+              };
+        }
+        return reply;
+      });
+      const { context } = createContext(request, methods, { agentsList });
+      const { page } = await mountPage(context);
+      await settled(page);
+      if (status === "needs-sign-in") {
+        expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
+      } else {
+        expect(page.textContent).toContain(
+          "Using your existing Codex login · sessions shared with Codex",
+        );
       }
-      if (method === "openclaw.setup.auth.start") {
-        return { sessionId: "auth-session", done: false };
-      }
-      if (method === "wizard.next") {
-        return params?.answer
-          ? { done: true, status: "done" }
-          : {
-              done: false,
-              step: { id: "confirm", type: "confirm", message: "Finish signing in?" },
-            };
-      }
-      return reply;
-    });
-    const { context } = createContext(request, methods, { agentsList });
-    const { page } = await mountPage(context);
-    await settled(page);
-    expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
-    click(page, "Sign in with ChatGPT");
-    await settled(page);
-    expect(request).toHaveBeenCalledWith(
-      "openclaw.setup.auth.start",
-      expect.objectContaining({ authChoice: "codex-sign-in" }),
-      { timeoutMs: null },
-    );
-    expect(page.textContent).toContain("Finish signing in?");
-    click(page, "Yes");
-    await settled(page, () => page.store.autoSetup.ready);
-    expect(autoCalls).toBe(2);
-    expect(page.textContent).toContain("Using ChatGPT");
-    expect(page.textContent).toContain(reply.reply);
-  });
+      click(page, status === "needs-sign-in" ? "Sign in with ChatGPT" : "Use a separate login");
+      await settled(page);
+      expect(request).toHaveBeenCalledWith(
+        "openclaw.setup.auth.start",
+        expect.objectContaining({
+          authChoice: status === "needs-sign-in" ? "codex-sign-in" : "codex-separate-sign-in",
+        }),
+        { timeoutMs: null },
+      );
+      expect(page.textContent).toContain("Finish signing in?");
+      click(page, "Yes");
+      await settled(
+        page,
+        () =>
+          autoCalls === 2 &&
+          page.store.autoSetup.ready &&
+          !page.store.autoSetup.result?.selected?.shared,
+      );
+      expect(autoCalls).toBe(2);
+      expect(page.textContent).toContain("Using ChatGPT");
+      expect(page.textContent).toContain(reply.reply);
+      expect(page.textContent).not.toContain("sessions shared with Codex");
+      expect(page.textContent).not.toContain("Use a separate login");
+    },
+  );
 
   it("shows unavailable attempts and the terminal fallback", async () => {
     const request = vi.fn(async () => ({

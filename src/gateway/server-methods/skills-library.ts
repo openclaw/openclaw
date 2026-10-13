@@ -106,12 +106,16 @@ export async function activateLibrarySelection(
   params: SkillsLibraryActivateParams,
 ) {
   const { client, context } = options;
-  const authorization = await resolveSessionMutationAuthorizationAsync({
+  const resolvedAuthorization = await resolveSessionMutationAuthorizationAsync({
     client,
     context,
     method: "skills.library.activate",
     requestParams: params,
   });
+  using authorization = {
+    ...resolvedAuthorization,
+    [Symbol.dispose]: () => resolvedAuthorization.authorization?.release?.(),
+  };
   if (authorization.error) {
     throw new SessionMutationAuthorizationChangedError(authorization.error);
   }

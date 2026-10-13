@@ -352,15 +352,27 @@ async function prepareCliBlockFallbackWrite(
   if (committedSource) {
     return retainWrite(committedSource, expectedEntry);
   }
-  return withSessionEntryReadOnlyInWorker(readScope, assertOwnedWrite, async (read, owner) => {
-    if (!read.ok) {
-      throw read.error;
-    }
-    if (!read.value || !owner.source) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
-    return retainWrite(owner.source, read.value);
-  });
+  let write: ReturnType<typeof retainWrite> | undefined;
+  try {
+    return await withSessionEntryReadOnlyInWorker(
+      readScope,
+      assertOwnedWrite,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        if (!read.value || !owner.source) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+        write = retainWrite(owner.source, read.value);
+        return write;
+      },
+    );
+  } catch (error) {
+    // The read owner can reject after the callback has retained the write predicate.
+    write?.release();
+    throw error;
+  }
 }
 
 export async function persistCliRunBlock(

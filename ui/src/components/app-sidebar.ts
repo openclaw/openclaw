@@ -231,7 +231,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       () => this.context?.gateway,
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
-    .watchStore(() => this.context?.agentIdentity)
+    .effect(
+      () => this.context?.agentIdentity,
+      (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
+    )
     .watchStore(
       () => this.context?.theme,
       () => this.syncCommunityInviteState(),
@@ -240,7 +243,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       () => this.context?.config,
       () => this.syncCommunityInviteState(),
     )
-    .watchStore(() => this.context?.plugins);
+    .effect(
+      () => this.context?.plugins,
+      (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
+    );
   private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();

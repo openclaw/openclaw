@@ -146,7 +146,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   expect(intersections.get(last)?.intersectionRatio).toBe(0);
   expect(ring(last).classList.contains("session-run-indicator--offscreen")).toBe(false);
 
-  await scrollTo(last);
+  await scrollTo(last, () => intersections.get(first)?.isIntersecting === false);
   expect(ring(first).classList.contains("session-run-indicator--offscreen")).toBe(true);
   expect(getComputedStyle(ring(first)).animationPlayState).toBe("paused");
   expect(ring(last).classList.contains("session-run-indicator--offscreen")).toBe(false);

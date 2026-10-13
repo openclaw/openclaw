@@ -39,6 +39,11 @@ shared `message` tool. Your plugin owns:
   channel: its current channel, or the only configured channel. A `message`
   tool send to another channel does not get that channel's rules, and external
   ACP agents do not receive it. Keep all formatting rules in this one hook.
+- **Message guidance** - `agentPrompt.messageToolHints` supplies account-scoped
+  instructions. Set `agentPrompt.customInlineButtonHint: true` when the channel
+  owns inline-button guidance; core then omits its generic callback example and
+  capability-configuration hint. Return no button instructions when the account
+  has buttons disabled. The flag defaults to `false`.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group

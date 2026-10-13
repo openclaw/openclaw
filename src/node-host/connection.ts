@@ -398,7 +398,12 @@ export function startNodeHostConnection({
     disconnectCleanup = runtime.cancelAll();
   };
   const runtime = prepared.start({
-    client,
+    client: {
+      request: (...args) => client.request(...args),
+      get serverCapabilities() {
+        return gatewayCapabilities;
+      },
+    },
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();

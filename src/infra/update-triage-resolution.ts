@@ -4,7 +4,7 @@ import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
   formatDeferredPluginMigration,
-  readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
 } from "./deferred-plugin-migrations.js";
 import { formatErrorMessage } from "./errors.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
@@ -90,10 +90,10 @@ function unresolved(message: string, stop = true, nextStep = nextUpdate): Update
   return { ok: false, score: -1, summary, ...(stop ? { stopReason: summary } : {}) };
 }
 
-function validateTriagePendingRecovery(
+async function validateTriagePendingRecovery(
   installRoot: string,
   env: NodeJS.ProcessEnv,
-): UpdateRepairValidation | undefined {
+): Promise<UpdateRepairValidation | undefined> {
   try {
     assertNoPendingPackageActivation(resolveUpdateInstallRoot(installRoot));
   } catch (error) {
@@ -103,7 +103,7 @@ function validateTriagePendingRecovery(
       nextRepair,
     );
   }
-  const warnings = readDeferredPluginMigrations({ env }).map((pending) =>
+  const warnings = (await readDeferredPluginMigrationsAsync({ env })).map((pending) =>
     formatDeferredPluginMigration(pending, env),
   );
   return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
@@ -120,7 +120,8 @@ export async function validateTriageUpdateResolution(params: {
 }): Promise<UpdateRepairValidation> {
   const { failure, installRoot, env, signal } = params;
   signal.throwIfAborted();
-  const recoveryFailure = validateTriagePendingRecovery(installRoot, env);
+  const recoveryFailure = await validateTriagePendingRecovery(installRoot, env);
+  signal.throwIfAborted();
   if (recoveryFailure) {
     return recoveryFailure;
   }
@@ -135,15 +136,18 @@ export async function validateTriageUpdateResolution(params: {
   const original =
     (params.implicit ? history.failure : undefined) ??
     (runId ? getUpdateRun(runId, options) : undefined);
-  const validateCurrentOwner = () =>
-    findActiveUpdateRun(options) ||
-    readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId
+  const validateCurrentOwner = async () => {
+    const currentRecoveryFailure = await validateTriagePendingRecovery(installRoot, env);
+    signal.throwIfAborted();
+    return findActiveUpdateRun(options) ||
+      readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId
       ? unresolved("The update owner changed during verification.")
-      : validateTriagePendingRecovery(installRoot, env);
+      : currentRecoveryFailure;
+  };
   const validateDoctor = async () => {
     const doctor = await params.validateDoctor();
     signal.throwIfAborted();
-    return validateCurrentOwner() ?? doctor;
+    return (await validateCurrentOwner()) ?? doctor;
   };
   if (findActiveUpdateRun(options)) {
     return unresolved("An update is still running; wait for its owner to finish.");
@@ -292,7 +296,7 @@ export async function validateTriageUpdateResolution(params: {
   }
   signal.throwIfAborted();
   return (
-    validateCurrentOwner() ?? {
+    (await validateCurrentOwner()) ?? {
       ok: true,
       score: 0,
       summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,

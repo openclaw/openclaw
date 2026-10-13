@@ -13,6 +13,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import {
+  bindSqliteWorkerExecutionAuthority,
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
   type SqliteWorkerAdmissionRequest,
@@ -43,6 +44,7 @@ import {
   retireReplacedAgentValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import {
   cleanupRetiredAgentDatabaseLease,
   readAgentDatabaseClosedReceipt,
@@ -70,6 +72,7 @@ export function createAgentDatabaseNativeGeneration(
   agentId: string,
   pathname: string,
   context: OpenClawStateWorkerContext,
+  logicalLifetime: Int32Array<SharedArrayBuffer>,
   assertLogicalCurrent: () => void,
   assertCleanupOwned: () => void,
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined,
@@ -88,7 +91,7 @@ export function createAgentDatabaseNativeGeneration(
     ...(creatingIdentity ? { creatingIdentity } : {}),
     ...(creationClaim ? { creationClaim } : {}),
   };
-  let retiring = false;
+  const lifetime = new AgentDatabaseExecutionLifetime();
   let opening: Promise<Store | undefined> | undefined;
   let openedStore: Store | undefined;
   let openingFailure: "open-refused" | "native" | undefined;
@@ -111,6 +114,7 @@ export function createAgentDatabaseNativeGeneration(
 
   // The actor retains this observer; keep it outside the opening caller's scope.
   const onNativeLost = () => {
+    lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
@@ -118,11 +122,11 @@ export function createAgentDatabaseNativeGeneration(
   };
   const assertCurrent = () => {
     assertLogicalCurrent();
-    if (retiring) {
-      throw new Error("Agent native generation is retiring");
-    }
     if (openedStore && !isSqliteWorkerStoreAvailable(openedStore)) {
       throw new Error("Agent database execution lost its native owner");
+    }
+    if (!lifetime.open) {
+      throw new Error("Agent native generation is retiring");
     }
   };
   const admission =
@@ -370,6 +374,17 @@ export function createAgentDatabaseNativeGeneration(
           assertSourceCurrent(identity);
         },
       })(operation);
+      if (preparationPublished && nativeIdentity && !creatingIdentity && !registration) {
+        bindSqliteWorkerExecutionAuthority(captured.admission, {
+          logical: logicalLifetime,
+          native: lifetime.state,
+          physicalIdentity: nativeIdentity.physicalIdentity,
+          incarnation: nativeIdentity.incarnation,
+          ...(nativeIdentity.birthtime !== undefined
+            ? { birthtime: nativeIdentity.birthtime }
+            : {}),
+        });
+      }
       captured.admission.observeRequests(observeNative);
       return captured;
     };
@@ -638,7 +653,7 @@ export function createAgentDatabaseNativeGeneration(
     },
     run,
     close() {
-      retiring = true;
+      lifetime.retire();
       closing ??= (async () => {
         const errors: unknown[] = [];
         let storeClosed = false;

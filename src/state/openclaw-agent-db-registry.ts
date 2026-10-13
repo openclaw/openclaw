@@ -144,7 +144,7 @@ export function registerOpenClawAgentDatabase(
       }
       emitOpenClawAgentDatabaseRegistryChange(params.agentId, database.db);
     },
-    { env: params.env },
+    { env: params.env, initializationAgentPaths: [params.path] },
   );
   if (params.admittedDb) {
     const database = { ...params, db: params.admittedDb };

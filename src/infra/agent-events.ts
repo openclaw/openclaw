@@ -654,16 +654,16 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
 export function emitAgentEventForOwner(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId: string,
-) {
-  dispatchAgentEvent(event, claimId);
+): boolean {
+  return dispatchAgentEvent(event, claimId);
 }
 
 /** Emits only while the exact run-context record captured by its producer remains current. */
 export function emitAgentEventForRunContext(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   context: AgentRunContext,
-) {
-  dispatchAgentEvent(event, undefined, context);
+): boolean {
+  return dispatchAgentEvent(event, undefined, context);
 }
 
 /** Emits run metadata only to the Gateway-owned durable audit projection. */

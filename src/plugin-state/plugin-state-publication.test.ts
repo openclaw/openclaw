@@ -134,9 +134,34 @@ describe("plugin state committed facts", () => {
         expect(await store.entries()).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).not.toHaveBeenCalled();
 
+        const asyncSibling = createPluginStateKeyedStore("receipt-test", {
+          ...options,
+          namespace: "sibling",
+        });
+        const pendingReads: Array<ReturnType<typeof store.entries>> = [];
+        const stopPending = pluginStatePublication.subscribeFacts((change) => {
+          if (change.kind === "pending" && pendingReads.length === 0) {
+            pendingReads.push(store.entries());
+          }
+        });
+        try {
+          await asyncSibling.register("other", false);
+          expect(pendingReads).toHaveLength(1);
+          expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 1 } }]);
+          expect(dispatch).toHaveBeenCalledTimes(1);
+          dispatch.mockClear();
+          await store.register("first", { count: 2 });
+          expect(pendingReads).toHaveLength(1);
+          expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 2 } }]);
+          expect(dispatch).toHaveBeenCalledTimes(2);
+          dispatch.mockClear();
+        } finally {
+          stopPending();
+        }
+
         native.register("second", { count: 2 });
         expect(await store.entries()).toMatchObject([
-          { key: "first", value: { count: 1 } },
+          { key: "first", value: { count: 2 } },
           { key: "second", value: { count: 2 } },
         ]);
         expect(dispatch).toHaveBeenCalledOnce();

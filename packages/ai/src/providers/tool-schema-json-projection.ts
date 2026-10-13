@@ -1,4 +1,5 @@
 import { types as utilTypes } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
 import {
@@ -25,6 +26,55 @@ export type RuntimeToolInputSchemaProjection = {
   readonly schema: RuntimeToolInputSchemaJson;
   readonly violations: readonly string[];
 };
+
+type PublishedRuntimeToolInputSchema = {
+  readonly projection: RuntimeToolInputSchemaProjection;
+  readonly json: string;
+  readonly fingerprint: string;
+};
+
+const publishedSchemas = new WeakMap<object, PublishedRuntimeToolInputSchema>();
+
+export function getPublishedRuntimeToolInputSchema(
+  schema: unknown,
+): PublishedRuntimeToolInputSchema | undefined {
+  return schema !== null && typeof schema === "object" ? publishedSchemas.get(schema) : undefined;
+}
+
+/** Only an owner's detached JSON publication can bypass later schema traversals. */
+export function publishRuntimeToolInputSchema(
+  schema: unknown,
+  path = "parameters",
+  toolName?: string,
+): RuntimeToolInputSchemaProjection {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  if (published) {
+    return projectRuntimeToolInputSchema(schema, path, toolName);
+  }
+  let json = "";
+  const projection = projectToolInputSchema(schema, path, (text) => (json = text), toolName);
+  if (projection.violations.length > 0 || !isJsonObject(projection.schema)) {
+    return projection;
+  }
+  inheritToolSchemaTruncation(schema, projection.schema);
+  const pending: RuntimeToolInputSchemaJson[] = [projection.schema];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value && typeof value === "object") {
+      for (const child of Object.values(value)) {
+        pending.push(child);
+      }
+      Object.freeze(value);
+    }
+  }
+  Object.freeze(projection.violations);
+  Object.freeze(projection);
+  publishedSchemas.set(
+    projection.schema,
+    Object.freeze({ projection, json, fingerprint: sha256Hex(json) }),
+  );
+  return projection;
+}
 
 function isNonFiniteNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
@@ -187,6 +237,13 @@ export function projectRuntimeToolInputSchema(
   path = "parameters",
   toolName?: string,
 ): RuntimeToolInputSchemaProjection {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  if (published) {
+    if (wasToolSchemaTruncated(schema)) {
+      reportToolSchemaTruncation(schema, toolName);
+    }
+    return published.projection;
+  }
   return projectToolInputSchema(schema, path, undefined, toolName);
 }
 
@@ -199,6 +256,10 @@ export function prepareRuntimeToolInputSchema(
   projection: RuntimeToolInputSchemaProjection;
   normalization?: PreparedToolSchemaNormalization;
 } {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  if (published) {
+    return { projection: projectRuntimeToolInputSchema(schema, path, toolName) };
+  }
   let inputJson: string | undefined;
   const projection = projectToolInputSchema(
     schema,

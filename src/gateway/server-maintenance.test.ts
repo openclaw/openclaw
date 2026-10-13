@@ -395,7 +395,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("refreshes automatic health snapshots without live channel probes", async () => {
+  it("warms health once and refreshes passively only while clients are connected", async () => {
     const clock = createGatewaySchedulerClock();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
@@ -408,8 +408,22 @@ describe("startGatewayMaintenanceTimers", () => {
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
 
       await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(1);
+
+      deps.clients.add({
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "test", version: "test", platform: "test", mode: "test" },
+        },
+      });
+      await clock.advanceBy(60_000);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
       expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+
+      deps.clients.clear();
+      await clock.advanceBy(60_000);
+      expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
     } finally {
       await stopMaintenanceTimers(timers);
     }
