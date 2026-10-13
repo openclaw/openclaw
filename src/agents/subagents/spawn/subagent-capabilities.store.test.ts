@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
 import {
@@ -177,12 +178,22 @@ describe("persisted subagent capability lookups", () => {
         resolveStoredSubagentCapabilities("agent:main:subagent:missing", { cfg, store }).depth,
       ).toBe(1);
     });
+    let entryReads = 0;
+    const run = projectionLane.pool.run.bind(projectionLane.pool);
+    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (input, controls) => {
+      const request = typeof input === "function" ? await input() : input;
+      if (request.kind === "session-exact-entries") {
+        entryReads += 1;
+      }
+      return run(request, controls);
+    });
     write(4);
     expect(
       await withPreparedSessionCapabilityRead(
         () => resolveStoredSubagentCapabilities(key, { cfg }).depth,
       ),
     ).toBe(4);
+    expect(entryReads).toBe(0);
     expect(
       await withPreparedSessionCapabilityRead(
         () =>
@@ -202,6 +213,17 @@ describe("persisted subagent capability lookups", () => {
     } finally {
       retained.release();
     }
+    await sessionAccessor.patchSessionEntryCore(
+      { storePath, agentId: "main", sessionKey: key },
+      () => ({ spawnDepth: 6, inheritedToolDeny: ["exec", "write"] }),
+      { workerGuard: {}, skipMaintenance: true },
+    );
+    entryReads = 0;
+    await withPreparedSessionCapabilityRead(() => {
+      expect(resolveStoredSubagentCapabilities(key, { cfg }).depth).toBe(6);
+      expect(resolveStoredSubagentInheritedToolDenylist(key, { cfg })).toEqual(["exec", "write"]);
+    });
+    expect(entryReads).toBe(0);
   });
 
   it.each([true, false])(

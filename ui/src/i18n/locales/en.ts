@@ -2064,6 +2064,8 @@ export const en: TranslationMap & {
       connecting: "Connecting your AI...",
       verifying: "Checking a real conversation. This may take a minute or more.",
       using: "Using {label} ({modelRef}) on {gateway}",
+      sharedCodexLogin: "Using your existing Codex login · sessions shared with Codex",
+      separateLogin: "Use a separate login",
       thisComputer: "This computer",
       thisGateway: "this Gateway",
       alternatives: "Or use another AI",

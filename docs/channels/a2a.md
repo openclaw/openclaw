@@ -185,6 +185,12 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
+A repeated `messageId` from the same authenticated peer returns the existing task and its current
+state while that task is retained. It does not start another agent turn, even if the retry omits
+`contextId`. Use a new `messageId` for new work. Replies are associated with the task that started
+the turn, including when messages in one context finish out of order. A finished turn with no
+reply text completes without an artifact; stopping the channel fails unfinished tasks.
+
 Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries. Restarting the gateway discards all tasks and task history.
 
 ## Related

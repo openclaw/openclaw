@@ -104,19 +104,21 @@ describe("buildCompactAnnounceStatsLine", () => {
       expected: "Stats: runtime n/a • tokens 500 prompt/cache",
     },
   ])("$name", async ({ usage, expected }) => {
+    const readEntry = vi.fn(() => ({
+      sessionId: "child-session",
+      updatedAt: 0,
+      ...usage,
+    }));
     testing.setDepsForTest({
       getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-        ...usage,
-      })) as ReadSessionEntry,
+      readSubagentSessionEntry: readEntry as ReadSessionEntry,
       resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
     await expect(
       buildCompactAnnounceStatsLine({ sessionKey: "agent:main:subagent:child" }),
     ).resolves.toBe(expected);
+    expect(readEntry).toHaveBeenCalledOnce();
   });
 });
 

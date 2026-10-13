@@ -13,10 +13,7 @@ import {
   blockSubagentCompletionDelivery,
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
@@ -258,7 +255,6 @@ export function createSubagentRegistrySweeper(params: {
         if (resolveSubagentChildAuthority(entry).status === "mismatch") {
           continue;
         }
-        warnLegacySubagentAuthority(entry, params.warn);
         if (isRestoredQueuedFailureSettlementClaimed(entry)) {
           // The restored FIFO callback owns this row until durable settlement.
           continue;

@@ -106,6 +106,8 @@ export function captureSetupInferenceFileUndo(
 /** Setup coordinates effects; the selected config and auth owners retain their own undo. */
 export async function commitSetupInferenceActivation(params: {
   preserveWorkingConnection?: boolean;
+  /** First-run clients cannot complete a restart handshake, but may load a new plugin. */
+  requireApplied?: true;
   configTarget: SetupInferenceConfigTarget;
   config: OpenClawConfig;
   activate: (assertCurrent: () => void) => Promise<SetupCredentialActivationReceipt | undefined>;
@@ -213,6 +215,7 @@ export async function commitSetupInferenceActivation(params: {
         const status = application.claimed ? await application.result : "unclaimed";
         if (
           !params.preserveWorkingConnection &&
+          !params.requireApplied &&
           (status === "restart-pending" || status === "applied-restart-required")
         ) {
           return true;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
@@ -79,6 +80,13 @@ function moduleFiles(root: string): string[] {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) {
+        // The UI publishes its independent browser graph by renaming these trees.
+        if (
+          directory === root &&
+          (entry.name === "control-ui" || controlUiBuildSiblingPid(entry.name) !== null)
+        ) {
+          continue;
+        }
         // Plugin outputs and installed dependencies are independent runtime graphs.
         if (!["node_modules", "extensions", "plugin-sdk"].includes(entry.name)) {
           visit(file);
