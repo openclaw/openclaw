@@ -143,7 +143,6 @@ export class GatewayBrowserClient {
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
-  private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private readonly remoteIngress = isRemoteControlUiIngress();
@@ -218,7 +217,7 @@ export class GatewayBrowserClient {
         this.nativeAuthAbort?.abort();
         this.chatEvents.clear();
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
-        this.stopTickWatch();
+        this.clearInboundActivity();
         this.scopeUpgradeBinding = null;
         const error = this.pairingFailure ?? context.connectFailure?.error ?? this.nativeAuthError;
         this.pendingPairing = null;
@@ -301,7 +300,7 @@ export class GatewayBrowserClient {
     this.reachabilityProbe?.abort();
     this.reachabilityProbe = null;
     this.chatEvents.clear();
-    this.stopTickWatch();
+    this.clearInboundActivity();
     this.recovery = { ...this.recovery, generation: this.recovery.generation + 1, resolved: false };
     this.client.stop();
     this.cancelScopeUpgrade();
@@ -396,7 +395,7 @@ export class GatewayBrowserClient {
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
     this.maxPayloadBytes = hello.policy?.maxPayload;
-    this.startTickWatch(hello);
+    this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
@@ -450,11 +449,9 @@ export class GatewayBrowserClient {
     this.opts.onRecoveryScopeChange?.();
   }
 
-  private startTickWatch(hello: GatewayHelloOk): void {
-    this.stopTickWatch();
+  private initializeInboundActivity(hello: GatewayHelloOk): void {
     const advertisedTickIntervalMs = hello.policy?.tickIntervalMs;
-    // Gateway policy is remote input; use the shared timer clamp so an
-    // oversized interval cannot wrap into a resource-exhausting hot loop.
+    // Retain the bounded stale-tab window advertised by the Gateway.
     const tickIntervalMs = resolveSafeTimeoutDelayMs(
       typeof advertisedTickIntervalMs === "number" &&
         Number.isFinite(advertisedTickIntervalMs) &&
@@ -465,20 +462,11 @@ export class GatewayBrowserClient {
     );
     this.maxInboundSilenceMs = tickIntervalMs * 2;
     this.lastInboundActivityAtMs = Date.now();
-    this.tickWatchTimer = setInterval(() => {
-      // Preserve long-running requests while real Gateway heartbeats arrive;
-      // only a silent socket should enter the shared reconnect lifecycle.
-      if (this.connected && this.needsWakeReconnect) {
-        this.forceReconnect("tick timeout");
-      }
-    }, tickIntervalMs);
+    // Transport ping/pong owns dead-peer detection. Delayed application ticks
+    // must not reconnect a busy Gateway; silence only informs tab-wake recovery.
   }
 
-  private stopTickWatch(): void {
-    if (this.tickWatchTimer !== null) {
-      clearInterval(this.tickWatchTimer);
-      this.tickWatchTimer = null;
-    }
+  private clearInboundActivity(): void {
     this.lastInboundActivityAtMs = null;
     this.maxInboundSilenceMs = null;
   }

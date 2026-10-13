@@ -1,4 +1,3 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -162,16 +161,19 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("closes Details when a child dropdown has already closed", async () => {
+  it("closes Details after its child menu closes", async () => {
     const { element, trigger, panel, progress } = await fixture();
     trigger.click();
     await element.updateComplete;
-    const menu = progress.querySelector<WaDropdown>("wa-dropdown")!;
+    const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
+    const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await menu.updateComplete;
-    expect(menu.open).toBe(true);
-    menu.open = false;
-    expect(menu.hasAttribute("open")).toBe(true);
+    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+    expect(menuSurface.matches(":popover-open")).toBe(true);
+    menu.querySelector<HTMLButtonElement>("button")!.click();
+    await expect
+      .poll(() => menu.querySelector("button")!.getAttribute("aria-expanded"))
+      .toBe("false");
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
@@ -270,21 +272,26 @@ describe("chat Details presentation", () => {
     trigger.click();
     await element.updateComplete;
     await progress.updateComplete;
-    const menu = progress.querySelector<WaDropdown>("wa-dropdown")!;
+    const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
+    const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await menu.updateComplete;
-    expect(menu.open).toBe(true);
+    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+    expect(menuSurface.matches(":popover-open")).toBe(true);
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
-    const select = (value: string) =>
-      menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
-    select("hide");
+    const select = async (value: string) => {
+      if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
+        menu.querySelector<HTMLButtonElement>("button")!.click();
+        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+      }
+      menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
+    };
+    await select("hide");
     expect(hide).toHaveBeenCalledOnce();
     expect(clear).not.toHaveBeenCalled();
-    menu.querySelector<HTMLElement>('wa-dropdown-item[value="collapse"]')!.click();
-    await menu.updateComplete;
+    await select("collapse");
     expect(collapse).toHaveBeenCalledWith(true);
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
-    select("settings");
+    await select("settings");
     expect(settings).toHaveBeenCalledOnce();
     progress.querySelector<HTMLButtonElement>(".session-progress-card__dismiss")!.click();
     expect(dismiss).toHaveBeenCalledWith(card);
@@ -293,12 +300,12 @@ describe("chat Details presentation", () => {
       .querySelector<HTMLButtonElement>('.session-progress-card__refresh[data-state="idle"]')!
       .click();
     expect(refresh).toHaveBeenCalledWith(card);
-    select("clear");
+    await select("clear");
     expect(clear).toHaveBeenCalledWith(card);
     element.presented = false;
     await element.updateComplete;
     await progress.updateComplete;
-    select("hide");
+    menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
     expect(hide).toHaveBeenCalledTimes(1);
   });
 });

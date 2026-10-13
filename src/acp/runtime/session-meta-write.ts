@@ -20,9 +20,8 @@ import {
   prepareAcpSessionMutation,
   commitAcpSessionMutation,
 } from "./session-meta-worker-mutation.js";
-import { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
-
-type AcpSessionMutationParams = Parameters<typeof upsertAcpSessionMetaNative>[0];
+import { upsertAcpSessionMetaForMaintenance } from "./session-meta-write.native.js";
+import type { AcpSessionMutationParams } from "./session-meta-write.types.js";
 
 /** Entry changes follow the selected session owner; ACP metadata keeps its shared worker. */
 export async function upsertAcpSessionMeta(
@@ -62,17 +61,6 @@ async function mutateAcpSessionMeta(
     assertCurrent: params.assertCommitAllowed,
   });
   const store = resolveSessionStorePathForAcp({ ...captured, sessionKey, agentId: params.agentId });
-  const mutateNative = (assertCommitAllowed = captured.assertCurrent) => {
-    if (control) {
-      throw new Error("ACP controlled metadata mutation requires its durable worker source");
-    }
-    return upsertAcpSessionMetaNative({
-      ...params,
-      ...captured,
-      expectedControlBinding,
-      assertCommitAllowed,
-    });
-  };
   return withSessionEntryReadOnlyInWorker(
     {
       agentId: store.agentId,
@@ -96,7 +84,16 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       };
       if (!supportsOpenClawAgentDatabaseExecution(options)) {
-        return mutateNative(readOwner.assertCurrent);
+        // Memory readers return before this file-backed scope; only native maintenance remains.
+        if (control) {
+          throw new Error("ACP controlled metadata mutation requires its durable worker source");
+        }
+        return upsertAcpSessionMetaForMaintenance({
+          ...params,
+          ...captured,
+          expectedControlBinding,
+          assertCommitAllowed: readOwner.assertCurrent,
+        });
       }
       const identity = readDatabasePathIdentitySync(options.path);
       const context = captureOpenClawStateWorkerContext({

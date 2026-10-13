@@ -37,6 +37,16 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Gateway startup binds existing auth-file observers to its read-only scope and
+spawn broker, including observations retained across an in-process restart.
+New observers capture those resources when admitting a directory. File scans
+publish through the current binding, including scans spanning a restart.
+Detached filesystem notifications reuse that scope's
+serialized child; they do not launch a native process for each WAL change.
+Every refresh still re-admits the current database source and checks its authority.
+Reader retirement stops change publications and joins the retained reader;
+the next Gateway generation rebinds retained observers before startup admission.
+
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
@@ -1936,7 +1946,7 @@ reader only for free ACP keys whose agent is absent. When initial admission need
 the content-version marker, the reader fetches it and the first metadata cohort in
 one statement. Later reads reuse admitted version facts. The ACP writer publishes
 the exact changed metadata keys through the existing database admission exchange,
-including native incognito writes and offline migration/Doctor imports. Managed
+including memory-session writes and offline migration/Doctor imports. Managed
 transactions combine their changed keys and publish only after commit; rollback
 retains the previous receipt. ACP cohorts invalidate on ACP receipts and schema
 changes, so unrelated shared-state writes do not discard them. Readers discard
@@ -1950,8 +1960,8 @@ owner already has an admitted native handle, transaction and commit grants retai
 a synchronous final-authority guard: one indexed lifecycle
 predicate on the original admitted agent handle. Native SDK writers
 can change that row without publishing revocation, so prepared facts cannot grant
-the mutation. Retire this guard when the next Plugin SDK major removes raw
-synchronous writers and the lifecycle owner has complete revocation publications.
+the mutation. Retire this guard after the deprecated synchronous SDK writers are
+removed and the lifecycle owner has complete revocation publications.
 Cold callers use the existing worker source reader; they never open a native handle
 on the Gateway thread for this guard.
 ACP writes publish the row returned by their upsert,
@@ -1959,11 +1969,16 @@ and clearing the exact metadata keys publishes absence without a readback. Nativ
 Doctor writes and the released synchronous SDK reader retain their contracts.
 Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
 
-The native ACP mutation adapter serves incognito session paths and exclusive native
-maintenance/deletion scopes; ordinary durable runtime mutations use the worker.
-Its legacy provenance read is also used by this adapter, so it is not classified
-as Doctor-only. Remove the incognito adapter with its actor cutover; the released
-synchronous SDK reader needs deprecation and later removal.
+The native ACP mutation adapter serves exclusive maintenance scopes. Durable
+runtime mutations use `acp.prepareMutation`/`acp.commitMutation`; memory sessions
+keep their entry in the session actor and use the same shared ACP worker. Explicit
+incognito paths are selected by the memory reader before native mutation dispatch.
+Production agent-deletion cleanup supplies worker authority; its native cleanup
+context runs inside the agent worker. The native adapter retains live control
+binding and legacy-provenance consumption checks. Its synchronous provenance
+reader also serves offline import; runtime provenance reads use
+`session-meta-source.worker.ts`. The released synchronous SDK reader and entry
+writer remain separate contracts requiring deprecation before removal.
 
 Reset reuses its prepared entry snapshot across transcript-only cold restoration;
 the committing worker still compares the complete current target before changing

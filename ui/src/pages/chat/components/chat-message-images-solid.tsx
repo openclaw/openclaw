@@ -7,9 +7,9 @@ import {
 } from "../../../lib/open-external-url.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
-import { renderChatImageActions } from "./chat-image-actions.ts";
+import { ChatImageActions } from "./chat-image-actions.tsx";
 import {
   MIN_CHAT_IMAGE_PREVIEW_WIDTH,
   resolveChatImagePreviewSize,
@@ -675,6 +675,7 @@ function ImageFrame(props: {
   const title = () => imageTitle(image());
   const compact = () => props.model.state === "unavailable";
   const pending = () => props.model.state === "loading";
+  const loadOriginal = () => loadManagedImageBlob(image().url, props.options, image().artifactId);
   // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
   // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
   const dimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
@@ -733,11 +734,7 @@ function ImageFrame(props: {
         </span>
       </Show>
       <Show when={props.model.managed && props.model.previewUrl && !compact()}>
-        <LitContent
-          value={renderChatImageActions(title(), () =>
-            loadManagedImageBlob(image().url, props.options, image().artifactId),
-          )}
-        />
+        <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
       </Show>
     </span>
   );
