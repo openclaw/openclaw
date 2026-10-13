@@ -158,6 +158,7 @@ describe("memory session delta publication", () => {
     const cfg = createConfig({ sources: ["sessions"], sessionMemory: true, cacheEnabled: false });
     const manager = await getFreshManager(cfg);
     onTestFinished(() => manager.close());
+    await (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
     await seedSessionTranscript({ sessionId, sessionKey, messages: [1, 2, 3, 4].map(turn) });
     await manager.sync({ reason: "initial", force: true });
     const database = Reflect.get(manager, "db") as DatabaseSync;
