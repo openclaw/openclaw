@@ -31,7 +31,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("repairs credentials with a canonical service OPENCLAW_HOME while state is offline", async () => {
+it.each([
+  { name: "CLI service", appOwned: false, running: false },
+  { name: "offline app-owned service", appOwned: true, running: false },
+  { name: "running app-owned service", appOwned: true, running: true },
+])("repairs canonical state without mutating the $name", async ({ appOwned, running }) => {
   const home = tempDirs.make("doctor-service-identity-");
   const stateDir = path.join(home, ".openclaw");
   const agentDir = path.join(stateDir, "agents/main/agent");
@@ -56,10 +60,26 @@ it("repairs credentials with a canonical service OPENCLAW_HOME while state is of
   }
   mockSystemAccountHome();
   expect(isDefaultInstallIdentity()).toBe(true);
+  let serviceRoot = process.cwd();
+  if (appOwned) {
+    serviceRoot = tempDirs.make("doctor-app-owned-runtime-");
+    fs.writeFileSync(path.join(serviceRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    fs.writeFileSync(path.join(serviceRoot, "openclaw.mjs"), "");
+    fs.writeFileSync(
+      path.join(serviceRoot, "openclaw-install-owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
+  }
   mocks.service = createMockGatewayService({
-    isLoaded: vi.fn(async () => true),
+    isLoaded: vi.fn(async () => !appOwned || running),
+    readRuntime: vi.fn(async () => ({ status: running ? "running" : "stopped" })),
     readCommand: vi.fn(async () => ({
-      programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+      programArguments: [process.execPath, path.join(serviceRoot, "openclaw.mjs"), "gateway"],
       environment: { HOME: home, OPENCLAW_HOME: home },
     })),
   });
@@ -69,6 +89,21 @@ it("repairs credentials with a canonical service OPENCLAW_HOME while state is of
       options: { repair: true, nonInteractive: true },
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
+  if (running) {
+    await expect(begin()).rejects.toThrow("Managed by OpenClaw.app");
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
+    for (const operation of [
+      "stage",
+      "stop",
+      "start",
+      "restart",
+      "install",
+      "uninstall",
+    ] as const) {
+      expect(mocks.service[operation]).not.toHaveBeenCalled();
+    }
+    return;
+  }
   const maintenance = await begin();
   expect(maintenance).toBeDefined();
   try {
@@ -98,7 +133,7 @@ it("repairs credentials with a canonical service OPENCLAW_HOME while state is of
   } finally {
     await maintenance!.release();
   }
-  for (const operation of ["stop", "start", "restart", "install", "uninstall"] as const) {
+  for (const operation of ["stage", "stop", "start", "restart", "install", "uninstall"] as const) {
     expect(mocks.service[operation]).not.toHaveBeenCalled();
   }
 });
