@@ -48,7 +48,7 @@ type UsageCostRefreshState = {
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
   storePath: string;
   dirtySessionFiles: Set<string>;
-  readingSessionFiles: Map<string, Deferred<void>>;
+  readingSessionFiles: Map<string, Deferred>;
   runningSessionFiles: Set<string> | "all";
   agentBusy: boolean;
   idleAt: number;

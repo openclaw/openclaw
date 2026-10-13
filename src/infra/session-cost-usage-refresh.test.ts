@@ -346,7 +346,7 @@ describe("session cost usage refresh", () => {
     });
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "returns exact session usage before bulk backfill finishes (dirty publication: %s)",
     async (coalesce, { signal }) => {
       const root = tempDirs.make("openclaw-usage-priority-");
