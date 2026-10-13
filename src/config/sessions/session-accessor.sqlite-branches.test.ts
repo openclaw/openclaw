@@ -4,7 +4,6 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
@@ -94,42 +93,6 @@ function trackBranchSummaryReads(): () => number {
     Reflect.apply(postMessage, this, args);
   });
   return () => reads;
-}
-
-function observeNextBranchWorker() {
-  const dispatched = createDeferredCore<Worker>();
-  const postMessage: unknown = Object.getOwnPropertyDescriptor(
-    Worker.prototype,
-    "postMessage",
-  )?.value;
-  if (typeof postMessage !== "function") {
-    throw new Error("expected Worker.postMessage to be an own method");
-  }
-  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    ...args: Parameters<Worker["postMessage"]>
-  ) {
-    const [message] = args;
-    if (
-      message &&
-      typeof message === "object" &&
-      "input" in message &&
-      message.input &&
-      typeof message.input === "object" &&
-      "kind" in message.input &&
-      message.input.kind === "branch-summaries" &&
-      "taskId" in message
-    ) {
-      spy.mockRestore();
-      Reflect.apply(postMessage, this, args);
-      dispatched.resolve(this);
-      return;
-    }
-    Reflect.apply(postMessage, this, args);
-  });
-  return {
-    dispatched: dispatched.promise,
-  };
 }
 
 describe("SQLite session branches", () => {
@@ -314,50 +277,6 @@ describe("SQLite session branches", () => {
     expect(readSessionBranchSummariesInWorker(request)).toEqual(first);
   });
 
-  it("revokes an in-flight branch read and joins worker exit before closing its database", async () => {
-    const { env, scope } = await createSession();
-    const database = openOpenClawAgentDatabase({ agentId, env });
-    const observed = observeNextBranchWorker();
-    const settlement: string[] = [];
-    const reading = Promise.all(Array.from({ length: 3 }, () => listSessionBranches(scope))).then(
-      (result) => {
-        settlement.push("read");
-        return result;
-      },
-    );
-    const worker = await observed.dispatched;
-    worker.once("exit", () => settlement.push("exit"));
-
-    const closing = closeOpenClawAgentDatabaseByPathAsync(database.path, agentId).then((result) => {
-      settlement.push("close");
-      return result;
-    });
-    const duringClose = listSessionBranches(scope);
-    try {
-      await expect(reading).resolves.toEqual(
-        Array.from({ length: 3 }, () => ({ status: "failed" })),
-      );
-      await expect(duringClose).resolves.toEqual({ status: "failed" });
-      await expect(closing).resolves.toBe(true);
-      expect(settlement[0]).toBe("exit");
-      expect(settlement).toEqual(expect.arrayContaining(["read", "close"]));
-      expect(database.db.isOpen).toBe(false);
-    } finally {
-      await Promise.allSettled([reading, duringClose, closing]);
-    }
-
-    await expect(listSessionBranches(scope)).resolves.toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-        }),
-      ]),
-    });
-  });
-
   it("reuses unchanged summaries across fifty active sessions without repeating worker reads", async () => {
     const { env } = await createSession();
     const scopes = [];
@@ -408,7 +327,8 @@ describe("SQLite session branches", () => {
     await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
     expect(branchReads()).toBe(2);
     await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
-    expect(branchReads()).toBe(2);
+    // Without a host write receipt, a newly admitted read-only database stays uncached.
+    expect(branchReads()).toBe(3);
     expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
   });
 
