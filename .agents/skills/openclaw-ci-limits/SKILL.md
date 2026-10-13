@@ -588,6 +588,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
+- Precisely selected serial CLI-only jobs use the 16-class when every group has
+  one or two explicit files and the existing two-worker fallback, without build,
+  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
+  inventories, runtime selection, timing identities, and process boundaries.
+  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
+  choice for retained Blacksmith CLI jobs.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
@@ -641,13 +647,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   stays on 8 unless the bounded hybrid plan admits it to hosted Ubuntu. The twelve-row 4:38 result in historical run 33695337496 used the
   32-class with eight reported CPUs; it does not prove timing on the current
   16-class route or refresh stale timing weights.
-- Eligible real-Gateway jobs retain the existing 32-class and two-row planner
-  split; ordinary PRs omit them. Their private preparation now builds runtime,
-  QA, and Control UI artifacts with SDK declaration generation disabled.
-  `build-artifacts` owns SDK declarations and validation. The old two-compiler
-  memory argument no longer establishes their runner requirement: qualify the
-  complete current job before downsizing, preserving browser workers, complete
-  inventory, build-before-test ordering, routing, deadlines, and caps.
+- Current-target real-Gateway jobs use the 16-class and existing two-row planner
+  split; frozen or unclassified targets retain the 32-class. Ordinary PRs omit
+  them. Private preparation builds runtime, QA, and Control UI artifacts with
+  SDK declaration generation disabled; `build-artifacts` owns SDK declarations
+  and validation. Preserve browser workers, complete inventory, build-before-test
+  ordering, routing, deadlines, and caps. Further sizing changes require complete
+  job qualification, including preparation and desktop transport proof.
 - Current-target `build-artifacts` uses the existing 16-class after a complete
   four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
   SDK declaration generation uses one compiler program with its existing heap

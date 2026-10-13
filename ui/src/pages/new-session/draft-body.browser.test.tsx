@@ -1,16 +1,17 @@
-import { html, nothing, render } from "lit";
 import { afterEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { releaseChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
-import { renderNewSessionBody } from "./draft-body.ts";
+import { NewSessionBody } from "./draft-body.solid.tsx";
 import baseStyles from "../../styles/base.css?inline";
 
 const container = document.createElement("div");
 const styles = document.createElement("style");
+let unmount: (() => void) | undefined;
 
 afterEach(() => {
-  render(nothing, container);
+  unmount?.();
   container.remove();
   styles.remove();
   releaseChatAttachmentPayload("startup-notes");
@@ -25,27 +26,29 @@ it.each([
   document.head.append(styles);
   container.className = "new-session-page chat";
   document.body.append(container);
-  render(
-    renderNewSessionBody({
-      error: null,
-      pendingMessage: buildLocalUserMessage({
-        createdAt: Date.now(),
-        text,
-        attachments: [
-          {
-            id: "startup-notes",
-            fileName: "notes.md",
-            mimeType: "text/markdown",
-            dataUrl: "data:text/markdown;base64,IyBOb3Rlcw==",
-          },
-        ],
-      }),
-      submitting: true,
-      renderDraft: () => html``,
-      onOpenImage: () => {},
-    }),
-    container,
-  );
+  ({ unmount } = mountSolid(
+    () => (
+      <NewSessionBody
+        error={null}
+        pendingMessage={buildLocalUserMessage({
+          createdAt: Date.now(),
+          text,
+          attachments: [
+            {
+              id: "startup-notes",
+              fileName: "notes.md",
+              mimeType: "text/markdown",
+              dataUrl: "data:text/markdown;base64,IyBOb3Rlcw==",
+            },
+          ],
+        })}
+        submitting={true}
+        renderDraft={() => null}
+        onOpenImage={() => {}}
+      />
+    ),
+    { container },
+  ));
   await expect.element(page.getByText("notes.md", { exact: true })).toBeVisible();
   const bubble = container.querySelector<HTMLElement>(".chat-group.user .chat-bubble")!;
   const card = bubble.querySelector<HTMLElement>(".chat-assistant-attachment-card")!;

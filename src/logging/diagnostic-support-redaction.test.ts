@@ -44,6 +44,8 @@ function fakeRepeatedToken(chars: readonly string[], length = 40): string {
 
 describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
+  const npmLayoutRefusal =
+    "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
 
   it.each([
     `'/synthetic/private owner/state.sqlite' private suffix`,
@@ -159,16 +161,31 @@ describe("diagnostic support redaction", () => {
     ).toBe("[redacted-diagnostic]");
   });
 
-  it.each(["", " private-customer-text"])(
-    "recognizes only the fixed npm layout refusal (%s)",
-    (suffix) => {
-      const message =
-        "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
-      expect(
-        redactPublicSupportDiagnosticLine(message + suffix, { env: {}, stateDir: tempDir }),
-      ).toBe(suffix ? "[redacted-diagnostic]" : message);
-    },
-  );
+  it.each([
+    [npmLayoutRefusal, npmLayoutRefusal],
+    [`${npmLayoutRefusal} private-customer-text`, "[redacted-diagnostic]"],
+    [
+      "Gateway readiness was not verified; service status: running; startup phase: private-customer-text. Check openclaw --profile private-customer gateway status --deep.",
+      "Gateway readiness was not verified; service status: running. Check openclaw gateway status --deep.",
+    ],
+    [
+      "Gateway readiness was not verified; service status: stopped; startup phase: /private/customer/startup. Check openclaw gateway status --deep.",
+      "Gateway readiness was not verified; service status: stopped. Check openclaw gateway status --deep.",
+    ],
+    [
+      "Gateway readiness was not verified; service status: unknown; startup phase: waiting for managed service. Check openclaw gateway status --deep.",
+      "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
+    ],
+    [
+      "Gateway readiness was not verified; service status: running-private-customer. Check openclaw gateway status --deep.",
+      "[redacted-diagnostic]",
+    ],
+    ["private-customer startup failed", "[redacted-diagnostic]"],
+  ])("publishes only closed repair facts (%s)", (message, expected) => {
+    expect(redactPublicSupportDiagnosticLine(message, { env: {}, stateDir: tempDir })).toBe(
+      expected,
+    );
+  });
 
   it("redacts numeric private fields in support snapshots and config", () => {
     const redaction = {

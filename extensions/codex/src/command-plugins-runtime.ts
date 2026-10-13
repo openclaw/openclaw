@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { fingerprintCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
@@ -13,7 +12,7 @@ import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.j
 import { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
-import { resolveCommandAppServerContext, resolveControlTarget } from "./command-handler-scope.js";
+import { resolveCommandAppServerContext } from "./command-handler-scope.js";
 import type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
 import { prepareCodexControlSessionAuth } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
@@ -40,8 +39,7 @@ export async function withCodexPluginCommandContext<T>(
   const { deps, pluginConfig } = params;
   const ctx = { ...params.ctx, gatewayClientScopes: params.ctx.gatewayClientScopes?.slice() };
   const current = (await deps.codexPluginsManagementIo?.readConfig()) ?? {};
-  const initialPolicy = JSON.stringify(current);
-  const { scope, target, binding } = await resolveCommandAppServerContext(deps, ctx, pluginConfig);
+  const { scope, binding } = await resolveCommandAppServerContext(deps, ctx, pluginConfig);
   const conversation = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
   const workspaceDir =
     binding?.cwd ||
@@ -119,23 +117,13 @@ export async function withCodexPluginCommandContext<T>(
         };
         const validateCurrent = async () => {
           assertCurrent();
-          const currentTarget = await resolveControlTarget(ctx);
-          const currentConversation = readCodexConversationBindingData(
-            await ctx.getCurrentConversationBinding(),
-          );
-          const currentPolicy = JSON.stringify(
-            (await deps.codexPluginsManagementIo?.readConfig()) ?? {},
-          );
           const currentAuthBinding = await readAuthBinding();
           await assertCurrentAsync?.();
           // Reads can outlive cancellation; never publish after the request scope ends.
           assertCurrent();
-          if (
-            !isDeepStrictEqual(currentTarget, target) ||
-            !isDeepStrictEqual(currentConversation, conversation) ||
-            currentPolicy !== initialPolicy ||
-            currentAuthBinding !== authBinding
-          ) {
+          // Inspection and inventory refresh use the admitted context; mid-command UI/config
+          // edits take effect on the next command. Credentials still require live authority.
+          if (currentAuthBinding !== authBinding) {
             throw new Error(SCOPE_CHANGED_MESSAGE);
           }
         };

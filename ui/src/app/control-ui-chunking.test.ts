@@ -11,7 +11,7 @@ describe("Control UI build chunking", () => {
   it("emits one measured shared stylesheet while keeping optional code lazy", async () => {
     const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.ts");
-    const newSession = modulePath("../pages/new-session/new-session-page.ts");
+    const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
     const sharedStyle = modulePath("../styles/hub-tabs.css");
     const sidebarStyle = modulePath("../styles/sidebar-issues.css");

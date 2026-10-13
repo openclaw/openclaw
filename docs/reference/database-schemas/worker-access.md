@@ -386,6 +386,11 @@ refusal certifies that no agent handle opened and admission cleanup succeeded.
 Admission failures during native open or schema refresh cannot carry that
 certificate; retirement keeps conservative validation and lease cleanup.
 
+Before caller work begins, the execution owner can reacquire a settled stale-schema
+refusal within its existing admission retry budget. It first retires the refused
+native generation and rechecks owner, request, and caller authority. Invalid
+receipts, failed cleanup, and entered operations are never replayed by this recovery.
+
 Quarantine guards load each target pathname's decision once and consume committed
 record/clear postimages through the existing database-fact transport. Absence is
 an explicit fact, so unchanged guards do not query the quarantine store. Rollback

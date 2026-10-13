@@ -366,7 +366,7 @@ describe("memory index", () => {
     );
     trackManager(first);
     await first.probeEmbeddingAvailability();
-    providerFixture.providerCloseFailuresRemaining = 2;
+    providerFixture.providerCloseFailuresRemaining = 1;
     const retirement = createMemoryRuntime({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
     }).prepareReload({
@@ -377,7 +377,7 @@ describe("memory index", () => {
       await expect(retirement.drain()).resolves.toEqual({
         errors: [expect.objectContaining({ message: "provider close failed" })],
       });
-      expect(providerFixture.providerCloseCalls).toBe(2);
+      expect(providerFixture.providerCloseCalls).toBe(1);
     } finally {
       retirement.resume();
     }
@@ -391,7 +391,7 @@ describe("memory index", () => {
     );
     trackManager(replacement);
     expect(replacement).not.toBe(first);
-    expect(providerFixture.providerCloseCalls).toBe(2);
+    expect(providerFixture.providerCloseCalls).toBe(1);
     await replacement.probeEmbeddingAvailability();
     expect(
       requireManager(
@@ -404,9 +404,9 @@ describe("memory index", () => {
     ).toBe(replacement);
 
     await closeAllMemoryIndexManagers();
-    expect(providerFixture.providerCloseCalls).toBe(4);
+    expect(providerFixture.providerCloseCalls).toBe(3);
     await closeAllMemoryIndexManagers();
-    expect(providerFixture.providerCloseCalls).toBe(4);
+    expect(providerFixture.providerCloseCalls).toBe(3);
   });
 
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {
@@ -420,12 +420,12 @@ describe("memory index", () => {
     );
     trackManager(first);
     await first.probeEmbeddingAvailability();
-    providerFixture.providerCloseFailuresRemaining = 2;
+    providerFixture.providerCloseFailuresRemaining = 1;
 
     await expect(closeMemoryIndexManagersForAgent({ agentId: "main" })).rejects.toThrow(
       "provider close failed",
     );
-    expect(providerFixture.providerCloseCalls).toBe(2);
+    expect(providerFixture.providerCloseCalls).toBe(1);
 
     let releaseProviderClose: () => void = () => {};
     providerFixture.providerCloseGate = new Promise<void>((resolve) => {
@@ -438,7 +438,7 @@ describe("memory index", () => {
       agentId: "main",
     }).then((result) => requireManager(result));
     try {
-      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(3));
+      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(2));
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeReplacement);
     } finally {
       releaseProviderClose();
@@ -461,7 +461,7 @@ describe("memory index", () => {
     );
     trackManager(first);
     await first.probeEmbeddingAvailability();
-    providerFixture.providerCloseFailuresRemaining = 2;
+    providerFixture.providerCloseFailuresRemaining = 1;
     providerFixture.providerCloseFailure = undefined;
 
     let globalCloseRejected = false;
@@ -472,7 +472,7 @@ describe("memory index", () => {
       },
     );
     expect(globalCloseRejected).toBe(true);
-    expect(providerFixture.providerCloseCalls).toBe(2);
+    expect(providerFixture.providerCloseCalls).toBe(1);
 
     const unavailable = await getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -494,7 +494,7 @@ describe("memory index", () => {
       agentId: "main",
     }).then((result) => requireManager(result));
     try {
-      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(3));
+      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(2));
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeReplacement);
     } finally {
       releaseProviderClose();
@@ -544,12 +544,14 @@ describe("memory index", () => {
     expect(Object.is(secondAgain, second)).toBe(true);
   });
 
-  it("retries embedding provider close before releasing the manager", async () => {
+  it("retains failed embedding provider close for the next explicit close", async () => {
     providerFixture.providerCloseFailuresRemaining = 1;
     const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
 
     await manager.probeEmbeddingAvailability();
+    await expect(manager.close()).rejects.toThrow("provider close failed");
+    expect(providerFixture.providerCloseCalls).toBe(1);
     await manager.close();
 
     expect(providerFixture.providerCloseCalls).toBe(2);
