@@ -1,6 +1,7 @@
-/* @vitest-environment jsdom */
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+import { LitContent } from "../../lit/solid-content.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { renderDevicePairSetup } from "./view-pairing.runtime.ts";
 
 describe("device pairing dialog", () => {
@@ -14,22 +15,21 @@ describe("device pairing dialog", () => {
       href: "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     },
   ])("links $access setup help to the matching workflow", ({ access, href }) => {
-    const container = document.createElement("div");
-
-    render(
-      renderDevicePairSetup({
-        open: true,
-        lifecycle: { phase: "selection", access },
-        nowMs: 0,
-        pendingCount: 0,
-        onRefresh: vi.fn(),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
-      }),
-      container,
-    );
+    const { container } = mountSolid(() => (
+      <LitContent
+        value={renderDevicePairSetup({
+          open: true,
+          lifecycle: { phase: "selection", access },
+          nowMs: 0,
+          pendingCount: 0,
+          onRefresh: vi.fn(),
+          onAccessChange: vi.fn(),
+          onClose: vi.fn(),
+          onManageDevices: vi.fn(),
+          onGetApps: vi.fn(),
+        })}
+      />
+    ));
 
     expect(container.textContent).toContain(
       "Device capabilities plus complete Gateway controls, including settings and upgrades.",
@@ -41,35 +41,33 @@ describe("device pairing dialog", () => {
   });
 
   it("renders the node one-paste command and quiet expiry countdown", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(
-      renderDevicePairSetup({
-        open: true,
-        lifecycle: {
-          phase: "waiting",
-          access: "node",
-          setup: {
-            setupId: "setup-node",
-            setupCode: "AbC_123",
-            gatewayUrl: "wss://gateway.example",
-            auth: "token",
-            urlSource: "test",
+    const { container } = mountSolid(() => (
+      <LitContent
+        value={renderDevicePairSetup({
+          open: true,
+          lifecycle: {
+            phase: "waiting",
             access: "node",
-            expiresAtMs: 70_000,
+            setup: {
+              setupId: "setup-node",
+              setupCode: "AbC_123",
+              gatewayUrl: "wss://gateway.example",
+              auth: "token",
+              urlSource: "test",
+              access: "node",
+              expiresAtMs: 70_000,
+            },
           },
-        },
-        nowMs: 10_000,
-        pendingCount: 0,
-        onRefresh: vi.fn(),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
-      }),
-      container,
-    );
+          nowMs: 10_000,
+          pendingCount: 0,
+          onRefresh: vi.fn(),
+          onAccessChange: vi.fn(),
+          onClose: vi.fn(),
+          onManageDevices: vi.fn(),
+          onGetApps: vi.fn(),
+        })}
+      />
+    ));
 
     expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(3);
     expect(container.querySelector(".device-pair-setup__command code")?.textContent).toBe(

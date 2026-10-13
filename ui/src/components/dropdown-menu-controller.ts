@@ -1,6 +1,4 @@
-import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive, type ChildPart } from "lit/directive.js";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { consumeTooltipEscape } from "./tooltip.ts";
 import { trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -78,45 +76,3 @@ export class DropdownMenuController implements ReactiveController {
     this.disconnect = undefined;
   }
 }
-
-class LazyDropdownContent extends AsyncDirective {
-  private dropdown: HTMLElement | undefined;
-  private content: (() => unknown) | undefined;
-  private opened = false;
-
-  override render(content: () => unknown) {
-    this.content = content;
-    return this.opened ? content() : nothing;
-  }
-
-  override update(part: ChildPart, [content]: [() => unknown]) {
-    if (!this.dropdown) {
-      const dropdown = part.parentNode;
-      if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
-        throw new Error("Lazy dropdown content must be a direct child of wa-dropdown");
-      }
-      this.dropdown = dropdown;
-      this.dropdown.addEventListener("wa-show", this.show);
-    }
-    return this.render(content);
-  }
-
-  private readonly show = (event: Event) => {
-    if (event.target !== this.dropdown || this.opened) {
-      return;
-    }
-    this.opened = true;
-    // Commit before Web Awesome measures the popup and chooses its initial focus.
-    this.setValue(this.content?.());
-  };
-
-  override disconnected() {
-    this.dropdown?.removeEventListener("wa-show", this.show);
-  }
-
-  override reconnected() {
-    this.dropdown?.addEventListener("wa-show", this.show);
-  }
-}
-
-export const lazyDropdownContent = directive(LazyDropdownContent);

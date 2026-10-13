@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, onCleanup, onSettled, untrack } from "solid-js";
+import { For, Show, createEffect, untrack } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
@@ -12,10 +12,10 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
+import { composerScrollStateRef } from "./chat-composer-menu.tsx";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
-const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
 function GoalIcon() {
   return (
     <svg
@@ -43,45 +43,6 @@ const goalStatusIcons = {
   complete: "check",
 } as const;
 
-function createGoalScrollRef(objective: () => string) {
-  let element: HTMLElement | undefined;
-  const sync = () => {
-    if (!element?.isConnected) {
-      return;
-    }
-    const scrollable = element.scrollHeight > element.clientHeight + 1;
-    element.dataset.scrollable = String(scrollable);
-    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
-    element.dataset.atEnd = String(
-      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-    );
-  };
-  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
-  createEffect(objective, sync);
-  onSettled(() => {
-    if (element) {
-      observer?.observe(element);
-    }
-    sync();
-  });
-  onCleanup(() => {
-    observer?.disconnect();
-    element?.removeEventListener("scroll", sync);
-  });
-  return (next: HTMLElement) => {
-    element = next;
-    element.addEventListener("scroll", sync);
-  };
-}
-
-function clearGoalElapsedTimer(element: HTMLElement) {
-  const timer = goalElapsedTimers.get(element);
-  if (timer !== undefined) {
-    clearInterval(timer);
-    goalElapsedTimers.delete(element);
-  }
-}
-
 // Keep the one-second clock local to its span; it must not invalidate the composer.
 function createGoalElapsedRef(goal: () => SessionGoal) {
   let element: HTMLElement | undefined;
@@ -101,8 +62,8 @@ function createGoalElapsedRef(goal: () => SessionGoal) {
       if (!clock.active) {
         return undefined;
       }
-      goalElapsedTimers.set(bound, setInterval(sync, 1000));
-      return () => clearGoalElapsedTimer(bound);
+      const timer = setInterval(sync, 1000);
+      return () => clearInterval(timer);
     },
   );
   return (next: HTMLElement) => {
@@ -246,7 +207,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
         <div class="agent-chat__goal-detail-content">
           <div
             class="agent-chat__goal-detail-objective"
-            ref={createGoalScrollRef(() => props.goal.objective)}
+            ref={composerScrollStateRef(() => props.goal.objective)}
             textContent={props.goal.objective}
           />
           {props.goal.lastStatusNote && !props.resumeRecovery ? (
@@ -286,13 +247,6 @@ export function ChatGoal(props: ChatGoalProps) {
       />
     </Show>
   );
-}
-
-export function clearGoalElapsedTimers(): void {
-  for (const timer of goalElapsedTimers.values()) {
-    clearInterval(timer);
-  }
-  goalElapsedTimers.clear();
 }
 
 export function renderChatGoalRecoverySolid(
