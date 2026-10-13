@@ -67,10 +67,10 @@ enable **OpenClaw** in Chrome. OpenClaw never restarts Chrome or approves its
 permission prompt for you. The request applies to all profiles in that Chrome
 user-data directory. Chrome controls approval in each profile.
 
-The native macOS app waits for you to choose **Set up Chrome on this device**
-before inspecting or changing Chrome's protected data. Packaged apps use their
+The native macOS app does not inspect or change Chrome data on startup. Choose
+**Set up Chrome on this device** to prepare the extension. Packaged apps use their
 validated private runtime, so a remote-only Mac does not need a separate CLI
-install. After an explicit setup request completes, the default app profile refreshes
+install. After you start setup, the default app profile refreshes
 registration on CLI updates during that app session. Named profiles keep
 explicit setup because Chrome shares one native-host registration per user.
 

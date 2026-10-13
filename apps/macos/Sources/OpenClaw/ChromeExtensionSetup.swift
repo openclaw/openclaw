@@ -194,6 +194,8 @@ final class ChromeExtensionSetup {
                         self.manualReplies.removeValue(forKey: id)?.resume(throwing: SetupError.retired)
                         return
                     }
+                    // Admitted setup belongs to the app session even if its document retires during the command.
+                    if action == .install { self.hasRequestedSetup = true }
                     let task = Task { try await self.performAction(action, isCurrent) }
                     self.manualTasks[id] = task
                     let result = await task.result
@@ -208,7 +210,6 @@ final class ChromeExtensionSetup {
             }
         }
         guard isCurrent(), !Task.isCancelled else { throw SetupError.retired }
-        if action == .install { self.hasRequestedSetup = true }
         return result
     }
 

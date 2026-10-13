@@ -125,6 +125,31 @@ struct ChromeExtensionSetupTests {
     }
 
     @Test(arguments: [false, true])
+    func `admitted setup survives retirement of its requesting document`(rejectResult: Bool) async throws {
+        var actions: [ChromeExtensionSetupAction] = []
+        var current = true
+        let setup = ChromeExtensionSetup { action in
+            actions.append(action)
+            if actions.count == 1 {
+                current = false
+                if rejectResult { throw ChromeExtensionSetup.SetupError.retired }
+            }
+            return self.prepared
+        }
+        defer { setup.stop() }
+        await #expect(throws: ChromeExtensionSetup.SetupError.self) {
+            try await setup.run(action: .install) { current }
+        }
+        setup.start(
+            plan: AppLaunchRuntimePlan(arguments: ["OpenClaw"]),
+            profile: AppProfile(environment: [:]),
+            center: NotificationCenter())
+        // The inspect request drains maintenance queued by the app-owned observer.
+        _ = try await setup.run(action: .inspect) { true }
+        #expect(actions == [.install, .install, .inspect])
+    }
+
+    @Test(arguments: [false, true])
     func `queued manual retry cannot write after retirement or cancellation`(cancel: Bool) async throws {
         let started = AsyncStream<Void>.makeStream()
         var iterator = started.stream.makeAsyncIterator()
