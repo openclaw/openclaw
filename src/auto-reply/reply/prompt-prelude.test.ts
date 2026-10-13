@@ -118,12 +118,11 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(envelope.currentInboundContext?.text).not.toContain(CURRENT_MESSAGE_MARKER);
   });
 
-  it.each([
-    ["with", "[Thread starter - for context]\nPlanning the picnic next month."],
-    ["without", undefined],
-  ] as const)("labels the current message %s a thread context note", (_label, threadNote) => {
+  it.each(["starter", "history"])("labels the current message after thread %s", (kind) => {
+    const threadNote = `[Thread ${kind} - for context]\nPlanning the picnic next month.`;
     const sessionCtx = finalizeInboundContext({
       Body: "Can you pick a date?",
       BodyStripped: "Can you pick a date?",
@@ -147,43 +146,20 @@ describe("buildReplyPromptEnvelope", () => {
       context: envelope.currentInboundContext,
       prompt: envelope.prefixedCommandBody,
     });
-    const sourceContext = threadNote
-      ? [threadNote, "System: reaction added", CURRENT_MESSAGE_MARKER]
-      : ["System: reaction added"];
     expect(prompt).toBe(
-      ["Conversation info:\nchat_id=123", ...sourceContext, "Can you pick a date?"].join("\n\n"),
+      [
+        "Conversation info:\nchat_id=123",
+        threadNote,
+        "System: reaction added",
+        "[Current message - respond to this]",
+        "Can you pick a date?",
+      ].join("\n\n"),
     );
-    expect(envelope.currentInboundContext?.fragments?.at(-1)).toEqual(
-      threadNote
-        ? { kind: "runtime-instruction", text: CURRENT_MESSAGE_MARKER }
-        : { kind: "conversation-data", text: "System: reaction added" },
-    );
+    expect(envelope.currentInboundContext?.fragments).toContainEqual({
+      kind: "runtime-instruction",
+      text: CURRENT_MESSAGE_MARKER,
+    });
     expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
-  });
-
-  it("keeps room-event thread context without a respond label", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "Lunch is at noon",
-      BodyStripped: "Lunch is at noon",
-      Provider: "discord",
-      ChatType: "channel",
-      InboundEventKind: "room_event",
-    });
-
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "Lunch is at noon",
-      hasUserBody: true,
-      inboundUserContext: "",
-      isBareSessionReset: false,
-      startupAction: "new",
-      inboundEventKind: "room_event",
-      threadContextNote: "[Thread starter - for context]\nPlanning the picnic next month.",
-    });
-
-    expect(envelope.currentInboundContext?.text).toContain("[Thread starter - for context]");
-    expect(envelope.currentInboundContext?.text).not.toContain(CURRENT_MESSAGE_MARKER);
   });
 
   it.each(["pending", "recent"] as const)(
@@ -230,6 +206,7 @@ describe("buildReplyPromptEnvelope", () => {
         expect(text).toContain("Thread note");
         expect(text).toContain("System event");
         expect(text).not.toContain("Current room event");
+        expect(text).not.toContain(CURRENT_MESSAGE_MARKER);
       }
       expect(envelope.currentInboundContext?.fragments).toEqual(
         expect.arrayContaining([

@@ -221,13 +221,6 @@ export function buildReplyPromptEnvelope(
   const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
   const prependMediaNote = (body: string): string =>
     mediaNote ? [mediaNote, body].filter(Boolean).join("\n").trim() : body;
-  const transcriptCommandBody =
-    mediaNote && params.inboundEventKind !== "room_event"
-      ? base.transcriptBody
-        ? prependMediaNote(base.transcriptBody)
-        : mediaNote
-      : base.transcriptBody;
-
   const sourceContext: RuntimeContextFragment[] = [
     params.threadContextNote,
     ...(params.systemEventBlocks ?? []),
@@ -235,15 +228,10 @@ export function buildReplyPromptEnvelope(
   ]
     .filter((text): text is string => Boolean(text?.trim()))
     .map((text) => ({ kind: "conversation-data", text }));
-  // Thread notes end with free-form message text; without a closing label the
-  // user turn reads as part of the thread instead of the request to answer.
-  // Room events keep their stay-silent directive instead of a respond label.
+  // Close thread context without overriding room events' optional-response policy.
   if (params.threadContextNote?.trim() && params.inboundEventKind !== "room_event") {
     sourceContext.push({ kind: "runtime-instruction", text: CURRENT_MESSAGE_MARKER });
   }
-  const currentInboundContext = sourceContext.length
-    ? appendCurrentInboundContext(base.currentInboundContext, sourceContext)
-    : base.currentInboundContext;
   const annotateBody = (body: string) =>
     annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
@@ -252,8 +240,13 @@ export function buildReplyPromptEnvelope(
     ...(media.length > 0 ? { media } : {}),
     prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
     queuedBody: annotateBody(base.effectiveBaseBody),
-    transcriptCommandBody,
+    transcriptCommandBody:
+      params.inboundEventKind === "room_event"
+        ? base.transcriptBody
+        : prependMediaNote(base.transcriptBody),
     ...base,
-    currentInboundContext,
+    currentInboundContext: sourceContext.length
+      ? appendCurrentInboundContext(base.currentInboundContext, sourceContext)
+      : base.currentInboundContext,
   };
 }
