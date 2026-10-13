@@ -1,6 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveCodexAgentHarnessNativeCompaction } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import type {
@@ -14,7 +15,10 @@ export type TranscriptByteCompactionPersistence = CompactionAppendPersistence;
 export type TranscriptByteCompactionPersistenceAsync = CompactionAppendPersistenceAsync;
 
 export type TranscriptBytePreflightClaim = {
-  authority: TranscriptBytePreflightAuthority;
+  authority?: TranscriptBytePreflightAuthority;
+  agentHarnessId?: string;
+  assertActive: () => Promise<void>;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   sessionTarget: Partial<SessionTranscriptRuntimeTarget>;
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
@@ -37,15 +41,21 @@ export function resolveTranscriptBytePreflightAuthority(
 export function setTranscriptBytePreflightClaim(
   runtimeContext: ContextEngineRuntimeContext | undefined,
   authority: TranscriptBytePreflightAuthority | undefined,
+  assertActive: TranscriptBytePreflightClaim["assertActive"],
   withCompactionPersistence?: TranscriptByteCompactionPersistence,
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+  hostTranscriptByteSummary = false,
 ): () => void {
-  if (!runtimeContext || !authority) {
+  if (!runtimeContext || (!authority && !hostTranscriptByteSummary)) {
     return () => {};
   }
   const target = runtimeContext.sessionTarget;
   const claim = {
     authority,
+    agentHarnessId: runtimeContext.agentHarnessId,
+    assertActive,
+    operatorAuthority,
     ...(withCompactionPersistence ? { withCompactionPersistence } : {}),
     ...(withCompactionPersistenceAsync ? { withCompactionPersistenceAsync } : {}),
     sessionTarget: {
@@ -74,17 +84,20 @@ export function consumeTranscriptBytePreflightClaim(
     return undefined;
   }
   const { authority, sessionTarget: expected } = claim;
-  const active = resolveTranscriptBytePreflightAuthority(authority);
+  const active = authority ? resolveTranscriptBytePreflightAuthority(authority) : undefined;
   claims.delete(runtimeContext);
-  return (lockedHarnessRuntime ?? params.agentHarnessId) === authority.id &&
+  const harnessRuntime = lockedHarnessRuntime ?? params.agentHarnessId;
+  const sameHarness = authority
+    ? harnessRuntime === authority.id && active === authority
+    : harnessRuntime === claim.agentHarnessId;
+  return sameHarness &&
     params.preflightRequired === true &&
     params.preflightCompactionTrigger === "transcript_bytes" &&
     params.trigger === "budget" &&
     expected?.agentId === sessionTarget.agentId &&
     expected.sessionId === sessionTarget.sessionId &&
     expected.sessionKey === sessionTarget.sessionKey &&
-    expected.storePath === sessionTarget.storePath &&
-    active === authority
+    expected.storePath === sessionTarget.storePath
     ? claim
     : undefined;
 }

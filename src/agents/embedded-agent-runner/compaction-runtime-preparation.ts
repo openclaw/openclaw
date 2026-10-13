@@ -33,19 +33,34 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
-export function projectCodexHostTranscriptBytePreflightConfig(
+export function projectHostCompactionConfig(
   config: OpenClawConfig | undefined,
-  active: boolean,
+  options: {
+    nativeCodex?: boolean;
+    transcriptByteSummary?: boolean;
+    modelSelectionLocked?: boolean;
+  },
 ): OpenClawConfig | undefined {
   const compaction = config?.agents?.defaults?.compaction;
+  if (!compaction) {
+    return config;
+  }
+  const byteModel =
+    options.transcriptByteSummary && !options.modelSelectionLocked
+      ? compaction.transcriptByteModel?.trim()
+      : undefined;
   if (
-    !active ||
-    !compaction ||
-    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+    !byteModel &&
+    (!options.nativeCodex ||
+      (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider")))
   ) {
     return config;
   }
-  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  const { model: _model, provider: _provider, ...nativeCompaction } = compaction;
+  const projectedCompaction = {
+    ...(options.nativeCodex ? nativeCompaction : compaction),
+    ...(byteModel ? { model: byteModel } : {}),
+  };
   return {
     ...config,
     agents: {
@@ -62,6 +77,7 @@ export function resolveCompactionRuntimeSelection(params: {
   modelId?: string | null;
   authProfileId?: string | null;
   modelSelectionLocked?: boolean;
+  hostTranscriptBytePreflight?: boolean;
   sandboxSessionKey?: string | null;
   sandboxAgentId?: string;
   sessionKey?: string | null;
@@ -99,7 +115,15 @@ export function resolveCompactionRuntimeSelection(params: {
     !isDefaultAgentRuntimeId(policy.runtime)
       ? policy.runtime
       : undefined;
-  const boundHarnessRuntime = normalizeOptionalAgentRuntimeId(params.boundHarnessRuntime);
+  // A host-authorized mirror summary is separate from the native conversation.
+  // A model lock still forbids sending its history to another model.
+  const useSummaryModelRuntime =
+    params.hostTranscriptBytePreflight === true &&
+    params.modelSelectionLocked !== true &&
+    Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+  const boundHarnessRuntime = useSummaryModelRuntime
+    ? undefined
+    : normalizeOptionalAgentRuntimeId(params.boundHarnessRuntime);
   const selectedHarnessRuntime =
     params.selectedHarnessRuntime ??
     resolveCompactionHarnessRuntime({

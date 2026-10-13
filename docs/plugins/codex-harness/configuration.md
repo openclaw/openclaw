@@ -123,10 +123,19 @@ whether any individual file was fully loaded or truncated.
 
 ### Compaction
 
-Do not set `compaction.model` or `compaction.provider` on Codex-backed
-agents. Codex compacts through its native app-server thread state, so
-OpenClaw ignores those local summarizer overrides at runtime, and
-`openclaw doctor --fix` removes them when the agent uses Codex.
+Codex-backed agents ignore `compaction.model` and `compaction.provider`.
+`openclaw doctor --fix` removes these unused settings, retaining shared defaults
+when non-Codex agents can inherit them. Enabling the byte guard does not change
+that cleanup or activate an old model override.
+
+When `agents.defaults.compaction.maxActiveTranscriptBytes` is enabled, explicitly
+set `agents.defaults.compaction.transcriptByteModel` to use a different model for
+the separate built-in host mirror summary. Otherwise it keeps the conversation
+model. Doctor preserves this new opt-in and never derives it from the old
+setting. The selected model receives history through its own credentials and
+billing route, subject to the original operator's live model permission.
+Model-locked histories keep their creating model. Native Codex compaction and
+the chat model remain unchanged; custom context engines keep their own policy.
 
 An authored `models.providers.*.models[].contextTokens` cap is forwarded to
 Codex thread start and resume as `model_context_window`. Codex clamps the value

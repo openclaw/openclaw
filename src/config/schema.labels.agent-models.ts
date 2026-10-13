@@ -1,4 +1,7 @@
 export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
+  "agents.defaults.compaction.model": "Compaction Model Override",
+  "agents.defaults.compaction.transcriptByteModel": "Transcript Byte Compaction Model",
+  "agents.defaults.compaction.memoryFlush.model": "Compaction Memory Flush Model Override",
   "agents.entries.*.models": "Agent Model Overrides",
   "agents.entries.*.modelPolicy": "Agent Model Policy",
   "agents.entries.*.modelPolicy.allow": "Allowed Agent Models",

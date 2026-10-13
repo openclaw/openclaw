@@ -83,7 +83,7 @@ describe("transcript-byte preflight authority", () => {
 
   it("consumes the exact runtime-context claim once", () => {
     const runtimeContext = { sessionTarget };
-    const clearClaim = setTranscriptBytePreflightClaim(runtimeContext, authority);
+    const clearClaim = setTranscriptBytePreflightClaim(runtimeContext, authority, async () => {});
 
     expect(consume(runtimeContext)).toMatchObject({
       authority,
@@ -97,7 +97,7 @@ describe("transcript-byte preflight authority", () => {
     const runtimeContext: ContextEngineRuntimeContext = {
       sessionTarget: { ...sessionTarget },
     };
-    setTranscriptBytePreflightClaim(runtimeContext, authority);
+    setTranscriptBytePreflightClaim(runtimeContext, authority, async () => {});
     const replacementTarget = { ...sessionTarget, sessionId: "session-2" };
     runtimeContext.sessionTarget = replacementTarget;
 
@@ -126,7 +126,7 @@ describe("transcript-byte preflight authority", () => {
     runtimeContext: ContextEngineRuntimeContext;
     overrides?: ConsumeOverrides;
   }>)("rejects $name", ({ runtimeContext, overrides }) => {
-    setTranscriptBytePreflightClaim(runtimeContext, authority);
+    setTranscriptBytePreflightClaim(runtimeContext, authority, async () => {});
     expect(consume(runtimeContext, overrides)).toBeUndefined();
   });
 
@@ -134,9 +134,14 @@ describe("transcript-byte preflight authority", () => {
     const runtimeContext = { sessionTarget };
     const wrapper = () => consume(runtimeContext);
     const withCompactionPersistence =
-      vi.fn<NonNullable<Parameters<typeof setTranscriptBytePreflightClaim>[2]>>();
+      vi.fn<NonNullable<Parameters<typeof setTranscriptBytePreflightClaim>[3]>>();
 
-    setTranscriptBytePreflightClaim(runtimeContext, authority, withCompactionPersistence);
+    setTranscriptBytePreflightClaim(
+      runtimeContext,
+      authority,
+      async () => {},
+      withCompactionPersistence,
+    );
     expect(wrapper()).toMatchObject({
       authority,
       sessionTarget,

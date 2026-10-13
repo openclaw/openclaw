@@ -67,6 +67,7 @@ it.each([
     };
     const entry = await runSessionCompactionIfNeeded(params);
 
+    expect(compact.mock.calls[0]?.[1]).toMatchObject({ transcriptBytePreflight: true });
     expect(entry).toMatchObject({
       sessionId: "session",
       compactionCount: compacted ? 1 : 0,

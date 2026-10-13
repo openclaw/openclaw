@@ -41,7 +41,7 @@ import type {
 } from "./compact.types.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import {
-  projectCodexHostTranscriptBytePreflightConfig,
+  projectHostCompactionConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
@@ -209,10 +209,11 @@ export async function compactEmbeddedAgentSessionDirect(
   const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
   const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
-    config: projectCodexHostTranscriptBytePreflightConfig(
-      paramsBase.config,
-      Boolean(transcriptBytePreflightAuthority),
-    ),
+    config: projectHostCompactionConfig(paramsBase.config, {
+      nativeCodex: Boolean(transcriptBytePreflightAuthority),
+      transcriptByteSummary: Boolean(transcriptBytePreflightClaim),
+      modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
+    }),
     sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
@@ -245,6 +246,7 @@ export async function compactEmbeddedAgentSessionDirect(
   );
   const runtimeSelection = resolveCompactionRuntimeSelection({
     ...requestedParams,
+    hostTranscriptBytePreflight: Boolean(transcriptBytePreflightAuthority),
     modelId: requestedParams.model,
     boundHarnessRuntime: requestedParams.agentHarnessId,
     preparedRuntimePlan: requestedParams.runtimePlan,
@@ -306,12 +308,14 @@ export async function compactEmbeddedAgentSessionDirect(
         {
           abortSignal: requestedParams.abortSignal,
           deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
-            const config = projectCodexHostTranscriptBytePreflightConfig(
-              admittedConfig,
-              Boolean(transcriptBytePreflightAuthority),
-            );
+            const config = projectHostCompactionConfig(admittedConfig, {
+              nativeCodex: Boolean(transcriptBytePreflightAuthority),
+              transcriptByteSummary: Boolean(transcriptBytePreflightClaim),
+              modelSelectionLocked: requestedParams.modelSelectionLocked,
+            });
             const selected = resolveCompactionRuntimeSelection({
               ...requestedParams,
+              hostTranscriptBytePreflight: Boolean(transcriptBytePreflightAuthority),
               config,
               modelId: requestedParams.model,
               boundHarnessRuntime: requestedParams.agentHarnessId,
@@ -361,10 +365,11 @@ export async function compactEmbeddedAgentSessionDirect(
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       const preparedConfig =
-        projectCodexHostTranscriptBytePreflightConfig(
-          preparedModelRuntimeOwnerSnapshot.config,
-          Boolean(transcriptBytePreflightAuthority),
-        ) ?? preparedModelRuntimeOwnerSnapshot.config;
+        projectHostCompactionConfig(preparedModelRuntimeOwnerSnapshot.config, {
+          nativeCodex: Boolean(transcriptBytePreflightAuthority),
+          transcriptByteSummary: Boolean(transcriptBytePreflightClaim),
+          modelSelectionLocked: requestedParams.modelSelectionLocked,
+        }) ?? preparedModelRuntimeOwnerSnapshot.config;
       const preparedWorkspaceDir = sharedRuntimeWorkspace
         ? requestedWorkspaceDir
         : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
@@ -388,23 +393,14 @@ export async function compactEmbeddedAgentSessionDirect(
         agentDir: preparedModelRuntime.agentDir,
         workspaceDir: preparedWorkspaceDir,
         preparedModelRuntime,
-        ...(transcriptBytePreflightClaim
-          ? {
-              transcriptBytePreflightAuthority: true as const,
-              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
-                ? {
-                    transcriptByteCompactionPersistenceAsync:
-                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
-                  }
-                : {}),
-              ...(transcriptBytePreflightClaim.withCompactionPersistence
-                ? {
-                    transcriptByteCompactionPersistence:
-                      transcriptBytePreflightClaim.withCompactionPersistence,
-                  }
-                : {}),
-            }
-          : {}),
+        // Delegate input may carry unknown fields; only the consumed claim grants this fact.
+        transcriptBytePreflightAuthority: transcriptBytePreflightAuthority ? true : undefined,
+        assertTranscriptBytePreflightActive: transcriptBytePreflightClaim?.assertActive,
+        transcriptByteOperatorAuthority: transcriptBytePreflightClaim?.operatorAuthority,
+        transcriptByteCompactionPersistence:
+          transcriptBytePreflightClaim?.withCompactionPersistence,
+        transcriptByteCompactionPersistenceAsync:
+          transcriptBytePreflightClaim?.withCompactionPersistenceAsync,
       };
       const compactPrepared = async () => {
         if (
