@@ -164,6 +164,7 @@ describe("plugin-state-store.authority", () => {
                 // Service node setup probes this host binding even when the service never invokes nodes.
                 subagent: {
                   complete: unexpectedSubagent,
+                  forkSession: unexpectedSubagent,
                   run: unexpectedSubagent,
                   waitForRun: unexpectedSubagent,
                   getSessionMessages: unexpectedSubagent,

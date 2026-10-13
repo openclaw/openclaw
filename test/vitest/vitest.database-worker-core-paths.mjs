@@ -23,6 +23,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/embedded-agent-runner.responses-cold-prefix.test.ts",
   "src/agents/workspace-sandbox.test.ts",
+  "src/agents/embedded-agent-runner.session-fork.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",

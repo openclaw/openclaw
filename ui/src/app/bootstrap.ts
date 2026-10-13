@@ -19,6 +19,7 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { i18n, isSupportedLocale } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -71,6 +72,12 @@ import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import {
+  rememberProfileAppearanceIdentity,
+  seedProfileAppearancePrefs,
+} from "./server-prefs-profile.ts";
+import { applyServerUiPrefs } from "./server-prefs-reconcile.ts";
+import { extractProfileUiPrefs, PROFILE_UI_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadGatewaySessionSelection,
@@ -88,6 +95,7 @@ import {
 } from "./startup-settings.ts";
 import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
+import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 export type ApplicationRuntime = {
@@ -254,6 +262,46 @@ export function bootstrapApplication(): ApplicationRuntime {
   const initialRoutingLocationReady = firstRunDefaultLanding
     ? Promise.resolve(initialRoutingLocation)
     : resolveInitialLocation();
+  const config = createApplicationConfigCapability({
+    resourceBasePath,
+    getAuth: getGatewayAuth,
+  });
+  const canUseDocumentPreferences = () =>
+    gatewayCredentialScope(gateway.connection.gatewayUrl) === documentGatewayScope;
+  const documentPreferences = canUseDocumentPreferences() ? config.preferences : undefined;
+  if (documentPreferences) {
+    const scope = gateway.connection.gatewayUrl;
+    const { profileId, entries } = documentPreferences;
+    rememberProfileAppearanceIdentity(scope, profileId ?? null);
+    if (profileId && entries) {
+      seedProfileAppearancePrefs(scope, profileId, extractProfileUiPrefs(entries));
+    }
+    applyServerUiPrefs(documentPreferences.config ?? {}, {
+      scope,
+      profileId,
+      navigationConfirmed: entries !== undefined,
+      onApplied: (patch) => Object.assign(settings, patch),
+    });
+    if (isSupportedLocale(settings.locale)) {
+      void i18n.setLocale(settings.locale);
+    }
+  }
+  let firstPreferencesConnection = true;
+  const stopBootstrapPreferences = gateway.subscribe((snapshot) => {
+    if (snapshot.phase !== "connected" || !snapshot.client || !firstPreferencesConnection) {
+      return;
+    }
+    firstPreferencesConnection = false;
+    const { profileId, entries } = documentPreferences ?? {};
+    if (
+      canUseDocumentPreferences() &&
+      profileId === snapshot.selfUser?.id &&
+      profileId &&
+      entries
+    ) {
+      seedUserPreferences(snapshot.client, profileId, PROFILE_UI_PREFERENCE_KEYS, entries);
+    }
+  });
   const agentIdentity = createAgentIdentityCapability(gateway);
   const theme = createApplicationTheme(settings, gateway);
   const agentSelection = createAgentSelectionCapability(
@@ -297,10 +345,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       sessionRefFromPath(applicationLocation.pathname, basePath) !== null,
   });
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
-  const config = createApplicationConfigCapability({
-    resourceBasePath,
-    getAuth: getGatewayAuth,
-  });
   const sessions = createSessionCapability(gateway, agentSelection, {
     bootRecord,
     connectionBootstrap,
@@ -308,7 +352,17 @@ export function bootstrapApplication(): ApplicationRuntime {
   const bootRecordPersistence = ownsWarmBoot
     ? subscribeBootRecordPersistence({ gateway, agents, sessions }, bootRecord)
     : undefined;
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const runtimeConfig = createRuntimeConfigCapability(gateway, {
+    current: () => {
+      const preferences = config.preferences;
+      return canUseDocumentPreferences() &&
+        (gateway.snapshot.phase !== "connected" ||
+          preferences?.profileId === gateway.snapshot.selfUser?.id)
+        ? (preferences?.config ?? null)
+        : null;
+    },
+    subscribe: config.subscribe,
+  });
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
     getActiveSessionKey: () => gateway.snapshot.sessionKey || undefined,
@@ -691,6 +745,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       placementStartup.dispose();
       sessions.dispose();
       stopConfigWriteSuspension();
+      stopBootstrapPreferences();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();

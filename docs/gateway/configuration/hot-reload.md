@@ -22,6 +22,10 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+If restart preparation or signal delivery fails, the Gateway logs the failure
+and leaves the restart pending without retrying automatically. Correct the
+reported problem, then reapply the config or restart the Gateway manually.
+
 UI preferences remain in `ui.prefs`. Changing them preserves prepared model
 catalogs, provider authentication, and plugin registrations. Display changes
 still publish the updated config to consumers that read those settings.

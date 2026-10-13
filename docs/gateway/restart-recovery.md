@@ -24,6 +24,9 @@ message alone cannot restore missing sender authority.
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
 provider reports an error and the turn settles before shutdown discovers it.
+The next visible message preserves an interrupted turn's recovery claim even
+when its saved status is failed, timed out, or killed. Recovery resumes the
+interrupted work before the new message takes foreground ownership.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.

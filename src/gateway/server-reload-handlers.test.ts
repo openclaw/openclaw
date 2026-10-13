@@ -2575,45 +2575,6 @@ describe("gateway hot reload commit policy", () => {
 });
 
 describe("gateway restart deferral preflight", () => {
-  it("defers a restart emission retry while host suspension is prepared", async () => {
-    const { promise: retryEmitted, resolve: recordRetryEmission } = createDeferred();
-    const requestRecoveryRestart = vi
-      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
-      .mockReturnValueOnce({ status: "failed" })
-      .mockImplementationOnce(() => {
-        recordRetryEmission?.();
-        return { status: "emitted" };
-      });
-    const { requestGatewayRestart, stopRestartRetries } = createReloadHandlersForTest(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      requestRecoveryRestart,
-    );
-    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
-    vi.useFakeTimers();
-
-    try {
-      const initialResult = await runWithGatewayIndependentRootWorkAdmission(async () =>
-        requestGatewayRestart(createGatewayRestartPlan(), {}),
-      );
-      expect(initialResult.status).toBe("recovery-pending");
-      suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.commit()).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
-
-      expect(suspension?.release()).toBe(true);
-      await retryEmitted;
-      expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
-    } finally {
-      suspension?.release();
-      stopRestartRetries();
-    }
-  });
-
   it("retires a rejected preflight after it supersedes committed restart work", async () => {
     const requestRecoveryRestart = vi
       .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
@@ -2897,7 +2858,7 @@ describe("gateway restart deferral preflight", () => {
     );
   });
 
-  it("cancels a failed restart retry when a newer restart supersedes it", async () => {
+  it("leaves a failed restart pending until another request", async () => {
     const requestRecoveryRestart = vi
       .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
       .mockReturnValueOnce({ status: "failed" })
@@ -2915,6 +2876,8 @@ describe("gateway restart deferral preflight", () => {
       expect(
         requestGatewayRestart(createGatewayRestartPlan(), { gateway: { port: 18790 } }).status,
       ).toBe("recovery-pending");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
 
       expect(
         requestGatewayRestart(createGatewayRestartPlan("gateway.auth"), {
@@ -2952,13 +2915,12 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
-  it("keeps retrying a deferred restart until signal admission succeeds", async () => {
+  it("reports a failed deferred restart without retrying signal admission", async () => {
     restartTesting.resetRestartSignalState();
     resetGatewayWorkAdmission();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const requestRecoveryRestart = vi
       .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
-      .mockReturnValueOnce({ status: "failed" })
       .mockReturnValueOnce({ status: "failed" })
       .mockReturnValueOnce({ status: "emitted" });
     const { requestGatewayRestart, stopRestartRetries } = createReloadHandlersForTest(
@@ -2984,13 +2946,16 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
       expect(logReload.warn).toHaveBeenCalledWith(
-        "gateway restart recovery emission failed; retrying",
+        "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
+      );
+      expect(logReload.info).not.toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
       );
 
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+      expect(requestGatewayRestart(createGatewayRestartPlan(), {}).status).toBe("accepted");
       expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(requestRecoveryRestart).toHaveBeenCalledTimes(3);
     } finally {
       stopRestartRetries();
       restartTesting.resetRestartSignalState();
@@ -4520,7 +4485,7 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it.each(["absent", "during acceptance"])(
-    "revalidates restart secrets after held promotion and before emission retries (watcher readiness: %s)",
+    "revalidates restart secrets after held promotion and an explicit reapply (watcher readiness: %s)",
     async (readiness) => {
       vi.useFakeTimers();
       const harness = await createManagedRestartSequenceHarness();
@@ -4554,7 +4519,7 @@ describe("gateway Gmail hot reload handlers", () => {
         await vi.advanceTimersByTimeAsync(500);
         expect(harness.assertRestartReady).not.toHaveBeenCalled();
         expect(harness.logReload.warn).not.toHaveBeenCalledWith(
-          "gateway restart recovery emission failed; retrying",
+          "gateway restart preparation failed; reapply the config or restart the Gateway manually",
         );
         expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
         hoisted.activeAgentRunCount.value = 1;
@@ -4563,11 +4528,11 @@ describe("gateway Gmail hot reload handlers", () => {
         await leaseClock.waitForFirstLease();
         expect(harness.assertRestartReady).not.toHaveBeenCalled();
         hoisted.activeAgentRunCount.value = 0;
-        const retryScheduled = harness.nextReloadWarning(
-          "gateway restart recovery emission failed; retrying",
+        const restartRefused = harness.nextReloadWarning(
+          "gateway restart preparation failed; reapply the config or restart the Gateway manually",
         );
         await vi.advanceTimersByTimeAsync(500);
-        await leaseClock.waitFor(retryScheduled);
+        await leaseClock.waitFor(restartRefused);
         expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
         expect(harness.assertRestartReady).toHaveBeenCalledOnce();
         expect(harness.logReload.warn).toHaveBeenCalledWith(
@@ -4576,10 +4541,16 @@ describe("gateway Gmail hot reload handlers", () => {
 
         harness.setSecretAvailable("RESTART_A_TOKEN");
         await vi.advanceTimersByTimeAsync(1_000);
+        expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+        const reapplied = harness.nextPromotion();
+        harness.writeConfig(harness.deferredConfig, "explicit-emission-reapply", 2);
+        await vi.advanceTimersByTimeAsync(0);
+        await leaseClock.waitFor(reapplied);
+        await vi.advanceTimersByTimeAsync(500);
         await leaseClock.waitFor(harness.restartEmitted);
         expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
         expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
-        expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(3);
+        expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledTimes(5);
       } finally {
         promotionGate.resolve();
         hoisted.activeAgentRunCount.value = 0;

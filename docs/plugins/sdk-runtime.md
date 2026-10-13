@@ -81,6 +81,68 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.state`              | [State and system](/plugins/sdk-runtime/state-and-system#api-runtime-state)     |
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
 
+### Read-only session forks
+
+Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
+for background inference against an existing session. It returns
+`{ text, usage? }`; usage uses the completion fields `inputTokens`, `outputTokens`,
+`cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, and `costUsd`.
+The timeout defaults to 30 seconds.
+
+The fork uses the session's model and harness, with no model override. Codex
+inherits the conversation and tool definitions in an ephemeral thread, but denies
+local tool calls at dispatch and disables provider-hosted web search. On managed
+inference routes, it replays the parent's last prepared instructions, tool schemas,
+and input prefix, including after parent completion, with tool choice set to `none`.
+Snapshots share a 32 MiB in-memory LRU budget; evicted or oversized snapshots
+and WebSocket continuation requests fall back to native thread reconstruction
+without guaranteed cache reuse. While declarations remain in the snapshot budget,
+tool schemas stay parent-identical even on that native reconstruction path.
+Denied forks always set tool choice to `none` on managed inference requests,
+while native hosted search remains disabled. The fork has its own thread,
+session, and current model authority.
+Start a normal parent turn
+in the current runtime before requesting a fork. The native hook relay must be
+enabled and available; otherwise the request fails closed.
+The built-in `openclaw` runtime replays the parent's recorded provider request
+with one appended user message, preserving its system prompt, tools, reasoning
+settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
+payload data without re-running the parent's one-shot continuation hooks.
+The replay uses the current prepared model's proxy and TLS policy. Session read
+authority is checked immediately before every network send, including retries.
+Native ChatGPT forks use independent connections without consuming or replacing
+the parent's continuation. Supported APIs are OpenAI Responses (including native
+ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
+fail before dispatch because their transports cannot enforce the fork's live
+request authority.
+Tool choice is set to `none` before dispatch to prevent hosted tool execution;
+local tool calls are also denied, with at most two additional inference attempts.
+On Anthropic, changing tool choice invalidates the messages cache, but preserves
+the tool and system caches. Other APIs without a supported hosted-tool prohibition
+are rejected when the recorded request contains tools.
+Snapshots stay in bounded process memory until expiry or session cleanup.
+Read-only forks do not acquire workspace placement authority, so a parent's
+pending placement publication does not block them. Normal parent settlement and
+usage updates preserve the fork's read authority. Session reset or deletion
+revokes even an in-flight fork before its answer can be returned.
+After a restart or without a prepared parent turn, the request fails closed:
+"Cache-parity session fork requires a parent turn prepared by this OpenClaw
+runtime. Send a normal message first." CLI runtimes are unsupported for
+`forkSession`, even when their backend can disable native tools. Ordinary `/btw`
+keeps its lightweight, tool-free context; CLI backends with native tools must
+explicitly support disabling them for side questions, while backends with no
+native tools need no additional declaration.
+
+Conversation access is required through
+`plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
+bundled plugins). The caller must also have the target session's `sessions.get`
+read access. That authority, the Gateway binding, and conversation access remain
+live through inference and return. Requests share the subagent command lane and
+the `agents.defaults.subagents.maxConcurrent` cap with `subagent.complete`, and
+are cancelled when their runtime is retired. A fork does not write a transcript,
+deliver an answer, fire agent-turn lifecycle hooks, or consume queued injections
+or steering. Missing session context and unsupported harnesses produce errors.
+
 ## Storing runtime references
 
 Synchronous storage compatibility calls retain their synchronous return contract.

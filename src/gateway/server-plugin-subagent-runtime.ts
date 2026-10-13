@@ -4,11 +4,15 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
+import { resolveAgentDir, resolveSessionAgentIdsStrict } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { resolveConversationAccessAllowed } from "../plugins/hook-policy-decisions.js";
 import { compileModelAllowlist, type CompiledModelAllowlist } from "../plugins/model-allowlist.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -16,6 +20,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
+import type { LlmCompleteUsage } from "../plugins/runtime/types-core.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -27,8 +32,10 @@ import {
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   prepareInProcessAgentExecution,
+  withInProcessGatewayRead,
 } from "./server-plugin-in-process-dispatch.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 function normalizePluginSubagentRunRuntime(
   value: unknown,
@@ -198,6 +205,145 @@ export function createGatewaySubagentRuntime(
   };
 
   const subagentRuntime: PluginRuntime["subagent"] = {
+    async forkSession(request) {
+      const params = { ...request };
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const pluginId = scope?.pluginId?.trim();
+      if (!pluginId) {
+        throw new Error("Plugin session fork requires a plugin identity and Gateway binding.");
+      }
+      const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+      if (!context) {
+        throw new Error("Plugin session fork requires an active Gateway binding.");
+      }
+      const assertConversationAccess = (cfg: OpenClawConfig) => {
+        const origin =
+          scope?.pluginOrigin ??
+          getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId)?.origin ??
+          "config";
+        if (!resolveConversationAccessAllowed(origin, cfg.plugins?.entries?.[pluginId]?.hooks)) {
+          throw new Error(
+            `Plugin session fork requires plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
+          );
+        }
+      };
+      assertConversationAccess(context.getRuntimeConfig());
+      runtimeLifetime?.throwIfAborted();
+      const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+        sessionKey: params.sessionKey,
+        config: context.getRuntimeConfig(),
+      });
+      const execution = await prepareInProcessAgentExecution({
+        agentId,
+        pluginRuntimeOwnerId: pluginId,
+        resolveGatewayContext,
+      });
+      try {
+        const assertExecutionCurrent = () => {
+          runtimeLifetime?.throwIfAborted();
+          execution.assertCurrent();
+          assertConversationAccess(execution.context.getRuntimeConfig());
+        };
+        await execution.authorize();
+        assertExecutionCurrent();
+        return await withInProcessGatewayRead(
+          {
+            method: "sessions.get",
+            requestParams: { key: params.sessionKey },
+            scope,
+            resolveGatewayContext,
+            callerAuthorityError: "Plugin session fork caller authority expired.",
+          },
+          async (_resolved, assertReadCurrent) => {
+            const assertCurrent = () => {
+              assertExecutionCurrent();
+              assertReadCurrent();
+            };
+            assertCurrent();
+            const signal = AbortSignal.any(
+              [
+                getGatewayRestartDrainSignal(),
+                params.signal,
+                runtimeLifetime,
+                execution.signal,
+              ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
+            );
+            return await enqueueCommandInLane(
+              CommandLane.Subagent,
+              async () => {
+                await execution.authorize();
+                assertCurrent();
+                signal.throwIfAborted();
+                const cfg = execution.context.getRuntimeConfig();
+                const target = await loadGatewaySessionEntryReadOnlyInWorker({
+                  cfg,
+                  key: params.sessionKey,
+                  agentId,
+                  assertActive: assertCurrent,
+                });
+                assertCurrent();
+                signal.throwIfAborted();
+                if (!target.entry?.sessionId) {
+                  throw new Error(`No active session context for "${params.sessionKey}".`);
+                }
+                const model = resolveSessionModelRef(cfg, target.entry, agentId);
+                assertOperatorModelAllowed(execution.operatorAuthority, model);
+                const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
+                const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+                const sessionEntry = target.entry;
+                // Lazy: a static import pulls the agent runtime into the Gateway startup chunk
+                // and the build rejects it (INEFFECTIVE_DYNAMIC_IMPORT on subagent-registry).
+                const { runBtwSideQuestion } = await import("../agents/btw.js");
+                assertCurrent();
+                signal.throwIfAborted();
+                let usage: LlmCompleteUsage | undefined;
+                const result = await execution.run(() =>
+                  runBtwSideQuestion({
+                    cfg,
+                    agentId,
+                    agentDir: resolveAgentDir(cfg, agentId),
+                    ...model,
+                    question: params.message,
+                    sessionEntry,
+                    sessionKey: target.canonicalKey,
+                    storePath: target.storePath,
+                    isNewSession: false,
+                    resolvedReasoningLevel: "off",
+                    resolvedThinkLevel: normalizeThinkLevel(sessionEntry.thinkingLevel),
+                    allowGatewaySubagentBinding: true,
+                    assertCurrent,
+                    operatorAuthority: execution.operatorAuthority,
+                    toolCalls: "deny",
+                    opts: { abortSignal: runSignal, timeoutOverrideMs: timeoutMs },
+                    onUsage: (value) => {
+                      usage = value
+                        ? {
+                            inputTokens: value.input,
+                            outputTokens: value.output,
+                            cacheReadTokens: value.cacheRead,
+                            cacheWriteTokens: value.cacheWrite,
+                            totalTokens: value.total,
+                            costUsd: value.cost?.total,
+                          }
+                        : undefined;
+                    },
+                  }),
+                );
+                assertCurrent();
+                runSignal.throwIfAborted();
+                if (!result?.text) {
+                  throw new Error("Session fork produced no answer.");
+                }
+                return { text: result.text, ...(usage ? { usage } : {}) };
+              },
+              { priority: "background", abortSignal: signal },
+            );
+          },
+        );
+      } finally {
+        execution.release();
+      }
+    },
     async complete(request) {
       // Authorization and credential selection must use the same request across queue waits.
       const params = { ...request };
