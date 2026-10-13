@@ -104,11 +104,14 @@ export function registerReplyAdmissionCases({
   it.each(["before cleanup", "after cleanup"] as const)(
     "retains a backend drain abort for startup recovery when lifecycle persists %s",
     async (order) => {
-      const sessionKey = "agent:main:dashboard:backend-drain";
-      const runId = "backend-drain-run";
+      const suffix = order === "before cleanup" ? "before" : "after";
+      const sessionKey = `agent:main:dashboard:backend-drain-${suffix}`;
+      const sessionId = `backend-drain-session-${suffix}`;
+      const runId = `backend-drain-run-${suffix}`;
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
         {
+          sessionId,
           restartRecoveryDeliveryRunId: runId,
           restartRecoveryDeliverySourceRunId: runId,
           restartRecoverySourceIngress: "control-ui",
@@ -168,10 +171,11 @@ export function registerReplyAdmissionCases({
         storePath,
         opts: { runId },
         sessionCtx: { Provider: "webchat", MessageSid: runId },
-        runOverrides: { config },
+        runOverrides: { config, sessionId },
       });
-      await expect(run()).resolves.toMatchObject({ text: SILENT_REPLY_TOKEN });
+      const reply = await run();
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(reply).toMatchObject({ text: SILENT_REPLY_TOKEN });
       if (order === "after cleanup") {
         await persistAbort();
       }
