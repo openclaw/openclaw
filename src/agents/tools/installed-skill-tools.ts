@@ -1,5 +1,4 @@
 import { Type } from "typebox";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   bindAgentToolAvailability,
   getAgentToolAvailabilityBinding,
@@ -38,30 +37,6 @@ export function createInstalledSkillTools(
   }
   const readerBinding: AgentToolAvailabilityBinding = { prepare() {} };
   let readAuthority: object | undefined;
-  /** Resolve the delivery receipt for the bytes this invocation actually serves. */
-  const resolveDeliveredFingerprint = async (
-    name: string,
-    content: string,
-    cohort?: number,
-  ): Promise<string | undefined> => {
-    const skill = skills.find((entry) => entry.name === name);
-    if (!skill) {
-      return undefined;
-    }
-    // A live-tree entry acquires the identity of the bytes this serving read
-    // returned and attributes it only when the acquired tree contains those
-    // exact bytes. A retained or pinned entry provably serves its producer's
-    // stamped bytes, so its stamp is the receipt. Anything else omits: the
-    // serving boundary never borrows a preparation-time identity.
-    if (skill.acquireDeliveredFingerprint) {
-      try {
-        return await skill.acquireDeliveredFingerprint(content, cohort);
-      } catch {
-        return undefined;
-      }
-    }
-    return skill.attributableBundleFingerprint;
-  };
   return [
     bindAgentToolAvailability<AnyAgentTool>(
       {
@@ -107,47 +82,27 @@ export function createInstalledSkillTools(
         execute: async (toolCallId, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
-          const instructions = await readInstalledSkill(skills, name, signal);
           const markers = delivery?.skillInstructionDeliveryMarkers;
           // The receipt cohort is the epoch this invocation's serving read
-          // started in: a clear during that read rejects acquisition, so this
-          // invocation never arms a walk a fresh generation could join.
+          // started in: a clear during that read treats the settlement as
+          // cleared, so this invocation never captures a receipt a fresh
+          // generation could consume.
           const invocationCohort = markers?.generation();
-          // Telemetry acquisition never holds a completed read: it is bound to
-          // this invocation's abort signal — an abort omits the receipt — and
-          // the serving read's cancellation and currency checks are revalidated
-          // after it, mirroring readInstalledSkill's own post-await gate.
-          let fingerprint: string | undefined;
-          if (
-            markers &&
-            invocationCohort !== undefined &&
-            markers.generation() !== invocationCohort
-          ) {
-            fingerprint = undefined;
-          } else {
-            try {
-              fingerprint = await racePromiseWithAbortSignal(
-                resolveDeliveredFingerprint(name, instructions.content, invocationCohort),
-                signal,
-              );
-            } catch {
-              fingerprint = undefined;
-            }
-          }
+          const instructions = await readInstalledSkill(skills, name, signal);
           signal?.throwIfAborted();
-          skills.find((entry) => entry.name === name)?.assertCurrent?.();
-          if (
-            markers &&
-            fingerprint &&
-            typeof toolCallId === "string" &&
-            // An epoch clear that landed while the acquisition was pending
-            // owns the markers now: this invocation started in a cleared
-            // generation, so it never captures a receipt the next generation
-            // could consume — a pending acquisition never bridges a clear.
-            (invocationCohort === undefined || markers.generation() === invocationCohort)
-          ) {
-            // The receipt rides the invocation: the matcher consumes it at
-            // emission instead of borrowing a preparation-time snapshot stamp.
+          const skill = skills.find((entry) => entry.name === name);
+          skill?.assertCurrent?.();
+          // The receipt rides the invocation, resolved by lookup at the serving
+          // boundary: the entry's retained loaded-bundle identity, never a
+          // delivery-time tree read. An epoch clear that landed during the
+          // serving read owns the markers now, so a cleared invocation
+          // captures nothing — the matcher omits until a fresh delivery
+          // re-establishes one.
+          const fingerprint =
+            invocationCohort === undefined || markers?.generation() === invocationCohort
+              ? skill?.bundleFingerprint
+              : undefined;
+          if (markers && fingerprint && typeof toolCallId === "string") {
             markers.captureInvocationFingerprint(toolCallId, fingerprint);
           }
           return {

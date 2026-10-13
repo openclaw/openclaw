@@ -22,7 +22,6 @@ import {
   resolveAdaptiveReadMaxBytes,
   type SkillInstructionDeliveryCache,
   type SkillInstructionDeliveryMarkers,
-  type SkillDeliveredIdentityAcquirers,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapSandboxFileToolPath,
@@ -190,7 +189,6 @@ type CoreCodingToolsOptions = {
   skillInstructionPaths?: readonly string[];
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
-  skillDeliveredIdentityAcquirers?: SkillDeliveredIdentityAcquirers;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
@@ -370,9 +368,6 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             filePath: resolveSkillReadPath(skill),
             readContent: retainHostContent ? skill.readContent : undefined,
             bundleFingerprint: retainHostContent ? skill.bundleFingerprint : undefined,
-            acquireDeliveredFingerprint: retainHostContent
-              ? options.skillDeliveredIdentityAcquirers?.get(skill)
-              : undefined,
           };
         }),
         {

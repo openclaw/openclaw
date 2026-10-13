@@ -11,8 +11,6 @@ import {
   SkillResourceDeliverySchema,
   type SkillResourceDelivery,
 } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
-import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import type { SkillDeliveredIdentityAcquirer } from "../../agents/agent-tools.read.js";
 import {
   getAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
@@ -132,67 +130,26 @@ const localSkillResourceReader: SkillResourceSourceReader = {
 };
 
 /**
- * Telemetry-only bound on bundle-identity acquisition walks: a resource-reader
- * tree walk that cannot establish the bundle promptly omits the identity
- * instead of holding up turn preparation or a completed delivery. Preparation
- * discovery walks share one budget across all of a preparation's bundles, so
- * a slow reader delays traced turn startup at most once, and that delay stays
- * within one second: optional telemetry must never gate the first model call
- * for longer, and bundles that miss the budget still arm the opportunistic
- * delivery-time acquisition below. It never bounds resource-integrity reads.
- */
-export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 1_000;
-
-/**
- * Opportunistic bound on delivery-time identity acquisition: the serving
- * boundary consults telemetry only while a completed read waits, so a slow or
- * remote reader gets this small budget per delivery — never the full
- * preparation budget — and the fingerprint omits instead of delaying the
- * served instructions by more than this.
- */
-export const SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS = 250;
-
-/**
- * Bound on in-flight telemetry walks per preparation and per reader: discovery
- * and delivery acquisitions run concurrently, but a slow or remote reader never
- * accumulates more outstanding tree reads behind abandoned observations than
- * this — including abandoned reads an earlier traced turn left in flight.
- */
-export const SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY = 8;
-
-/**
- * In-flight telemetry walks per source reader across preparations. The reader
- * object is process-stable per workspace/host binding, so timed-out walks one
- * preparation abandoned still count against later preparations using the same
- * reader and release when the underlying read settles on its own timeout.
- */
-const readerOutstandingTelemetryWalks = new WeakMap<SkillResourceSourceReader, number>();
-
-/**
  * Stamps the retained bundle identity onto ordinary local entries at the
- * preparation boundary, and arms delivery-time identity acquisition for the
- * entries a live tree serves. Discovery entries (the skills_read and command
- * matcher input) carry the discovered bundle's identity, hashed once per
- * loaded bundle per preparation through its owning host reader; stamp caches
- * key by host identity (the reader object) and directory, so a Gateway skill
- * and a same-path workspace skill never share an identity and a remote path
- * absent on the Gateway is read through the workspace that owns it. The read
- * wrapper instead binds identity at delivery settlement for live entries: the
- * emitted fingerprint describes the bytes that delivery actually serves, each
- * fresh delivery generation acquires once and verifies the acquired tree
- * contains the delivered instruction text (a tree that changed inside the
- * delivery window never backs the served bytes and omits instead), concurrent
- * settlements coalesce, and already-served re-reads never rehash. Pinned
- * library revisions retain their identified bytes, so their stamps hold at
- * delivery. An entry-carried stamp is its producer's retained field: when the
- * entry provably serves its retained identified bytes (a producer-stamped
- * `readContent`), the installed catalog attributes that stamp directly and no
- * live-tree acquisition arms behind the retained generation. `node://`
- * locators and unreadable roots omit the field;
- * telemetry-only acquisition never weakens resource integrity, misattributes
- * an identity, or fails the run. Stamps copy entries instead of mutating them
- * so caller-owned snapshots and cached library pins stay untouched, and a
- * restamped entry whose identity is unchanged keeps the original object.
+ * preparation boundary. The fingerprint identifies the loaded skill bundle —
+ * the bundle this preparation's reader gathers — never the exact bytes a later
+ * delivery serves: identity is a property of the loaded bundle, computed here
+ * once per loaded bundle per preparation through its owning host reader (the
+ * existing `prepareSkillBundle` digest over the walked tree), and every
+ * emission looks the retained field up. Stamp caches key by host identity (the
+ * reader object) and directory, so a Gateway skill and a same-path workspace
+ * skill never share an identity, and a remote path absent on the Gateway is
+ * read through the workspace that owns it. `node://` locators and unreadable
+ * roots omit the field; a telemetry-only read failure omits rather than weakens
+ * resource integrity or fails the run. Stamps copy entries instead of mutating
+ * them so caller-owned snapshots and cached library pins stay untouched, and a
+ * restamped entry whose identity is unchanged keeps the original object. A
+ * source edit after preparation is a disclosed staleness window, not a defect
+ * here: the skill watcher reloads edited skills within seconds and the next
+ * preparation restamps from the reloaded tree, so emissions carry the
+ * previously loaded bundle's identity only until that reload
+ * (watching-disabled routes, such as the cron snapshot path, restamp at their
+ * next reload).
  */
 export async function stampLocalSkillBundleIdentities(params: {
   snapshot: SkillSnapshot | undefined;
@@ -202,9 +159,7 @@ export async function stampLocalSkillBundleIdentities(params: {
 }): Promise<{
   snapshot: SkillSnapshot | undefined;
   libraryEntries: SkillEntry[];
-  deliveredIdentityAcquirers: WeakMap<Skill, SkillDeliveredIdentityAcquirer>;
 }> {
-  const deliveredIdentityAcquirers = new WeakMap<Skill, SkillDeliveredIdentityAcquirer>();
   // Host-aware reader selection mirrors prepareSkillResourceDelivery: entries
   // owned by the Gateway read locally; every other entry reads through the
   // remote workspace's owning reader when that workspace owns skill loading.
@@ -238,227 +193,75 @@ export async function stampLocalSkillBundleIdentities(params: {
     }
     return workspaceAccessUnavailable ? undefined : localSkillResourceReader;
   };
-  /** One shared budget for all of this preparation's discovery walks. */
-  const preparationDeadlineAt = Date.now() + SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS;
-  /** An acquired bundle identity together with the instruction text its tree carries. */
-  type AcquiredBundleIdentity = { revision: string; instructionText: string };
-  /** Underlying bundle walks this preparation started that have not settled yet. */
-  let outstandingBundleWalks = 0;
   /**
-   * Counts an underlying bundle walk against the per-preparation bound: a
-   * slow or remote reader never holds more walks open behind abandoned or
-   * timed-out observations than the bound, whether a discovery batch or a
-   * delivery-time acquisition started them. The count releases only when the
-   * underlying read settles — a race deadline alone never frees a slot.
-   *
-   * The bound is also shared across preparations per reader: a race deadline
-   * abandons an observation but cannot cancel the underlying read, so without
-   * a reader-scoped cap each new traced turn would start a fresh batch of
-   * telemetry walks while earlier turns' abandoned reads still hold the
-   * reader's transport. A later preparation omits identities behind that cap
-   * instead of accumulating reads; real readers release slots when their own
-   * operation timeouts settle the underlying reads.
+   * Reads one loaded bundle's identity through its owning host reader. The
+   * walk is telemetry-only: a failure omits the identity rather than failing
+   * the run, and it never bounds or replaces the resource-integrity reads
+   * delivery preparation itself performs.
    */
-  const tryStartBundleWalk = (reader: SkillResourceSourceReader): boolean => {
-    if (outstandingBundleWalks >= SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
-      return false;
-    }
-    const readerOutstanding = readerOutstandingTelemetryWalks.get(reader) ?? 0;
-    if (readerOutstanding >= SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
-      return false;
-    }
-    outstandingBundleWalks += 1;
-    readerOutstandingTelemetryWalks.set(reader, readerOutstanding + 1);
-    return true;
-  };
   const readBundleIdentity = async (
     skill: Skill,
     reader: SkillResourceSourceReader,
-    budgetMs: number,
-  ): Promise<AcquiredBundleIdentity | undefined> => {
-    if (!tryStartBundleWalk(reader)) {
-      // The preparation's or reader's walk bound is full: another underlying
-      // read never starts behind it, so this telemetry observation omits.
-      return undefined;
-    }
-    let underlyingSettled = false;
-    const releaseUnderlying = (): void => {
-      if (!underlyingSettled) {
-        underlyingSettled = true;
-        outstandingBundleWalks -= 1;
-        readerOutstandingTelemetryWalks.set(
-          reader,
-          (readerOutstandingTelemetryWalks.get(reader) ?? 1) - 1,
-        );
-      }
-    };
+  ): Promise<string | undefined> => {
     try {
-      // The bound sits at the resource-reader boundary so every consumer —
-      // preparation discovery stamps and delivery-time acquisition alike —
-      // observes a deadline: a tree that cannot establish the bundle promptly
-      // omits the identity instead of holding up turn preparation or a
-      // completed delivery. The underlying walk stays counted until it
-      // settles; the underlying walk keeps its own semantics and
-      // resource-integrity reads never pass through here.
-      const files = await raceWithTimeout(
-        () => {
-          const underlying = reader.readSkillFiles(skill, { allowMissingRoot: true });
-          void underlying.then(releaseUnderlying, releaseUnderlying);
-          return underlying;
-        },
-        budgetMs,
-        () => undefined,
-        { ref: false },
-      );
-      if (!files) {
-        return undefined;
-      }
-      // prepareSkillBundle requires a UTF-8 SKILL.md, so the acquired bundle
-      // carries the instruction text losslessly for delivery verification.
-      const bundle = prepareSkillBundle(files);
-      const skillMd = bundle.files.find((file) => file.path === "SKILL.md");
-      return skillMd
-        ? { revision: bundle.revision, instructionText: skillMd.bytes.toString("utf8") }
-        : undefined;
+      const files = await reader.readSkillFiles(skill, { allowMissingRoot: true });
+      return files ? prepareSkillBundle(files).revision : undefined;
     } catch {
-      // The factory threw before an underlying read existed, or the read
-      // itself failed: release this walk's slot either way.
-      releaseUnderlying();
       // Telemetry-only acquisition: omit rather than weaken resource integrity.
       return undefined;
     }
   };
-  type BundleIdentityCaches = {
-    /** Preparation-boundary discovery identities: one walk per bundle. */
-    discovered: Map<string, Promise<AcquiredBundleIdentity | undefined>>;
-    /** In-flight delivery acquisitions; never cached across generations. */
-    acquiring: Map<string, Promise<AcquiredBundleIdentity | undefined>>;
-  };
-  const cachesByReader = new WeakMap<SkillResourceSourceReader, BundleIdentityCaches>();
-  const resolveCaches = (reader: SkillResourceSourceReader): BundleIdentityCaches => {
+  /** Preparation-boundary discovery identities: one walk per loaded bundle. */
+  type BundleIdentityCache = Map<string, Promise<string | undefined>>;
+  const cachesByReader = new WeakMap<SkillResourceSourceReader, BundleIdentityCache>();
+  const resolveCaches = (reader: SkillResourceSourceReader): BundleIdentityCache => {
     let caches = cachesByReader.get(reader);
     if (!caches) {
-      caches = { discovered: new Map(), acquiring: new Map() };
+      caches = new Map();
       cachesByReader.set(reader, caches);
     }
     return caches;
   };
-  const mapWithBoundedWalks = async <T, R>(
-    items: readonly T[],
-    map: (item: T) => Promise<R>,
-  ): Promise<R[]> => {
-    const results: R[] = [];
-    for (let offset = 0; offset < items.length; offset += SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
-      results.push(
-        ...(await Promise.all(
-          items.slice(offset, offset + SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY).map(map),
-        )),
-      );
-    }
-    return results;
-  };
-  const resolveDiscoveredIdentity = async (
-    skill: Skill,
-  ): Promise<AcquiredBundleIdentity | undefined> => {
+  const resolveDiscoveredIdentity = (skill: Skill): Promise<string | undefined> => {
     if (skill.filePath.startsWith("node://")) {
-      return undefined;
+      return Promise.resolve(undefined);
     }
     const reader = resolveSourceReader(skill);
     if (!reader) {
-      return undefined;
+      return Promise.resolve(undefined);
     }
     const directory = path.resolve(skill.baseDir);
     const caches = resolveCaches(reader);
-    let identity = caches.discovered.get(directory);
+    let identity = caches.get(directory);
     if (!identity) {
-      // The preparation's shared budget bounds all discovery walks together:
-      // once spent, remaining bundles ship unstamped instead of delaying
-      // turn startup any further.
-      const remainingMs = preparationDeadlineAt - Date.now();
-      if (remainingMs <= 0) {
-        return undefined;
-      }
-      identity = readBundleIdentity(skill, reader, remainingMs);
-      caches.discovered.set(directory, identity);
+      // The fingerprint is computed once per loaded bundle: same-directory
+      // siblings coalesce into this single walk for the whole preparation.
+      identity = readBundleIdentity(skill, reader);
+      caches.set(directory, identity);
       // Do not pin a failed lookup: a later sibling may legitimately retry.
       void identity.then((acquired) => {
         if (acquired === undefined) {
-          caches.discovered.delete(directory);
+          caches.delete(directory);
         }
       });
     }
     return identity;
   };
-  const armDeliveredIdentityAcquirer = (skill: Skill): void => {
-    if (skill.filePath.startsWith("node://")) {
-      return;
-    }
-    deliveredIdentityAcquirers.set(skill, async (deliveredText, cohort) => {
-      const reader = resolveSourceReader(skill);
-      if (!reader || deliveredText === undefined) {
-        return undefined;
-      }
-      const directory = path.resolve(skill.baseDir);
-      const caches = resolveCaches(reader);
-      // In-flight coalescing is scoped to the caller's delivery cohort: a
-      // generation a compaction epoch clear advanced never joins an earlier
-      // generation's walk, so a fresh delivery after a clear acquires the
-      // identity of the tree it actually serves instead of inheriting one
-      // from before a clear or an edit inside it.
-      const acquiringKey = cohort === undefined ? directory : `${directory}\u0000${cohort}`;
-      const inFlight = caches.acquiring.get(acquiringKey);
-      // Delivery acquisition is opportunistic: it observes the short
-      // delivery-time bound, never the full preparation budget, so a slow
-      // or remote reader delays a completed read by at most that bound —
-      // the fingerprint omits rather than holds up the served instructions.
-      const acquisition =
-        inFlight ??
-        readBundleIdentity(skill, reader, SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS);
-      if (!inFlight) {
-        caches.acquiring.set(acquiringKey, acquisition);
-        void acquisition.then(() => caches.acquiring.delete(acquiringKey));
-      }
-      // Verify-at-acquire: the acquired tree must contain the delivered
-      // instruction text itself. A bundle that changed between the delivery's
-      // read and this acquisition never backs the served bytes, so the
-      // identity omits instead of describing a tree that was not delivered.
-      const acquired = await acquisition;
-      return acquired && acquired.instructionText === deliveredText ? acquired.revision : undefined;
-    });
-  };
-  // A pinned library revision retains its identified bytes behind the pin, so
-  // its preparation stamp holds at delivery and no delivery acquisition runs;
-  // every other entry acquires at delivery time.
-  const isPinnedRevision = (skill: Skill): boolean => isLibraryPin(skill);
   const stampSkills = async (skills: readonly Skill[]): Promise<Skill[]> => {
-    // Discovery walks run concurrently and bounded under the preparation's
-    // shared budget: a slow remote reader delays traced turn startup at most
-    // once, never once per discovered bundle, never accumulates more than the
-    // walk bound in outstanding reads, and the reader+directory caches still
-    // coalesce same-bundle siblings into a single walk.
-    const identities = await mapWithBoundedWalks(skills, (skill) =>
-      skill.bundleFingerprint
-        ? Promise.resolve(skill.bundleFingerprint)
-        : resolveDiscoveredIdentity(skill).then((acquired) => acquired?.revision),
+    // Discovery walks run concurrently, and the reader+directory caches
+    // coalesce same-bundle siblings into a single walk per loaded bundle.
+    const identities = await Promise.all(
+      skills.map((skill) =>
+        skill.bundleFingerprint
+          ? Promise.resolve(skill.bundleFingerprint)
+          : resolveDiscoveredIdentity(skill),
+      ),
     );
     return skills.map((skill, index) => {
       const identity = identities[index];
-      const stampedSkill =
-        identity === undefined || skill.bundleFingerprint === identity
-          ? skill
-          : { ...skill, bundleFingerprint: identity };
-      // An entry carrying both a producer-stamped bundle identity and
-      // retained identified readContent provably serves those stamped bytes:
-      // trust the stamp at delivery instead of arming a live-tree acquisition
-      // behind the retained generation, which can drop the receipt for paths
-      // this producer cannot reach. A stamp discovered here describes a
-      // preparation-time tree, so it still arms delivery acquisition.
-      const servesRetainedStamp =
-        Boolean(skill.bundleFingerprint) && typeof skill.readContent === "string";
-      if (!servesRetainedStamp && !isPinnedRevision(stampedSkill)) {
-        armDeliveredIdentityAcquirer(stampedSkill);
-      }
-      return stampedSkill;
+      return identity === undefined || skill.bundleFingerprint === identity
+        ? skill
+        : { ...skill, bundleFingerprint: identity };
     });
   };
   const resolvedSkills = params.snapshot?.resolvedSkills;
@@ -469,26 +272,15 @@ export async function stampLocalSkillBundleIdentities(params: {
       ? stampedResolved
       : await stampSkills(discoverySkills)
     : undefined;
-  const stampedLibrary = await mapWithBoundedWalks(params.libraryEntries, async (entry) => {
-    const identity =
-      entry.skill.bundleFingerprint ?? (await resolveDiscoveredIdentity(entry.skill))?.revision;
-    if (identity === undefined || entry.skill.bundleFingerprint === identity) {
-      // Same retained-delivery rule as the snapshot stamps above: an entry
-      // provably serving its producer-stamped readContent trusts that stamp
-      // at delivery; only a stamp discovered here arms acquisition.
-      const servesRetainedStamp =
-        Boolean(entry.skill.bundleFingerprint) && typeof entry.skill.readContent === "string";
-      if (!servesRetainedStamp && !isPinnedRevision(entry.skill)) {
-        armDeliveredIdentityAcquirer(entry.skill);
-      }
-      return entry;
-    }
-    const stampedSkill = { ...entry.skill, bundleFingerprint: identity };
-    if (!isPinnedRevision(stampedSkill)) {
-      armDeliveredIdentityAcquirer(stampedSkill);
-    }
-    return { ...entry, skill: stampedSkill };
-  });
+  const stampedLibrary = await Promise.all(
+    params.libraryEntries.map(async (entry) => {
+      const identity =
+        entry.skill.bundleFingerprint ?? (await resolveDiscoveredIdentity(entry.skill));
+      return identity === undefined || entry.skill.bundleFingerprint === identity
+        ? entry
+        : { ...entry, skill: { ...entry.skill, bundleFingerprint: identity } };
+    }),
+  );
   const snapshot = params.snapshot
     ? stampedResolved !== resolvedSkills || stampedDiscovery !== discoverySkills
       ? {
@@ -498,7 +290,7 @@ export async function stampLocalSkillBundleIdentities(params: {
         }
       : params.snapshot
     : undefined;
-  return { snapshot, libraryEntries: stampedLibrary, deliveredIdentityAcquirers };
+  return { snapshot, libraryEntries: stampedLibrary };
 }
 
 function matchesExplicitSelection(skill: Skill, selection: ExplicitSkillSelection): boolean {

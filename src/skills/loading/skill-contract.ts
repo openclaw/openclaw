@@ -15,10 +15,12 @@ export interface Skill {
   /** Prepared runtime identity of instruction bytes, or the complete delivered bundle tree. */
   contentHash?: string;
   /**
-   * Content fingerprint of the delivered skill bundle (SKILL.md plus support
-   * files), equal to that delivery's revision. A retained field stamped only by
-   * delivery, materialization, transfer, or the tracing-gated ordinary-local
-   * preparation producer; `contentHash` keeps its own separate semantics.
+   * Content fingerprint of the loaded skill bundle (SKILL.md plus support
+   * files): the bundle digest computed at delivery preparation and stamped
+   * once per loaded bundle by the delivery producers — worker materialization,
+   * the session route, the remote transfer adapter, and the tracing-gated
+   * ordinary-local preparation. `contentHash` keeps its own separate
+   * semantics.
    */
   bundleFingerprint?: string;
   filePath: string;

@@ -84,7 +84,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   runTrace: DiagnosticTraceContext;
   skillUsagePaths: SkillUsagePaths;
   skillReadResources?: Parameters<typeof createOpenClawCodingToolsInternalAsync>[1];
-  skillDeliveredIdentityAcquirers?: OpenClawCodingToolsOptions["skillDeliveredIdentityAcquirers"];
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
   codeModeSkills: readonly CodeModeSkill[];
   installedSkills?: OpenClawCodingToolsOptions["installedSkills"];
@@ -393,7 +392,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         computerContextEpoch,
         skillInstructionDeliveryCache,
         skillInstructionDeliveryMarkers,
-        skillDeliveredIdentityAcquirers: params.skillDeliveredIdentityAcquirers,
         registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
         inboundEventKind: attempt.currentInboundEventKind,
         inputProvenance: attempt.inputProvenance,

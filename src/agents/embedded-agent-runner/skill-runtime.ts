@@ -65,7 +65,6 @@ export async function prepareEmbeddedSkills(params: {
       skillsPrompt: "",
       skillsSnapshotForRun: undefined,
       skillReadResources: undefined,
-      skillDeliveredIdentityAcquirers: undefined,
       codeModeSkills: [],
       installedSkills: [],
     };
@@ -122,13 +121,13 @@ export async function prepareEmbeddedSkills(params: {
           {},
           params.assertCurrent ?? (() => {}),
         );
-    // Ordinary local runs stamp the retained bundle identity of the entries
-    // they serve at this preparation boundary, matching the worker, session,
-    // and transfer producers, and arm delivery-time identity acquisition for
-    // the live-served entries the read wrapper delivers. Gated on the active
-    // tracing consumer, checked once per preparation: zero bundle hashing or
-    // acquisition while tracing is inactive, one discovery walk per loaded
-    // bundle per preparation, and delivery acquisition once per generation.
+    // Ordinary local runs stamp the retained loaded-bundle identity of the
+    // entries they serve at this preparation boundary, matching the worker,
+    // session, and transfer producers: one discovery walk per loaded bundle
+    // per preparation, cached per preparation, and every emission resolves
+    // the retained field by lookup. Gated on the active tracing consumer,
+    // checked once per preparation: zero bundle hashing or filesystem walks
+    // while tracing is inactive.
     const stampedSkills =
       !params.sandbox?.enabled && hasActiveDiagnosticTracePropagation()
         ? await stampOrdinaryLocalBundleIdentities({
@@ -136,7 +135,7 @@ export async function prepareEmbeddedSkills(params: {
             libraryEntries,
             workspaceDir: skillsWorkspaceDir,
           })
-        : { snapshot: skillsSnapshot, libraryEntries, deliveredIdentityAcquirers: undefined };
+        : { snapshot: skillsSnapshot, libraryEntries };
     params.assertCurrent?.();
     // Preparation may yield to abort/revocation. Apply process-wide overrides only
     // once all filesystem work has settled and this caller can take custody.
@@ -157,7 +156,6 @@ export async function prepareEmbeddedSkills(params: {
       workspaceDir: skillsWorkspaceDir,
       sandbox: params.sandbox,
       assertCurrent: params.assertCurrent,
-      deliveredIdentityAcquirers: stampedSkills.deliveredIdentityAcquirers,
     });
     const codeModeSkills = params.includeCodeModeSkills ? installedSkills : [];
     // Host read exceptions use exact eligible resources without changing model visibility.
@@ -168,7 +166,6 @@ export async function prepareEmbeddedSkills(params: {
     return {
       restoreSkillEnv,
       skillReadResources,
-      skillDeliveredIdentityAcquirers: stampedSkills.deliveredIdentityAcquirers,
       skillUsagePaths,
       skillsPrompt,
       skillsSnapshotForRun: stampedSkills.snapshot,

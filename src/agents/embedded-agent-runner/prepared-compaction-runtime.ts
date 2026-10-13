@@ -147,13 +147,8 @@ export async function buildPreparedCompactionRuntime(
       includeCodeModeSkills: false,
     });
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const {
-      skillsSnapshotForRun,
-      skillReadResources,
-      skillDeliveredIdentityAcquirers,
-      skillUsagePaths,
-      skillsPrompt,
-    } = preparedSkills;
+    const { skillsSnapshotForRun, skillReadResources, skillUsagePaths, skillsPrompt } =
+      preparedSkills;
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
@@ -323,7 +318,6 @@ export async function buildPreparedCompactionRuntime(
             skillUsagePaths,
             skillInstructionDeliveryCache,
             skillInstructionDeliveryMarkers,
-            skillDeliveredIdentityAcquirers,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
             modelAuthMode: await resolveModelAuthModeAsync(

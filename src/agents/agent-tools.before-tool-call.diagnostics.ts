@@ -483,20 +483,21 @@ export function findSkillUsageMatch(params: {
     const usage = params.ctx?.skillUsagePaths?.find(
       (entry) => entry.skillName === skill.name && entry.readPath === skill.filePath,
     );
-    // The invocation's serving read captured what it served into its delivery
-    // receipt; consume it first. A receipt exists only when the serving
-    // boundary established an identity: a verified acquisition for the bytes a
-    // live tree serves, or the bytes a retained or pinned entry provably
-    // serves. Discovery-entry stamps are preparation-time hashes of a tree the
-    // serving read may have read later bytes from, so without a receipt the
-    // emission omits the fingerprint instead of borrowing the stamp.
+    // The invocation's serving read captured the entry's retained
+    // loaded-bundle identity into its delivery receipt; consume it first. A
+    // receipt exists only when the serving boundary established one: it
+    // resolves the entry's retained fingerprint by lookup after the serving
+    // read settles, and an epoch clear that crossed that read leaves no
+    // receipt — so without a receipt the emission omits the fingerprint
+    // instead of attaching an unestablished identity.
     const receipt =
       typeof params.toolCallId === "string"
         ? params.ctx?.skillInstructionDeliveryMarkers?.takeInvocationFingerprint(params.toolCallId)
         : undefined;
-    // A serving receipt is the serving boundary's attribution for the bytes it
-    // actually served: transfer and session producers stamp it regardless of
-    // tracing, so the same gate keeps a retained value from reaching internal
+    // A serving receipt carries the entry's retained loaded-bundle identity:
+    // the worker materialization, session, transfer, and tracing-gated
+    // ordinary-local producers stamp it, and some stamp regardless of tracing,
+    // so the same gate keeps a retained value from reaching internal
     // diagnostic listeners while tracing is inactive.
     const gatedReceipt = gatedSkillFingerprint(receipt);
     if (usage) {

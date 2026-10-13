@@ -9,7 +9,6 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type {
-  SkillDeliveredIdentityAcquirers,
   SkillInstructionDeliveryCache,
   SkillInstructionDeliveryMarkers,
 } from "./agent-tools.read.js";
@@ -109,8 +108,6 @@ export type OpenClawCodingToolsOptions = {
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   /** Attempt-local delivery fingerprints and per-invocation emission markers. */
   skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
-  /** Per-preparation delivery identity acquirers armed by the ordinary-local producer. */
-  skillDeliveredIdentityAcquirers?: SkillDeliveredIdentityAcquirers;
   /** Keep the message tool available even when the selected profile omits it. */
   forceMessageTool?: boolean;
   /** Keep the heartbeat response tool available even when the selected profile omits it. */

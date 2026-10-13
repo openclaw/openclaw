@@ -263,7 +263,6 @@ function* assembleOpenClawCodingTools(
           skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
           skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
           skillInstructionDeliveryMarkers: options?.skillInstructionDeliveryMarkers,
-          skillDeliveredIdentityAcquirers: options?.skillDeliveredIdentityAcquirers,
           memoryWriteProvenance,
           execDefaults: {
             ...options?.exec,
