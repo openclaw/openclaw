@@ -52,13 +52,13 @@ export function assertProfile(valid: boolean): asserts valid {
 
 export function parseNativeCpuProfile(json: string): Profiler.Profile {
   // V8 writes names and URLs verbatim. Escape them before decoding its native format.
-  const profile = JSON.parse(
-    json.replace(
-      /"functionName":"(.*?)"(,"lineNumber":-?\d+,"columnNumber":-?\d+,"scriptId":-?\d+,"url":)"(.*?)"}(?=,"(?:children|deoptReason|positionTicks)":|})/gs,
-      (_match, name: string, location: string, url: string) =>
-        `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
-    ),
-  ) as Omit<Profiler.Profile, "nodes"> & {
+  const escaped = json.replace(
+    /"functionName":"(.*?)"(,"lineNumber":-?\d+,"columnNumber":-?\d+,"scriptId":-?\d+,"url":)"(.*?)"}(?=,"(?:children|deoptReason|positionTicks)":|})/gs,
+    (_match, name: string, location: string, url: string) =>
+      `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
+  );
+  // SAFETY: Only V8's native serializer supplies this graph and numeric script IDs.
+  const profile = JSON.parse(escaped) as Omit<Profiler.Profile, "nodes"> & {
     nodes: (Omit<Profiler.ProfileNode, "callFrame"> & {
       callFrame: Omit<Runtime.CallFrame, "scriptId"> & { scriptId: number };
     })[];
