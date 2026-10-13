@@ -24,8 +24,8 @@ export function startGatewayPresenceActivity(
     ) {
       return;
     }
-    const now = Date.now();
-    if (now >= lastReportedAt && now - lastReportedAt < REPORT_INTERVAL_MS) {
+    const now = performance.now();
+    if (now - lastReportedAt < REPORT_INTERVAL_MS) {
       return;
     }
     lastReportedAt = now;
