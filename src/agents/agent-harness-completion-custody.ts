@@ -157,37 +157,47 @@ export function captureAgentHarnessCompletionCustody(
         scope.requesterAgentId,
         async (isCurrent) => {
           selectedRequester = isCurrent !== undefined;
-          const readCurrent = captureRequesterSessionEntryCurrent(
+          const requesterCurrent = await captureRequesterSessionEntryCurrent(
             scope.requesterSessionKey,
             scope.requesterAgentId,
           );
-          const entry = readCurrent();
-          const expected = {
-            sessionId: entry?.sessionId,
-            lifecycleRevision: entry?.lifecycleRevision,
-          };
-          if (isCurrent && !entry) {
-            return;
-          }
-          const custody = await captureAgentHarnessCompletionCustodyOwner(
-            scope,
-            () => {
-              const current = readCurrent();
-              if (
-                current?.sessionId !== expected.sessionId ||
-                current?.lifecycleRevision !== expected.lifecycleRevision
-              ) {
-                throw new Error("Harness completion requester lifecycle was replaced");
+          const { readCurrent } = requesterCurrent;
+          try {
+            const entry = readCurrent();
+            const expected = {
+              sessionId: entry?.sessionId,
+              lifecycleRevision: entry?.lifecycleRevision,
+            };
+            if (isCurrent && !entry) {
+              return;
+            }
+            const custody = await captureAgentHarnessCompletionCustodyOwner(
+              scope,
+              () => {
+                const current = readCurrent();
+                if (
+                  current?.sessionId !== expected.sessionId ||
+                  current?.lifecycleRevision !== expected.lifecycleRevision
+                ) {
+                  throw new Error("Harness completion requester lifecycle was replaced");
+                }
+              },
+              () => {
+                requesterCurrent.release();
+                released.resolve();
+              },
+              root,
+            );
+            if (custody) {
+              handedOff = true;
+              ready.resolve(custody);
+              if (selectedRequester) {
+                await released.promise;
               }
-            },
-            () => released.resolve(),
-            root,
-          );
-          if (custody) {
-            handedOff = true;
-            ready.resolve(custody);
-            if (selectedRequester) {
-              await released.promise;
+            }
+          } finally {
+            if (!handedOff) {
+              requesterCurrent.release();
             }
           }
         },

@@ -125,15 +125,19 @@ export function memoryPublicationHeader(
     return fields;
   }
   // Retained rows travel in the bounded transfer, never the header.
-  const { retained = [], ...header } = fields;
-  return { ...header, delta: retained.length > 0 };
+  const { retained: _retained, removedIds, ...header } = fields;
+  return { ...header, delta: removedIds !== undefined };
 }
 
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    // The kernel validates every retained row before it writes the first new row.
+    if (replacement.source === "sessions") {
+      for (const removedId of replacement.removedIds ?? []) {
+        yield { removedId };
+      }
+    }
     const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
     for (const chunk of retained) {
       yield {

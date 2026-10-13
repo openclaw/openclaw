@@ -5,7 +5,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -524,7 +524,11 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (patch.archived === true && isRequesterSession && key !== "global") {
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
           const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-          const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
+          const currentEntry = await readSessionEntryReadOnlyInWorker({
+            agentId,
+            sessionKey: key,
+            storePath,
+          });
           const released = getSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
@@ -570,11 +574,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                   ...expectedSessionIdentity,
                 };
                 while (true) {
-                  const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-                  if (latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId) {
-                    return;
-                  }
-
                   const competingRelease = getSessionWorkAdmissionRelease({
                     scope: storePath,
                     identities: archiveIdentities,

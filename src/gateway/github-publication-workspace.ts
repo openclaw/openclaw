@@ -42,6 +42,8 @@ export async function prepareGitHubPublicationClaimWorkspace(
       branch: first.branch,
     },
   });
+  using _ = { [Symbol.dispose]: () => worktreeOwner.release() };
+
   const { worktree } = worktreeOwner;
   if (!params.placements.validateWorkspaceResultClaim(claim)) {
     throw new Error("GitHub publication lost its workspace result claim before snapshot.");

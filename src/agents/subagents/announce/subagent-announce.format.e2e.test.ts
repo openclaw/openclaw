@@ -707,6 +707,15 @@ describe("subagent announce formatting", () => {
           skipMaintenance: true,
         },
       );
+      subagentAnnounceDeliveryTesting.setDepsForTest({
+        ...gatewayDeps,
+        loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
+        loadRequesterSessionEntry: (sessionKey) => ({
+          cfg: configOverride,
+          canonicalKey: sessionKey,
+          entry: readSessionFixture(sessionKey),
+        }),
+      });
       // readSubagentSessionEntry is intentionally omitted so the real reader runs.
       subagentAnnounceOutputTesting.setDepsForTest({
         ...gatewayDeps,

@@ -8,8 +8,6 @@ import {
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
-import { controlUiBuildDiffersFrom } from "../build-info.ts";
-import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
@@ -84,9 +82,6 @@ export function createApplicationUpdateOverlays(
   let connectedSource: NonNullable<typeof activeClient> | null = null;
   let connectedEpoch = 0;
   let confirmationTargetGeneration = 0;
-  // connectedEpoch also fences scope changes, so it cannot tell a first
-  // connection from a reconnect; legacy version-only skew needs that fact.
-  let connectedBefore = false;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
   let updateGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
   let profileId = gateway.snapshot.selfUser?.id ?? null;
@@ -474,7 +469,6 @@ export function createApplicationUpdateOverlays(
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
       } else if (!next.client) {
         connectedEpoch = 0;
-        connectedBefore = false;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
       } else if (next.hello) {
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
@@ -482,24 +476,17 @@ export function createApplicationUpdateOverlays(
       publish();
       return;
     }
-    const serverBuildIdentity = {
-      version: next.hello?.server?.version,
-      buildId: next.hello?.server?.buildId,
-      controlUiBuildSource: next.hello?.server?.controlUiBuildSource,
-    };
     snapshot = {
       ...snapshot,
       ...(connectedSourceChanged || helloChanged
         ? projectConnectedUpdateSnapshot(snapshot, next.hello)
         : {}),
-      // Vite owns this document; reloading cannot adopt its proxied Gateway's build.
-      controlUiRefreshRequired: connectedSourceChanged
-        ? !isConfiguredUiDevGateway(gateway.connection.gatewayUrl) &&
-          (Boolean(serverBuildIdentity.buildId?.trim()) || connectedBefore) &&
-          controlUiBuildDiffersFrom(serverBuildIdentity)
-        : snapshot.controlUiRefreshRequired,
+      // The gateway store owns build staleness: it fences a stale same-origin
+      // hello (projected above) and connects only builds this document may
+      // drive. Cross-origin skew stays unsupported; reloading cannot change a
+      // document that Gateway did not serve (ui/AGENTS.md "Gateway Coupling").
+      controlUiRefreshRequired: false,
     };
-    connectedBefore = true;
     publish(true);
     if ((connectedSourceChanged || scopeChanged || accessGranted) && operatorAccess.canAdmin) {
       void runConnectionBootstrap("update-run", () =>

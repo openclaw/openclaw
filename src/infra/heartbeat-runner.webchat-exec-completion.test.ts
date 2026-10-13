@@ -17,6 +17,10 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-e
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
@@ -69,9 +73,11 @@ it("suppresses a routeless cron reminder on a WebChat session", async () => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetSystemEventsForTest();
   resetHeartbeatEventsForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 type ProjectionScenario = {
@@ -92,6 +98,7 @@ async function withProjectionScenario(
       messages: { visibleReplies: "message_tool" },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     const sessionKey = options.sessionKey ?? resolveMainSessionKey(cfg);
     const sessionId = "publication-boundary-session";
     await seedSessionStore(storePath, sessionKey, {

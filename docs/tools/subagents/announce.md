@@ -172,6 +172,9 @@ keeps the same input:
 Internal metadata is meant for orchestration only; user-facing replies
 should be rewritten in normal assistant voice.
 
+Usage is read once after the child settles. If usage has not been recorded yet,
+the stats line says `tokens unknown`; completion delivery does not wait for it.
+
 ### Why prefer `sessions_history`
 
 `sessions_history` is the safer orchestration path for reading a child's

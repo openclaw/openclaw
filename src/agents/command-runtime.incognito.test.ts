@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
-  assertReplyPayloadSessionWriterDeliveryAuthorized,
+  assertSessionWriterDeliveryAuthorized,
   isDispatchFinalReplySessionWriterAuthorized,
 } from "../auto-reply/reply/session-writer-delivery-authority.js";
 import {
@@ -286,12 +286,18 @@ it("retains final-delivery authority outside the actor binding and revokes it on
     getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority?.readCurrentSession,
   ).toBeTypeOf("function");
   expect(isDispatchFinalReplySessionWriterAuthorized(payload)).toBe(true);
-  expect(() => assertReplyPayloadSessionWriterDeliveryAuthorized(payload)).not.toThrow();
+  expect(() =>
+    assertSessionWriterDeliveryAuthorized(
+      getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+    ),
+  ).not.toThrow();
   await withIncognitoSessionActor(actor, () =>
     patchSessionEntryCore(target, () => ({ activeWriterRunId: "replacement-writer" })),
   );
   expect(isDispatchFinalReplySessionWriterAuthorized(payload)).toBe(false);
-  expect(() => assertReplyPayloadSessionWriterDeliveryAuthorized(payload)).toThrow(
-    /writer changed/i,
-  );
+  expect(() =>
+    assertSessionWriterDeliveryAuthorized(
+      getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+    ),
+  ).toThrow(/writer changed/i);
 });

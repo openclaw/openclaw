@@ -1495,8 +1495,23 @@ wa-popover.new-session-page__where-popover {
 }
 
 .new-session-page__environment-option[aria-disabled="true"] {
-  opacity: 0.5;
+  color: var(--muted);
   cursor: default;
+}
+
+.new-session-page__unavailable-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 11px;
+}
+
+.new-session-page__unavailable-status svg {
+  display: block;
+  width: 13px;
+  height: 13px;
 }
 
 .new-session-page__environment-heading {

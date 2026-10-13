@@ -92,10 +92,15 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         });
       let snapshot = (await read()).creation;
       if (!snapshot) {
-        await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
-          reader.assertCurrent();
-          options.commitGuard?.();
-        });
+        await prepareSessionEntryReplacementDatabase(
+          databaseOptions,
+          () => {
+            reader.assertCurrent();
+            options.commitGuard?.();
+          },
+          undefined,
+          options.followRegistration,
+        );
         snapshot = (await read()).creation;
       }
       if (!snapshot) {

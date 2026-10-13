@@ -6,12 +6,11 @@ import {
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import type { AgentJobSession } from "../agent-turn/types.js";
-import { operatorSessionCap } from "../operator-role-policy.js";
+import { isGatewayAdmin, withSessionSharingTarget } from "../session-sharing-policy.js";
 import {
-  createSessionListEntryFilter,
-  isGatewayAdmin,
-  resolveSessionSharingTarget,
-} from "../session-sharing.js";
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "../session-sharing-read.js";
 import { agentRunHandler } from "./agent-run-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -28,36 +27,62 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
   }
   const gatewayClient = client ?? null;
   const prepared = createAgentTurnService({ context, isWebchatConnect }).prepareWaitForTurn(params);
-  const authorizeWait = (run: Readonly<AgentJobSession> | undefined) => {
+  let profiles: ReturnType<typeof prepareSessionSharingProfiles> | undefined;
+  const authorizeWait = async (
+    run: Readonly<AgentJobSession> | undefined,
+    respondWithResult?: () => void,
+  ) => {
     if (!gatewayClient?.authenticatedUserProfile || isGatewayAdmin(gatewayClient)) {
+      respondWithResult?.();
       return true;
     }
+    const preparedProfiles = await (profiles ??= prepareSessionSharingProfiles(gatewayClient));
     const cfg = context.getRuntimeConfig();
-    if (operatorSessionCap(gatewayClient, cfg) !== "none") {
+    const sharing = prepareProjectedSessionSharing({
+      client: gatewayClient,
+      cfg,
+      profiles: preparedProfiles,
+      isMember: () => false,
+    });
+    if (sharing.policy?.sessions.others !== "none") {
+      respondWithResult?.();
       return true;
     }
-    const target = run?.sessionKey
-      ? resolveSessionSharingTarget({ cfg, sessionKey: run.sessionKey, agentId: run.agentId })
-      : null;
-    const visibilityFilter = createSessionListEntryFilter({ client: gatewayClient, cfg });
-    if (
-      !target ||
-      run?.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
-      (run?.sessionId !== undefined && target.entry.sessionId !== run.sessionId) ||
-      visibilityFilter?.(target.storeKey, target.entry) === false
-    ) {
+    const deny = () => {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agent run was not found"));
       return false;
+    };
+    if (!run?.sessionKey) {
+      return deny();
     }
-    return true;
+    return withSessionSharingTarget(
+      { cfg, sessionKey: run.sessionKey, agentId: run.agentId },
+      ({ target, members, assertCurrent }) => {
+        assertCurrent();
+        const currentSharing = prepareProjectedSessionSharing({
+          cfg: context.getRuntimeConfig(),
+          client: gatewayClient,
+          profiles: preparedProfiles,
+          isMember: (_target, id) => members.some((member) => member.identityId === id),
+        });
+        if (
+          !target ||
+          run.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
+          (run.sessionId !== undefined && target.entry.sessionId !== run.sessionId) ||
+          currentSharing.entryFilter?.(target.storeKey, target.entry) === false
+        ) {
+          return deny();
+        }
+        respondWithResult?.();
+        return true;
+      },
+    );
   };
-  if (!authorizeWait(prepared.session)) {
+  if (!(await authorizeWait(prepared.session))) {
     return;
   }
   const observation = await prepared.wait();
-  if (authorizeWait(observation.session)) {
-    respond(true, observation.result);
-  }
+  await authorizeWait(observation.session, () => respond(true, observation.result));
 };
 
 export const agentHandlers: GatewayRequestHandlers = {

@@ -14,6 +14,41 @@ const message = {
 };
 
 describe("trusted transcript display metadata", () => {
+  it.each([
+    { content: [], __openclaw: { runId: "recovering-run" }, pending: true },
+    {
+      content: [{ type: "text", text: "Useful partial answer" }],
+      __openclaw: { runId: "recovering-run" },
+      pending: false,
+    },
+    {
+      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      __openclaw: { runId: "recovering-run" },
+      pending: false,
+    },
+    { content: [], __openclaw: { runId: "other-run" }, pending: false },
+  ])(
+    "defers only diagnostic-only failures of the exact active run: %j",
+    ({ pending, ...failure }) => {
+      const raw = {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "context exceeded",
+        ...failure,
+      };
+      const original = structuredClone(raw);
+      const result = projectSessionMessagePayload({
+        message: raw,
+        sessionKey: "agent:main:main",
+        isRunActive: (runId) => runId === "recovering-run",
+      });
+      expect(result.deferredAssistantError === true).toBe(pending);
+      expect(Boolean(result.payload)).toBe(!pending);
+      expect(result.projectionState.assistantErrorPending).toBe(pending);
+      expect(raw).toEqual(original);
+    },
+  );
+
   it("keeps nested activity run ownership distinct from entry deduplication in history and live events", () => {
     const activity = {
       ...createNestedToolActivity({

@@ -91,6 +91,10 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   private readonly focusInitialControl = () => {
     if (!this.focused) {
       this.focused = true;
+      // A late reposition must not take focus from a control already chosen inside the panel.
+      if (this.contains(this.ownerDocument.activeElement)) {
+        return;
+      }
       this.querySelector<HTMLElement>(this.initialFocusSelector)?.focus({
         preventScroll: true,
       });

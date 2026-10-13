@@ -451,7 +451,28 @@ function createOperationAdmission(
         inOwnerContext(admit, request, grant);
       }
     } catch (error) {
-      refuse(decision, error, source);
+      if (
+        error instanceof StateDatabaseAdmissionPendingError &&
+        databaseAuthority?.coldOpenPath === error.databasePath &&
+        !databaseAuthority.lease &&
+        request.stage === "prepare" &&
+        isRecord(request.facts) &&
+        request.facts.kind === "schema-maintenance" &&
+        typeof request.facts.databasePath === "string" &&
+        resolveIdentityPathViaExistingAncestorSync(request.facts.databasePath) ===
+          databaseAuthority.databasePath
+      ) {
+        // No schema lease or body has begun; let the cold-open owner's bounded
+        // wait handle another process creating this database first.
+        if (
+          Atomics.compareExchange(decision, 0, REQUESTED, SQLITE_COLD_ADMISSION_PENDING) ===
+          REQUESTED
+        ) {
+          Atomics.notify(decision, 0);
+        }
+      } else {
+        refuse(decision, error, source);
+      }
       return;
     } finally {
       // Repeated preparation requests must not retain every settled decision.
@@ -683,9 +704,23 @@ export function requestSqliteWorkerOperationAdmission(
   if (timing) {
     timing.hostAdmissionWaitMs += Date.now() - startedAt;
   }
-  if (Atomics.load(decision, 0) !== GRANTED) {
+  const outcome = Atomics.load(decision, 0);
+  if (
+    outcome === SQLITE_COLD_ADMISSION_PENDING &&
+    request.stage === "prepare" &&
+    isRecord(request.facts) &&
+    request.facts.kind === "schema-maintenance" &&
+    typeof request.facts.databasePath === "string"
+  ) {
+    const databasePath = request.facts.databasePath;
+    throw new StateDatabaseAdmissionPendingError(
+      databasePath,
+      `OpenClaw state at ${databasePath} is undergoing schema admission; retry when it finishes.`,
+    );
+  }
+  if (outcome !== GRANTED) {
     const refusal =
-      Atomics.load(decision, 0) === TIMED_OUT
+      outcome === TIMED_OUT
         ? new SqliteWorkerAdmissionTimeoutError()
         : new SqliteWorkerError("SQLite transaction admission was refused", "closed");
     scope.owner.refusal = refusal;

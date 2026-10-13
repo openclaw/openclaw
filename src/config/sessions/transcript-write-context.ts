@@ -241,6 +241,7 @@ export function readOwnedSessionTranscriptEntry(
   return (
     entry && {
       sessionId: entry.sessionId,
+      updatedAt: entry.updatedAt,
       lifecycleRevision: entry.lifecycleRevision,
       activeWriterRunId: entry.activeWriterRunId,
       cliHistoryBoundary: entry.cliHistoryBoundary,
