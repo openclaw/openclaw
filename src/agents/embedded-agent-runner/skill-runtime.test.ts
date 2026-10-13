@@ -13,9 +13,10 @@ import {
 } from "../../infra/diagnostic-trace-propagation.js";
 import { prepareSkillBundle, readSkillBundleTree } from "../../skills/library/bundle.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
+import { bumpSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import {
   readSkillResourceFiles,
-  stampLocalSkillBundleIdentities,
+  stampDiscoveredSkillBundleIdentities,
 } from "../../skills/runtime/resources.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -34,10 +35,10 @@ import type { AnyAgentTool } from "../tools/common.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
-// Narrow spy factory for hashing-count assertions: the preparation-boundary
-// discovery stamps walk the bundle tree through `readSkillBundleTree`, while
-// the ordinary-local discovery path never touches it, so every other export
-// stays real while the count observes only the tracing-gated hashing walks.
+// Narrow spy factory for hashing-count assertions: the discovery-intake
+// stamps walk the bundle tree through `readSkillBundleTree`, so every other
+// export stays real while the count observes only the tracing-gated hashing
+// walks.
 vi.mock("../../skills/library/bundle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../skills/library/bundle.js")>();
   return { ...actual, readSkillBundleTree: vi.fn(actual.readSkillBundleTree) };
@@ -191,9 +192,9 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       const entry = prepared.skillsSnapshotForRun!.resolvedSkills!.find(
         (skill) => skill.name === "pond",
       )!;
-      // Preparation stamps the loaded bundle's identity once per loaded
-      // bundle, cached per preparation: no bundle directory is walked twice,
-      // and the pond bundle walked exactly once.
+      // Discovery stamps the loaded bundle's identity once per loaded
+      // version, cached per version: no bundle directory is walked twice
+      // within one loaded version, and the pond bundle walked exactly once.
       const walkedBundles = readSkillBundleTreeSpy.mock.calls.map((call) =>
         path.resolve(String(call[0])),
       );
@@ -291,7 +292,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     }
   });
 
-  it("retains the loaded bundle identity across an in-preparation edit until the next preparation restamps", async () => {
+  it("retains the loaded bundle identity across an edit until the watcher reload restamps", async () => {
     setDiagnosticsEnabledForProcess(true);
     registerActiveTracingBridge();
     const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-live-"));
@@ -342,8 +343,10 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
         }),
       ).toBe(loaded);
       expect(pondWalks(baseDir)).toBe(0);
-      // The watcher's reload closes the window: the next preparation walks
-      // the edited tree and restamps a new identity.
+      // The watcher's reload closes the window: the version bump a reload
+      // publishes invalidates the entry and identity caches, so the next
+      // preparation re-discovers and restamps the edited tree.
+      bumpSkillsSnapshotVersion({ workspaceDir: workspace, reason: "manual" });
       const second = await prepareLocalRun(workspace);
       try {
         const entrySecond = second.skillsSnapshotForRun!.resolvedSkills!.find(
@@ -365,7 +368,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     }
   });
 
-  it("stamps a new identity after a support-file edit on the next preparation", async () => {
+  it("restamps a new identity after a support-file edit once the watcher reloads", async () => {
     setDiagnosticsEnabledForProcess(true);
     registerActiveTracingBridge();
     const workspace = await fs.realpath(temps.make("openclaw-local-fingerprint-edit-"));
@@ -378,8 +381,11 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       const identityFirst = entryFirst.bundleFingerprint;
       expect(identityFirst).toBeTypeOf("string");
       // Support-file-only edit: SKILL.md bytes stay identical while the bundle
-      // identity moves, and the next preparation delivers the new identity.
+      // identity moves. The watcher reloads the edited skill — modeled here by
+      // the version bump it publishes — so the next preparation re-discovers
+      // and restamps the edited bundle.
       await fs.writeFile(path.join(baseDir, "scripts", "check.sh"), "#!/bin/sh\nprintf pond-two\n");
+      bumpSkillsSnapshotVersion({ workspaceDir: workspace, reason: "manual" });
       const second = await prepareLocalRun(workspace);
       try {
         const entrySecond = second.skillsSnapshotForRun!.resolvedSkills!.find(
@@ -427,15 +433,11 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       discoverySkills: [skill],
     };
     readSkillBundleTreeSpy.mockClear();
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot,
-      libraryEntries: [],
-    });
+    const stamped = await stampDiscoveredSkillBundleIdentities([skill]);
     expect(readSkillBundleTreeSpy).not.toHaveBeenCalled();
-    expect(stamped.snapshot?.resolvedSkills![0]!.bundleFingerprint).toBe(delivered);
-    expect(stamped.snapshot?.resolvedSkills![0]).toBe(skill);
-    expect(stamped.snapshot?.discoverySkills![0]).toBe(skill);
-    expect(stamped.libraryEntries).toEqual([]);
+    expect(stamped[0]!.bundleFingerprint).toBe(delivered);
+    expect(stamped[0]).toBe(skill);
+    expect(stamped).toHaveLength(1);
   });
 
   it("stamps each entry's own bundle identity when a workspace skill shares a library selection's name", async () => {

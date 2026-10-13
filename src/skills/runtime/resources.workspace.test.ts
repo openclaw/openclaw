@@ -4,6 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
+  registerDiagnosticTracePropagationBridge,
+  resetDiagnosticTracePropagationForTest,
+} from "../../infra/diagnostic-trace-propagation.js";
+import {
   expandExplicitSkillReferences,
   skillCommandsToExplicitSelections,
 } from "../discovery/chat-command-invocation.js";
@@ -17,15 +21,30 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { ExplicitSkillSelection } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 import {
   materializeSkillResources,
   prepareSkillResourceDelivery,
   readSkillResourceFiles,
   resolveExplicitSkillResource,
-  stampLocalSkillBundleIdentities,
+  stampDiscoveredSkillBundleIdentities,
 } from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+
+// The active-tracing gate discovery stamping keys on: a registered
+// trace-propagation bridge is exactly the exporter-owned tracing consumer the
+// diagnostics-otel service registers while traces are active, and a
+// metrics-only install never registers one.
+function registerActiveTracingBridge() {
+  return registerDiagnosticTracePropagationBridge({
+    resolveTraceContext: () => undefined,
+  });
+}
+
+afterEach(() => {
+  resetDiagnosticTracePropagationForTest();
+});
 
 async function fixture() {
   const root = temps.make("remote-skill-resources-");
@@ -357,17 +376,13 @@ it("stamps each host's bundle identity when Gateway and workspace skills share o
     f.snapshot.skills.push({ name: gatewaySkill.name });
     f.snapshot.resolvedSkills?.push(gatewaySkill);
     f.skillResources.readSkillFiles.mockClear();
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot: f.snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const gatewayEntry = stamped.snapshot?.resolvedSkills?.find(
-      (skill) => skill.name === gatewaySkill.name,
+    registerActiveTracingBridge();
+    const stamped = await stampDiscoveredSkillBundleIdentities(
+      f.snapshot.resolvedSkills ?? [],
+      f.gateway,
     );
-    const workspaceEntry = stamped.snapshot?.resolvedSkills?.find(
-      (skill) => skill.name === workspaceSkill.name,
-    );
+    const gatewayEntry = stamped.find((skill) => skill.name === gatewaySkill.name);
+    const workspaceEntry = stamped.find((skill) => skill.name === workspaceSkill.name);
     if (!gatewayEntry || !workspaceEntry) {
       throw new Error("missing stamped collision fixture");
     }
@@ -417,12 +432,12 @@ it("reads remote-hosted bundle identities through the owning reader when the pat
     f.snapshot.skills.push({ name: "hostonly" });
     f.snapshot.resolvedSkills?.push(remoteSkill);
     f.skillResources.readSkillFiles.mockClear();
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot: f.snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const entry = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "hostonly");
+    registerActiveTracingBridge();
+    const stamped = await stampDiscoveredSkillBundleIdentities(
+      f.snapshot.resolvedSkills ?? [],
+      f.gateway,
+    );
+    const entry = stamped.find((skill) => skill.name === "hostonly");
     expect(entry?.bundleFingerprint).toBe(
       prepareSkillBundle(
         (await readSkillResourceFiles(
@@ -466,12 +481,12 @@ it("omits remote-hosted identities without failing when the owning reader is una
     snapshot.resolvedSkills![0] = remote;
     // Resource delivery fails hard here (WorkspaceAccessUnavailableError); the
     // telemetry-only producer degrades to omit instead.
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot,
-      libraryEntries: [],
-      workspaceDir: gateway,
-    });
-    const entry = stamped.snapshot?.resolvedSkills?.[0];
+    registerActiveTracingBridge();
+    const stamped = await stampDiscoveredSkillBundleIdentities(
+      snapshot.resolvedSkills ?? [],
+      gateway,
+    );
+    const entry = stamped[0];
     // The owning reader is unavailable, so the identity omits instead of
     // guessing which host owns the bytes.
     expect(entry?.bundleFingerprint).toBeUndefined();
@@ -500,14 +515,9 @@ it("stamps a workspace entry through its owning reader when a library selection 
       ],
     };
     f.skillResources.readSkillFiles.mockClear();
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const entry = stamped.snapshot?.resolvedSkills?.find(
-      (skill) => skill.name === workspaceSkill.name,
-    );
+    registerActiveTracingBridge();
+    const stamped = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway);
+    const entry = stamped.find((skill) => skill.name === workspaceSkill.name);
     if (!entry) {
       throw new Error("missing stamped workspace entry");
     }
@@ -542,14 +552,12 @@ it("omits an identity without failing the preparation when its reader walk fails
     f.skillResources.readSkillFiles.mockImplementationOnce(() =>
       Promise.reject(new Error("reader transport failed")),
     );
-    const stamped = await stampLocalSkillBundleIdentities({
-      snapshot: f.snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
-    const entry = stamped.snapshot?.resolvedSkills?.find(
-      (skill) => skill.name === workspaceSkill.name,
+    registerActiveTracingBridge();
+    const stamped = await stampDiscoveredSkillBundleIdentities(
+      f.snapshot.resolvedSkills ?? [],
+      f.gateway,
     );
+    const entry = stamped.find((skill) => skill.name === workspaceSkill.name);
     if (!entry) {
       throw new Error("missing stamped workspace entry");
     }
@@ -616,11 +624,8 @@ it("walks discovered bundles concurrently and coalesces same-directory siblings"
         return orig(skill, options);
       },
     );
-    const pending = stampLocalSkillBundleIdentities({
-      snapshot,
-      libraryEntries: [],
-      workspaceDir: f.gateway,
-    });
+    registerActiveTracingBridge();
+    const pending = stampDiscoveredSkillBundleIdentities(snapshot.resolvedSkills ?? [], f.gateway);
     // All distinct discovery walks start together — never serialized behind
     // an earlier bundle — and the same-directory sibling joins the guide
     // bundle's single walk instead of starting its own.
@@ -633,15 +638,71 @@ it("walks discovered bundles concurrently and coalesces same-directory siblings"
     }
     const stamped = await pending;
     for (const skill of snapshot.resolvedSkills ?? []) {
-      const entry = stamped.snapshot?.resolvedSkills?.find(
-        (candidate) => candidate.name === skill.name,
-      );
+      const entry = stamped.find((candidate) => candidate.name === skill.name);
       expect(entry?.bundleFingerprint).toBeTypeOf("string");
     }
     // The sibling's stamp is the same loaded bundle's identity.
-    const guide = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "guide");
-    const alias = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "guide-alias");
+    const guide = stamped.find((skill) => skill.name === "guide");
+    const alias = stamped.find((skill) => skill.name === "guide-alias");
     expect(alias?.bundleFingerprint).toBe(guide?.bundleFingerprint);
+  } finally {
+    f.release();
+  }
+});
+it("hashes no bundles while tracing is disabled and keeps entries unstamped", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    f.skillResources.readSkillFiles.mockClear();
+    // No exporter-owned tracing consumer is registered: the discovery pass
+    // hashes nothing and copies the entries through unstamped.
+    const stamped = await stampDiscoveredSkillBundleIdentities(
+      f.snapshot.resolvedSkills ?? [],
+      f.gateway,
+    );
+    expect(f.skillResources.readSkillFiles).not.toHaveBeenCalled();
+    expect(stamped).toHaveLength((f.snapshot.resolvedSkills ?? []).length);
+    expect(stamped.every((skill) => skill.bundleFingerprint === undefined)).toBe(true);
+  } finally {
+    f.release();
+  }
+});
+
+it("restamps the edited bundle after a watcher reload and never re-hashes a carried stamp", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    registerActiveTracingBridge();
+    f.skillResources.readSkillFiles.mockClear();
+    const before = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway);
+    const identityBefore = before[0]?.bundleFingerprint;
+    expect(identityBefore).toBeTypeOf("string");
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+    // A support-file-only edit lands before the watcher's reload: the loaded
+    // version keeps its identity (the disclosed staleness window).
+    const guideHostDir = path.join(f.host, "skills", "guide");
+    await fs.writeFile(path.join(guideHostDir, "check.sh"), "edited but not yet reloaded\n");
+    const unchanged = await stampDiscoveredSkillBundleIdentities([before[0]!], f.gateway);
+    expect(unchanged[0]?.bundleFingerprint).toBe(identityBefore);
+    // No new walk and no re-hash: the carried stamp is trusted verbatim.
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+    // The watcher reloads the edited skill: the version bump restamps from the
+    // reloaded tree, so future spans carry the new bundle identity.
+    bumpSkillsSnapshotVersion({ workspaceDir: f.gateway, reason: "manual" });
+    f.skillResources.readSkillFiles.mockClear();
+    const after = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway);
+    const identityAfter = after[0]?.bundleFingerprint;
+    expect(identityAfter).toBeTypeOf("string");
+    expect(identityAfter).not.toBe(identityBefore);
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
   } finally {
     f.release();
   }
