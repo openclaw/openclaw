@@ -59,13 +59,16 @@ export function resolveCommandReplyExpectation(params: {
   if (
     params.opts.privateCompletion ||
     params.opts.lane === AGENT_LANE_SUBAGENT ||
-    isSubagentSessionKey(params.sessionKey) ||
-    !isDeliverableMessageChannel(params.messageChannel ?? "")
+    isSubagentSessionKey(params.sessionKey)
   ) {
     return "required";
   }
-  if (params.opts.inputProvenance?.kind !== "inter_session") {
-    return undefined;
+  const provenanceKind = params.opts.inputProvenance?.kind;
+  if (provenanceKind === "internal_system") {
+    return "optional";
+  }
+  if (provenanceKind !== "inter_session") {
+    return !isDeliverableMessageChannel(params.messageChannel ?? "") ? "required" : undefined;
   }
   const chatType = normalizeChatType(params.sessionEntry?.chatType);
   return resolveSilentReplySettings({

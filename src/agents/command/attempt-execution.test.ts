@@ -31,6 +31,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
+  resolveCommandReplyExpectation,
   resolveFallbackRetryPrompt,
   sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
@@ -49,6 +50,54 @@ function formatClaudeCliFallbackPrelude(
   mocks.readClaudeCliFallbackSeed.mockReturnValue(seed);
   return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session", ...options });
 }
+
+describe("resolveCommandReplyExpectation", () => {
+  it("treats internal_system turns and policy-allowed inter_session turns on webchat as optional", () => {
+    expect(
+      resolveCommandReplyExpectation({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        messageChannel: "webchat",
+        opts: { inputProvenance: { kind: "internal_system" } },
+      }),
+    ).toBe("optional");
+    expect(
+      resolveCommandReplyExpectation({
+        cfg: { agents: { defaults: { silentReply: { internal: "allow", direct: "allow" } } } },
+        sessionKey: "agent:main:main",
+        messageChannel: "webchat",
+        opts: { inputProvenance: { kind: "inter_session" } },
+      }),
+    ).toBe("optional");
+  });
+
+  it("keeps direct user turns, default inter_session webchat turns, and subagent completions as required", () => {
+    expect(
+      resolveCommandReplyExpectation({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        messageChannel: "webchat",
+        opts: {},
+      }),
+    ).toBe("required");
+    expect(
+      resolveCommandReplyExpectation({
+        cfg: {},
+        sessionKey: "agent:main:direct:reply-required",
+        messageChannel: "webchat",
+        opts: { inputProvenance: { kind: "inter_session" } },
+      }),
+    ).toBe("required");
+    expect(
+      resolveCommandReplyExpectation({
+        cfg: { agents: { defaults: { silentReply: { internal: "allow", direct: "allow" } } } },
+        sessionKey: "agent:main:subagent:worker-1",
+        messageChannel: "webchat",
+        opts: { inputProvenance: { kind: "inter_session" } },
+      }),
+    ).toBe("required");
+  });
+});
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
