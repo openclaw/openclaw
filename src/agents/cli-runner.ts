@@ -202,9 +202,10 @@ async function runCliAgentInternal(
     diagnosticLifecycle?.publishCapturedContent({
       userPrompt: context.params.prompt,
     });
-    const result = await runPreparedCliAgent(context, diagnosticLifecycle);
-    modelExecution?.assertCurrent();
-    return result;
+    // Settlement owns post-commit tolerance: an authority loss after the final
+    // reply commits records a warning and stays successful (#170757); authority
+    // checks live at the protected effect boundaries in the run params instead.
+    return await runPreparedCliAgent(context, diagnosticLifecycle);
   } finally {
     generation?.release();
     modelExecution?.release();
