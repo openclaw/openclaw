@@ -18,16 +18,10 @@ import type {
   OverlayPhase,
 } from "./overlay-types.ts";
 
-export { findOverlayParent, installOverlayKeyboard } from "./overlay-registry.ts";
-export type {
-  Overlay,
-  OverlayFocusIntent,
-  OverlayNativeAdapter,
-  OverlayOptions,
-  OverlayPhase,
-} from "./overlay-types.ts";
+export { findOverlayParent } from "./overlay-registry.ts";
+export type { Overlay, OverlayOptions } from "./overlay-types.ts";
 
-export const popoverOverlayAdapter: OverlayNativeAdapter = {
+const popoverOverlayAdapter: OverlayNativeAdapter = {
   isOpen: (surface) => surface.matches(":popover-open"),
   show: (surface, source) => {
     showOverlayAnchor(surface);

@@ -1,12 +1,15 @@
 import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
-import { html, nothing, type LitElement } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
-import "./router-outlet.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import {
+  disposeRouterOutlets,
+  mountRouterOutlet,
+  settleRouterOutlet,
+  type MountedRouterOutlet,
+} from "./router-outlet.test-support.tsx";
 
 type RouteId = "page" | "next";
 type TestContext = { label: string };
@@ -14,40 +17,79 @@ type TestData = { label: string };
 type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
 type TestModule = {
   render: (data: TestData | undefined) => unknown;
+  retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: TestOwnerMatch,
     settled: TestOwnerMatch | undefined,
   ) => string | undefined;
 };
 type TestRouter = Router<RouteId, TestContext, TestModule, TestData>;
-type RouterOutletElement = LitElement &
-  ControlUiReadinessOutlet & {
-    router?: TestRouter;
-    retryContext?: TestContext;
-    onNotFound?: () => void;
-  };
+type RouterOutletElement = MountedRouterOutlet;
 
 function createOutlet(router: TestRouter, context: TestContext): RouterOutletElement {
-  const outlet = document.createElement("openclaw-router-outlet") as RouterOutletElement;
-  outlet.router = router;
-  outlet.retryContext = context;
-  document.body.append(outlet);
-  return outlet;
+  return mountRouterOutlet({ router, retryContext: context });
 }
 
 afterEach(() => {
+  disposeRouterOutlets();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
-  // The outlet resolves route work in promise chains that each schedule another render,
-  // so drain to Lit's settled state rather than pumping a fixed number of cycles.
-  await settleLitElement(outlet);
+  await settleRouterOutlet(outlet);
 }
 
 describe("openclaw-router-outlet", () => {
+  it("settles the active route when a parked descendant's update fails", async () => {
+    class ParkedSurface extends LitElement {}
+    customElements.define(`test-parked-surface-${crypto.randomUUID()}`, ParkedSurface);
+    const parked = new ParkedSurface();
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            retainOnNavigate: true,
+            renderOwnerKey: () => "retained-page",
+            render: () => html`<section>${parked}</section>`,
+          }),
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({ render: () => html`<p>Current destination</p>` }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    const childUpdate = createDeferredCore<boolean>();
+    // Background work observes its own failure independently of route presentation.
+    void childUpdate.promise.catch(() => undefined);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(parked.isConnected).toBe(true);
+      expect(parked.closest("[hidden][inert][aria-hidden=true]")).not.toBeNull();
+      Object.defineProperty(parked, "updateComplete", { value: childUpdate.promise });
+
+      const settlement = outlet.settlePresentation();
+      childUpdate.reject(new Error("Parked background update failed"));
+      await expect(settlement).resolves.toBe(true);
+      expect(outlet.textContent).toContain("Current destination");
+    } finally {
+      childUpdate.resolve(true);
+      outlet.dispose();
+      router.stop();
+    }
+  });
+
   it("retains MCP Apps across route IDs that share an explicit owner", async () => {
     const teardownView = vi.fn(async () => undefined);
     const nextData = createDeferredCore<TestData>();
@@ -106,7 +148,7 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("next");
     expect(teardownView).not.toHaveBeenCalled();
-    outlet.remove();
+    outlet.dispose();
     router.stop();
   });
 
@@ -151,7 +193,7 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
     expect(outlet.querySelector('[role="status"]')).toBeNull();
     expect(outlet.querySelector(".loading-skeleton")).toBeNull();
-    outlet.remove();
+    outlet.dispose();
     router.stop();
   });
 
@@ -204,7 +246,7 @@ describe("openclaw-router-outlet", () => {
       const settlement = outlet.settlePresentation().then((value) => {
         result = value;
       });
-      outlet.remove();
+      outlet.dispose();
       try {
         await settleOutlet(outlet);
         expect(result).toBe(false);
@@ -219,7 +261,7 @@ describe("openclaw-router-outlet", () => {
     teardown.resolve(undefined);
     await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
     expect(outlet.querySelector("mcp-app-view")).toBeNull();
-    outlet.remove();
+    outlet.dispose();
     router.stop();
   });
 
@@ -254,15 +296,15 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("pending");
     expect(outlet.querySelector('[role="alert"]')?.textContent).toContain("load failed");
 
-    outlet.retryContext = retryContext;
-    await outlet.updateComplete;
+    outlet.setInputs({ retryContext });
+    await settleOutlet(outlet);
     outlet.querySelector<HTMLButtonElement>("button")?.click();
     await settleOutlet(outlet);
 
     expect(loadCount).toBe(2);
     expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("retried");
     expect(outlet.querySelector('[role="alert"]')).toBeNull();
-    outlet.remove();
+    outlet.dispose();
     router.stop();
   });
 
@@ -332,7 +374,7 @@ describe("openclaw-router-outlet", () => {
     expect(button?.disabled).toBe(false);
     expect(outlet.querySelector('[role="alert"]')).not.toBeNull();
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
-    outlet.remove();
+    outlet.dispose();
     router.stop();
   });
 
@@ -399,7 +441,7 @@ describe("openclaw-router-outlet", () => {
       expect(moduleLoads).toBe(1);
     } finally {
       releaseGuard();
-      outlet.remove();
+      outlet.dispose();
       router.stop();
     }
   });

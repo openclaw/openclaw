@@ -26,7 +26,8 @@ const constructs: readonly Construct[] = [
   [
     "json-projection",
     "design",
-    /\b(?:json_(?:extract|set|insert|replace|remove|patch|object|array|group_\w+|type|valid)|jsonb_\w+)\s*\(|->>?/giu,
+    // PostgreSQL-only JSONB constructors and aggregates are not SQLite projection debt.
+    /\b(?:json_(?:extract|set|insert|replace|remove|patch|object|array|group_\w+|type|valid)|jsonb_(?!(?:build_object|build_array|agg|object_agg)\b)\w+)\s*\(|->>?/giu,
   ],
   ["temp-schema", "design", /\b(?:create\s+(?:temp|temporary)\b|temp\s*\.)/giu],
   ["rowid", "design", /\b(?:rowid|_rowid_)\b/giu],

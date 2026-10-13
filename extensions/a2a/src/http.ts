@@ -223,21 +223,24 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         if (!text) {
           throw new A2aProtocolError(-32602, "Message must contain at least one usable text part");
         }
-        const contextId = message.contextId ?? `ctx-${randomUUID()}`;
-        const task = params.taskStore.create(contextId, peerName);
-        params.taskStore.start(task.id);
-        // Reserved synchronously while this request is still admitted: a
-        // returnImmediately dispatch outlives the response, and an inherited
-        // released root makes the agent turn fail as gateway-draining.
-        void runDetachedWebhookWork(async () => {
-          await params.dispatchInbound({
-            taskId: task.id,
-            contextId,
-            messageId: message.messageId ?? randomUUID(),
-            peerName,
-            text,
-          });
-        }).catch((error: unknown) => params.taskStore.fail(task.id, error));
+        const messageId = message.messageId ?? randomUUID();
+        const task = params.taskStore.create(
+          message.contextId ?? `ctx-${randomUUID()}`,
+          peerName,
+          messageId,
+        );
+        if (params.taskStore.start(task.id)) {
+          // Reserve detached work before the HTTP request releases its admission root.
+          void runDetachedWebhookWork(async () => {
+            await params.dispatchInbound({
+              taskId: task.id,
+              contextId: task.contextId,
+              messageId,
+              peerName,
+              text,
+            });
+          }).catch((error: unknown) => params.taskStore.fail(task.id, error));
+        }
 
         if (send.data.configuration?.returnImmediately) {
           result = { task: params.taskStore.get(task.id, peerName) ?? task };
