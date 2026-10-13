@@ -8,13 +8,20 @@ import Testing
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct CronJobsStoreTests {
-    @Test func `count-only refreshes notify observers without changing preview rows`() async throws {
+    @Test(arguments: ["manual", "config.changed", "reopen"])
+    func `count-only refreshes notify observers without changing preview rows`(trigger: String) async throws {
         let fixture = CronSourceFixture()
         fixture.catalogTotal.setValue(9)
         let store = CronJobsStore(gateway: fixture.gateway)
         do {
-            await store.refreshJobs()
+            if trigger == "manual" {
+                await store.refreshJobs()
+            } else {
+                store.start()
+                try await TestWait.observed("initial Cron catalog") { store.summary.total == 9 }
+            }
             try #require(store.summary.total == 9)
+            let lease = try #require(await fixture.gateway.captureServerLease())
             let previewIDs = store.summary.jobs.map(\.id)
             try #require(previewIDs.count == 8)
             let changed = LockIsolated(false)
@@ -24,12 +31,24 @@ struct CronJobsStoreTests {
                 changed.setValue(true)
             }
 
+            if trigger == "reopen" { store.stop() }
             fixture.catalogTotal.setValue(10)
-            await store.refreshJobs()
+            switch trigger {
+            case "config.changed":
+                let request = try #require(fixture.requests.value.last)
+                request.socket.emitReceiveSuccess(.string(
+                    #"{"type":"event","event":"config.changed","seq":1,"payload":{"hash":"changed","ts":1}}"#))
+            case "reopen":
+                store.start()
+            default:
+                await store.refreshJobs()
+            }
+            try await TestWait.observed("updated Cron catalog") { store.summary.total == 10 }
 
             #expect(changed.value)
             #expect(store.summary.total == 10)
             #expect(store.summary.jobs.map(\.id) == previewIDs)
+            #expect(await fixture.gateway.captureServerLease() == lease)
         } catch {
             store.stop()
             await fixture.gateway.shutdown()
