@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProvider,
@@ -28,7 +29,6 @@ import {
 import {
   executeImageGenerationJob,
   inferImageGenerationResolution,
-  normalizeImageGenerationResolution,
 } from "./image-generate-tool.execution.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import {

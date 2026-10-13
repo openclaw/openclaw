@@ -185,7 +185,7 @@ describe("next-turn injection identity", () => {
           injection: { sessionKey, agentId: "ops", text: `ops ${sessionKey}` },
         });
       }
-      const selected = resolveSessionEntryAccessTarget(
+      const selected = await resolveSessionEntryAccessTarget(
         { cfg: activeCfg, sessionKey: "global" },
         { keyFormat: "agent-qualified" },
       );

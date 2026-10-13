@@ -175,6 +175,16 @@ publish a schema that did not commit. Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
 
+Audit lifecycle bindings, node-worker launch companions, worker placement moves,
+skill-library and worker-environment preparation, goal receipts, Board preparation,
+and memory origin/provenance preparation reuse these admitted objects even on
+their first use of a warm connection. Redundant DDL would revoke retained profile
+authority, so an existing table is not recreated just to prepare a store. Retired
+memory triggers are removed only when present; imported memory rows still receive
+their existing provenance backfill. Private update and Windows workspace lease
+owners likewise create their table only when missing. No schema version, stored
+shape, upgrade, or downgrade behavior changes.
+
 Shared-state bootstrap checks native table options once after installing the
 canonical schema. When every ordinary table is already STRICT, it skips legacy
 STRICT rebuild planning and duplicate schema installation. Existing non-STRICT

@@ -267,12 +267,20 @@ function acquireOwnerFile(
 ) {
   const deadline = performance.now() + busyTimeoutMs;
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
-  const observed: { holder: LockPayload | null } = { holder: null };
+  const observed: { raw?: string; holder: LockPayload | null } = { holder: null };
+  const parsePayload = (raw: string) => {
+    // Physical verification still reads the lock; immutable bytes need decoding only once.
+    if (raw !== observed.raw) {
+      observed.holder = parseGatewayLockPayload(raw);
+      observed.raw = raw;
+    }
+    return observed.holder;
+  };
   const stale = ({ payload: value }: { payload: unknown }) =>
     isGatewayStateOwnerDefinitelyStale(value, pathname);
   if (busyTimeoutMs > 0) {
     try {
-      const previous = parseGatewayLockPayload(fs.readFileSync(pathname, "utf8"));
+      const previous = parsePayload(fs.readFileSync(pathname, "utf8"));
       if (
         previous &&
         !stale({ payload: previous }) &&
@@ -302,7 +310,7 @@ function acquireOwnerFile(
         staleRecovery: "remove-if-unchanged",
         reentrantOwner: payload.ownerId,
         payload: () => payload,
-        parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
+        parsePayload,
         shouldReclaim: stale,
         shouldRemoveStaleLock: stale,
       });

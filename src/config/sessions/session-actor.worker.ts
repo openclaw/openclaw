@@ -42,9 +42,11 @@ import {
 } from "./session-actor-phase.worker.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import {
-  cloneSessionActorStoredState,
+  forkSessionActorStoredState,
   readSessionActorTransactionState,
+  replaceSessionActorStoredEntry,
   withSessionActorTransactionState,
+  writableSessionActorMap,
 } from "./session-actor-transaction.js";
 import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-transcript-publication.worker.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
@@ -124,17 +126,16 @@ export function createSessionActorWorker(
       ) {
         return;
       }
-      const working = cloneSessionActorStoredState(before);
-      working.hot.entry = structuredClone(postimage.entry);
-      working.entryRows.set(sessionKey, {
-        entry: structuredClone(postimage.entry),
+      const working = forkSessionActorStoredState(before);
+      replaceSessionActorStoredEntry(working, sessionKey, {
+        entry: postimage.entry,
         row: {
           ...postimage.row,
           member_ids_json: postimage.sideTables.memberIdsJson,
           board_present: postimage.sideTables.hasBoard ? 1 : 0,
         },
+        window: postimage.window,
       });
-      working.window = postimage.window;
       working.hasBoard = postimage.sideTables.hasBoard;
       working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
       working.hot = projectSessionActorHotState(working);
@@ -175,9 +176,10 @@ export function createSessionActorWorker(
       ) {
         return run();
       }
-      const working = cloneSessionActorStoredState(before);
+      const working = forkSessionActorStoredState(before);
       for (const { rawSeq, event, serializedBytes } of rewrite.rows) {
         if (working.transcript.payloads.has(rawSeq)) {
+          working.transcript.payloads = writableSessionActorMap(working.transcript.payloads);
           working.transcript.payloads.set(rawSeq, { event, serializedBytes });
         }
       }
@@ -337,7 +339,7 @@ export function createSessionActorWorker(
             };
             throw error;
           }
-          const working = cloneSessionActorStoredState(before);
+          const working = forkSessionActorStoredState(before);
           let commitPublication: unknown;
           const borrowed: AgentWorkerOperationContext = {
             ...context,

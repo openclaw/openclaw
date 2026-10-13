@@ -49,3 +49,33 @@ export function resolveCompactNodeTestRunner(
     ? DEFAULT_NODE_TEST_RUNNER
     : job.runner;
 }
+
+export function resolveSelectedNodeTestRunner(
+  job: CompactNodeTestShard,
+  runnerBackend: string | undefined,
+) {
+  // Two selected files cannot use the full CLI owner's wider worker allowance.
+  // Apply after packing so the capacity cut does not change process placement.
+  return ["blacksmith", "hybrid"].includes(runnerBackend ?? "blacksmith") &&
+    job.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
+    job.planConcurrency === 1 &&
+    !job.requiresDist &&
+    !job.pretestBuildMode &&
+    job.groups.length > 0 &&
+    job.groups.every(
+      (group) =>
+        /^agentic-cli(?:-hosted-\d+)?$/u.test(group.shard_name) &&
+        group.configs.length === 1 &&
+        group.configs[0] === "test/vitest/vitest.cli.config.ts" &&
+        [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
+        group.fallbackMaxWorkers === 2 &&
+        group.minTotalMemoryBytes === undefined &&
+        !group.requiresDist &&
+        !group.pretestBuildMode &&
+        group.includePatterns !== undefined &&
+        group.includePatterns.length > 0 &&
+        group.includePatterns.length <= 2,
+    )
+    ? "blacksmith-16vcpu-ubuntu-2404"
+    : job.runner;
+}

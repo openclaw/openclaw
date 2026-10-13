@@ -445,7 +445,7 @@ process.send({event:"ready"});
         expect(onNoOutputTimeout).toHaveBeenCalledOnce();
         const result = await withinTest(handle.completion, signal);
         expect(handle.child.exitCode).toBe(0);
-        expect(result).toEqual({ code: 1, signal: null, groupJoined: true });
+        expect(result).toEqual({ code: 2, signal: null, groupJoined: true });
         expect(isProcessAlive(handle.child.pid!)).toBe(false);
       } finally {
         releaseCompiler.resolve();

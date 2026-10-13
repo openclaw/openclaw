@@ -55,6 +55,7 @@ import { LitRouteHost } from "./lit-route-host.tsx";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 import { connectShellViewport } from "./shell-viewport.ts";
 
@@ -63,10 +64,7 @@ export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplicati
   return render(() => <OpenClawApp host={host} runtime={runtime} />, host);
 }
 
-export function OpenClawApp(props: {
-  host: HTMLElement;
-  runtime: ApplicationRuntime;
-}): SolidJSX.Element {
+function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }): SolidJSX.Element {
   // The bootstrap epoch and its DOM host stay fixed until this root is disposed.
   const runtime = untrack(() => props.runtime);
   const host = untrack(() => props.host);
@@ -193,6 +191,7 @@ export function OpenClawApp(props: {
     return (
       !connected() &&
       !(
+        isRemoteControlUiIngress() ||
         browserSignInRecovery ||
         snapshot().phase === "reconnecting" ||
         snapshot().phase === "reload-required" ||

@@ -122,12 +122,7 @@ export function isPackageActivationComplete(
   record: PackageActivationRecord,
 ): boolean {
   if (record.phase === "superseded") {
-    if (
-      record.intent?.kind !== "superseded-by-manual-install" &&
-      record.intent?.kind !== "recovery-lease-identity-changed" &&
-      record.intent?.kind !== "publication-settled-external-change" &&
-      record.intent?.kind !== "recovery-lease-missing"
-    ) {
+    if (!record.intent || !("settled" in record.intent)) {
       throw new Error("Package supersession fact is missing.");
     }
     // Settlement already relinquished rollback custody. Retained evidence may

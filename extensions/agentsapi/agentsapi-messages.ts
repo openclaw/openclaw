@@ -50,7 +50,6 @@ export class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
-  private readonly eventIds = new Set<string>();
   private readonly unknownTypes = new Set<string>();
   private readonly usageByTurn = new Map<string, NormalizedUsage>();
   private canonicalUsageRecorded = false;
@@ -145,17 +144,8 @@ export class AgentsApiMessageProjection {
 
   async observe(event: AgentsApiEvent): Promise<void> {
     this.assertCurrent();
-    if (this.finalTurnId || (event.event_id && this.eventIds.has(event.event_id))) {
+    if (this.finalTurnId) {
       return;
-    }
-    if (event.event_id) {
-      this.eventIds.add(event.event_id);
-      if (this.eventIds.size > 4096) {
-        const oldest = this.eventIds.values().next().value;
-        if (oldest !== undefined) {
-          this.eventIds.delete(oldest);
-        }
-      }
     }
     if (
       event.turn?.subagent_id === null &&

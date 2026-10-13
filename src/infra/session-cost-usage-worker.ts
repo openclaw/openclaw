@@ -8,14 +8,12 @@ import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readSessionTranscriptHotWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark-read.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { buildUsageOverview } from "../shared/usage-overview.js";
 import {
@@ -24,6 +22,7 @@ import {
 } from "../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
@@ -43,7 +42,10 @@ import {
   partitionUsageCostRollup,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
-import { readSessionCostUsagePartitionsInDatabase } from "./session-cost-usage-partitions.worker.js";
+import {
+  readSessionCostUsagePartitionsInDatabase,
+  readSessionCostUsageRollupWithPartitionsInDatabase,
+} from "./session-cost-usage-partitions.worker.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
@@ -121,6 +123,11 @@ export async function executeUsageCostWorker(
     }
     return control.runNativeSection(() => readDatabase(database, read));
   };
+  const transcriptFacts = new Map<string, { generation: string | null; cold: boolean }>();
+  const transcriptKey = (marker: SqliteSessionFileMarker) => {
+    const database = target(marker.agentId, marker.storePath);
+    return JSON.stringify([database.path, database.agentId, marker.sessionId]);
+  };
   const access: UsageCostCollectionAccess = {
     env,
     materializeArchive: (sourcePath) =>
@@ -157,9 +164,35 @@ export async function executeUsageCostWorker(
               "memory-stats",
               group.map((item) => item.marker),
             )
-          : await readStore(marker.agentId, marker.storePath, () =>
-              readTranscriptStatsBatchReadOnlySync(group.map((item) => ({ ...item.marker, env }))),
-            );
+          : await readStore(marker.agentId, marker.storePath, () => {
+              try {
+                const read = withOpenClawAgentDatabaseReadOnly(
+                  (opened) =>
+                    readTranscriptStatsBatchFromDatabase(
+                      opened,
+                      group.map((item) => item.marker.sessionId),
+                      { includeGeneration: true },
+                    ),
+                  { ...database, env },
+                );
+                if (!read.found) {
+                  return [];
+                }
+                for (const [index, item] of group.entries()) {
+                  const facts = read.value[index]!;
+                  transcriptFacts.set(transcriptKey(item.marker), {
+                    generation: facts.generation ?? null,
+                    cold: facts.cold === true,
+                  });
+                }
+                return read.value;
+              } catch (error) {
+                if (!(error instanceof SessionMetadataUnavailableError)) {
+                  throw error;
+                }
+                return [];
+              }
+            });
         for (const [index, item] of group.entries()) {
           result[item.index] = stats[index] ?? undefined;
         }
@@ -294,31 +327,21 @@ export async function executeUsageCostWorker(
         ),
       ),
     );
+  const readPartitionedBody = (row: SessionCostUsageRollupRow) =>
+    control.runNativeSection(() =>
+      readDatabase(cacheDatabase, () =>
+        readCache((db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row), undefined),
+      ),
+    );
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
   const readGeneration = async (marker: SqliteSessionFileMarker) => {
-    const database = target(marker.agentId, marker.storePath);
-    if (isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })) {
+    const facts = transcriptFacts.get(transcriptKey(marker));
+    if (facts?.cold) {
+      await host("restore", marker);
+      // Restore may replace the projection; rebuild this derived cache from the captured bounds.
       return undefined;
     }
-    const read = () =>
-      readStore(marker.agentId, marker.storePath, () => {
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (opened) =>
-            readSessionTranscriptHotWatermark(opened, marker.sessionId, { requireHot: true })
-              .generation,
-          { ...database, env },
-        );
-        return result.found ? result.value : undefined;
-      });
-    try {
-      return await read();
-    } catch (error) {
-      if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== marker.sessionId) {
-        throw error;
-      }
-      await host("restore", marker);
-      return read();
-    }
+    return facts?.generation;
   };
   let readId = 0;
   const readRows = async (
@@ -614,19 +637,25 @@ export async function executeUsageCostWorker(
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
+    let priorPartitions: UsageCostPartition[] = [];
     if (
       !rebuild &&
       row &&
       envelope &&
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
-      const body = await readBody(row);
+      let body: { blob: Uint8Array | null } | undefined;
+      if (!memoryCache && envelope.projection) {
+        const snapshot = await readPartitionedBody(row);
+        body = snapshot;
+        priorPartitions = snapshot?.partitions ?? [];
+      } else {
+        body = await readBody(row);
+      }
       previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
         : undefined;
     }
-    const priorPartitions =
-      previous && envelope?.projection && !memoryCache ? await readPartitions(file.filePath) : [];
     if (previous && envelope?.projection) {
       if (memoryCache || priorPartitions.length !== envelope.projection.dates.length) {
         previous = undefined;

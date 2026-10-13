@@ -480,7 +480,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     mark,
     read: (id) => rows.get(id),
     store: (path) => stores.get(path),
-    invalidate: backfill.remove,
     refresh(id, retained) {
       const row = rows.get(id);
       if (!row || (isCold(row) && !row.pendingDatabaseFacts)) {

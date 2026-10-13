@@ -31,7 +31,7 @@ extension OnboardingView {
         case 9:
             self.readyPage()
         default:
-            EmptyView()
+            self.welcomePage()
         }
     }
 

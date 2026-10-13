@@ -21,7 +21,7 @@ import {
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
-import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,

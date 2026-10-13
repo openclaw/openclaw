@@ -62,9 +62,13 @@ export function finalizeCronRunsInWorker(
                 continue;
               }
             }
-            const currentJob = completed.activeJobMarker?.jobRemoved
-              ? undefined
-              : jobs.get(completed.jobId);
+            const storedJob = jobs.get(completed.jobId);
+            // Retention protects the marker still in storage until this mutation flushes.
+            const pendingReceiptId =
+              storedJob?.state.runningAtMs === undefined
+                ? undefined
+                : storedJob.state.runningReceiptId;
+            const currentJob = completed.activeJobMarker?.jobRemoved ? undefined : storedJob;
             const ownsRunningMarker =
               !receipt ||
               !currentJob?.state.runningReceiptId ||
@@ -109,6 +113,7 @@ export function finalizeCronRunsInWorker(
                 database: db,
                 receiptSchema,
                 handle: receipt,
+                pendingReceiptId,
                 status:
                   completed.status === "ok" && completed.triggerEval?.fired === false
                     ? "skipped"

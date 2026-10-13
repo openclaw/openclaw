@@ -25,7 +25,7 @@ describe("quiet requester restart continuation", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["main", "nested", "reset", "cancelled", "successful"] as const)(
+  it.each(["main", "nested", "reset", "cancelled", "successful", "replaced-child"] as const)(
     "keeps a quiet restart continuation private to its original %s parent",
     async (scenario) => {
       const requesterSessionKey = scenario === "nested" ? "agent:main:subagent:middle" : REQUESTER;
@@ -47,11 +47,16 @@ describe("quiet requester restart continuation", () => {
           startedAt: 2_000,
           endedAt: 3_000,
           interruptionReason: scenario === "successful" ? undefined : "gateway-restart",
-          outcome: scenario === "successful" ? { status: "ok" } : { status: "error" },
+          outcome:
+            scenario === "successful"
+              ? { status: "ok" }
+              : { status: "error", error: "The original child session was replaced." },
+          suppressSessionEffects: scenario === "replaced-child" ? true : undefined,
         },
       });
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-      const shouldContinue = scenario === "main" || scenario === "nested";
+      const shouldContinue =
+        scenario === "main" || scenario === "nested" || scenario === "replaced-child";
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(
           wakeParams({ requesterSessionKey, settledEntry: child }),
@@ -69,6 +74,7 @@ describe("quiet requester restart continuation", () => {
         expect(delivery.triggerMessage).toContain("Reconcile every listed unfinished child");
         expect(delivery.triggerMessage).toContain(child.childSessionKey);
         expect(delivery.triggerMessage).toContain("Process this result privately");
+        expect(delivery.triggerMessage).toContain("The original child session was replaced.");
       }
       expect(child.requesterSettleWake).toBeUndefined();
     },

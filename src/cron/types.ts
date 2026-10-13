@@ -150,8 +150,7 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  /** `reportedByAgent`: the run's final answer reported AUTOMATION_FAILED; no runtime fault. */
-  | { kind: "permanent"; reportedByAgent?: true }
+  | { kind: "permanent" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 

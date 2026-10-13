@@ -6,7 +6,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import type { UiSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
@@ -282,8 +282,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "subagents");
     const processesVisible =
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "processes");
-    const modifiedFiles =
-      sessionWorkspace.list?.files.filter((file) => file.kind === "modified").length ?? 0;
     const panelMenuActions = this.headerPanelsMemo.read(
       [
         Boolean(sessionWorkspace.onToggleTerminal),
@@ -293,7 +291,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         discussion?.active,
         Boolean(sessionWorkspace.onOpenDiff),
         sessionWorkspace.collapsed,
-        modifiedFiles,
         sessionRailVisible,
         subagentsVisible,
         processesVisible,
@@ -357,7 +354,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ),
           icon: icons.fileText,
           active: !sessionWorkspace.collapsed,
-          badge: modifiedFiles,
           onActivate: callbacks.files,
         });
         actions.push({

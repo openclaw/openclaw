@@ -107,6 +107,40 @@ describe("cross-layer failover behavior", () => {
     expect(classifyFailoverSignal({ message })).toBeNull();
   });
 
+  it.each([
+    {
+      signal: {
+        message:
+          "Google Generative AI API error (503): The service is currently unavailable. [code=UNAVAILABLE]",
+      },
+      expected: { kind: "reason", reason: "server_error" },
+    },
+    {
+      signal: { message: "Google Generative AI API error (429): Retry later." },
+      expected: { kind: "reason", reason: "rate_limit" },
+    },
+    {
+      signal: {
+        status: 429,
+        message: "Google Generative AI API error (503): The service is currently unavailable.",
+      },
+      expected: { kind: "reason", reason: "rate_limit" },
+    },
+    {
+      signal: { message: "Provider selected candidate (503) before request dispatch." },
+      expected: null,
+    },
+    {
+      signal: {
+        message:
+          'Invalid request: user text contained "Google Generative AI API error (503): unavailable".',
+      },
+      expected: null,
+    },
+  ])("classifies only guarded provider-wrapped statuses: $signal", ({ signal, expected }) => {
+    expect(classifyFailoverSignal(signal)).toEqual(expected);
+  });
+
   it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {
     const message = "503 service unavailable";
 

@@ -8,8 +8,13 @@ import {
 } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { solidContent } from "../lit/solid-content.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
-import { LinkReaderPanelOwner, type LinkReaderPanelProps } from "./link-reader-panel-owner.ts";
+import {
+  LINK_READER_TAB_LIMIT,
+  LinkReaderPanelOwner,
+  type LinkReaderPanelProps,
+} from "./link-reader-panel-owner.ts";
 import {
   linkReaderViewStyles,
   tabTarget,
@@ -22,7 +27,24 @@ import { renderPanelTabStrip } from "./panel-tab-strip.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
-const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.cssText.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
+const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
+
+function HostedAction(props: { owner: LinkReaderPanelOwner; revision: number }) {
+  return (
+    <PanelIconButton
+      class="rail-header__action bp-icon"
+      label={t("linkReader.newTab")}
+      icon={<Icon name="plus" />}
+      onClick={() => props.owner.createTab()}
+      disabled={
+        (void props.revision,
+        props.owner.tabs.length >= LINK_READER_TAB_LIMIT ||
+          !props.owner.available ||
+          !props.owner.readers.length)
+      }
+    />
+  );
+}
 
 function PanelContent(props: { tab: ReaderTab; available: boolean; refresh: () => void }) {
   const target = () => tabTarget(props.tab);
@@ -90,7 +112,10 @@ function PanelView(
   Object.defineProperties(host, {
     hostedTabs: { configurable: true, get: () => owner.hostedTabs },
     activeHostedTabId: { configurable: true, get: () => owner.activeHostedTabId },
-    hostedActions: { configurable: true, get: () => owner.hostedActions },
+    hostedActions: {
+      configurable: true,
+      get: () => solidContent(HostedAction, { owner, revision: revision() }),
+    },
   });
   owner.connect();
   let previous: LinkReaderPanelProps | undefined;

@@ -230,7 +230,7 @@ describe("subagent registry restart recovery", () => {
       { originalRevision: "original-revision", currentRevision: undefined },
       { originalRevision: "original-revision", currentRevision: "replacement-revision" },
     ])(
-      "refuses a same-sessionId recovery with a changed revision ($originalRevision -> $currentRevision)",
+      "settles a same-sessionId recovery with a changed revision ($originalRevision -> $currentRevision)",
       async ({ originalRevision, currentRevision }) => {
         const entry = run({
           childSessionIdentity: { sessionId: "session-id", lifecycleRevision: originalRevision },
@@ -245,20 +245,22 @@ describe("subagent registry restart recovery", () => {
         const beforeRun = structuredClone(entry);
         const beforeSession = structuredClone(mocks.entries[childSessionKey]);
 
-        expect(await recover(entry)).toEqual({ status: "deferred" });
+        const result = await recover(entry);
+        expect(result).toMatchObject({
+          status: "terminal",
+          suppressSessionEffects: true,
+          error: expect.stringContaining("original session incarnation changed"),
+        });
+        if (result.status === "terminal") {
+          expect(await result.recoveryCurrent?.prepare()).toBe(true);
+          expect(result.sessionEffects).toBeUndefined();
+        }
 
         expect(entry).toEqual(beforeRun);
         expect(mocks.entries[childSessionKey]).toEqual(beforeSession);
         expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
         expect(dispatchAgent).not.toHaveBeenCalled();
-        expect(restartRecoveryTestHarness.warn).toHaveBeenCalledWith(
-          "failed to reconcile interrupted subagent execution",
-          expect.objectContaining({
-            error: expect.objectContaining({
-              message: expect.stringContaining("Inspect the retained record"),
-            }),
-          }),
-        );
+        expect(restartRecoveryTestHarness.warn).not.toHaveBeenCalled();
       },
     );
 
