@@ -11,6 +11,8 @@ import { SessionEntryNavigation } from "../../config/sessions/session-entry-navi
 import type { SessionTranscriptReadSnapshot } from "../../config/sessions/session-history-read.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type {
   AppliedTranscriptMessage,
@@ -79,6 +81,7 @@ function resolveActiveCommitPrefix(params: {
   baseLeafId: string | null;
   activeBranch: TranscriptEntry[];
   activeLeafId: string | null;
+  runId: string | null | undefined;
   messages: readonly AgentMessage[];
 }):
   | {
@@ -99,9 +102,27 @@ function resolveActiveCommitPrefix(params: {
     return { ok: false };
   }
 
-  const activeSuffix = activeBranch.slice(baseIndex + 1);
-  if (activeSuffix.length === 0) {
+  const baseEntry = activeBranch[baseIndex];
+  const baseRunId =
+    baseEntry?.type === "message" ? readSessionTranscriptRunId(baseEntry.message) : undefined;
+  const suffix = activeBranch.slice(baseIndex + 1);
+  if (suffix.length === 0) {
     return { ok: false };
+  }
+  // A message tool persists its delivered reply before returning to the worker.
+  // Its same-run mirror is bookkeeping, not a change to the worker's model context.
+  const activeSuffix = suffix.filter(
+    (entry) =>
+      !(
+        params.runId &&
+        baseRunId === params.runId &&
+        entry.type === "message" &&
+        isOpenClawDeliveryMirrorAssistantMessage(entry.message) &&
+        readSessionTranscriptRunId(entry.message) === params.runId
+      ),
+  );
+  if (activeSuffix.length === 0) {
+    return { ok: true, recoveredMessages: [] };
   }
 
   const recoveredMessages: AppliedTranscriptMessage[] = [];
@@ -250,6 +271,7 @@ export function prepareTranscriptCommitFromSnapshot(
     baseLeafId: input.requestedBaseLeafId,
     activeBranch,
     activeLeafId: navigation.leafId,
+    runId: input.runId,
     messages: input.messages,
   });
   return prefix.ok
