@@ -89,7 +89,7 @@ inbound media through their reply model; see the full provider list in
 | fal               |   ✓   |   ✓   |   ✓   |     |     |                |                     |
 | Google            |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |       ✓        |          ✓          |
 | Gradium           |       |       |       |  ✓  |     |                |                     |
-| Inworld           |       |       |       |  ✓  |     |                |                     |
+| Inworld           |       |       |       |  ✓  |     |       ✓        |                     |
 | LiteLLM           |   ✓   |       |       |     |     |                |                     |
 | Local CLI         |       |       |       |  ✓  |     |                |                     |
 | Microsoft         |       |       |       |  ✓  |     |                |                     |
@@ -110,8 +110,8 @@ inbound media through their reply model; see the full provider list in
 
 <Note>
 **Realtime voice** here means provider-native bidirectional realtime (Talk
-`realtime` mode, e.g. Gemini Live or the OpenAI Realtime API) — only Google
-and OpenAI register it today. Deepgram, ElevenLabs, Mistral, OpenAI, and xAI
+`realtime` mode, e.g. Gemini Live, the OpenAI Realtime API, or the Inworld
+Realtime API) — Google, OpenAI, and Inworld register it today. Deepgram, ElevenLabs, Mistral, OpenAI, and xAI
 separately register Voice Call streaming STT (one-way audio-to-text); see
 [Speech-to-text and Voice Call](#speech-to-text-and-voice-call) below.
 xAI Realtime voice is an upstream capability but is not registered in

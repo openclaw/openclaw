@@ -1,5 +1,5 @@
 ---
-summary: "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony)."
+summary: "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony) and realtime speech-to-speech voice."
 read_when:
   - You are installing, configuring, or auditing the inworld plugin
 title: "Inworld plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
+Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony) and realtime speech-to-speech voice.
 
 ## Distribution
 
@@ -19,7 +19,7 @@ Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
 
 ## Surface
 
-- Contracts: `speechProviders`
+- Contracts: `realtimeVoiceProviders`, `speechProviders`
 
 ## Related docs
 
