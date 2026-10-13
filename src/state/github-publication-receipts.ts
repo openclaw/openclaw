@@ -14,7 +14,10 @@ import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state
 import type { DB } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import { createKeyedStateDomainPublication } from "./state-domain-publication.js";
+import {
+  createKeyedStateDomainPublication,
+  type StateDomainChange,
+} from "./state-domain-publication.js";
 
 type PresentationColumn = "title" | "body" | "next_action";
 type Rows = {
@@ -58,7 +61,15 @@ const publication = createKeyedStateDomainPublication<Row>({
 /** Exact owner writes only: arbitrary raw SQL remains outside this coverage. */
 export const githubPublicationReceipts = {
   stageRow: stageGitHubPublicationRow,
-  subscribeFacts: publication.subscribeFacts,
+  subscribeFacts: (listener: (change: StateDomainChange<Row>, deletionPending: boolean) => void) =>
+    publication.subscribeFacts((change) =>
+      listener(
+        change,
+        change.kind === "pending" &&
+          typeof change.identity === "string" &&
+          owners.get(change.identity)?.pendingDeletion === true,
+      ),
+    ),
 };
 
 type LifecycleCell = { loaded: boolean; value?: GitHubPublicationSessionLifecycle };
@@ -66,6 +77,7 @@ type LifecycleOwner = {
   cells: Map<string, LifecycleCell>;
   pending: Set<string>;
   uncertain: boolean;
+  pendingDeletion?: boolean;
 };
 const owners = resolveGlobalMap<string, LifecycleOwner>(
   Symbol.for("openclaw.githubPublicationLifecycleAuthority"),
@@ -230,7 +242,11 @@ function withGitHubPublicationReceipt(
   return (operation) => {
     const owner = createAdmission(operation);
     let pending: ReturnType<typeof publication.begin>;
+    const lifecycleOwner = ownerFor(context.admission.identity.key);
+    const previousDeletion = lifecycleOwner.pendingDeletion;
     try {
+      // Pending listeners run synchronously; source preparation only loses authority on deletion.
+      lifecycleOwner.pendingDeletion = !mutation;
       pending = publication.begin(
         {
           identity: context.admission.identity.key,
@@ -242,6 +258,8 @@ function withGitHubPublicationReceipt(
     } catch (error) {
       owner.admission.finish();
       throw error;
+    } finally {
+      lifecycleOwner.pendingDeletion = previousDeletion;
     }
     const finish = owner.admission.finish.bind(owner.admission);
     owner.admission.finish = () => {

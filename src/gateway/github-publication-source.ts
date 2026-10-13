@@ -153,10 +153,11 @@ export async function prepareGitHubPublicationSource(params: {
         revoke();
       }
     }),
-    githubPublicationReceipts.subscribeFacts((change) => {
+    githubPublicationReceipts.subscribeFacts((change, deletionPending) => {
       if (
         // Once admitted, native source reservations protect the write through destination commit.
         (change.kind === "pending" &&
+          deletionPending &&
           change.identity === context.admission.identity.key &&
           !binding?.admitted) ||
         (change.kind === "unknown" && change.identity === context.admission.identity.key) ||
