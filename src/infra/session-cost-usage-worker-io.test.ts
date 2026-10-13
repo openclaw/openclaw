@@ -26,6 +26,7 @@ import {
   appendTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -230,7 +231,11 @@ describe("session cost usage worker I/O", () => {
             appendTranscriptEventsInTransaction(
               owner,
               scope,
-              [first, message("second", "first", 2)],
+              [
+                { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+                first,
+                message("second", "first", 2),
+              ],
               {
                 scheduleProjectionReconcile: false,
               },
@@ -281,7 +286,7 @@ describe("session cost usage worker I/O", () => {
           "expected rewritten SQLite usage rollup",
         );
         expect(JSON.parse(row.valueJson)).toMatchObject({
-          checkpoint: { kind: "sqlite", generation, maxSeq: 3, eventCount: 3 },
+          checkpoint: { kind: "sqlite", generation, maxSeq: 3, eventCount: 4 },
         });
         const reads = await probe.read();
         expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);

@@ -595,10 +595,9 @@ export function recordSessionParticipantInWorker(
         const change: SessionRowChange = {
           ...location,
           scope: "session-entry",
-          facts: {
-            kind: "participants",
-            ...(result.projectionChanged ? { projection: result.participants } : {}),
-          },
+          facts: result.projectionChanged
+            ? { kind: "participants", projection: result.participants }
+            : { kind: "participants", projectionChanged: false },
         };
         if (database && result.projectionChanged) {
           recordCommittedSessionMetadataPublication(database, location.sessionKey, change.facts);
