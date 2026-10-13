@@ -742,10 +742,10 @@ describe("makeBootstrapWarn", () => {
   it("keeps content revisions distinct when decorating truncation warnings", () => {
     const warnings: string[] = [];
     const workspaceDir = `/tmp/${randomUUID()}`;
-    for (const [sessionLabel, content] of [
-      ["first", "a"],
-      ["second", "a"],
-      ["first", "b"],
+    for (const { sessionLabel, content } of [
+      { sessionLabel: "first", content: "a" },
+      { sessionLabel: "second", content: "a" },
+      { sessionLabel: "first", content: "b" },
     ]) {
       buildBootstrapContextFiles(
         [
