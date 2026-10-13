@@ -337,7 +337,13 @@ function downgradeRichBlockTags(text: string, markdown: boolean): string {
     const raw = tag.raw;
     append(text.slice(cursor, tag.start));
     cursor = tag.end;
-    if (isInsideCode(tag.start, codeRegions)) {
+    let escapeStart = tag.start;
+    if (markdown) {
+      while (escapeStart > 0 && text[escapeStart - 1] === "\\") {
+        escapeStart -= 1;
+      }
+    }
+    if (isInsideCode(tag.start, codeRegions) || (tag.start - escapeStart) % 2 === 1) {
       append(raw);
       continue;
     }

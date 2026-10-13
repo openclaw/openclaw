@@ -497,6 +497,17 @@ describe("file references", () => {
     }
   });
 
+  it.each([
+    [String.raw`Use \<hr/> here`, "Use &lt;hr/&gt; here"],
+    [String.raw`Use \\<hr/> here`, String.raw`Use \ here`],
+    [
+      String.raw`\<ul>\<li>literal\</li>\</ul> \<aside>quote\</aside>`,
+      "&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt; &lt;aside&gt;quote&lt;/aside&gt;",
+    ],
+  ])("preserves Markdown escape parity in captions: %s", (input, expected) => {
+    expect(renderTelegramHtmlText(input, { downgradeRichPromptTags: true })).toBe(expected);
+  });
+
   it("downgrades Markdown captions without changing literal code or non-caption rendering", () => {
     const input = "<ul><li>**Scope**</li><li>Next</li></ul>\n\n`<li>literal</li>`";
     const html = renderTelegramHtmlText(input, { downgradeRichPromptTags: true });
