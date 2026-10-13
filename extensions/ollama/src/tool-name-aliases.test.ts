@@ -96,7 +96,7 @@ function readRequest() {
   return JSON.parse(body);
 }
 
-it.each(["functions.ls"])(
+it.each(["ls", "functions.ls"])(
   "aliases native definitions and %s replay while restoring streamed and final names",
   async (replayName) => {
     const original = context(["exec", "ls"]);
@@ -163,6 +163,52 @@ it("keeps aliases stable across tool order and disjoint from real replay names",
   expect((await stream.result()).content[0]).toMatchObject({ name: "openclaw_ls" });
 });
 
+it.each(["ls", "call", "tool_calls", "function", "TOOL_CALLS", "name"])(
+  "protects the known Ollama envelope collision %s",
+  async (name) => {
+    respond(`openclaw_${name}`);
+    const input = context([name, "exec"]);
+    input.messages = [];
+    const stream = await createOllamaStreamFn(model.baseUrl)(model, input);
+    expect((await stream.result()).content[0]).toMatchObject({ name });
+    const request = readRequest();
+    expect(request.tools).toContainEqual({
+      type: "function",
+      function: {
+        name: `openclaw_${name}`,
+        description: name,
+        parameters: { type: "object", properties: {} },
+      },
+    });
+  },
+);
+
+it("leaves dispatcher guidance unchanged when a direct name needs an alias", async () => {
+  const input = context(["ls", "dispatch_action", "tool_search"]);
+  input.systemPrompt = "Call dispatch_action with id and args. Run ls to list files.";
+  input.tools = input.tools?.map((tool) => ({
+    ...tool,
+    description: "Use dispatch_action; catalog IDs and literal ls remain unchanged.",
+  }));
+  const saved = structuredClone(input);
+  respond("openclaw_ls");
+  await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
+  const request = readRequest();
+  expect(request.messages[0].content).toBe(
+    `${input.systemPrompt}\n## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:\nls: use openclaw_ls`,
+  );
+  expect(
+    request.tools.map((tool: { function: { name: string; description: string } }) => tool.function),
+  ).toEqual(
+    ["dispatch_action", "openclaw_ls", "tool_search"].map((name) => ({
+      name,
+      description: "Use dispatch_action; catalog IDs and literal ls remain unchanged.",
+      parameters: { type: "object", properties: {} },
+    })),
+  );
+  expect(input).toEqual(saved);
+});
+
 it("recovers aliased plain-text calls before restoring the canonical tool name", async () => {
   fetchMock.mockResolvedValue({
     response: new Response(
@@ -188,7 +234,7 @@ it("recovers aliased plain-text calls before restoring the canonical tool name",
   ]);
 });
 
-it.each(["error"] as const)(
+it.each(["done", "error"] as const)(
   "maps Ollama /v1 selectors, independent tool events, and %s results",
   async (terminal) => {
     const compatModel: Model = { ...model, api: "openai-completions" };
@@ -215,11 +261,15 @@ it.each(["error"] as const)(
               arguments: { id: "session_status" },
             },
           });
-          stream.push({
-            type: "error",
-            reason: "error",
-            error: { ...message, stopReason: "error" },
-          });
+          if (terminal === "done") {
+            stream.push({ type: "done", reason: "toolUse", message });
+          } else {
+            stream.push({
+              type: "error",
+              reason: "error",
+              error: { ...message, stopReason: "error" },
+            });
+          }
           return stream;
         },
       }),
@@ -240,11 +290,26 @@ it.each(["error"] as const)(
     });
     expect(events.at(-1)).toMatchObject({
       type: terminal,
-      error: { content: [{ name: "ls" }] },
+      [terminal === "done" ? "message" : "error"]: { content: [{ name: "ls" }] },
     });
     expect((await stream.result()).content[0]).toMatchObject({ name: "ls" });
   },
 );
+
+it("does not advertise replay-only tools or rewrite non-colliding names", async () => {
+  const input = context(["exec", "functions", "tool_search"]);
+  respond("exec");
+  const stream = await createOllamaStreamFn(model.baseUrl)(model, input);
+  await stream.result();
+  const request = readRequest();
+  expect(request.messages[0].content).toBe(input.systemPrompt);
+  expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual([
+    "exec",
+    "functions",
+    "tool_search",
+  ]);
+  expect(request.messages[2].tool_calls[0].function.name).toBe("ls");
+});
 
 it("preserves prefixed replay when no tools are active", async () => {
   const input = context([]);
@@ -257,14 +322,17 @@ it("preserves prefixed replay when no tools are active", async () => {
   expect(request.messages[3].tool_name).toBe("ls");
 });
 
-it.each(["allowed_tools"] as const)(
+it.each(["function", "allowed_tools"] as const)(
   "translates explicit /v1 %s selectors before request reconciliation",
   async (type) => {
     const selection = { type: "function" as const, function: { name: "ls" } };
-    const toolChoice = {
-      type,
-      allowed_tools: { mode: "required" as const, tools: [selection] },
-    };
+    const toolChoice =
+      type === "function"
+        ? selection
+        : {
+            type,
+            allowed_tools: { mode: "required" as const, tools: [selection] },
+          };
     const compatModel: Model<"openai-completions"> = {
       ...model,
       api: "openai-completions",
@@ -293,15 +361,19 @@ it.each(["allowed_tools"] as const)(
     const stream = await wrapped(compatModel, context(["ls"]), options);
     await stream.result();
     const wireSelection = { type: "function", function: { name: "openclaw_ls" } };
-    expect(request?.tool_choice).toEqual({
-      type,
-      allowed_tools: { mode: "required", tools: [wireSelection] },
-    });
+    expect(request?.tool_choice).toEqual(
+      type === "function"
+        ? wireSelection
+        : {
+            type,
+            allowed_tools: { mode: "required", tools: [wireSelection] },
+          },
+    );
     expect(selection.function.name).toBe("ls");
   },
 );
 
-it.each(["call"])("keeps legacy dispatcher replay unchanged beside %s", async (name) => {
+it.each(["exec", "call"])("keeps legacy dispatcher replay unchanged beside %s", async (name) => {
   const input = context(["dispatch_action", "tool_search", name], "tool_call");
   input.systemPrompt = "Call dispatch_action with id and args.";
   const saved = structuredClone(input);
