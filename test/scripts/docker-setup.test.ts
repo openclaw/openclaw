@@ -816,6 +816,21 @@ describe("scripts/docker/setup.sh", () => {
     }
   });
 
+  it("keeps the shared-network CLI from inheriting the Gateway loopback healthcheck", async () => {
+    // A long-running CLI keeps the Gateway's old network namespace after a Gateway
+    // restart, so the image probe it would inherit can never pass again.
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    const { services } = parse(compose) as {
+      services: Record<
+        "openclaw-cli",
+        { network_mode: string; healthcheck?: Record<string, unknown> }
+      >;
+    };
+    const cli = services["openclaw-cli"];
+    expect(cli.network_mode).toBe("service:openclaw-gateway");
+    expect(cli.healthcheck).toStrictEqual({ disable: true });
+  });
+
   it("Dockerfile ARG OPENCLAW_IMAGE_APT_PACKAGES must not have a default value", async () => {
     // A default makes the ARG set, suppressing the legacy build-arg fallback.
     const dockerfile = await readFile(join(repoRoot, "Dockerfile"), "utf8");

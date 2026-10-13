@@ -96,6 +96,10 @@ services:
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
+    # The image healthcheck probes the Gateway, not this CLI. From the sidecar it fails
+    # or goes stale after a Gateway restart, so long-running CLIs stay unhealthy (#110972).
+    healthcheck:
+      disable: true
     env_file:
       - path: .env
         required: false

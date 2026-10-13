@@ -55,6 +55,12 @@ adjust the printed dashboard URL as described in [Containerized Gateway](/instal
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 
+`openclaw-cli` is meant for one-off `docker compose run --rm` commands and has no
+health check: the image's Gateway probe cannot pass from the CLI sidecar. A
+long-running CLI container, such as `docker compose run -d openclaw-cli logs --follow`,
+keeps the Gateway's old network namespace when `openclaw-gateway` restarts and reports
+`gateway disconnected` until you restart it with `docker restart <container>`.
+
 When the CLI shares Gateway state, add `pid: "service:openclaw-gateway"` to the
 `openclaw-cli` service in your Compose override so ownership checks can see the
 Gateway's processes; sharing the network alone does not share the PID namespace.
