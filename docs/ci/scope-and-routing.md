@@ -28,7 +28,7 @@ the resulting main tree independently. See
 | [Scope selection](/ci/scope-and-routing/selection)                  | Why a lane was or was not selected: changed-scope detection and the per-area routing rules.    |
 | [Node test lanes](/ci/scope-and-routing/node-test-lanes)            | How the slowest Node test families are split, balanced, packed, and cached.                    |
 | [Job budgets and platform lanes](/ci/scope-and-routing/job-budgets) | UI shards, concurrency and matrix budgets, lint memory policy, Android rows, and sticky disks. |
-| [Manual dispatches](/ci/scope-and-routing/manual-dispatches)        | Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Probe.            |
+| [Manual dispatches](/ci/scope-and-routing/manual-dispatches)        | Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Check.            |
 
 Short hybrid jobs use a [bounded hosted offload](/ci/capacity#bounded-hybrid-hosted-offload): the complete selected base must fit 40 hosted rows before up to five more move from Blacksmith. Coverage selection remains unchanged.
 
@@ -38,7 +38,7 @@ Every section heading from the previous single-page version keeps its anchor her
 
 - <a id="scope-and-routing" />[Scope and routing](/ci/scope-and-routing/selection#scope-and-routing)
 - <a id="manual-dispatches" />[Manual dispatches](/ci/scope-and-routing/manual-dispatches#manual-dispatches)
-- <a id="windows-testbox-probe" />[Windows Testbox Probe](/ci/scope-and-routing/manual-dispatches#windows-testbox-probe)
+- <a id="windows-testbox-probe" />[Windows Testbox Check](/ci/scope-and-routing/manual-dispatches#windows-testbox-probe)
 
 ## Related
 

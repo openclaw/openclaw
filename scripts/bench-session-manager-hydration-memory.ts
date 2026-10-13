@@ -19,13 +19,7 @@ type ReaderResult = {
   heapUsedDeltaBytes: number;
   rssDeltaBytes: number;
   peakRssBytes: number;
-  topAllocationSites: Array<{
-    bytes: number;
-    functionName: string;
-    line: number;
-    stack: string[];
-    url: string;
-  }>;
+  topAllocationSites: ReturnType<typeof summarizeHeapProfile>;
 };
 
 function forceGc(): void {
@@ -46,9 +40,7 @@ function readArg(name: string): string {
   return value;
 }
 
-function summarizeHeapProfile(
-  profile: HeapProfiler.SamplingHeapProfile,
-): ReaderResult["topAllocationSites"] {
+function summarizeHeapProfile(profile: HeapProfiler.SamplingHeapProfile) {
   type ProfileNode = HeapProfiler.SamplingHeapProfileNode;
   const samples: Array<{ node: ProfileNode; stack: ProfileNode[] }> = [];
   const visit = (node: ProfileNode, stack: ProfileNode[]): void => {

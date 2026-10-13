@@ -17,7 +17,6 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -34,7 +33,7 @@ export async function readDoctorGatewayOwnerLease(
   const reply = await withArtifactPreservingStateReads(() =>
     executeExistingOpenClawStateRead(
       options,
-      { type: "doctor.gatewayOwnerLease.read" },
+      { type: "gatewayOwnerLease.read", schemaMaintenance: true },
       { current: true, signal },
     ),
   );
@@ -42,7 +41,7 @@ export async function readDoctorGatewayOwnerLease(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "doctor.gatewayOwnerLease.read") {
+  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
     throw new Error("Unexpected Doctor Gateway owner lease read result");
   }
   // The recorded process may have exited while the reader and its private snapshot settled.
@@ -150,23 +149,6 @@ export async function assertDoctorMaintenanceReady(
     }
   }
   return { schemaPublicationDeferred };
-}
-
-/** Repair may have committed config before a later diagnostic failed. */
-export async function readDoctorMaintenanceRecoveryConfig(
-  resources: Pick<OpenClawDatabaseMaintenanceScope, "run">,
-  env: NodeJS.ProcessEnv,
-  log: (message: string) => void,
-): Promise<OpenClawConfig> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  return resources.run(async () => {
-    const { config } = await readConfigFileSnapshot({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    await assertDoctorMaintenanceReady(config, env, log);
-    return config;
-  });
 }
 
 export function assertDoctorMaintenanceInspection(

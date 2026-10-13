@@ -54,18 +54,12 @@ export type ClearPendingOnboardingRecommendationsParams = {
   expected: OnboardingRecommendationsRecord;
 };
 
-export type PreparedOnboardingRecommendationOffer = {
-  inventoryHash: string;
-  matches: OnboardingRecommendationMatch[];
-  answered: boolean;
-  nowMs: number;
-};
-
-export type PreparedOnboardingRecommendationPending = {
-  matches: OnboardingRecommendationMatch[];
-  expected: OnboardingRecommendationsRecord;
-  nowMs: number;
-};
+export type PreparedOnboardingRecommendationOffer = ReturnType<
+  typeof prepareOnboardingRecommendationOffer
+>;
+export type PreparedOnboardingRecommendationPending = ReturnType<
+  typeof prepareOnboardingRecommendationPending
+>;
 
 function canonicalInventory(
   inventory: readonly OnboardingRecommendationInventoryItem[],
@@ -84,7 +78,7 @@ function canonicalInventory(
 
 export function prepareOnboardingRecommendationOffer(
   params: WriteOnboardingRecommendationsOfferParams,
-): PreparedOnboardingRecommendationOffer {
+) {
   const nowMs = params.nowMs ?? Date.now();
   const inventoryHash = sha256Hex(JSON.stringify(canonicalInventory(params.inventory)));
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
@@ -93,7 +87,7 @@ export function prepareOnboardingRecommendationOffer(
 
 export function prepareOnboardingRecommendationPending(
   params: UpdatePendingOnboardingRecommendationsParams,
-): PreparedOnboardingRecommendationPending {
+) {
   const nowMs = params.nowMs ?? Date.now();
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
   return { matches, expected: structuredClone(params.expected), nowMs };

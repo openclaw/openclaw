@@ -1,7 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -44,7 +47,8 @@ export async function preserveSubagentRunForRestart(params: {
       if (
         entry.execution.status === "terminal" ||
         typeof entry.execution.endedAt === "number" ||
-        shouldSuppressSubagentRecoverySessionEffects(entry)
+        (shouldSuppressSubagentRecoverySessionEffects(entry) &&
+          resolveSubagentChildAuthority(entry).status !== "legacy-unverified")
       ) {
         return { value: { preserved: true, observedEntry: entry } };
       }
@@ -85,10 +89,7 @@ export async function preserveSubagentRunForRestart(params: {
   );
 }
 
-export type SubagentYieldClaim =
-  | "nothing-pending"
-  | "pending-work"
-  | { messageWaitRegistered: boolean };
+type SubagentYieldClaim = "nothing-pending" | "pending-work" | { messageWaitRegistered: boolean };
 
 /** Claim a live native task, recording announcing waits before the yielded terminal. */
 export async function claimSubagentYieldInRuns(params: {
@@ -197,12 +198,13 @@ export function markSubagentRunPausedAfterYield(params: {
   entry: SubagentRunRecord;
   startedAt?: number;
   endedAt?: number;
-  now?: number;
 }): boolean {
   const { entry } = params;
   if (
     entry.terminalOwner === "interrupted-recovery" ||
-    shouldSuppressSubagentRecoverySessionEffects(entry) ||
+    (shouldSuppressSubagentRecoverySessionEffects(entry) &&
+      (resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
+        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
     entry.suppressAnnounceReason === "killed" ||
     (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))
@@ -220,7 +222,7 @@ export function markSubagentRunPausedAfterYield(params: {
     }
     mutated = true;
   }
-  const endedAt = typeof params.endedAt === "number" ? params.endedAt : (params.now ?? Date.now());
+  const endedAt = typeof params.endedAt === "number" ? params.endedAt : Date.now();
   if (
     entry.execution.status !== "terminal" ||
     entry.execution.endedAt !== endedAt ||
@@ -238,16 +240,14 @@ export function markSubagentRunPausedAfterYield(params: {
     delete entry.archiveAtMs;
     mutated = true;
   }
-  if (entry.endedReason !== undefined) {
-    entry.endedReason = undefined;
-    mutated = true;
+  for (const key of ["endedReason", "cleanupCompletedAt"] as const) {
+    if (entry[key] !== undefined) {
+      entry[key] = undefined;
+      mutated = true;
+    }
   }
   if (entry.cleanupHandled === true) {
     entry.cleanupHandled = false;
-    mutated = true;
-  }
-  if (entry.cleanupCompletedAt !== undefined) {
-    entry.cleanupCompletedAt = undefined;
     mutated = true;
   }
   if (entry.delivery !== undefined) {

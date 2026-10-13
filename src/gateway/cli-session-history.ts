@@ -3,7 +3,6 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { withTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   ChatHistoryPage,
@@ -16,6 +15,7 @@ import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
 } from "../sessions/transcript-anchor-page.js";
+import { createTranscriptDisplaySource } from "../sessions/transcript-display-position.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -26,6 +26,7 @@ import {
   resolveClaudeCliHistorySource,
   visitClaudeCliSessionMessages,
 } from "./cli-session-history.claude-snapshot.js";
+import { cleanClaudeCliImportedUserDisplay } from "./cli-session-history.claude.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -110,10 +111,6 @@ export async function prepareCliSessionHistoryReader(
       return undefined;
     }
   }
-  const redaction = params.cliHistoryRedaction;
-  if (!redaction) {
-    throw new Error("CLI history requires prepared transcript redaction");
-  }
   const native = {
     cliSessionId: binding.sessionId,
     homeDir: params.cliHistoryHomeDir,
@@ -129,12 +126,7 @@ export async function prepareCliSessionHistoryReader(
   const revisionKey = (value: CliHistoryRevision) =>
     JSON.stringify([value.generation, value.indexedSeq, value.leafEventId]);
   const localRevision = revision ? revisionKey(revision) : undefined;
-  const key = JSON.stringify([
-    localRevision,
-    source[1],
-    params.entry?.sessionStartedAt,
-    redaction.policyToken,
-  ]);
+  const key = JSON.stringify([localRevision, source[1], params.entry?.sessionStartedAt]);
   let cached = revision?.database ? indexes.get(identity) : undefined;
   if (cached && (cached.database !== revision?.database || cached.key !== key)) {
     retire(identity);
@@ -155,13 +147,11 @@ export async function prepareCliSessionHistoryReader(
   if (!cached) {
     const index = new CliSessionHistoryIndex(!revision?.database);
     try {
-      await withTranscriptRedactionSnapshot(redaction, () =>
-        visitClaudeCliSessionMessages(
-          source[0],
-          native,
-          (message) => index.appendImported(message),
-          source[2],
-        ),
+      await visitClaudeCliSessionMessages(
+        source[0],
+        native,
+        (message) => index.appendImported(message),
+        source[2],
       );
       if (!index.importedCount) {
         index.close();
@@ -259,9 +249,17 @@ export async function prepareCliSessionHistoryReader(
     indexes.set(identity, cached);
   }
   const index = cached.index;
+  const indexCursorSource = createTranscriptDisplaySource([key]);
+  // Set once this request reads a closed reset interval or archive through the
+  // canonical anchor reader. Every row on that page, including rows retained into
+  // the current window, then keeps its canonical sequence.
+  let canonicalAnchorPage = false;
   const sequence = (message: unknown) => {
     const id = readChatHistoryMessageId(message);
     const seq = readChatHistoryMessageSeq(message);
+    if (canonicalAnchorPage) {
+      return seq;
+    }
     const ordinal = id
       ? index.ordinal(id)
       : seq === undefined
@@ -318,8 +316,12 @@ export async function prepareCliSessionHistoryReader(
     }
     const messages: unknown[] = [];
     for (const row of window) {
+      // The merge matched on original text; only an import that found no canonical row
+      // is served from the index, so its generated prefixes can leave the display copy here.
       const message =
-        row.local_seq === null ? index.message(row.id) : localMessages.get(row.local_seq);
+        row.local_seq === null
+          ? cleanClaudeCliImportedUserDisplay(index.message(row.id))
+          : localMessages.get(row.local_seq);
       const record = asOptionalRecord(message);
       if (!record) {
         throw new SessionTranscriptProjectionUnavailableError(params.sessionId!, "window-changed");
@@ -383,8 +385,9 @@ export async function prepareCliSessionHistoryReader(
     },
     sequence,
     applyPagination(historyPage: ChatHistoryPage) {
-      if (historyPage.pagination) {
-        historyPage.pagination.messageSequences = Object.fromEntries(
+      const pagination = historyPage.pagination ?? historyPage.anchor;
+      if (pagination) {
+        pagination.messageSequences = Object.fromEntries(
           historyPage.messages.flatMap((message) => {
             const id = readChatHistoryPaginationKey(message);
             const seq = sequence(message);
@@ -404,22 +407,30 @@ export async function prepareCliSessionHistoryReader(
         options: SessionTranscriptPageOptions,
       ) => page(options),
       readSessionMessagesAroundIdWithStatsAsync: async (
-        _scope: Parameters<Readers["readSessionMessagesPageWithStatsAsync"]>[0],
+        anchorScope: Parameters<Readers["readSessionMessagesAroundIdWithStatsAsync"]>[0],
         options: Parameters<Readers["readSessionMessagesAroundIdWithStatsAsync"]>[1],
       ) => {
         const ordinal = index.ordinal(options.messageId);
-        const range =
-          ordinal === undefined
-            ? undefined
-            : resolveHistoryAnchorPageRange(index.count, ordinal, options);
+        // The index covers only the latest reset window, and reset clears CLI bindings.
+        // Closed reset intervals and archives keep the canonical anchor contract; rows
+        // indexed here stay subject to merge and display filtering. Cursors stay on the
+        // source that issued them, because a closed interval shares its retained rows
+        // and closing reset marker with the index.
+        if (
+          ordinal === undefined ||
+          canonicalAnchorPage ||
+          (params.pageCursor !== undefined && params.pageCursor.source !== indexCursorSource)
+        ) {
+          canonicalAnchorPage = true;
+          return await readers.readSessionMessagesAroundIdWithStatsAsync(anchorScope, options);
+        }
+        const range = resolveHistoryAnchorPageRange(index.count, ordinal, options);
         return {
-          messages: range
-            ? await readRange(range.readStart, range.endExclusive, options.maxBytes)
-            : [],
+          messages: await readRange(range.readStart, range.endExclusive, options.maxBytes),
           totalMessages: index.count,
-          found: Boolean(range),
-          offset: range?.offset ?? 0,
-          hasOverreadContext: range?.hasOverreadContext ?? false,
+          found: true,
+          offset: range.offset,
+          hasOverreadContext: range.hasOverreadContext,
           displaySource: key,
         };
       },

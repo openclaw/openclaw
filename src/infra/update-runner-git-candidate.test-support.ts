@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
+import { copyTreeCloseOnExec } from "../../test/helpers/close-on-exec-copy.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { pathExists } from "../utils.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
@@ -61,6 +64,29 @@ export async function createGitFixtureCheckout(
   ]) {
     vi.stubEnv(key, undefined);
   }
+  const seed = await getOrCreatePromise(gitFixtureSeeds, JSON.stringify(manifest), async () => {
+    const seedDirectory = await fs.realpath(gitFixtureDirectories.make("openclaw-git-seed-"));
+    return { directory: seedDirectory, ...(await createGitFixtureSeed(seedDirectory, manifest)) };
+  });
+  copyTreeCloseOnExec(seed.directory, directory);
+  const root = path.join(directory, "checkout");
+  const remote = path.join(directory, "remote");
+  await runFixtureGit(root, "remote", "set-url", "origin", remote);
+  return { root, remote, beforeSha: seed.beforeSha };
+}
+
+const gitFixtureDirectories = useAutoCleanupTempDirTracker(afterAll);
+const gitFixtureSeeds = new Map<
+  string,
+  Promise<{
+    directory: string;
+    root: string;
+    remote: string;
+    beforeSha: string;
+  }>
+>();
+
+async function createGitFixtureSeed(directory: string, manifest: Record<string, unknown>) {
   const root = path.join(directory, "checkout");
   const remote = path.join(directory, "remote");
   await fs.mkdir(remote);

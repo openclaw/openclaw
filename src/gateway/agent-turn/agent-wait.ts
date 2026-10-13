@@ -43,8 +43,17 @@ export function prepareAgentWaitForTurn(
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
-    const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
-    const queuedAfterWait = queuedResult();
+    let queuedDuringWait: ReturnType<typeof queuedResult>;
+    const snapshot = await waitForAgentJob({
+      runId,
+      timeoutMs,
+      source,
+      stopWaiting: () => {
+        queuedDuringWait = queuedResult();
+        return queuedDuringWait !== undefined;
+      },
+    });
+    const queuedAfterWait = queuedDuringWait ?? queuedResult();
     if (queuedAfterWait) {
       return queuedAfterWait;
     }

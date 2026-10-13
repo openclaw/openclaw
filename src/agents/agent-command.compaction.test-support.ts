@@ -167,6 +167,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => ({ profiles: {} })),
   };
@@ -194,8 +195,9 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
   }),
 }));
 
+// mock-isolation: Compaction fixtures must not open the host approval store or discover executable nodes.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
 vi.mock("./model-fallback-runner.js", () => ({

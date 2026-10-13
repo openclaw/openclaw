@@ -14,6 +14,7 @@ export type ChannelIngressHostOwner = Readonly<{
 export type ChannelParticipantInput = {
   identity: Extract<SessionParticipantIdentity, { type: "remote" | "observation" }>;
   binding: ChannelIngressContextBinding;
+  childSessionPublication?: { audience: "public"; assertCurrent: () => void };
   promptedAt: number;
   owner: ChannelIngressHostOwner;
   gatewayContext: ReturnType<GatewayContextResolver>;

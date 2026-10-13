@@ -15,9 +15,7 @@ enum PushRelayError: LocalizedError {
         switch self {
         case .relayBaseURLMissing:
             "Push relay base URL missing"
-        case let .relayMisconfigured(message):
-            message
-        case let .invalidResponse(message):
+        case let .relayMisconfigured(message), let .invalidResponse(message):
             message
         case let .requestFailed(status, message):
             "Push relay request failed (\(status)): \(message)"
@@ -115,7 +113,11 @@ final class PushRelayClient: @unchecked Sendable {
     }
 
     var normalizedBaseURLString: String {
-        Self.normalizeBaseURLString(self.baseURL)
+        var absolute = self.baseURL.absoluteString
+        while absolute.hasSuffix("/") {
+            absolute.removeLast()
+        }
+        return absolute
     }
 
     func register(_ input: PushRelayRegistrationInput) async throws -> PushRelayRegisterResponse {
@@ -239,7 +241,7 @@ final class PushRelayClient: @unchecked Sendable {
         guard service.isSupported else { throw PushRelayError.unsupportedAppAttest }
 
         let keyID: String
-        if let existing = PushRelayRegistrationStore.loadAppAttestKeyID(scope: scope), !existing.isEmpty {
+        if let existing = PushRelayRegistrationStore.loadAppAttestKeyID(scope: scope) {
             keyID = existing
         } else {
             keyID = try await service.generateKey()
@@ -358,14 +360,6 @@ final class PushRelayClient: @unchecked Sendable {
 
     private static func statusCode(from response: URLResponse) -> Int {
         (response as? HTTPURLResponse)?.statusCode ?? 0
-    }
-
-    private static func normalizeBaseURLString(_ url: URL) -> String {
-        var absolute = url.absoluteString
-        while absolute.hasSuffix("/") {
-            absolute.removeLast()
-        }
-        return absolute
     }
 
     private static func decodeErrorMessage(data: Data) -> String {

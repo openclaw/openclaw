@@ -1,5 +1,6 @@
 // Covers server-local chat, cron watcher, queued-turn, and terminal blockers.
 import { describe, expect, it, vi } from "vitest";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
@@ -30,12 +31,13 @@ describe("gateway server active work inspectors", () => {
     const context = {
       cron: { getSuspensionBlockerCount: () => 1 },
       chatAbortControllers: new Map([
-        ["active", { controller: controller() }],
-        ["aborted", { controller: controller(true) }],
+        ["active", { controller: controller(), sessionKey: "agent:main:active" }],
+        ["aborted", { controller: controller(true), sessionKey: "agent:main:aborted" }],
         [
           "persisting",
           {
             controller: controller(),
+            sessionKey: "agent:main:persisting",
             registrationCleanupRequested: true,
             controlUiVisible: true,
             projectSessionTerminalPending: true,
@@ -59,6 +61,21 @@ describe("gateway server active work inspectors", () => {
     expect(inspectors.getQueuedTurns?.()).toBe(1);
     expect(inspectors.getTerminalPersistence?.()).toBe(1);
     expect(inspectors.getTerminalSessions?.()).toBe(2);
+    expect(createGatewayActiveWorkSnapshot(inspectors).blockers).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "chat-run",
+          count: 1,
+          message: "1 active chat run(s): run=active session=agent:main:active",
+        },
+        {
+          kind: "terminal-persistence",
+          count: 1,
+          message:
+            "1 pending terminal session write(s): run=persisting session=agent:main:persisting",
+        },
+      ]),
+    );
   });
 
   it("drops the raw terminal-session blocker count during an agent session drain", async () => {

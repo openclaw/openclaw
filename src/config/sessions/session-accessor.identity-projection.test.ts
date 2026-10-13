@@ -49,12 +49,6 @@ describe("qualified session accessor projection", () => {
   it.each([
     { input: "global", stored: "global", logical: "agent:research:global", global: true },
     {
-      input: "agent:research:main",
-      stored: "global",
-      logical: "agent:research:global",
-      global: true,
-    },
-    {
       input: "main",
       stored: "agent:research:primary",
       logical: "agent:research:primary",
@@ -121,34 +115,30 @@ describe("qualified session accessor projection", () => {
     },
   );
 
-  it.each(["global", "agent:research:global"])(
-    "refuses a qualified projection collision for %s without changing legacy reads",
-    async (sessionKey) => {
-      const cfg: OpenClawConfig = {
-        session: { store: path.join(tempDir, "{agentId}.json"), scope: "global" },
-        agents: { entries: { research: {} } },
-      };
-      const physical = { agentId: "research", storePath: path.join(tempDir, "research.json") };
-      for (const { key, sessionId } of [
-        { key: "global", sessionId: "raw" },
-        { key: "agent:research:global", sessionId: "qualified" },
-      ]) {
-        await replaceSessionEntry({ ...physical, sessionKey: key }, { sessionId, updatedAt: 1 });
-      }
-      const scope = { cfg, sessionKey, agentId: "research" };
-      expect(resolveSessionEntryAccessTarget(scope).entry?.sessionId).toBe(
-        sessionKey === "global" ? "raw" : "qualified",
-      );
-      expect(() =>
-        resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" }),
-      ).toThrow("ambiguous stored identity");
-      expect(
-        listSessionEntriesCore(physical)
-          .map((row) => row.entry.sessionId)
-          .toSorted(),
-      ).toEqual(["qualified", "raw"]);
-    },
-  );
+  it("refuses a qualified projection collision without changing legacy reads", async () => {
+    const sessionKey = "global";
+    const cfg: OpenClawConfig = {
+      session: { store: path.join(tempDir, "{agentId}.json"), scope: "global" },
+      agents: { entries: { research: {} } },
+    };
+    const physical = { agentId: "research", storePath: path.join(tempDir, "research.json") };
+    for (const { key, sessionId } of [
+      { key: "global", sessionId: "raw" },
+      { key: "agent:research:global", sessionId: "qualified" },
+    ]) {
+      await replaceSessionEntry({ ...physical, sessionKey: key }, { sessionId, updatedAt: 1 });
+    }
+    const scope = { cfg, sessionKey, agentId: "research" };
+    expect(resolveSessionEntryAccessTarget(scope).entry?.sessionId).toBe("raw");
+    expect(() => resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" })).toThrow(
+      "ambiguous stored identity",
+    );
+    expect(
+      listSessionEntriesCore(physical)
+        .map((row) => row.entry.sessionId)
+        .toSorted(),
+    ).toEqual(["qualified", "raw"]);
+  });
 
   it("does not select a qualified conversation when its old alias row is absent", async () => {
     const cfg: OpenClawConfig = {

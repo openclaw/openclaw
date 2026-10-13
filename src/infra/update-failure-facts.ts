@@ -4,7 +4,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   redactPublicSupportDiagnosticLine,
@@ -22,10 +21,45 @@ import {
 } from "./errors.js";
 import { npmFailurePackageName } from "./npm-error.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { formatUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts-format.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { UpdateDestinationFailureSchema, UpdateFailureFactSchema } from "./update-run-schema.js";
 
-export type UpdateFailureFact = z.infer<typeof UpdateFailureFactSchema>;
+export type { UpdateFailureFact } from "./update-failure-facts-format.js";
+
+type UpdatePreflightDiagnostic = {
+  check: string;
+  required: string;
+  detected: string;
+  installRoot?: string;
+  binaryPath?: string;
+  gatewayInstall?: string;
+  remedy: string;
+};
+
+/** The local report keeps paths; persisted/exported facts use the existing redaction bounds. */
+export function createUpdatePreflightDiagnostics(
+  params: UpdatePreflightDiagnostic & { code: string; affectedKey?: string },
+) {
+  const mismatch =
+    params.installRoot && params.gatewayInstall && params.installRoot !== params.gatewayInstall;
+  const facts = [
+    `Required: ${params.required}; detected: ${params.detected}`,
+    `Update install root: ${params.installRoot ?? "unresolved"}`,
+    `Update binary: ${params.binaryPath ?? "unresolved"}`,
+    `Gateway install root: ${params.gatewayInstall ?? "unresolved"}${mismatch ? " (differs from update install)" : ""}`,
+    `${mismatch ? "Different installations: align PATH and use the intended installation's absolute launcher. " : ""}${params.remedy}`,
+  ].map((message) => ({
+    check: params.check,
+    code: params.code,
+    affectedKey: params.affectedKey,
+    message,
+  }));
+  return {
+    message: facts.map(formatUpdateFailureFact).join("\n"),
+    failureFacts: facts.map((fact) => createUpdateFailureFact(fact)),
+  };
+}
 
 function normalizeDestinationFailure(
   fact: NonNullable<UpdateFailureFact["destination"]>,
@@ -233,36 +267,28 @@ export function createUpdateCanaryFailureFacts(params: {
 }): UpdateFailureFact[] {
   const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
     params;
-  if (signal) {
-    return [
-      createUpdateFailureFact(
-        {
-          check: phase,
-          code: "signal",
-          message: `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`,
-        },
-        env,
-      ),
-      ...(findings ?? []).slice(0, 4),
-    ];
+  if (!signal && findings?.length) {
+    return findings;
   }
-  return findings?.length
-    ? findings
-    : [
-        createUpdateFailureFact(
-          {
-            check: phase,
-            code:
-              timedOut && !exitWarning
-                ? "candidate-checks-timeout"
-                : phase === "doctor" || phase === "lint"
-                  ? "doctor-failed"
-                  : `candidate-${phase}-failed`,
-            message: timedOut ? failureMessage : (diagnostic ?? failureMessage),
-          },
-          env,
-        ),
-      ];
+  const fact = createUpdateFailureFact(
+    {
+      check: phase,
+      code: signal
+        ? "signal"
+        : timedOut && !exitWarning
+          ? "candidate-checks-timeout"
+          : phase === "doctor" || phase === "lint"
+            ? "doctor-failed"
+            : `candidate-${phase}-failed`,
+      message: signal
+        ? `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`
+        : timedOut
+          ? failureMessage
+          : (diagnostic ?? failureMessage),
+    },
+    env,
+  );
+  return signal ? [fact, ...(findings ?? []).slice(0, 4)] : [fact];
 }
 
 /** Config validation issues are more specific than the CLI's failure envelope. */

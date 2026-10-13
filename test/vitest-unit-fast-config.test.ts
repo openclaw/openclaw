@@ -101,9 +101,11 @@ describe("unit-fast vitest lane", () => {
           gitLsFilesCalls += 1;
           const stdout = [
             "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+            "src/agents/session-maintenance/coordinator.test.ts",
             "src/hooks/frontmatter.test.ts",
             "src/media-generation/runtime-shared.test.ts",
-          ].join("\\0") + "\\0";
+            "src/routing/account-lookup.test.ts",
+          ].map((file) => "H " + file).join("\\0") + "\\0";
           return {
             pid: 0,
             output: [null, stdout, ""],
@@ -199,6 +201,25 @@ describe("unit-fast vitest lane", () => {
         );
         const fullUnitConfig = createUnitVitestConfigWithOptions({}, { argv: ["node", "vitest", "run"] });
         console.log("UNIT_FULL_EXCLUSION_PROBE", fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"));
+        delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+        process.argv = ["node", "vitest", "run"];
+        const { createVitestRunSpecs } = await import("./scripts/test-projects.test-support.mts");
+        const lifecycleFiles = ["src/agents/session-maintenance/coordinator.test.ts", "src/routing/account-lookup.test.ts"];
+        const lifecycleRuns = [];
+        for (const [index, spec] of createVitestRunSpecs(lifecycleFiles, { baseEnv: {} }).entries()) {
+          const selectedFile = path.join(directory, "lifecycle-" + index + ".json");
+          fs.writeFileSync(selectedFile, JSON.stringify(spec.includePatterns));
+          process.env.OPENCLAW_VITEST_INCLUDE_FILE = selectedFile;
+          const { default: { test } } = await import("./" + spec.config + "?lifecycle-probe=" + index);
+          const directoryPrefix = path.relative(process.cwd(), test.dir ?? process.cwd());
+          const admitted = lifecycleFiles.filter((file) => {
+            const relative = path.relative(directoryPrefix || ".", file).replaceAll("\\\\", "/");
+            return test.include.some((pattern) => path.matchesGlob(relative, pattern))
+              && !test.exclude.some((pattern) => path.matchesGlob(relative, pattern));
+          });
+          lifecycleRuns.push({ config: spec.config, admitted, runner: test.runner ? path.basename(test.runner) : null });
+        }
+        console.log("UNIT_LIFECYCLE_ROUTING_PROBE", JSON.stringify(lifecycleRuns.sort((a, b) => a.config.localeCompare(b.config))));
       } finally {
         fs.rmSync(directory, { recursive: true, force: true });
       }
@@ -289,6 +310,24 @@ describe("unit-fast vitest lane", () => {
       { include, excluded },
     ]);
     expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true");
+  });
+
+  it("keeps lifecycle drains in their reset-capable owner without dropping test coverage", () => {
+    expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
+    const routing = configProbeResult.stdout.match(/UNIT_LIFECYCLE_ROUTING_PROBE (.+)/u);
+    expect(routing, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(routing?.[1] ?? "null")).toEqual([
+      {
+        config: "test/vitest/vitest.agents-support.config.ts",
+        admitted: ["src/agents/session-maintenance/coordinator.test.ts"],
+        runner: "non-isolated-runner.ts",
+      },
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        admitted: ["src/routing/account-lookup.test.ts"],
+        runner: null,
+      },
+    ]);
   });
 
   it("keeps untracked tests in their planned fast lane and execution include list", () => {
@@ -412,14 +451,14 @@ describe("unit-fast vitest lane", () => {
             return spawn.call(this, command, args, options);
           }
           if (mode === "incomplete") {
-            return { status: 0, stdout: files[0] + "\\0",
+            return { status: 0, stdout: "H " + files[0] + "\\0",
               error: Object.assign(new Error("incomplete output"), { code: "ENOBUFS" }) };
           }
           if (mode === "unavailable") {
             return spawn(path.join(process.cwd(), "missing-git"), args, options);
           }
-          const script = "process.stdout.write(" + JSON.stringify("src/filler.ts\\0") +
-            ".repeat(90_000) + " + JSON.stringify(files.join("\\0") + "\\0") + ")";
+          const script = "process.stdout.write(" + JSON.stringify("H src/filler.ts\\0") +
+            ".repeat(90_000) + " + JSON.stringify(files.map((file) => "H " + file).join("\\0") + "\\0") + ")";
           return spawn(process.execPath, ["-e", script], options);
         };
         syncBuiltinESMExports();
@@ -515,11 +554,12 @@ describe("unit-fast vitest lane", () => {
 
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     for (const file of [
+      "src/acp/translator.error-kind.test.ts",
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
       "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
-      "src/agents/provider-transport-fetch.headers.test.ts",
+      "src/agents/provider-transport-fetch.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
       "src/commands/status-overview-values.test.ts",
     ]) {
@@ -527,6 +567,10 @@ describe("unit-fast vitest lane", () => {
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
       expect(resolveUnitFastIsolatedTestIncludePattern(file), file).toBeNull();
     }
+    expect(
+      unitFastAnalysis.find((entry) => entry.file === "src/acp/translator.error-kind.test.ts")
+        ?.reasons,
+    ).toEqual(["database-worker-owner"]);
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/openai-transport-stream.base.test.ts")).toBe(false);
     expect(
@@ -599,7 +643,6 @@ describe("unit-fast vitest lane", () => {
     // Fixture files must genuinely import a stateful test helper; #121923
     // rewrote the outbound poll tests to be stateless, so they left this list.
     const files = [
-      "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",

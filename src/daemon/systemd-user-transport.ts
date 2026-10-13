@@ -5,7 +5,12 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
-  findServiceOwnershipRefusal,
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+  withServiceInspectionBudget,
+} from "./service-inspection-budget.js";
+import {
+  assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
@@ -27,9 +32,12 @@ const versionArgs = [
   `${manager}.Manager`,
   "Version",
 ];
-export const SYSTEMD_TRANSPORT_DEADLINE = new ServiceInspectionError(
-  "systemd-inspection-deadline-exceeded",
-);
+export class SystemdTransportInspectionTimeout extends ServiceInspectionError {
+  constructor(check: string) {
+    super("systemd-inspection-deadline-exceeded");
+    this.message = `${this.message} Stalled check: ${check}.`;
+  }
+}
 const addressFor = (socket: string) =>
   `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
 const transportKey = (env: GatewayServiceEnv, uid = process.geteuid?.()) => {
@@ -51,148 +59,177 @@ export async function readSystemdUserTransport(env: GatewayServiceEnv) {
 
 export async function resolveSystemdUserTransport(
   env: GatewayServiceEnv,
-  deadline = performance.now() + 5000,
+  deadline = getServiceInspectionClock()() + 5000,
   assertCurrent?: () => void,
   purpose: "inspection" | "admission" = "inspection",
 ): Promise<SystemdUserTransport | undefined> {
-  const check = () => {
-    assertGatewayServiceUpdateCurrent();
-    assertCurrent?.();
-    if (performance.now() >= deadline) {
-      throw SYSTEMD_TRANSPORT_DEADLINE;
-    }
-  };
-  const uid = process.geteuid?.();
-  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
-  if (preferMachineScope && machineUser) {
-    return { kind: "machine", user: machineUser };
-  }
-  if (process.platform !== "linux" || uid === undefined) {
-    return undefined;
-  }
-  check();
-  const source = { ...process.env, ...env };
-  const runtimeDir = source.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
-  const explicit = source.DBUS_SESSION_BUS_ADDRESS?.trim();
-  const key = transportKey(source, uid);
-  const joined = transports.has(key);
-  const discovery = getOrCreatePromise(transports, key, select, { cacheRejections: false });
-  let selected: Selection | typeof ABSOLUTE_DEADLINE_EXPIRED;
-  try {
-    selected = await awaitWithinDeadline(
-      () => discovery,
-      deadline,
-      () => performance.now(),
-    );
-  } catch (error) {
-    check();
-    const refusal = findServiceOwnershipRefusal(error);
-    if (refusal) {
-      throw refusal;
-    }
-    // A failed shared discovery does not consume this caller's independent custody/budget.
-    if (joined) {
-      return await resolveSystemdUserTransport(env, deadline, assertCurrent, purpose);
-    }
-    throw error;
-  }
-  check();
-  if (selected === ABSOLUTE_DEADLINE_EXPIRED) {
-    throw SYSTEMD_TRANSPORT_DEADLINE;
-  }
-  // A timed-out earlier candidate remains unresolved for a later admission.
-  if (joined && purpose === "admission" && selected.timedOut) {
-    if (transports.get(key) === discovery) {
-      transports.delete(key);
-    }
-    return await resolveSystemdUserTransport(env, deadline, assertCurrent, purpose);
-  }
-  return selected.transport;
-
-  async function select(): Promise<Selection> {
-    const runtimeAddress = addressFor(path.posix.join(runtimeDir, "bus"));
-    const socket = path.posix.join(runtimeDir, "systemd/private");
-    const candidates: SystemdUserTransport[] = [
-      ...(explicit ? [{ kind: "session-bus" as const, address: explicit, runtimeDir }] : []),
-      ...(explicit !== runtimeAddress && fs.existsSync(path.posix.join(runtimeDir, "bus"))
-        ? [{ kind: "runtime-bus" as const, address: runtimeAddress, runtimeDir }]
-        : []),
-      ...(path.posix.isAbsolute(socket) && fs.existsSync(socket)
-        ? [{ kind: "private" as const, address: addressFor(socket), runtimeDir }]
-        : []),
-      ...(machineUser ? [{ kind: "machine" as const, user: machineUser }] : []),
-    ];
-    let reason: ServiceInspectionReason = "systemd-user-bus-unavailable";
-    let timedOut = false;
-    for (const [index, candidate] of candidates.entries()) {
-      check();
-      const budget = Math.max(
-        1,
-        Math.floor((deadline - performance.now()) / (candidates.length - index + 1)),
-      );
-      const until = performance.now() + budget;
-      let connection: Awaited<ReturnType<typeof openSystemdUserManager>> | undefined;
-      try {
-        let version: unknown;
-        if (candidate.kind === "private") {
-          connection = await openSystemdUserManager(candidate.address, until);
-          check();
-          [version] = (await connection.query(versionArgs, ["s"], until)) ?? [];
-        } else {
-          const scope =
-            candidate.kind === "machine"
-              ? ["--machine", `${candidate.user}@`, "--user"]
-              : ["--user"];
-          const result = await execFileUtf8(
-            "busctl",
-            [...scope, "--auto-start=no", ...versionArgs],
-            {
-              env:
-                candidate.kind === "machine"
-                  ? source
-                  : { ...source, DBUS_SESSION_BUS_ADDRESS: candidate.address },
-              timeout: budget,
-              killSignal: "SIGKILL",
-            },
-          );
-          check();
-          if (result.termination === "timeout" || result.termination === "no-output-timeout") {
-            timedOut = true;
-          }
-          if (result.termination === "exit" && result.code === 0) {
-            [version] = decodeLegacyBusctlOutput(result.stdout, ["s"], false);
-          }
-          if (result.errorCode === "ENOENT") {
-            reason = "systemd-busctl-unavailable";
-          } else if (["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
-            reason = "service-manager-access-denied";
-          }
+  return await withServiceInspectionBudget<Promise<SystemdUserTransport | undefined>>(
+    async (inspectionBudget) => {
+      let checking = "cached user-manager route";
+      const check = () => {
+        if (inspectionBudget.now() >= deadline) {
+          throw new SystemdTransportInspectionTimeout(checking);
         }
-        check();
-        if (typeof version === "string" && version.length > 0) {
-          return { transport: candidate, timedOut };
+        assertGatewayServiceUpdateCurrent();
+        runServiceInspectionGuard(assertCurrent);
+        if (inspectionBudget.now() >= deadline) {
+          throw new SystemdTransportInspectionTimeout("custody/admission guards");
         }
-      } catch (error) {
-        check();
-        const refusal = findServiceOwnershipRefusal(error);
-        if (refusal) {
-          throw refusal;
-        }
-        if (error === SYSTEMD_TRANSPORT_DEADLINE) {
-          throw error;
-        }
-        timedOut ||= performance.now() >= until;
-      } finally {
-        await connection?.close();
+      };
+      const uid = process.geteuid?.();
+      const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
+      if (preferMachineScope && machineUser) {
+        return { kind: "machine", user: machineUser };
       }
-    }
-    check();
-    if (!timedOut && reason !== "service-manager-access-denied") {
-      reason = await resolveUnavailableSystemdInspectionReason(reason, source, deadline);
+      if (process.platform !== "linux" || uid === undefined) {
+        return undefined;
+      }
       check();
-    }
-    throw timedOut ? SYSTEMD_TRANSPORT_DEADLINE : new ServiceInspectionError(reason);
-  }
+      const source = { ...process.env, ...env };
+      const runtimeDir = source.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
+      const explicit = source.DBUS_SESSION_BUS_ADDRESS?.trim();
+      const key = transportKey(source, uid);
+      const joined = transports.has(key);
+      // Discovery and waiters use their own selected clocks; only the initiating
+      // scope accounts for its synchronous admission checks.
+      const discovery = getOrCreatePromise(transports, key, () => Promise.resolve().then(select), {
+        cacheRejections: false,
+      });
+      let selected: Selection | typeof ABSOLUTE_DEADLINE_EXPIRED;
+      try {
+        selected = await awaitWithinDeadline(
+          () => discovery,
+          deadline,
+          () => inspectionBudget.now(),
+        );
+      } catch (error) {
+        assertServiceInspectionFallbackAllowed(error);
+        check();
+        // A failed shared discovery does not consume this caller's independent custody/budget.
+        if (joined) {
+          return await resolveSystemdUserTransport(env, deadline, assertCurrent, purpose);
+        }
+        throw error;
+      }
+      if (selected === ABSOLUTE_DEADLINE_EXPIRED) {
+        // The initiating caller owns native cleanup even after its deadline. A
+        // joining waiter must not cancel another caller's independent discovery.
+        if (!joined) {
+          await discovery.catch(assertServiceInspectionFallbackAllowed);
+        }
+        check();
+        throw new SystemdTransportInspectionTimeout(checking);
+      }
+      check();
+      // A timed-out earlier candidate remains unresolved for a later admission.
+      if (joined && purpose === "admission" && selected.timedOut) {
+        if (transports.get(key) === discovery) {
+          transports.delete(key);
+        }
+        return await resolveSystemdUserTransport(env, deadline, assertCurrent, purpose);
+      }
+      return selected.transport;
+
+      async function select(): Promise<Selection> {
+        const runtimeAddress = addressFor(path.posix.join(runtimeDir, "bus"));
+        const socket = path.posix.join(runtimeDir, "systemd/private");
+        const candidates: SystemdUserTransport[] = [
+          ...(explicit ? [{ kind: "session-bus" as const, address: explicit, runtimeDir }] : []),
+          ...(explicit !== runtimeAddress && fs.existsSync(path.posix.join(runtimeDir, "bus"))
+            ? [{ kind: "runtime-bus" as const, address: runtimeAddress, runtimeDir }]
+            : []),
+          ...(path.posix.isAbsolute(socket) && fs.existsSync(socket)
+            ? [{ kind: "private" as const, address: addressFor(socket), runtimeDir }]
+            : []),
+          ...(machineUser ? [{ kind: "machine" as const, user: machineUser }] : []),
+        ];
+        let reason: ServiceInspectionReason = "systemd-user-bus-unavailable";
+        let timedOut = false;
+        let timedOutCheck = checking;
+        for (const [index, candidate] of candidates.entries()) {
+          checking = `${candidate.kind} Manager.Version`;
+          check();
+          const budget = Math.max(
+            1,
+            Math.floor((deadline - inspectionBudget.now()) / (candidates.length - index + 1)),
+          );
+          const until = inspectionBudget.now() + budget;
+          let connection: Awaited<ReturnType<typeof openSystemdUserManager>> | undefined;
+          try {
+            let version: unknown;
+            if (candidate.kind === "private") {
+              checking = "private manager connection";
+              connection = await openSystemdUserManager(candidate.address, until);
+              check();
+              checking = "private Manager.Version";
+              [version] = (await connection.query(versionArgs, ["s"], until)) ?? [];
+            } else {
+              const scope =
+                candidate.kind === "machine"
+                  ? ["--machine", `${candidate.user}@`, "--user"]
+                  : ["--user"];
+              const result = await execFileUtf8(
+                "busctl",
+                [...scope, "--auto-start=no", ...versionArgs],
+                {
+                  env:
+                    candidate.kind === "machine"
+                      ? source
+                      : { ...source, DBUS_SESSION_BUS_ADDRESS: candidate.address },
+                  timeout: budget,
+                  killSignal: "SIGKILL",
+                },
+              );
+              if (
+                result.termination === "timeout" ||
+                result.termination === "no-output-timeout" ||
+                result.errorCode === "ETIMEDOUT"
+              ) {
+                timedOut = true;
+                timedOutCheck =
+                  result.errorCode === "ETIMEDOUT"
+                    ? `${checking} native command admission`
+                    : checking;
+              }
+              if (result.termination === "exit" && result.code === 0) {
+                [version] = decodeLegacyBusctlOutput(result.stdout, ["s"], false);
+              }
+              if (result.errorCode === "ENOENT") {
+                reason = "systemd-busctl-unavailable";
+              } else if (["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
+                reason = "service-manager-access-denied";
+              }
+            }
+            check();
+            if (typeof version === "string" && version.length > 0) {
+              return { transport: candidate, timedOut };
+            }
+          } catch (error) {
+            assertServiceInspectionFallbackAllowed(error);
+            check();
+            if (error instanceof SystemdTransportInspectionTimeout) {
+              throw error;
+            }
+            if (inspectionBudget.now() >= until) {
+              timedOut = true;
+              timedOutCheck = checking;
+            }
+          } finally {
+            await connection?.close();
+          }
+        }
+        check();
+        if (!timedOut && reason !== "service-manager-access-denied") {
+          checking = "system manager availability";
+          reason = await resolveUnavailableSystemdInspectionReason(reason, source, deadline);
+          check();
+        }
+        throw timedOut
+          ? new SystemdTransportInspectionTimeout(timedOutCheck)
+          : new ServiceInspectionError(reason);
+      }
+    },
+  );
 }
 
 function readSystemctlEffectiveUser(): string | null {

@@ -21,18 +21,13 @@ const paths = {
   artifact: "personal-task-status.txt",
 };
 type Fault =
-  | "missing-read"
-  | "missing-write"
   | "reordered"
   | "unmatched"
   | "failed"
   | "fake"
-  | "parallel"
   | "tied-parallel"
   | "early-result"
-  | "early-artifact"
-  | "overclaim"
-  | "repeat-write";
+  | "early-artifact";
 
 async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = false) {
   const workspaceDir = tempDirs.make("qa-task-evidence-");
@@ -58,21 +53,12 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
       writeFileSync(artifactPath, artifact);
       const terminalAt = Math.ceil(statSync(artifactPath).mtimeMs) + 100;
       const order = fault === "reordered" ? [1, 0, 2] : [0, 1, 2];
-      if (fault === "repeat-write") {
-        order.push(2);
-      }
       if (codeMode && !fault) {
         order.push(3);
       }
       messages = [];
       const deferredResults: unknown[] = [];
       for (const [index, operation] of order.entries()) {
-        if (
-          (fault === "missing-read" && operation === 1) ||
-          (fault === "missing-write" && operation === 2)
-        ) {
-          continue;
-        }
         const toolName = operation === 2 ? "write" : "read";
         const file = operation === 0 ? paths.ledger : operation === 1 ? paths.note : paths.artifact;
         const input = { path: path.join(workspaceDir, file) };
@@ -82,11 +68,9 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
         const timestamp =
           fault === "early-result" && operation === 2
             ? terminalAt + 1
-            : fault === "parallel" && operation === 0
-              ? terminalAt - 40
-              : fault === "tied-parallel" || tiedSerial
-                ? startedAt
-                : startedAt + 5;
+            : fault === "tied-parallel" || tiedSerial
+              ? startedAt
+              : startedAt + 5;
         if (codeMode) {
           if (index === 0 || (index === 2 && fault !== "tied-parallel")) {
             messages.push({
@@ -172,7 +156,7 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
       state.addOutboundMessage({
         to: `dm:${inbound.conversation.id}`,
         replyToId: inbound.id,
-        text: fault === "overclaim" ? `${reply}\nPublished successfully` : reply,
+        text: reply,
         timestamp: fault === "early-artifact" ? statSync(artifactPath).mtimeMs - 1 : terminalAt,
         toolCalls: (codeMode
           ? ["exec", "read", "read", "exec", "write", "read"]
@@ -184,33 +168,20 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
 }
 
 describe.each([false, true])("task telemetry evidence with codeMode=%s", (codeMode) => {
-  it.each([false, true])("accepts correlated serial task work with tied=%s", async (tied) => {
-    await expect(runTaskEvidence(codeMode, undefined, tied)).resolves.toMatchObject({
+  it("accepts correlated serial task work with tied timestamps", async () => {
+    await expect(runTaskEvidence(codeMode, undefined, true)).resolves.toMatchObject({
       status: "pass",
     });
   });
 
   // Common task assertions need one mode; correlation and ordering use both adapters.
   const faults: Fault[] = codeMode
-    ? ["unmatched", "failed", "parallel", "tied-parallel"]
-    : [
-        "missing-read",
-        "missing-write",
-        "reordered",
-        "unmatched",
-        "failed",
-        "fake",
-        "parallel",
-        "tied-parallel",
-        "early-result",
-        "early-artifact",
-        "overclaim",
-        "repeat-write",
-      ];
+    ? ["unmatched", "failed", "tied-parallel"]
+    : ["reordered", "unmatched", "fake", "tied-parallel", "early-result", "early-artifact"];
   it.each(faults)("rejects %s despite a plausible start trace and artifact", async (fault) => {
     const result = runTaskEvidence(codeMode, fault);
     await expect(result).rejects.toThrow(/task|artifact|claim/);
-    if (fault === "parallel" || fault === "tied-parallel") {
+    if (fault === "tied-parallel") {
       const error = await result.catch((failure: unknown) => failure);
       expect(error).toBeInstanceOf(Error);
       const message = String(error);

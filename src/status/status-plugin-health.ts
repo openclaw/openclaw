@@ -87,14 +87,6 @@ export function dedupeChannelPluginFailures(
   );
 }
 
-function dedupeCompatibilityNotices(
-  notices: readonly PluginCompatibilityHealthNotice[],
-): PluginCompatibilityHealthNotice[] {
-  return dedupeByKey(notices, (entry) =>
-    JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
-  );
-}
-
 function mergePluginRecords(
   installed: readonly PluginHealthRecord[],
   runtime: readonly PluginHealthRecord[],
@@ -138,10 +130,10 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.channelPluginFailures ?? []),
       ...(runtime.channelPluginFailures ?? []),
     ]),
-    compatibilityNotices: dedupeCompatibilityNotices([
-      ...(installed.compatibilityNotices ?? []),
-      ...(runtime.compatibilityNotices ?? []),
-    ]),
+    compatibilityNotices: dedupeByKey(
+      [...(installed.compatibilityNotices ?? []), ...(runtime.compatibilityNotices ?? [])],
+      (entry) => JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
+    ),
     // Runtime-loaded provenance is a runtime-side fact; the installed disk scan
     // cannot confirm it, so it never contributes here.
     runtimeLoadedPluginIds: runtime.runtimeLoadedPluginIds,
@@ -156,28 +148,20 @@ function hasDependencyIssue(plugin: PluginHealthRecord): boolean {
   );
 }
 
-function shouldSuppressChannelPluginDiagnostic(
-  diagnostic: PluginDiagnosticRecord,
-  channelPluginFailures: readonly ChannelPluginFailureRecord[],
-): boolean {
-  if (!isChannelPluginFailureDiagnostic(diagnostic)) {
-    return false;
-  }
-  // Only suppress when the failure is actually reported in the channel
-  // section; otherwise the diagnostic must still count as a problem.
-  return channelPluginFailures.some(
-    (failure) =>
-      failure.message === diagnostic.message &&
-      (failure.pluginId == null ||
-        diagnostic.pluginId == null ||
-        failure.pluginId === diagnostic.pluginId),
-  );
-}
-
 function getReportableDiagnostics(snapshot: StatusPluginHealthSnapshot): PluginDiagnosticRecord[] {
   const channelPluginFailures = snapshot.channelPluginFailures ?? [];
+  // Only suppress when the failure is actually reported in the channel
+  // section; otherwise the diagnostic must still count as a problem.
   return snapshot.diagnostics.filter(
-    (entry) => !shouldSuppressChannelPluginDiagnostic(entry, channelPluginFailures),
+    (diagnostic) =>
+      !isChannelPluginFailureDiagnostic(diagnostic) ||
+      !channelPluginFailures.some(
+        (failure) =>
+          failure.message === diagnostic.message &&
+          (failure.pluginId == null ||
+            diagnostic.pluginId == null ||
+            failure.pluginId === diagnostic.pluginId),
+      ),
   );
 }
 

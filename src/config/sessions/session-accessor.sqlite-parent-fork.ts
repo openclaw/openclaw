@@ -354,7 +354,7 @@ export function buildForkedChildTranscriptEvents(params: {
     ? {
         type: "leaf",
         id: generateEntryId(pathEntryIds),
-        parentId: labelEntries.at(-1)?.id ?? lastPathEntryId,
+        parentId,
         timestamp: new Date().toISOString(),
         targetId: params.source.leafId,
         appendParentId: params.source.appendParentId,

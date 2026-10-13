@@ -14,13 +14,6 @@ export type DebugProxyCoverageEntry = {
   notes: string;
 };
 
-export type DebugProxyCoverageSummary = {
-  total: number;
-  captured: number;
-  proxyOnly: number;
-  uncovered: number;
-};
-
 const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "provider-transport-fetch",
@@ -131,7 +124,7 @@ export function buildDebugProxyCoverageReport() {
     entries.push({ ...entry, protocols: [...entry.protocols] });
     counts[entry.status] += 1;
   }
-  const summary: DebugProxyCoverageSummary = {
+  const summary = {
     total: entries.length,
     captured: counts.captured,
     proxyOnly: counts["proxy-only"],

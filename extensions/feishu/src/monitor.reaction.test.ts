@@ -403,17 +403,19 @@ describe("Feishu inbound debounce regressions", () => {
     expect(parsed.mentionTargets?.map((target) => target.openId)).toEqual(["ou_bob", "ou_carol"]);
   });
 
-  it("excludes stale retries and keeps the latest fresh message as the batch anchor", async () => {
-    const staleCommit = vi.fn(async () => true);
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async ({ messageId }) => ({
-      kind: "claimed",
-      handle: {
-        keys: [messageId ?? "test"],
-        commit: messageId === "om_old" ? staleCommit : async () => true,
-        release: () => undefined,
-      },
-    }));
-    vi.spyOn(dedup, "hasProcessedFeishuMessage").mockImplementation(async (id) => id === "om_old");
+  it("excludes duplicates at admission and keeps the latest message as the batch anchor", async () => {
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async ({ messageId }) =>
+      messageId === "om_old"
+        ? { kind: "duplicate" }
+        : {
+            kind: "claimed",
+            handle: {
+              keys: [messageId ?? "test"],
+              commit: async () => true,
+              release: () => undefined,
+            },
+          },
+    );
     const onMessage = await setupDebounceMonitor();
     await enqueueText(
       onMessage,
@@ -427,6 +429,5 @@ describe("Feishu inbound debounce regressions", () => {
     const { dispatched, parsed } = parsedDispatch();
     expect(dispatched.message.message_id).toBe("om_new_2");
     expect(parsed.content).toBe("first\nsecond");
-    expect(staleCommit).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,7 +1,6 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import OSLog
 
@@ -47,7 +46,7 @@ actor CameraCaptureService {
     }
 
     func snap(
-        facing: CameraFacing,
+        facing: OpenClawCameraFacing,
         maxWidth: Int?,
         quality: Double?,
         deviceId: String?,
@@ -117,7 +116,7 @@ actor CameraCaptureService {
     }
 
     func clip(
-        facing: CameraFacing,
+        facing: OpenClawCameraFacing,
         durationMs: Int?,
         includeAudio: Bool,
         deviceId: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)

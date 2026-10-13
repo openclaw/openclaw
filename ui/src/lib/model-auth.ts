@@ -15,13 +15,11 @@ export function canonicalModelAuthProviderId(provider: string): string {
 
 /** API-key-only providers have no scheduled expiry for the dashboard to monitor. */
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
-  if (p.status === "missing") {
-    return true;
-  }
-  if (!Array.isArray(p.profiles)) {
-    return false;
-  }
-  return p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token");
+  return (
+    p.status === "missing" ||
+    (Array.isArray(p.profiles) &&
+      p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token"))
+  );
 }
 
 const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] as const;

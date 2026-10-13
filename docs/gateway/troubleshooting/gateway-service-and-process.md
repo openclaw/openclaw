@@ -288,7 +288,7 @@ Common signatures:
 - `reason=rss_growth` → the RSS floor kept rising across consecutive sampling windows. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
 - Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence. Pressure events do not automatically write bundles.
 
-On Node, an administrator can also [sample allocations](/gateway/diagnostics#sampling-heap-profile) with `openclaw gateway call diagnostics.heapProfile --timeout 30000`. This captures current allocation activity, not a past spike or all native memory. Older bundles remain readable with `openclaw gateway stability --bundle latest`.
+An administrator can also [sample allocations](/gateway/diagnostics#sampling-heap-profile) with `openclaw gateway call diagnostics.heapProfile --timeout 30000` on Node or OpenClaw's Bun runtime. This captures current allocation activity, not a past spike or all native memory. Older bundles remain readable with `openclaw gateway stability --bundle latest`.
 
 Review the sanitized diagnostics export before attaching it to a bug report; avoid copying raw logs.
 

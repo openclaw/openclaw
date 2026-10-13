@@ -10,8 +10,9 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import { mountRoster } from "./roster.test-support.ts";
+import { mountRoster, settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.ts";
 
 const sessionKey = "agent:main:attention";
@@ -61,6 +62,17 @@ function agentAttentionRow(
   });
 }
 
+async function errorDescription(container: ParentNode): Promise<string> {
+  const attention = container.querySelector('[data-session-attention="error"]')!;
+  expect(attention).not.toBeNull();
+  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+    .updateComplete;
+  return (attention.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/u)
+    .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
 describe("AppSidebar session attention", () => {
   it("keeps an active waiting session hand-only and restores its ring after resolution", async () => {
     const client = {
@@ -97,7 +109,7 @@ describe("AppSidebar session attention", () => {
       expiresAtMs: Date.now() + 60_000,
       status: "pending",
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(
       row.querySelector('[data-session-attention="question"]')?.getAttribute("aria-label"),
     ).toBe("Waiting for your answer\nContinue?");
@@ -107,7 +119,7 @@ describe("AppSidebar session attention", () => {
       id: "question-active",
       status: "cancelled",
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(row.querySelector('[data-session-attention="question"]')).toBeNull();
     expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
   });
@@ -123,14 +135,14 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
-    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`)!;
 
-    expect(row?.textContent).toContain(
+    expect(await errorDescription(row)).toContain(
       "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
     );
   });
 
-  it("projects canonical attention onto Home across row refresh ordering", async () => {
+  it("projects canonical main attention onto the agent header across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
     const client = {
       request: vi.fn().mockResolvedValue({ questions: [] }),
@@ -138,8 +150,21 @@ describe("AppSidebar session attention", () => {
     const gatewayHarness = createGatewayHarness(client);
     const sessionsHarness = createSessionsHarness("main", [mainKey]);
     setRows(sessionsHarness, [agentAttentionRow(mainKey)]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
-    const home = sidebar.querySelector(".nav-item--home");
+    const { sidebar, context } = await mountSidebar(
+      gatewayHarness.gateway,
+      sessionsHarness.sessions,
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
+    const publishRows = async (rows: GatewaySessionRow[]) => {
+      setRows(sessionsHarness, rows);
+      await rosterActivityStore(context).refresh();
+      await settleRoster(sidebar);
+    };
+    const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
 
     expect(home?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
 
@@ -159,33 +184,35 @@ describe("AppSidebar session attention", () => {
       expiresAtMs: Date.now() + 60_000,
       status: "pending",
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
-    setRows(sessionsHarness, []);
-    await sidebar.updateComplete;
+    await publishRows([]);
+    await settleLitElement(sidebar);
     expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
     gatewayHarness.publishEvent("question.resolved", {
       id: "question-home",
       status: "cancelled",
     });
-    setRows(sessionsHarness, [
+    await publishRows([
       failedRow(mainKey, {
         lastRunError: "⚠️ ✉️ Message failed:  delivery unavailable",
       }),
     ]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(home?.getAttribute("aria-label")).toBe(
-      "Home · Run failed:   Message failed:  delivery unavailable",
-    );
-    expect(home?.getAttribute("aria-label")).not.toMatch(/[⚠✉]/u);
+    expect(
+      home?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+    ).toBe("Run failed:   Message failed:  delivery unavailable");
+    expect(
+      home?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+    ).not.toMatch(/[⚠✉]/u);
 
-    setRows(sessionsHarness, [
+    await publishRows([
       { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
     ]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(home?.querySelector("[data-session-attention]")).toBeNull();
   });
 
@@ -214,7 +241,7 @@ describe("AppSidebar session attention", () => {
       expiresAtMs: Date.now() + 60_000,
       status: "pending",
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const questionAttention = sidebar.querySelector('[data-session-attention="question"]');
     expect(questionAttention).not.toBeNull();
@@ -236,7 +263,7 @@ describe("AppSidebar session attention", () => {
       id: "question-1",
       status: "cancelled",
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector('[data-session-attention="question"]')).toBeNull();
     expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
@@ -282,7 +309,7 @@ describe("AppSidebar session attention", () => {
     );
 
     sidebar.sessionOrganizer.setSessionsShowPreview(true);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
@@ -308,7 +335,7 @@ describe("AppSidebar session attention", () => {
     expect(previewRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
 
     setRows(sessionsHarness, [failedRow()]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const attentionRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
@@ -319,6 +346,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.findSidebarHovercardRowByKey(sessionKey)?.attention).toEqual({
       kind: "error",
       reason: "Provider credits exhausted",
+      sourceSessionKey: sessionKey,
     });
   });
 
@@ -334,17 +362,17 @@ describe("AppSidebar session attention", () => {
 
     sidebar.requestUpdate();
     provider.remove();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     const requestUpdate = vi.spyOn(sidebar, "requestUpdate");
     await vi.advanceTimersByTimeAsync(60_001);
     expect(requestUpdate).not.toHaveBeenCalled();
 
     document.body.append(provider);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
 
     setRows(sessionsHarness, [agentAttentionRow()]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
     await vi.advanceTimersByTimeAsync(60_001);
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
@@ -383,7 +411,7 @@ describe("AppSidebar session attention", () => {
     },
   );
 
-  it("uses canonical Home attention without duplicating an agent approval badge", async () => {
+  it("uses canonical main attention without duplicating the agent header approval badge", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -400,8 +428,11 @@ describe("AppSidebar session attention", () => {
       [approval],
     );
 
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
     const homeAttention = sidebar.querySelector(
-      '.nav-item--home [data-session-attention="approval"]',
+      '[data-agent-group="main"] .sidebar-agent-roster__header [data-session-attention="approval"]',
     );
     expect(homeAttention).not.toBeNull();
     expect(
@@ -411,7 +442,7 @@ describe("AppSidebar session attention", () => {
     ).toBe("git status");
 
     expect(
-      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+      sidebar.querySelector(".sidebar-workspace-header__main")?.getAttribute("aria-label"),
     ).not.toContain("pending approval");
   });
 
@@ -425,7 +456,7 @@ describe("AppSidebar session attention", () => {
 
     expect(sidebar.querySelector('[data-session-attention="error"]')).not.toBeNull();
     setRows(sessionsHarness, [failedRow(sessionKey, { lastReadAt: 2 })]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(sidebar.querySelector('[data-session-attention="error"]')).toBeNull();
     expect(sidebar.textContent).not.toContain("Run failed:");
@@ -466,8 +497,9 @@ describe("AppSidebar session attention", () => {
     } = await mountRoster(TWO_AGENTS, rows);
     const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
-    expect(parentRow().textContent).toContain(childFailure);
-    expect(parentRow().textContent).not.toContain("Run failed:");
+    const description = await errorDescription(parentRow());
+    expect(description).toContain(childFailure);
+    expect(description).not.toContain("Run failed:");
 
     sidebar.sidebarAgentsMode = "roster";
     await waitForFast(() => {
@@ -503,10 +535,9 @@ describe("AppSidebar session attention", () => {
 
     expect(sidebar.querySelector('[data-session-attention="error"]')).toBeNull();
     setRows(sessionsHarness, [failedRow(sessionKey, { endedAt: 3, updatedAt: 3, lastReadAt: 2 })]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
-    expect(sidebar.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Run failed: Provider credits exhausted");
+    expect(await errorDescription(sidebar)).toContain("Run failed: Provider credits exhausted");
   });
 
   it("marks a collapsed section that contains agent-declared attention", async () => {
@@ -582,7 +613,7 @@ describe("AppSidebar session attention", () => {
           expiresAtMs: Date.now() + 60_000,
           status: "pending",
         });
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
       }
       expect(
         sidebar.querySelector(
@@ -601,7 +632,7 @@ describe("AppSidebar session attention", () => {
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
       expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(
         sidebar
           .querySelector('[data-session-section="ungrouped"]')

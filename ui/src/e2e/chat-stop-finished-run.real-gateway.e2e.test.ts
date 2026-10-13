@@ -13,6 +13,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:stop-finished";
@@ -53,6 +54,7 @@ type Frame = {
   type: string;
   id?: string;
   ok?: boolean;
+  error?: { code?: string; message?: string };
   method?: string;
   params?: Record<string, unknown>;
   event?: string;
@@ -376,21 +378,14 @@ suite.define(() => {
               try {
                 stage = "open same-origin authenticated Chat";
                 await page.goto(url.href);
+                await enterControlUiSession(page);
                 await waitForControlUiGatewayReady(page);
                 const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
                 await composer.fill("Finish this fixture turn.");
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
                 await stop.waitFor({ state: "visible" });
-                stage = "qualify active ownership before releasing provider";
-                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
-                  sessionKey,
-                  runId: expect.any(String),
-                  sending: false,
-                  loading: false,
-                });
-                expect((await browserState()).runId).toBe(runId);
-                await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
+                stage = "qualify accepted send before active ownership";
                 const send = sent.find((frame) => frame.method === "chat.send");
                 const sessionId = send?.params?.sessionId;
                 if (!send || !runId || typeof sessionId !== "string") {
@@ -401,6 +396,15 @@ suite.define(() => {
                 await expect
                   .poll(() => received.find((frame) => frame.id === send.id), { timeout: 15_000 })
                   .toMatchObject({ ok: true, payload: { runId, status: "started" } });
+                await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
+                stage = "qualify active ownership before releasing provider";
+                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
+                  sessionKey,
+                  runId: expect.any(String),
+                  sending: false,
+                  loading: false,
+                });
+                expect((await browserState()).runId).toBe(runId);
                 await expect.poll(sessionRow, { timeout: 15_000 }).toMatchObject({
                   key: sessionKey,
                   sessionId,
@@ -571,6 +575,16 @@ suite.define(() => {
                 proof.restoredDraftPreserved = (await composer.inputValue()) === "Next draft";
                 expect(await composer.inputValue()).toBe("Next draft");
               } finally {
+                const send = sent.find((frame) => frame.method === "chat.send");
+                const response = send && received.find((frame) => frame.id === send.id);
+                proof.sendAckObserved = response !== undefined;
+                proof.sendAckOk = response?.ok === true;
+                proof.sendAckStarted = response?.payload?.status === "started";
+                proof.sendAckUnavailable = response?.error?.code === "UNAVAILABLE";
+                proof.sendAckSchemaPublicationRefused =
+                  response?.error?.message?.includes(
+                    "Agent schema admission changed before publication",
+                  ) ?? false;
                 proof.stage = stage;
                 proof.browserSockets = sockets;
                 proof.connectRequests = sent.filter((frame) => frame.method === "connect").length;

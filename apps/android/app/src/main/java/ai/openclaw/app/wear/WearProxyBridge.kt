@@ -118,7 +118,10 @@ internal class WearProxyBridge(
   ): Long =
     when (operation) {
       is WearBridgeOperation.Event -> {
-        markEventDequeued()
+        synchronized(overflowLock) {
+          check(pendingEventCount > 0)
+          pendingEventCount -= 1
+        }
         sendEventPreservingActor(operation.message)
         operation.message.sequence
       }
@@ -252,25 +255,16 @@ internal class WearProxyBridge(
     }
   }
 
-  private fun markEventDequeued() {
-    synchronized(overflowLock) {
-      check(pendingEventCount > 0)
-      pendingEventCount -= 1
-    }
-  }
-
   private fun takeOverflow(): List<WearMessage.Event> =
     synchronized(overflowLock) {
-      buildList {
-        addAll(pendingTerminalEvents)
-        add(
+      (
+        pendingTerminalEvents +
           WearMessage.Event(
             streamId = eventStreamId,
             sequence = ++nextSequence,
             event = WearEventType.Resync,
-          ),
-        )
-      }.also {
+          )
+      ).also {
         pendingTerminalEvents.clear()
         resyncRequired = false
       }
@@ -371,18 +365,16 @@ internal class WearProxyBridge(
   }
 
   private suspend fun resolvePeers(): Set<String> {
-    repeat(2) { attempt ->
+    repeat(2) {
       try {
         return peerResolver.reachableWatchNodeIds()
-      } catch (_: WearTaskCanceledException) {
-        if (attempt == 1) return emptySet()
-      } catch (err: CancellationException) {
-        // A custom resolver may use cancellation as a transient discovery failure.
-        // Preserve parent cancellation and retry this event once.
-        currentCoroutineContext().ensureActive()
-        if (attempt == 1) return emptySet()
-      } catch (_: Throwable) {
-        return emptySet()
+      } catch (err: Throwable) {
+        // Retry transport cancellation once, preserving the actor's own cancellation.
+        when (err) {
+          is CancellationException -> currentCoroutineContext().ensureActive()
+          is WearTaskCanceledException -> Unit
+          else -> return emptySet()
+        }
       }
     }
     return emptySet()

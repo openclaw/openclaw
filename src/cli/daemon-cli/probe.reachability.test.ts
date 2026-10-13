@@ -149,7 +149,7 @@ describe("Gateway reachability over real sockets", () => {
       }
       const { result, output } = await checkDashboardReadiness(url, rpc);
       expect(result).toMatchObject({ ready: false, recoverable: false });
-      expect(output).toContain("Gateway probe failed:");
+      expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");
     },

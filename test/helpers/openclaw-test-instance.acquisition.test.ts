@@ -9,7 +9,6 @@ import { resolveGatewayPort } from "../../src/config/paths.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayUrlOverride } from "../../src/gateway/client-bootstrap.js";
 import { reserveGatewayTestListener } from "../../src/gateway/test-helpers.listener.js";
-import { probeTcpListener } from "../../src/infra/ports-probe.js";
 import { captureFullEnv, withEnvAsync } from "../../src/test-utils/env.js";
 import {
   acquireTestPortBlock,
@@ -23,22 +22,55 @@ import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
-  it("keeps an absent Gateway unreachable while retaining its port claims", async () => {
+  it("closes an absent Gateway reservation while retaining its port claims", async () => {
+    const listeners = new Map<number, net.Server>();
+    const createServer = net.createServer;
+    const serverSpy = vi.spyOn(net, "createServer").mockImplementation((...args) => {
+      const server = createServer(...args);
+      server.once("listening", () => {
+        const address = server.address();
+        if (address && typeof address !== "string") {
+          listeners.set(address.port, server);
+        }
+      });
+      return server;
+    });
+    const competitor = createServer((socket) => socket.destroy());
     const instance = await createOpenClawTestInstance({
       name: "absent-gateway",
       reserveIdlePort: false,
-    });
+    }).finally(() => serverSpy.mockRestore());
+    const reservation = listeners.get(instance.port);
     await runQaGatewayFixture(
       async () => {
-        await expect(probeTcpListener(instance.port, "127.0.0.1")).resolves.toBe("free");
+        expect(reservation).toBeDefined();
+        expect(reservation?.listening).toBe(false);
+        expect(reservation?.address()).toBeNull();
+        // Released sockets can belong to an unclaimed listener even while the
+        // fixture retains cooperative claims; observe the exact reserved socket.
+        await new Promise<void>((resolve, reject) => {
+          competitor.once("error", reject);
+          competitor.listen(instance.port, "127.0.0.1", () => {
+            competitor.off("error", reject);
+            resolve();
+          });
+        });
         await instance.stopGateway();
-        await expect(probeTcpListener(instance.port, "127.0.0.1")).resolves.toBe("free");
+        expect(reservation?.listening).toBe(false);
+        expect(reservation?.address()).toBeNull();
+        expect(competitor.listening).toBe(true);
         for (const port of [instance.port, instance.port + 1]) {
           await expect(acquireTestPortBlock({ port, offsets: [0] })).rejects.toMatchObject({
             code: "EADDRINUSE",
           });
         }
       },
+      () =>
+        competitor.listening
+          ? new Promise<void>((resolve, reject) => {
+              competitor.close((error) => (error ? reject(error) : resolve()));
+            })
+          : undefined,
       () => instance.cleanup(),
     );
     const released = await acquireTestPortBlock({ port: instance.port, offsets: [0, 1] });

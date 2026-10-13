@@ -97,7 +97,7 @@ async function promptWebToolsConfig(
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    const codexRelevant = await isCodexNativeWebSearchRelevant({ config: nextConfig });
     let configureManagedProvider = true;
 
     if (codexRelevant) {
@@ -118,45 +118,39 @@ async function promptWebToolsConfig(
         initialValue: existingSearch?.openaiCodex?.enabled === true,
       });
 
+      const codexMode = enableCodexNative
+        ? await prompts.select({
+            message: "Native Codex web search mode",
+            options: [
+              {
+                value: "cached",
+                label: "cached (recommended)",
+                hint: "Uses cached web content",
+              },
+              {
+                value: "live",
+                label: "live",
+                hint: "Allows live external web access",
+              },
+            ],
+            initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
+          })
+        : undefined;
+      nextSearch = {
+        ...nextSearch,
+        openaiCodex: {
+          ...existingSearch?.openaiCodex,
+          enabled: enableCodexNative,
+          ...(enableCodexNative ? { mode: codexMode } : {}),
+        },
+      };
       if (enableCodexNative) {
-        const codexMode = await prompts.select({
-          message: "Native Codex web search mode",
-          options: [
-            {
-              value: "cached",
-              label: "cached (recommended)",
-              hint: "Uses cached web content",
-            },
-            {
-              value: "live",
-              label: "live",
-              hint: "Allows live external web access",
-            },
-          ],
-          initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
-        });
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: true,
-            mode: codexMode,
-          },
-        };
         configureManagedProvider = await prompts.confirm({
           message: existingSearch?.provider
             ? `Change the separate web search provider (currently ${existingSearch.provider})?`
             : "Also configure a separate web search provider for other models?",
           initialValue: Boolean(existingSearch?.provider),
         });
-      } else {
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: false,
-          },
-        };
       }
     }
 
@@ -331,7 +325,7 @@ export async function runConfigureWizard(
             hint: localProbe.ok
               ? `Gateway reachable (${localUrl})`
               : "authUnavailable" in localProbe
-                ? `Gateway auth unavailable; probe skipped (${localUrl})`
+                ? `Gateway auth unavailable; check skipped (${localUrl})`
                 : `No gateway detected (${localUrl})`,
           },
           {
@@ -529,6 +523,12 @@ export async function runConfigureWizard(
       web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
       },
+      memory: async () => {
+        const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
+        nextConfig = await runMemorySetupFlow(nextConfig, prompter, {
+          agentDir: (await resolveSetupTarget()).agentDir,
+        });
+      },
       gateway: async () => {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -581,19 +581,13 @@ export async function runConfigureWizard(
 
       // Section flags retain their canonical setup order regardless of flag order;
       // the complete config is committed once before service or health effects.
-      for (const section of [
-        "workspace",
-        "model",
-        "web",
-        "gateway",
-        "channels",
-        "plugins",
-        "skills",
-      ] as const) {
-        if (selectedSections.includes(section)) {
-          await sectionActions[section]();
-          hasPendingConfig = true;
+      for (const { value: section } of CONFIGURE_SECTION_OPTIONS) {
+        if (section === "daemon" || section === "health" || !selectedSections.includes(section)) {
+          continue;
         }
+        const before = nextConfig;
+        await sectionActions[section]();
+        hasPendingConfig ||= section !== "memory" || nextConfig !== before;
       }
 
       await persistPendingConfig();
@@ -625,10 +619,11 @@ export async function runConfigureWizard(
         if (choice === "daemon" || choice === "health") {
           await persistPendingConfig();
         }
+        const before = nextConfig;
         await sectionActions[choice]();
         if (choice !== "daemon" && choice !== "health") {
           // Interactive setup commits each section before showing another prompt.
-          hasPendingConfig = true;
+          hasPendingConfig ||= choice !== "memory" || nextConfig !== before;
           await persistPendingConfig();
         }
       }
@@ -674,20 +669,15 @@ export async function runConfigureWizard(
     }
 
     const bind = nextConfig.gateway?.bind ?? "loopback";
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const linkParams = {
       bind,
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind,
-      port: gatewayPort,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: nextConfig.gateway?.controlUi?.basePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(linkParams);
+    const probeLinks = resolveLocalControlUiProbeLinks(linkParams);
     const probeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: nextConfig,
       env: process.env,
@@ -699,7 +689,7 @@ export async function runConfigureWizard(
     const probe =
       daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
-      ? { ok: false, detail: "auth unavailable; probe skipped" }
+      ? { ok: false, detail: "auth unavailable; check skipped" }
       : await probe({
           ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
           url: probeLinks.wsUrl,
@@ -726,7 +716,7 @@ export async function runConfigureWizard(
       }
     }
     const gatewayStatusLine = probeAuth.warning
-      ? "Gateway: auth unavailable (probe skipped)"
+      ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
         : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
@@ -752,4 +742,3 @@ export async function runConfigureWizard(
     throw err;
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

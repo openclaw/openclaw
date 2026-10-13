@@ -26,7 +26,7 @@ auth health, sandbox images, and plugin installs.
 
     The JSON plugin index at `plugins/installs.json` is retired. Doctor leaves it unchanged and directs operators to run `openclaw doctor --fix` on `2026.9.5` with a pre-update backup. Updates also check this original file before stopping the running Gateway. Current SQLite plugin indexes and install records remain supported.
 
-    Legacy Skill Workshop proposal imports, skill relocation, and collection-backup repair belong to Doctor, including the repair pass during `openclaw update`. Normal Gateway and local CLI startup leave those artifacts untouched and do not discover Workshop backup roots or scan proposals for repair. Run `openclaw doctor --fix` or `openclaw doctor --yes` against the same state and config to complete a legacy Workshop migration. Plain Doctor can report remaining Workshop artifacts with repair guidance.
+    Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 
     A rewritten or truncated legacy audit raw archive does not stop Doctor or update finalization. Doctor quarantines it beside itself, preserves the sanitized archive and existing SQLite records, and reports the quarantined path once. Later repairs continue. See [legacy audit recovery](/cli/update/repair-and-recovery#skipped-legacy-audit-recovery) for retained backups and recovery limits.
 
@@ -50,11 +50,13 @@ auth health, sandbox images, and plugin installs.
 
     If an agent schema upgrade is interrupted after the database commits, rerun `openclaw doctor --fix` with a compatible OpenClaw build. Doctor refreshes the registration of each successfully verified database, including retained registered databases inside the active state directory whose agents are no longer configured.
 
+    An unfinished agent deletion keeps ownership of its database during an update. Doctor includes resumable pending stores in schema preflight and pre-migration backups, then prepares their schemas under the current deletion owner. Other per-agent content migrations defer those stores. Gateway recovery resumes the full session cleanup, including native bindings and related state, before removing or retaining files according to the original deletion request. This also supports older journals without a phase field. Completed retained deletions and unfinished Claw removals keep their existing restoration and removal owners.
+
     Doctor finishes database work started by its repair before releasing maintenance. A check that finds no repair leaves existing runtime handles open. If maintenance ownership is lost, Doctor stops its repairs and cleans up its own resources without closing independently admitted runtime work.
 
     `openclaw doctor --fix`, including the repair pass during `openclaw update`, removes surrounding whitespace from historical task run IDs and child session keys. It repairs related subagent task bindings in the same transaction while preserving task IDs, physical subagent run IDs, and delivery records. If distinct run IDs would become the same ID, Doctor leaves the transaction unchanged and reports the conflicting bindings. New task writes normalize these fields before persistence; Gateway reads use the existing indexes without scanning for whitespace repairs. When replacing a binary directly, run Doctor against the same state before starting the new Gateway; official container image activation includes this repair pass.
 
-    On Windows, standalone `openclaw doctor --fix` consolidates internal database registrations that use both ordinary and extended-length (`\\?\` or `\\?\UNC\`) paths, keeping the newest recorded facts in the state-relative row. External database locations keep their existing spelling. Doctor skips this repair with a warning during an update, including the candidate Doctor pass, so the updater's captured rollback inventory stays unchanged. Rerun standalone Doctor after the update finishes to repair existing aliases.
+    Standalone `openclaw doctor --fix` removes invalid database registrations derived from the `(multiple)` session-store marker on every platform. It deletes verified empty files, preserves data-bearing or unreadable files, and reports retained paths. On Windows, it also consolidates internal database registrations that use both ordinary and extended-length (`\\?\` or `\\?\UNC\`) paths, keeping the newest recorded facts in the state-relative row. External database locations keep their existing spelling. Doctor skips these repairs with a warning during an update, including the candidate Doctor pass, so the updater's captured rollback inventory stays unchanged. Rerun standalone Doctor after the update finishes to repair existing registrations.
 
     Doctor reports individual channel migration-plan failures while continuing plans for unrelated sources, including those from the same plugin. Plans sharing the failed source are deferred, and source cleanup waits for its last consumer to finish without reported failures or incomplete imports. Advisory readiness warnings allow the Gateway to start degraded. Startup logs the warnings once with the exact repair command; `openclaw status` and `openclaw doctor` show the running Gateway's warning report. Run `openclaw doctor --fix` against the same state/config, then restart the Gateway. Warning-bearing migrations remain incomplete until a later Doctor run. State that is unsafe to read still refuses startup.
 
@@ -120,8 +122,10 @@ auth health, sandbox images, and plugin installs.
     owner before removing that marker, preserving the job's definition and runtime
     state. Unresolved historical jobs also require Doctor before updates or removal,
     and the current system agent does not gain management access to them. Operator
-    inspection remains available. Current configurations without a legacy marker keep their dynamic
-    system-agent selection.
+    inspection remains available. For a legacy `agents.list` without a default
+    marker, Doctor pins historical ownerless jobs to the first agent in the list
+    before converting the roster. Current keyed `agents.entries` configurations
+    without a legacy marker keep their dynamic system-agent selection.
 
     Missing interval anchors are repaired by Doctor. Runtime scheduling can
     calculate the next run without writing an anchor into an old definition.
@@ -171,6 +175,8 @@ auth health, sandbox images, and plugin installs.
     Doctor also imports legacy generated provider catalogs (`plugins/*/catalog.json` and retained migration claims) into agent SQLite while preserving provider credentials. Run `openclaw doctor --fix` to import these catalogs or repair persisted generated models whose transport API cannot be derived. Ordinary model loading reads canonical SQLite catalogs without importing sidecars or repairing saved rows. Initial disk discovery and explicit registry refresh report legacy catalogs with a Doctor command; hot model lookups and lifecycle-captured catalogs do not inspect legacy files. Newly generated catalogs are still normalized before publication.
 
     OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
+
+    Stale OAuth shadow cleanup preserves profiles with sidecar references in either the legacy file or the canonical store. If a legacy auth file cannot be read or parsed, Doctor skips that agent's shadow cleanup and warns with the file path; inspect or restore it before retrying. A missing legacy file does not prevent cleanup of ordinary SQLite-only profiles.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">

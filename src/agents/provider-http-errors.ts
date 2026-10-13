@@ -1,9 +1,3 @@
-/**
- * Shared provider HTTP error normalization helpers.
- *
- * Transport adapters use this module to turn provider-specific response bodies,
- * request ids, and binary payload guardrails into stable OpenClaw error shapes.
- */
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import {
   asOptionalObjectRecord,
@@ -90,7 +84,6 @@ export function createProviderErrorTextRedactor(params: {
   };
 }
 
-/** Shared timeout and byte-limit options for provider response consumption. */
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
   onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
@@ -117,7 +110,6 @@ function readProviderResponseBytes(
   });
 }
 
-/** Options for bounded provider error-body normalization. */
 type ProviderHttpErrorOptions = {
   statusPrefix?: string;
   signal?: AbortSignal;
@@ -234,12 +226,10 @@ function resolveProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPay
   return { detail, code, type };
 }
 
-/** Formats common provider JSON error payload shapes into one readable detail string. */
 export function formatProviderErrorPayload(payload: unknown): string | undefined {
   return resolveProviderErrorPayloadMetadata(payload).detail;
 }
 
-/** Metadata extracted from a non-2xx provider response body and headers. */
 type ProviderHttpErrorInfo = ProviderErrorPayloadMetadata & {
   body?: string;
   requestId?: string;
@@ -324,12 +314,10 @@ async function extractProviderErrorInfo(
   }
 }
 
-/** Returns only the normalized provider detail string for callers that do not need metadata. */
 export async function extractProviderErrorDetail(response: Response): Promise<string | undefined> {
   return (await extractProviderErrorInfo(response)).detail;
 }
 
-/** Reads the provider request id header variants used across model and media APIs. */
 export function extractProviderRequestId(response: Response): string | undefined {
   return (
     trimToUndefined(response.headers.get("x-request-id")) ??
@@ -337,7 +325,6 @@ export function extractProviderRequestId(response: Response): string | undefined
   );
 }
 
-/** Error type carrying normalized provider status, request id, code, type, and body metadata. */
 export class ProviderHttpError extends Error {
   readonly status: number;
   readonly statusCode: number;
@@ -348,17 +335,7 @@ export class ProviderHttpError extends Error {
   readonly errorBody?: string;
   readonly requestId?: string;
 
-  constructor(
-    message: string,
-    params: {
-      status: number;
-      code?: string;
-      type?: string;
-      body?: string;
-      requestId?: string;
-      retryAfterMs?: number;
-    },
-  ) {
+  constructor(message: string, params: Omit<ProviderHttpErrorInfo, "detail"> & { status: number }) {
     super(message);
     this.name = "ProviderHttpError";
     this.status = params.status;
@@ -372,7 +349,6 @@ export class ProviderHttpError extends Error {
   }
 }
 
-/** Builds the human-facing provider HTTP error message from normalized metadata. */
 export function formatProviderHttpErrorMessage(params: {
   label: string;
   status: number;
@@ -388,7 +364,6 @@ export function formatProviderHttpErrorMessage(params: {
   );
 }
 
-/** Creates a normalized provider HTTP error from a failed response. */
 export async function createProviderHttpError(
   response: Response,
   label: string,
@@ -410,7 +385,6 @@ export async function createProviderHttpError(
   );
 }
 
-/** Throws a normalized provider error when a fetch response is not OK. */
 export async function assertOkOrThrowProviderError(
   response: Response,
   label: string,
@@ -422,7 +396,6 @@ export async function assertOkOrThrowProviderError(
   throw await createProviderHttpError(response, label, options);
 }
 
-/** Throws a normalized generic HTTP error when a fetch response is not OK. */
 export async function assertOkOrThrowHttpError(
   response: Response,
   label: string,
@@ -457,7 +430,6 @@ export async function readProviderJsonResponse<T>(
   }
 }
 
-/** Parses a provider JSON response that must be a top-level object. */
 export async function readProviderJsonObjectResponse(
   response: Response,
   label: string,
@@ -471,7 +443,6 @@ export async function readProviderJsonObjectResponse(
   return object;
 }
 
-/** Parses a provider JSON object response and returns an array field. */
 export async function readProviderJsonArrayFieldResponse(
   response: Response,
   label: string,

@@ -1,11 +1,13 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import {
-  createSqliteReadOnlyWorkerScope,
-  runSqliteReadOnlyOperation,
-} from "../infra/sqlite-readonly-worker.js";
+import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { captureCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -29,6 +31,58 @@ import {
 } from "./runtime-retention.sqlite.js";
 
 const log = createSubsystemLogger("trajectory");
+
+/** Preserve the native sweep policy without holding the actor's append transaction. */
+export async function settleIncognitoTrajectoryRuntimeRetention(params: {
+  actor: IncognitoSessionActor;
+  authority: IncognitoSessionAuthority;
+  input: TrajectoryRuntimeRetentionInput & { sessionKey: string };
+}): Promise<void> {
+  const buffer = new SharedArrayBuffer(4);
+  const lease = new Int32Array(buffer);
+  Atomics.store(lease, 0, 1);
+  const now = Date.now();
+  try {
+    await params.actor.sessions.withSharedState(async () => {
+      const prepare = () =>
+        params.actor.sessions.sideData(
+          params.authority,
+          {
+            type: "session.trajectory.retention.prepare",
+            input: { ...params.input, now },
+          },
+          undefined,
+          undefined,
+          undefined,
+          { trajectoryRetentionLease: buffer },
+        );
+      let prepared: { sweepId: string; snapshot?: TrajectoryRuntimeRetentionPlan } | undefined =
+        await prepare();
+      let refreshes = 0;
+      while (prepared) {
+        const result = await params.actor.sessions.sideData(params.authority, {
+          type: "session.trajectory.retention.delete",
+          input: { ...prepared, sessionKey: params.input.sessionKey, now },
+        });
+        if (result.complete) {
+          break;
+        }
+        if (result.refresh) {
+          if (++refreshes > 1) {
+            break;
+          }
+          prepared = await prepare();
+        } else {
+          prepared = { ...prepared, snapshot: undefined };
+        }
+      }
+    });
+  } catch (error) {
+    log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+  } finally {
+    Atomics.store(lease, 0, 0);
+  }
+}
 
 /** One lifecycle-owned sweep; reads never hold the canonical writer reservation. */
 export function scheduleSqliteTrajectoryRuntimeRetention(params: {
@@ -67,10 +121,13 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     await state.pending;
   };
   let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
-  let reader: ReturnType<typeof createSqliteReadOnlyWorkerScope> | undefined;
+  let reader: ReturnType<typeof retainSessionHistoryWorkerDatabase> | undefined;
   const cleanup = async () => {
     Atomics.store(lease, 0, 0);
-    const outcomes = await Promise.allSettled([reader?.close(), execution?.release()]);
+    const outcomes = await Promise.allSettled([
+      Promise.resolve().then(() => reader?.release()),
+      Promise.resolve().then(() => execution?.release()),
+    ]);
     const failures = outcomes.flatMap((outcome) =>
       outcome.status === "rejected" ? [outcome.reason] : [],
     );
@@ -109,10 +166,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
         }
       },
     });
-    reader = createSqliteReadOnlyWorkerScope({
-      signal: controller.signal,
-      deadlineOwnedByCaller: false,
-    });
+    reader = retainSessionHistoryWorkerDatabase(options, maintenanceLane);
   } catch (error) {
     log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
     state.pending = cleanup();
@@ -158,64 +212,63 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     }
     return result;
   };
-  state.pending = runInDetachedAsyncContext(() =>
-    retainedReader.run(async () => {
-      try {
-        await nextTurn(undefined, { signal: controller.signal });
-        let refreshes = 0;
-        let sweepId = await execute((worker) =>
-          worker.execute({ type: "trajectory.retention.begin", input: undefined }),
-        );
-        let snapshot: TrajectoryRuntimeRetentionPlan | undefined;
-        let needsRead = true;
-        for (;;) {
-          assertCurrent();
-          if (needsRead) {
-            snapshot = await runSqliteReadOnlyOperation(
-              database.path,
-              {
-                type: "trajectoryRetention.read",
-                input: { ...input, agentId: database.agentId, now },
-              },
-              {
-                source: "canonical",
-                expectedIdentity: `file:${physicalIdentity}`,
-                env: options.env ?? process.env,
-                signal: controller.signal,
-              },
-            );
-            needsRead = false;
-          }
-          const result = await execute((worker) =>
-            worker.execute({
-              type: "trajectory.retention.delete",
-              input: { sweepId, snapshot },
-            }),
+  state.pending = runInDetachedAsyncContext(async () => {
+    try {
+      await nextTurn(undefined, { signal: controller.signal });
+      let refreshes = 0;
+      let sweepId = await execute((worker) =>
+        worker.execute({ type: "trajectory.retention.begin", input: undefined }),
+      );
+      let snapshot: TrajectoryRuntimeRetentionPlan | undefined;
+      let needsRead = true;
+      for (;;) {
+        assertCurrent();
+        if (needsRead) {
+          snapshot = await retainedReader.owner.readTrajectoryRetention(
+            {
+              input,
+              now,
+              schemaContract: captureCanonicalSessionValidationSchema(),
+              expectedIdentity: { key: `file:${physicalIdentity}`, birthtime: identity.birthtime },
+              env: options.env ?? process.env,
+            },
+            {
+              signal: controller.signal,
+              timeoutMs: readSqliteInspectionBudget("read-only snapshot", database.path).timeoutMs,
+            },
           );
-          snapshot = undefined;
-          if (result.complete) {
-            state.sweptAt = now;
+          assertCurrent();
+          needsRead = false;
+        }
+        const result = await execute((worker) =>
+          worker.execute({
+            type: "trajectory.retention.delete",
+            input: { sweepId, snapshot },
+          }),
+        );
+        snapshot = undefined;
+        if (result.complete) {
+          state.sweptAt = now;
+          break;
+        }
+        if (result.refresh) {
+          if (++refreshes > 1) {
             break;
           }
-          if (result.refresh) {
-            if (++refreshes > 1) {
-              break;
-            }
-            sweepId = await execute((worker) =>
-              worker.execute({ type: "trajectory.retention.begin", input: undefined }),
-            );
-            needsRead = true;
-          }
+          sweepId = await execute((worker) =>
+            worker.execute({ type: "trajectory.retention.begin", input: undefined }),
+          );
+          needsRead = true;
         }
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
-        }
-      } finally {
-        await cleanup();
       }
-    }),
-  );
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+      }
+    } finally {
+      await cleanup();
+    }
+  });
   void state.pending.catch(observeFailure);
   return state.pending;
 }

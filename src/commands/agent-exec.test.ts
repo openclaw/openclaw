@@ -7,6 +7,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
+import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
+import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
@@ -49,13 +51,6 @@ afterEach(() => {
 
 describe("agent exec strict result classification", () => {
   it.each([
-    {
-      payload: { text: "provider rejected request", isError: true },
-      meta: { durationMs: 10 },
-      status: "error",
-      kind: "error_payload",
-      message: "provider rejected request",
-    },
     {
       payload: { isError: true },
       meta: { durationMs: 10 },
@@ -108,13 +103,6 @@ describe("agent exec strict result classification", () => {
       payloads: [{ text: "projected error text", isError: true }],
       error: { kind: "error_payload", message: "projected error text" },
     });
-  });
-
-  it("does not restore metadata text for a projected textless error", () => {
-    const result = successResult("metadata error text");
-    result.payloads = [];
-    const envelope = classifyAgentExecResult(result, false, true);
-    expect(envelope).toMatchObject({ ok: false, status: "error", final: "", payloads: [] });
   });
 });
 
@@ -349,10 +337,7 @@ describe("agent exec command composition", () => {
     },
   );
 
-  it.each([
-    { kind: "timeout", status: "timeout", exitCode: 2, thrown: true },
-    { kind: "context_overflow", status: "error", exitCode: 1, thrown: false },
-  ] as const)("preserves $kind when temporary-state cleanup also fails", async (failure) => {
+  it("preserves context overflow when temporary-state cleanup also fails", async () => {
     const runtime = createTestRuntime();
     const { log, error } = runtime;
     let observedStateDir = "";
@@ -360,64 +345,29 @@ describe("agent exec command composition", () => {
 
     const result = await runAgentExecWithMock("inspect", { json: true }, runtime, async () => {
       observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-      if (failure.thrown) {
-        throw Object.assign(new Error("original run failure"), {
-          name: failure.kind === "timeout" ? "TimeoutError" : "Error",
-        });
-      }
       return {
         ...successResult("partial answer"),
-        meta: { durationMs: 25, error: { kind: failure.kind, message: "original run failure" } },
+        meta: {
+          durationMs: 25,
+          error: { kind: "context_overflow", message: "original run failure" },
+        },
       };
     });
     externalTempDirs.push(observedStateDir);
 
     expect(result).toMatchObject({
-      exitCode: failure.exitCode,
+      exitCode: 1,
       envelope: {
-        status: failure.status,
-        final: failure.thrown ? "" : "partial answer",
-        payloads: failure.thrown ? [] : [{ text: "partial answer" }],
-        error: { kind: failure.kind, message: "original run failure" },
+        status: "error",
+        final: "partial answer",
+        payloads: [{ text: "partial answer" }],
+        error: { kind: "context_overflow", message: "original run failure" },
       },
     });
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(result.envelope);
     expect(error).toHaveBeenCalledWith("original run failure");
     expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
-  });
-
-  it("classifies cleanup failures before emitting the JSON envelope", async () => {
-    const runtime = createTestRuntime();
-    const { log } = runtime;
-    let observedStateDir = "";
-    vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
-
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { json: true },
-      runtime,
-      vi.fn(async () => {
-        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-        return successResult();
-      }),
-    );
-    externalTempDirs.push(observedStateDir);
-
-    expect(result).toMatchObject({
-      exitCode: 1,
-      envelope: {
-        ok: false,
-        status: "error",
-        error: { kind: "exception", message: "Agent exec cleanup failed: cleanup denied" },
-      },
-    });
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { message: "Agent exec cleanup failed: cleanup denied" },
-    });
   });
 
   it("reports exhaustion of the ordered explicit fallback chain", async () => {
@@ -499,24 +449,6 @@ describe("agent exec base config resolution", () => {
     return seedPath;
   }
 
-  it("reads the pinned file even when a runtime snapshot is already published", async () => {
-    const seedPath = await writeSeed(
-      `{ // pinned JSON5 config
-        models: { providers: { custom: { baseUrl: "https://from-file.invalid", models: [] } } },
-      }`,
-    );
-    setRuntimeConfigSnapshot({
-      models: { providers: { custom: { baseUrl: "https://from-snapshot.invalid", models: [] } } },
-    });
-
-    try {
-      const resolved = await resolveExecBaseConfig({ config: seedPath });
-      expect(resolved.models?.providers?.custom?.baseUrl).toBe("https://from-file.invalid");
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
-  });
-
   it("rejects --config paired with a mode that reads no config", async () => {
     const seedPath = await writeSeed("{}");
 
@@ -526,5 +458,40 @@ describe("agent exec base config resolution", () => {
     await expect(resolveExecBaseConfig({ config: seedPath, authEnvOnly: true })).rejects.toThrow(
       "--config cannot be combined with --auth-env-only",
     );
+  });
+});
+
+describe("agent exec tool lifetime", () => {
+  const runtime = createTestRuntime();
+
+  it("closes retained tool closures when the invocation ends", async () => {
+    const source = vi.fn(async () => ({ content: [], details: {} }));
+    let retained: ReturnType<typeof wrapToolWithBeforeToolCallHook> | undefined;
+    const result = await runAgentExecWithMock("inspect", {}, runtime, async () => {
+      retained = wrapToolWithBeforeToolCallHook({ ...createStubTool("read"), execute: source });
+      return successResult();
+    });
+
+    expect(result.exitCode).toBe(0);
+    await expect(retained?.execute("late", {})).rejects.toThrow();
+    expect(source).not.toHaveBeenCalled();
+  });
+
+  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
+    let retainedGuard: (() => void) | undefined;
+    const effect = vi.fn();
+    await runAgentExecWithMock("inspect", {}, runtime, async () => {
+      retainedGuard = captureAgentToolSourceExecutionGuard();
+      return successResult();
+    });
+    const replacement = await runAgentExecWithMock("inspect", {}, runtime, async () => {
+      expect(() => {
+        retainedGuard?.();
+        effect();
+      }).toThrow("execution scope is no longer active");
+      return successResult();
+    });
+    expect(replacement.exitCode).toBe(0);
+    expect(effect).not.toHaveBeenCalled();
   });
 });

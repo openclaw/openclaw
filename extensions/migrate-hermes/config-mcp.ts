@@ -1,4 +1,3 @@
-// Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
@@ -157,23 +156,18 @@ export function mapMcpServer(
   }
   // Canonical timeout fields are finite().positive(); drop non-positive or
   // overflowing source values instead of importing config that fails validation.
-  const connectionTimeoutSeconds = value.connectTimeout ?? value.connect_timeout;
-  if (
-    next.connectionTimeoutMs === undefined &&
-    typeof connectionTimeoutSeconds === "number" &&
-    connectionTimeoutSeconds > 0 &&
-    Number.isFinite(connectionTimeoutSeconds * 1_000)
-  ) {
-    next.connectionTimeoutMs = connectionTimeoutSeconds * 1_000;
-  }
-  const requestTimeoutSeconds = value.timeout;
-  if (
-    next.requestTimeoutMs === undefined &&
-    typeof requestTimeoutSeconds === "number" &&
-    requestTimeoutSeconds > 0 &&
-    Number.isFinite(requestTimeoutSeconds * 1_000)
-  ) {
-    next.requestTimeoutMs = requestTimeoutSeconds * 1_000;
+  for (const [key, seconds] of [
+    ["connectionTimeoutMs", value.connectTimeout ?? value.connect_timeout],
+    ["requestTimeoutMs", value.timeout],
+  ] as const) {
+    if (
+      next[key] === undefined &&
+      typeof seconds === "number" &&
+      seconds > 0 &&
+      Number.isFinite(seconds * 1_000)
+    ) {
+      next[key] = seconds * 1_000;
+    }
   }
   next.supportsParallelToolCalls = asBoolean(
     value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
@@ -378,5 +372,5 @@ export function mcpManualItems(params: {
       );
     }
   }
-  return [...new Map(items.map((item) => [item.id, item])).values()];
+  return items;
 }

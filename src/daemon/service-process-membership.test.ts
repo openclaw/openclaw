@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
-const native = vi.hoisted(() => ({ spawn: vi.fn(), read: vi.fn() }));
+const native = vi.hoisted(() => ({ spawn: vi.fn(), read: vi.fn(), coalition: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawnSync: native.spawn,
@@ -9,6 +9,11 @@ vi.mock("node:child_process", async (original) => ({
 vi.mock("node:fs", async (original) => ({
   ...(await original<typeof import("node:fs")>()),
   readFileSync: native.read,
+}));
+
+vi.mock("@openclaw/proc-safe/darwin", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/darwin")>()),
+  readProcessCoalition: native.coalition,
 }));
 
 const gatewayPid = process.pid + 1_000;
@@ -32,6 +37,9 @@ const uncontained = (pid: number) => `pid/${pid} = {\n  type = pid\n}`;
 beforeEach(() => {
   vi.resetAllMocks();
   native.spawn.mockReturnValue({ status: 1, stdout: "" });
+  native.coalition.mockImplementation(() => {
+    throw new Error("unavailable");
+  });
   native.read.mockImplementation(() => {
     throw new Error("native observation unavailable");
   });
@@ -174,6 +182,86 @@ describe("launchd process membership", () => {
       expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
     },
   );
+});
+
+describe("launchd process membership when launchctl denies PID domains", () => {
+  // macOS 12 answers `launchctl print pid/<pid>` with exit 1 (EPERM) for most processes.
+  const denied = {
+    status: 1,
+    stdout: "",
+    stderr: "Could not print domain: 1: Operation not permitted",
+  };
+  const nativeRow = (id: number, name?: string) => ({ id: BigInt(id), name });
+  const observe = (caller: object | null, gateway: object | null, launchctl: object = denied) => {
+    native.spawn.mockImplementation((command: string) =>
+      command === "ps" ? { status: 0, stdout: groupRows(901) } : launchctl,
+    );
+    native.coalition.mockImplementation((pid: number) => {
+      const value = pid === process.pid ? caller : gateway;
+      if (value instanceof Error) {
+        throw value;
+      }
+      return value;
+    });
+  };
+
+  it.each([
+    {
+      label: "an external terminal",
+      caller: nativeRow(1204, "com.apple.Terminal"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "outside",
+    },
+    {
+      label: "a process in the Gateway coalition",
+      caller: nativeRow(1203),
+      gateway: nativeRow(1203),
+      expected: "inside",
+    },
+    {
+      label: "a child of an earlier Gateway instance",
+      caller: nativeRow(1204, "ai.openclaw.gateway"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "inside",
+    },
+    {
+      label: "distinct coalitions without job names",
+      caller: nativeRow(1204),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+    {
+      label: "an unavailable native probe",
+      caller: new Error("unavailable"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+    {
+      label: "an invalid coalition ID",
+      caller: nativeRow(0, "com.apple.Terminal"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+    {
+      label: "a denied native query",
+      caller: new Error("access denied"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+  ])("classifies $label from native coalitions", ({ caller, gateway, expected }) => {
+    observe(caller, gateway);
+    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
+  });
+
+  it("does not query natively when launchctl itself fails to run", () => {
+    observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"), {
+      status: null,
+      stdout: "",
+      error: new Error("timeout"),
+    });
+    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("unknown");
+    expect(native.coalition).not.toHaveBeenCalled();
+  });
 });
 
 describe("systemd process membership", () => {

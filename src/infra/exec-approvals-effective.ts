@@ -5,11 +5,11 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecToolConfig } from "../config/types.tools.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsDisplayPath,
-  type ExecApprovalDecision,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
@@ -18,7 +18,6 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
   type ExecAsk,
-  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "./exec-approvals.js";
@@ -27,46 +26,9 @@ const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
 export const SESSION_EXEC_OVERRIDES_NOTE =
   "Per-session /exec overrides are not included; run /exec in the relevant session to inspect its current defaults.";
-type ExecPolicyConfig = {
-  host?: ExecTarget;
-  mode?: ExecMode;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-};
+type ExecPolicyConfig = Pick<ExecToolConfig, "host" | "mode" | "security" | "ask">;
 
-type ExecPolicyHostSummary = {
-  requested: ExecTarget;
-  requestedSource: string;
-};
-
-type ExecPolicyFieldSummary<TValue extends ExecSecurity | ExecAsk> = {
-  requested: TValue;
-  requestedSource: string;
-  host: TValue;
-  hostSource: string;
-  effective: TValue;
-  note: string;
-};
-
-export type ExecPolicyScopeSnapshot = {
-  scopeLabel: string;
-  configPath: string;
-  agentId?: string;
-  host: ExecPolicyHostSummary;
-  mode: {
-    requested: ExecMode;
-    requestedSource: string;
-    effective: ExecMode;
-    note: string;
-  };
-  security: ExecPolicyFieldSummary<ExecSecurity>;
-  ask: ExecPolicyFieldSummary<ExecAsk>;
-  askFallback: {
-    effective: ExecSecurity;
-    source: string;
-  };
-  allowedDecisions: readonly ExecApprovalDecision[];
-};
+export type ExecPolicyScopeSnapshot = ReturnType<typeof resolveExecPolicyScopeSnapshot>;
 
 function resolveRequestedField<TValue extends string>(params: {
   scopeValue?: TValue;
@@ -98,14 +60,7 @@ function resolveRequestedPolicy(params: {
   scopeExecConfig?: ExecPolicyConfig;
   globalExecConfig?: ExecPolicyConfig;
   configPath: string;
-}): {
-  mode: ExecMode;
-  modeSource: string;
-  security: ExecSecurity;
-  securitySource: string;
-  ask: ExecAsk;
-  askSource: string;
-} {
+}) {
   const explicitMode =
     params.scopeExecConfig?.mode ||
     (!hasLegacyExecPolicyOverride(params.scopeExecConfig)
@@ -221,7 +176,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
   hostPath?: string;
   hostDefaults?: ExecPolicyHostDefaults;
   hostDefaultSource?: string;
-}): ExecPolicyScopeSnapshot {
+}) {
   const requestedHost = resolveRequestedField<ExecTarget>({
     scopeValue: params.scopeExecConfig?.host,
     globalValue: params.globalExecConfig?.host,

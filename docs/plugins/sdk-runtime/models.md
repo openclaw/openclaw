@@ -77,6 +77,15 @@ host.
 
 ## Low-level completions
 
+`resolveApiKeyForProfile` from `openclaw/plugin-sdk/agent-runtime` returns a
+non-enumerable `readCurrentCredential` capability for personal accounts. Retain
+it with the resolved token and call it synchronously at the transport's final
+authorization boundary, after asynchronous preparation. It reads Gateway-owned
+facts without SQL, rejects pending or revoked authority, and remains valid after
+resolution completes. Reconnect retires old capabilities; an ordinary OAuth
+refresh publishes its new credential through the same owner. Shared and agent
+profiles return `null` and retain their existing persisted-authority checks.
+
 The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
 an optional fourth `assertCurrent` callback. It runs after transport setup and
 immediately before provider dispatch. A thrown error or an aborted
@@ -178,7 +187,7 @@ Backend adapters retain protocol validation and special-mode handling.
     replace aliases with an adapter id: separate aliases can point at separate
     local GPU hosts. The host rejects endpoints that do not match the configured
     provider base URL, apart from the `/v1` normalization used by Ollama and LM
-    Studio adapters. The host owns startup serialization, readiness probes,
+    Studio adapters. The host owns startup serialization, readiness checks,
     request leases, abort handling, and idle shutdown.
 
     The helper uses the same simple-completion preparation path as OpenClaw's

@@ -20,6 +20,8 @@ export function admittedSessionSettingsRestrictRuntime(
 export function createReplyDispatchEvent(
   params: Omit<PluginHookReplyDispatchEvent, "shouldSendToolSummaries"> & {
     shouldSendToolSummaries: () => boolean;
+    shouldSendToolSummariesAsync: () => Promise<boolean>;
+    shouldSendFullToolDetailsAsync: () => Promise<boolean>;
   },
 ): PluginHookReplyDispatchEvent {
   const { shouldSendToolSummaries, ...event } = params;

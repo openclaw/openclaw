@@ -11,7 +11,7 @@ import {
 } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.mts";
@@ -25,7 +25,10 @@ import {
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
 } from "./native-boundary-fixture.js";
-import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
+import {
+  createFixture as createDeclarationFixture,
+  treeHashes,
+} from "./tsdown-declaration-fixture.js";
 
 const fixture = createFixtureLifetime();
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -317,11 +320,9 @@ describe("native check launchers in paths with spaces", () => {
           ],
           {
             compiler: false,
-            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "koffi"],
+            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "@openclaw/proc-safe"],
           },
         );
-        const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
-        write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
         const compiler = script === "run-tsgo-core-test-shards.mts";
         const workload = compiler
           ? "node_modules/typescript/compiler.mjs"
@@ -727,7 +728,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           script === "write-plugin-sdk-entry-dts.ts"
             ? TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS
             : script === "write-unified-entry-dts.ts"
-              ? TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
+              ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS
               : undefined;
         // Declaration writers need their real generator graph; this lifetime still
         // owns the root so timed-out children are joined before inputs are removed.
@@ -745,8 +746,13 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const moduleUrl = (name: string) =>
           pathToFileURL(path.join(root, "scripts/lib", name)).href;
         const cleanupAttempt = path.join(root, "staging-cleanup-attempted");
-        const previousOutput = write(root, "dist/preserved.d.ts", "previous generation");
-        const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
+        write(root, "dist/preserved.d.ts", "previous generation");
+        write(root, "dist/plugin-sdk/core.d.ts", "previous SDK generation");
+        const previousOutputs = treeHashes(path.join(root, "dist"));
+        const failure = `throw new AggregateError([
+          new Error('first compiler failed'),
+          new Error('second compiler unjoined', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) }),
+        ], 'fixture failure');`;
         const replacements = {
           [scriptUrl]: {
             "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
@@ -797,9 +803,11 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const result = await start(root, runner).done;
         expect(result.code, result.output).toBe(1);
         expect(result.output).toContain("fixture failure");
+        expect(result.output).toContain("first compiler failed");
+        expect(result.output).toContain("second compiler unjoined");
         expect(result.output).toContain("cleanup unverified");
         expect(fs.existsSync(cleanupAttempt), result.output).toBe(false);
-        expect(fs.readFileSync(previousOutput, "utf8")).toBe("previous generation");
+        expect(treeHashes(path.join(root, "dist"))).toEqual(previousOutputs);
         expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
           true,
         );

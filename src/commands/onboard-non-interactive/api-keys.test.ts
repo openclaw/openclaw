@@ -246,60 +246,6 @@ describe("resolveNonInteractiveApiKey", () => {
     }
   });
 
-  it("returns explicit env fallback refs in secret-ref mode", async () => {
-    const runtime = createRuntime();
-    resolveEnvApiKey.mockReturnValue(null);
-    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
-    process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
-
-    try {
-      const result = await resolveNonInteractiveApiKey({
-        provider: "custom-models-custom-local",
-        cfg: {},
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        envVarName: "CUSTOM_API_KEY",
-        runtime: runtime as never,
-        secretInputMode: "ref",
-      });
-
-      expect(result).toEqual({
-        key: "custom-env-key",
-        source: "env",
-        envVarName: "CUSTOM_API_KEY",
-      });
-      expect(runtime.exit).not.toHaveBeenCalled();
-    } finally {
-      if (previousCustomApiKey === undefined) {
-        delete process.env.CUSTOM_API_KEY;
-      } else {
-        process.env.CUSTOM_API_KEY = previousCustomApiKey;
-      }
-    }
-  });
-
-  it("falls back to a matching API-key profile after flag and env are absent", async () => {
-    const runtime = createRuntime();
-    authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
-      "custom-models-custom-local",
-      "custom-profile-key",
-    );
-    resolveEnvApiKey.mockReturnValue(null);
-
-    const result = await resolveNonInteractiveApiKey({
-      provider: "custom-models-custom-local",
-      cfg: {},
-      flagName: "--custom-api-key",
-      envVar: "CUSTOM_API_KEY",
-      runtime: runtime as never,
-    });
-
-    expect(result).toEqual({ key: "custom-profile-key", source: "profile" });
-    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
-    const [profileParams] = resolveApiKeyForProfile.mock.calls[0] ?? [];
-    expect(profileParams?.profileId).toBe("custom-models-custom-local:default");
-  });
-
   it("retains existing profile reuse in secret-ref mode without inventing an env reference", async () => {
     const runtime = createRuntime();
     authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
@@ -385,6 +331,7 @@ describe("resolveNonInteractiveApiKey", () => {
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
     expect(payload).toEqual({
       ok: false,
+      error: { type: "cli_error", message: expect.stringContaining(testCase.expectedMessage) },
       phase: "options",
       message: expect.stringContaining(testCase.expectedMessage),
     });

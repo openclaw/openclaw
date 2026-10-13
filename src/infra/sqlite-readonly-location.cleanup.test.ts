@@ -10,7 +10,6 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   adoptPreparedLocation,
-  adoptRetainedPreparedLocation,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
   cleanupSnapshotOperations,
@@ -51,7 +50,7 @@ it("retains bytes after a serviced cleanup failure and retries the same director
     retirements.push(retirement);
     return retirement.operation;
   });
-  const prepared = adoptRetainedPreparedLocation(location, directory);
+  const prepared = adoptPreparedLocation(location, directory);
   const first = prepared.startCleanup();
   expect(first.read()).toEqual({ status: "pending" });
   expect(fs.readFileSync(location, "utf8")).toBe("retained snapshot bytes");
@@ -262,7 +261,8 @@ describe("prepared SQLite snapshot cleanup", () => {
   ] as const)(
     "keeps failed async removal retryable with $retry cleanup (strict: $strict)",
     async ({ strict, retry }) => {
-      const { ownedRoot, prepared } = fixture(strict);
+      const report = vi.fn();
+      const { ownedRoot, prepared } = fixture(strict, report);
       const failure = Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
       const remove = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(failure);
       const first = prepared.cleanupAsync();
@@ -276,6 +276,7 @@ describe("prepared SQLite snapshot cleanup", () => {
       expect(fs.existsSync(ownedRoot)).toBe(false);
       expect(remove).toHaveBeenCalledTimes(retry === "async" ? 2 : 1);
       expect(await prepared.cleanupAsync()).toBe(true);
+      expect(report).toHaveBeenCalledTimes(strict ? 0 : 1);
     },
   );
 });

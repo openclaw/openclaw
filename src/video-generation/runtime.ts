@@ -6,13 +6,13 @@ import { createMediaProviderLookup } from "../media-generation/provider-registry
 import {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
-  withVideoGenerationProviders,
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -92,14 +92,17 @@ export async function generateVideo(
   if (deps.getProvider && deps.listProviders) {
     return runVideoGeneration(params, deps);
   }
-  return withVideoGenerationProviders(params.cfg, (providers) => {
-    const lookup = createMediaProviderLookup(providers);
-    return runVideoGeneration(params, {
-      ...deps,
-      getProvider: deps.getProvider ?? lookup.getProvider,
-      listProviders: deps.listProviders ?? lookup.listProviders,
-    });
-  });
+  return withAcquiredPluginCapabilityProviders(
+    { key: "videoGenerationProviders", cfg: params.cfg },
+    (providers) => {
+      const lookup = createMediaProviderLookup(providers);
+      return runVideoGeneration(params, {
+        ...deps,
+        getProvider: deps.getProvider ?? lookup.getProvider,
+        listProviders: deps.listProviders ?? lookup.listProviders,
+      });
+    },
+  );
 }
 
 async function runVideoGeneration(

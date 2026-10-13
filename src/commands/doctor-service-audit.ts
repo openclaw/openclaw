@@ -1,10 +1,13 @@
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   SERVICE_AUDIT_CODES,
   type ServiceConfigAudit,
   type ServiceConfigIssue,
 } from "../daemon/service-audit.js";
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
+import type { GatewayServiceLayoutSummary } from "../daemon/service-layout.js";
 import { normalizeServiceEnvKey } from "../daemon/service-managed-env.js";
 import {
   hasGatewayServiceEnvironmentOverride,
@@ -13,9 +16,78 @@ import {
 } from "../daemon/service-types.js";
 
 export function formatServiceConfigIssues(issues: ServiceConfigIssue[]): string[] {
-  return issues.map((issue) =>
-    issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+  return issues.map(({ message, detail }) => `- ${message}${detail ? ` (${detail})` : ""}`);
+}
+
+/** Keep source-checkout and native audit findings in one panel. */
+export function reportGatewayServiceConfigAudit(
+  audit: ServiceConfigAudit,
+  layout: GatewayServiceLayoutSummary | undefined,
+  definitionRepair: boolean,
+): string | null {
+  const sourceCheckoutWarning = layout?.entrypointSourceCheckout
+    ? [
+        `Gateway service entrypoint resolves to a source checkout: ${layout.packageRootReal ?? layout.packageRoot ?? layout.entrypointReal ?? layout.entrypoint}.`,
+        `Run \`${formatCliCommand("openclaw gateway install --force")}\` from the intended package install to replace the gateway service definition.`,
+      ].join("\n")
+    : null;
+  const sourceCheckoutWarningToShow = audit.issues.some(
+    (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  )
+    ? null
+    : sourceCheckoutWarning;
+  if (audit.issues.length === 0 && !definitionRepair) {
+    if (sourceCheckoutWarningToShow !== null) {
+      note(sourceCheckoutWarningToShow, "Gateway service config");
+    }
+    return sourceCheckoutWarningToShow;
+  }
+  note(
+    [
+      ...(sourceCheckoutWarningToShow !== null ? [sourceCheckoutWarningToShow, ""] : []),
+      ...formatServiceConfigIssues(audit.issues),
+    ].join("\n"),
+    "Gateway service config",
   );
+  return sourceCheckoutWarningToShow;
+}
+
+/** Describe the selected install plan without changing runtime or launcher policy. */
+export function formatGatewayServiceRepairPreview(params: {
+  command: GatewayServiceCommandConfig;
+  managedDefinition: GatewayServiceCommandConfig;
+  plan: Pick<GatewayServiceInstallArgs, "programArguments" | "environment">;
+  currentLayout: GatewayServiceLayoutSummary | undefined;
+  plannedLayout: GatewayServiceLayoutSummary | undefined;
+  missingSystemNode: boolean;
+  definitionDrift: ServiceConfigAudit["definitionDrift"];
+}): { preview: string; unresolvedFindings: string[] } {
+  const unresolvedFindings: string[] = [];
+  if (params.missingSystemNode) {
+    unresolvedFindings.push(
+      `No supported system Node is available; this repair retains ${params.plan.programArguments[0]}. Install system Node ${SUPPORTED_NODE_VERSIONS} and rerun Doctor to resolve the runtime finding.`,
+    );
+  }
+  if (params.plannedLayout?.entrypointSourceCheckout) {
+    unresolvedFindings.push(
+      `This repair retains a source-checkout entrypoint. Run \`${formatCliCommand("openclaw gateway install --force")}\` from the intended package install to replace it.`,
+    );
+  }
+  const preview = [
+    `Runtime: ${params.managedDefinition.programArguments[0]} -> ${params.plan.programArguments[0]}`,
+    `Entrypoint: ${params.currentLayout?.entrypoint ?? "not identified"} -> ${params.plannedLayout?.entrypoint ?? "not identified"}`,
+    `PATH: ${params.command.environment?.PATH ?? "not set"} -> ${params.plan.environment?.PATH ?? "not set"}`,
+    ...(params.definitionDrift ?? []).flatMap((finding) =>
+      finding.kind === "outdated" &&
+      (finding.key === "ExitTimeOut" || finding.key === "TimeoutStopSec")
+        ? [
+            `Shutdown budget (${finding.key}): ${String(finding.current)} -> ${String(finding.expected)}`,
+          ]
+        : [],
+    ),
+    ...unresolvedFindings.map((finding) => `Will remain: ${finding}`),
+  ].join("\n");
+  return { preview, unresolvedFindings };
 }
 
 export function reportServiceDefinitionDrift(audit: ServiceConfigAudit) {
@@ -76,21 +148,19 @@ export function isOperatorOwnedEnvironmentIssue(
   command: GatewayServiceCommandConfig,
   environmentValueSources: GatewayServiceInstallArgs["environmentValueSources"],
 ): boolean {
+  const hasOverride = (keys: readonly string[]) =>
+    hasGatewayServiceEnvironmentOverride(command, keys, { environmentValueSources });
   switch (issue.code) {
     case SERVICE_AUDIT_CODES.gatewayPathMissing:
     case SERVICE_AUDIT_CODES.gatewayPathMissingDirs:
     case SERVICE_AUDIT_CODES.gatewayPathNonMinimal:
-      return hasGatewayServiceEnvironmentOverride(command, ["PATH"], { environmentValueSources });
+      return hasOverride(["PATH"]);
     case SERVICE_AUDIT_CODES.gatewayTokenEmbedded:
     case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
     case SERVICE_AUDIT_CODES.gatewayTokenDrift:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
-        environmentValueSources,
-      });
+      return hasOverride(["OPENCLAW_GATEWAY_TOKEN"]);
     case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
-        environmentValueSources,
-      });
+      return hasOverride(["OPENCLAW_GATEWAY_PASSWORD"]);
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
         environmentValueSources,

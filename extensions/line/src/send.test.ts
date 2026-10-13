@@ -1,7 +1,10 @@
+import http from "node:http";
 import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
 const {
   pushMessageMock,
@@ -476,7 +479,7 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockResolvedValueOnce({
       sentMessages: [{ id: "push-first" }, { id: "push-second" }],
     });
-    const result = await sendModule.sendMessageLine("line:user:U123", "Image caption", {
+    const result = await sendModule.pushMessageLine("line:user:U123", "Image caption", {
       cfg: LINE_TEST_CFG,
       verbose: true,
       mediaUrl: "https://example.com/original.jpg",
@@ -508,12 +511,18 @@ describe("LINE send helpers", () => {
     replyMessageMock.mockResolvedValueOnce({
       sentMessages: [{ id: "reply-first" }, { id: "reply-second" }],
     });
-    const result = await sendModule.sendMessageLine("line:group:C1", text, {
-      cfg: LINE_TEST_CFG,
-      replyToken: "reply-token",
-      mediaUrl: "https://example.com/media.jpg",
-      verbose: true,
-    });
+    await sendModule.replyMessageLine(
+      "reply-token",
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/media.jpg",
+          previewImageUrl: "https://example.com/media.jpg",
+        },
+        { type: "text", text },
+      ],
+      { cfg: LINE_TEST_CFG, verbose: true },
+    );
 
     expect(replyMessageMock).toHaveBeenCalledTimes(1);
     expect(pushMessageMock).not.toHaveBeenCalled();
@@ -531,8 +540,26 @@ describe("LINE send helpers", () => {
         },
       ],
     });
-    expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual(expectedMediaSendResult("C1", ["reply-first", "reply-second"], 2));
+    expect(logVerboseMock).toHaveBeenCalledWith("line: replied with 2 messages");
+  });
+
+  it("preserves all accepted reply ids when activity recording fails", async () => {
+    replyMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
+    });
+    recordChannelActivityMock.mockImplementationOnce(() => {
+      throw new Error("activity store unavailable");
+    });
+
+    const caught = await capturePartialDelivery(() =>
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "Hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    );
+    expect(caught.deliveryResult).toEqual({
+      messageIds: ["713452345678901234", "713452345678901235"],
+      visibleReplySent: true,
+    });
   });
 
   it("preserves a finalized push when activity recording fails", async () => {
@@ -663,7 +690,7 @@ describe("LINE send helpers", () => {
   });
 
   it("sends a bare audio URL using the kind inferred by the LINE media owner", async () => {
-    await sendModule.sendMessageLine("line:user:U123", "", {
+    await sendModule.pushMessageLine("line:user:U123", "", {
       cfg: LINE_TEST_CFG,
       mediaUrl: "https://example.com/voice.m4a",
     });
@@ -858,6 +885,81 @@ describe("LINE send helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
+  it("redacts a reflected Authorization token from LINE error bodies", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    lineFetchMock.mockImplementationOnce(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        return new Response(
+          `proxy failure reflected Authorization: ${authorization}; request rejected`,
+          {
+            status: 400,
+            statusText: "Bad Request",
+            headers: { "content-type": "text/plain" },
+          },
+        );
+      },
+    );
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    const body = (caught as HTTPFetchError).body;
+    expect(body).toContain("proxy failure");
+    expect(body).toContain("request rejected");
+    expect(body).not.toContain(token);
+  });
+
+  it("masks a reflected Authorization token through a real HTTP reflector", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    const server = http.createServer((req, res) => {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end(
+        `proxy failure reflected Authorization: ${req.headers.authorization}; request rejected`,
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    try {
+      // The production send boundary targets the fixed LINE API host; route only the
+      // destination to the loopback reflector while the real fetch stack and the
+      // production response handling run unchanged.
+      lineFetchMock.mockImplementationOnce(
+        async (url: string | URL | Request, init?: RequestInit) => {
+          const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+          return realGlobalFetch(
+            target.replace("https://api.line.me", `http://127.0.0.1:${address.port}`),
+            init,
+          );
+        },
+      );
+
+      const caught = await captureError(() =>
+        sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      );
+
+      expect(caught).toBeInstanceOf(HTTPFetchError);
+      const body = (caught as HTTPFetchError).body;
+      expect(body).toContain("proxy failure");
+      expect(body).toContain("request rejected");
+      expect(body).not.toContain(token);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it("preserves reply rejection status when the LINE error body cannot be read", async () => {
     const response = new Response(
       new ReadableStream<Uint8Array>({
@@ -871,9 +973,8 @@ describe("LINE send helpers", () => {
     lineFetchMock.mockResolvedValueOnce(response);
 
     const caught = await captureError(() =>
-      sendModule.sendMessageLine("U123", "Hello", {
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "Hello" }], {
         cfg: LINE_TEST_CFG,
-        replyToken: "reply-token",
       }),
     );
 

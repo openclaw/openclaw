@@ -1,5 +1,6 @@
 /** Native harness hook event relay and public Plugin SDK facade. */
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
@@ -11,6 +12,7 @@ import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilit
 import { formatPermissionApprovalDescription as formatPermissionApprovalDescriptionForTests } from "./native-hook-relay-approval-presentation.js";
 import {
   clearNativeHookRelayBridgesForTests,
+  handleNativeHookRelayBridgeRequest,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
@@ -32,7 +34,6 @@ import {
 import {
   clearNativeHookRelayPermissionsForTests,
   permissionRequestContentFingerprintForTests,
-  permissionRequestToolInputKeyFingerprintForTests,
   pruneNativeHookRelayPermissionAllowAlways,
   removeNativeHookRelayPermissionState,
   detachNativeHookRelayApprovalState,
@@ -219,6 +220,7 @@ function registerNativeHookRelayInternal(
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(approvalHost ? { approvalHost } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+      ...(params.assertActiveAsync ? { assertActiveAsync: params.assertActiveAsync } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
       // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
@@ -264,6 +266,15 @@ function registerNativeHookRelayInternal(
         return deferMcpToolApprovals;
       },
       ready,
+      enableRemoteCallback: () => {
+        const lifetime = readRelayLifetime(registration);
+        if (!lifetime) {
+          throw new Error("native hook relay registration is inactive");
+        }
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, lifetime.foregroundToken);
+        bridge.remoteEnabled = true;
+        return { token: bridge.token };
+      },
       prepareInvocation: async () => {
         const lifetime = readRelayLifetime(registration);
         if (!lifetime) {
@@ -508,6 +519,7 @@ export async function invokeNativeHookRelay(
   // Policy and approval callbacks may yield while their admitted run closes.
   // Never let a late allow cross back into the native runtime.
   if (event === "pre_tool_use" || event === "permission_request") {
+    await effectiveRegistration.assertActiveAsync?.();
     effectiveRegistration.assertActive?.();
   }
   if (
@@ -642,13 +654,6 @@ export const testing = {
   getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined {
     return relays.get(relayId);
   },
-  getNativeHookRelayBridgeDirForTests(): string {
-    throw new Error("native hook relay bridge files were retired");
-  },
-  getNativeHookRelayBridgeRegistryPathForTests(relayId: string): string {
-    void relayId;
-    throw new Error("native hook relay bridge files were retired");
-  },
   async getNativeHookRelayBridgeRecordForTests(
     relayId: string,
   ): Promise<Record<string, unknown> | undefined> {
@@ -660,7 +665,34 @@ export const testing = {
   },
   formatPermissionApprovalDescriptionForTests,
   permissionRequestContentFingerprintForTests,
-  permissionRequestToolInputKeyFingerprintForTests,
   setNativeHookRelayPermissionApprovalRequesterForTests,
   setNativeHookRelayDeferredToolApprovalRequesterForTests,
 } as const;
+
+/** Token-scoped dedicated-harness callback; never accepts Gateway operator credentials. */
+export async function dispatchNativeHookRelayHttpCallback(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const match = /^\/__openclaw__\/native-hook\/([A-Za-z0-9_-]+)$/.exec(req.url ?? "");
+  const relayId = match?.[1];
+  const registration = relayId ? relays.get(relayId) : undefined;
+  const bridge = relayId ? nativeHookRelayState.relayBridges.get(relayId) : undefined;
+  if (req.method !== "POST" || !match) {
+    res.writeHead(404).end();
+    return;
+  }
+  if (!registration || !bridge?.remoteEnabled) {
+    res.writeHead(403).end();
+    return;
+  }
+  await handleNativeHookRelayBridgeRequest(req, res, {
+    provider: registration.provider,
+    relayId: registration.relayId,
+    token: bridge.token,
+    registration,
+    bridge,
+    invokeRelay: invokeNativeHookRelay,
+    remote: true,
+  });
+}

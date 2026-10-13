@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import pMap from "p-map";
 import { waitForever } from "../src/cli/wait.ts";
@@ -53,9 +52,6 @@ function printUsage() {
   );
 }
 
-/**
- * Parses comma-separated plugin ids and separates Vitest passthrough args.
- */
 export function parseExtensionIds(rawArgs: string[]) {
   const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const separatorIndex = normalizedArgs.indexOf("--");
@@ -83,13 +79,10 @@ export function parseExtensionIds(rawArgs: string[]) {
   };
 }
 
-/**
- * Resolves bounded parallelism for extension test config groups.
- */
 export function resolveExtensionBatchParallelism(groupCount: number, env = process.env) {
   const raw = env[PARALLEL_ENV_KEY]?.trim();
   const override = raw ? parsePositiveInt(raw, PARALLEL_ENV_KEY) : 1;
-  return Math.min(Math.max(1, override), Math.max(1, groupCount));
+  return Math.min(override, Math.max(1, groupCount));
 }
 
 function createGroupEnv({
@@ -118,7 +111,7 @@ function orderPlanGroups(planGroups: ExtensionTestPlanGroup[], parallelism: numb
   if (parallelism <= 1) {
     return planGroups;
   }
-  return [...planGroups].toSorted((left, right) => {
+  return planGroups.toSorted((left, right) => {
     if (left.estimatedCost !== right.estimatedCost) {
       return right.estimatedCost - left.estimatedCost;
     }
@@ -292,9 +285,6 @@ async function runPlanGroup(
   return finalExitCode;
 }
 
-/**
- * Runs a resolved extension batch plan, optionally in parallel config groups.
- */
 export async function runExtensionBatchPlan(
   batchPlan: ExtensionBatchPlan,
   params: {

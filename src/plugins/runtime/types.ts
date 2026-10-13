@@ -6,7 +6,11 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
-import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
+import type {
+  RuntimeSessionFactsResult,
+  RuntimeSessionFactsSelection,
+  RuntimeSessionFactsSelectionResult,
+} from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -131,6 +135,12 @@ export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
+  /** Fence an in-process channel send to the exact current requester session incarnation. */
+  sessionDeliveryGeneration?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */
@@ -154,8 +164,11 @@ export type PluginRuntime = PluginRuntimeCore & {
     readSessionFacts: (params: {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
-    /** Authorize a session read; equal opaque scopes admit reuse until published facts change. */
-    withSessionReadScope: <T>(run: (scope: string | undefined) => Promise<T>) => Promise<T>;
+    /** Select immutable current session facts, retaining caller authority through the consumer. */
+    withSessionFacts: <T>(
+      select: RuntimeSessionFactsSelection,
+      run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
+    ) => Promise<T>;
     /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
     subscribeSessionChanges: (
       listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
@@ -206,6 +219,7 @@ export type PluginRuntime = PluginRuntimeCore & {
     resolveWorkspaceAuthority: (params: {
       config: OpenClawConfig;
       agentId?: string;
+      storePath?: string;
       confinedToolNames?: readonly string[];
       requiredToolNames?: readonly string[];
       modelProvider?: string;

@@ -68,12 +68,12 @@ function deviceDetailsHidden(devices: MediaDeviceInfo[], kind: RealtimeTalkDevic
   return inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
 }
 
-const deviceIssueByMediaErrorName: Record<string, RealtimeTalkDeviceIssue> = {
-  NotAllowedError: "permission-blocked",
-  NotFoundError: "none-found",
-  NotReadableError: "busy",
-  InvalidStateError: "page-inactive",
-};
+const deviceIssueByMediaErrorName = new Map<string, RealtimeTalkDeviceIssue>([
+  ["NotAllowedError", "permission-blocked"],
+  ["NotFoundError", "none-found"],
+  ["NotReadableError", "busy"],
+  ["InvalidStateError", "page-inactive"],
+]);
 
 function mediaDeviceErrorName(error: unknown): string | undefined {
   // WebKit shipped OverconstrainedError as Error instead of DOMException.
@@ -84,7 +84,7 @@ function mediaDeviceErrorName(error: unknown): string | undefined {
 }
 
 function deviceIssueFromError(error: unknown): RealtimeTalkDeviceIssue {
-  return deviceIssueByMediaErrorName[mediaDeviceErrorName(error) ?? ""] ?? "failed";
+  return deviceIssueByMediaErrorName.get(mediaDeviceErrorName(error) ?? "") ?? "failed";
 }
 
 export function realtimeTalkDeviceIssueMessage(
@@ -168,16 +168,6 @@ export async function discoverRealtimeTalkCameras(
   return discoverRealtimeTalkDevices(requestPermission, "videoinput");
 }
 
-function realtimeTalkAudioConstraints(inputDeviceId: string | undefined): MediaTrackConstraints {
-  const deviceId = inputDeviceId?.trim();
-  return {
-    autoGainControl: true,
-    echoCancellation: true,
-    noiseSuppression: true,
-    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-  };
-}
-
 function realtimeTalkAbortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -217,24 +207,28 @@ export class RealtimeTalkSelectedMicrophoneError extends Error {
 
 async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
-  options: { signal?: AbortSignal } = {},
+  signal: AbortSignal,
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
     throw new Error(t("chat.composer.realtimeTalkRequiresMicrophone"));
   }
+  const deviceId = inputDeviceId?.trim();
   // A DOMException cause makes the shared formatter append its legacy code to this UI message.
-  let acquisition: { stream: MediaStream } | { failure: string };
+  let acquisition: MediaStream | string;
   try {
-    acquisition = {
-      stream: await awaitRealtimeTalkMediaRequest(
-        () =>
-          devices.getUserMedia({
-            audio: realtimeTalkAudioConstraints(inputDeviceId),
-          }),
-        options.signal,
-      ),
-    };
+    acquisition = await awaitRealtimeTalkMediaRequest(
+      () =>
+        devices.getUserMedia({
+          audio: {
+            autoGainControl: true,
+            echoCancellation: true,
+            noiseSuppression: true,
+            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+          },
+        }),
+      signal,
+    );
   } catch (error) {
     const errorName = mediaDeviceErrorName(error);
     if (!errorName || errorName === "AbortError") {
@@ -242,20 +236,19 @@ async function openRealtimeTalkInput(
     }
     // Exact selection is consent, including legacy WebKit failures. Only the
     // calling surface can offer an explicit choice to open a different input.
-    if (inputDeviceId?.trim() && errorName === "OverconstrainedError") {
+    if (deviceId && errorName === "OverconstrainedError") {
       throw new RealtimeTalkSelectedMicrophoneError();
     }
-    acquisition = { failure: describeRealtimeTalkInputError(error) };
+    acquisition = describeRealtimeTalkInputError(error);
   }
-  if ("failure" in acquisition) {
-    throw new Error(acquisition.failure);
+  if (typeof acquisition === "string") {
+    throw new Error(acquisition);
   }
-  const { stream: audio } = acquisition;
-  if (options.signal?.aborted) {
-    audio.getTracks().forEach((track) => track.stop());
-    throw realtimeTalkAbortReason(options.signal);
+  if (signal.aborted) {
+    acquisition.getTracks().forEach((track) => track.stop());
+    throw realtimeTalkAbortReason(signal);
   }
-  return audio;
+  return acquisition;
 }
 
 export class RealtimeTalkInputController {
@@ -292,7 +285,7 @@ export class RealtimeTalkInputController {
     this.controller = controller;
     try {
       this.onConnecting?.(t("chat.composer.microphoneAccessPending"));
-      const media = await openRealtimeTalkInput(inputDeviceId, { signal: controller.signal });
+      const media = await openRealtimeTalkInput(inputDeviceId, controller.signal);
       if (controller.signal.aborted) {
         media.getTracks().forEach((track) => track.stop());
         throw realtimeTalkAbortReason(controller.signal);
@@ -342,7 +335,7 @@ export async function openRealtimeTalkCamera(
     throw new Error(t("chat.composer.cameraAccessFailed"));
   }
   const deviceId = videoDeviceId?.trim();
-  let acquisition: { stream: MediaStream } | { failure: string };
+  let acquisition: MediaStream | string;
   try {
     const stream = await awaitRealtimeTalkMediaRequest(
       () => devices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true }),
@@ -352,21 +345,19 @@ export async function openRealtimeTalkCamera(
       stream.getTracks().forEach((track) => track.stop());
       throw realtimeTalkAbortReason(options.signal);
     }
-    acquisition = { stream };
+    acquisition = stream;
   } catch (error) {
     if (options.signal?.aborted) {
       throw realtimeTalkAbortReason(options.signal);
     }
     const errorName = mediaDeviceErrorName(error);
-    acquisition = {
-      failure:
-        deviceId && errorName === "OverconstrainedError"
-          ? t("chat.composer.selectedCameraUnavailable")
-          : realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), "videoinput"),
-    };
+    acquisition =
+      deviceId && errorName === "OverconstrainedError"
+        ? t("chat.composer.selectedCameraUnavailable")
+        : realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), "videoinput");
   }
-  if ("failure" in acquisition) {
-    throw new Error(acquisition.failure);
+  if (typeof acquisition === "string") {
+    throw new Error(acquisition);
   }
-  return acquisition.stream;
+  return acquisition;
 }

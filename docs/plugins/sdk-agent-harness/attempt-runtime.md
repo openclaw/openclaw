@@ -201,6 +201,18 @@ isolates observer failures, and `createAgentHarnessAttemptLifecycle` gates
 lifecycle events and deduplicates execution phases. Native interruption,
 completion decisions, output flushing, and cleanup remain backend-owned.
 
+Assistant event `data.itemId` identifies the native text item for cumulative
+snapshots and delta merging. A harness that persists part of an item while it
+continues streaming also supplies `data.occurrenceId`, an opaque string identifying
+the exact live interval. Freeze that occurrence when capturing the transcript
+candidate, before awaiting persistence, and allocate a new occurrence for later
+bytes without changing the native item ID or delta text. Successful transcript
+publication supplies the captured IDs in `assistantItemIds`; failed writes do not
+retire them. Retries retain every occurrence actually included in the candidate.
+Without `occurrenceId`, retirement uses `itemId` or the host's source receipt.
+Text without either identity stays live until terminal settlement; matching
+durable text alone never proves ownership.
+
 The private `openclaw/plugin-sdk/agent-harness-tool-runtime` provides correlated
 execution promises and argument/start snapshots through
 `createAgentHarnessToolExecutionRegistry` and

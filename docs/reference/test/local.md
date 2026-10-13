@@ -107,6 +107,11 @@ actual Vitest process and workers while retaining Node for orchestration and
 compiler preparation. Source-runner CLI fixtures also use the selected runtime
 after Node completes build preparation. This does not use Bun's native test runner.
 `bun run` alone does not select Bun for tests. Node remains the local default.
+On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
+Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
+For an x64 Bun under Rosetta, build the pinned library with
+`scripts/build-mac-sqlite.sh universal <dir>` and set
+`OPENCLAW_SQLITE_LIBRARY=<dir>/lib/libsqlite3.dylib`.
 
 For the CI Control UI comparison, run the full selection on Node followed by Bun:
 

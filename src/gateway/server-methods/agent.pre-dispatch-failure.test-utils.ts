@@ -13,6 +13,7 @@ import {
   makeContext,
   prime,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -102,11 +103,9 @@ export function registerAgentPreDispatchFailureTests() {
             expect(mocks.agentCommand).not.toHaveBeenCalled();
             expect(respond).toHaveBeenCalledWith(
               false,
-              undefined,
-              expect.objectContaining({
-                code: "UNAVAILABLE",
-                message: "ACP preparation cancelled",
-              }),
+              { runId, status: "error", summary: "ACP preparation cancelled" },
+              { code: "UNAVAILABLE", message: "ACP preparation cancelled" },
+              { runId, error: "ACP preparation cancelled" },
             );
           } else if (acp) {
             expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
@@ -134,12 +133,12 @@ export function registerAgentPreDispatchFailureTests() {
       const sessionKey = "agent:main:main";
       const sessionId = "recovery-session";
       const runId = "recovery-reactivation-fails";
-      const storePath = "/tmp/sessions.json";
+      const storePath = getAgentTestStorePath();
       const store: Record<string, SessionEntry> = {
         [sessionKey]: {
           sessionId,
           updatedAt: Date.now() - 10_000,
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           restartRecoveryDeliveryRunId: runId,
           restartRecoveryDeliverySourceRunId: "interrupted-source-run",
@@ -198,7 +197,7 @@ export function registerAgentPreDispatchFailureTests() {
       expect(mocks.agentCommand).not.toHaveBeenCalled();
       expect(store[sessionKey]).toMatchObject({
         sessionId,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliverySourceRunId: "interrupted-source-run",
         mainRestartRecovery: {
@@ -222,12 +221,12 @@ export function registerAgentPreDispatchFailureTests() {
     const sessionKey = "agent:main:main";
     const sessionId = "interrupted-session";
     const runId = "foreground-reactivation-fails";
-    const storePath = "/tmp/sessions.json";
+    const storePath = getAgentTestStorePath();
     const store: Record<string, SessionEntry> = {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: {
           cycleId: "cycle-1",
@@ -268,12 +267,12 @@ export function registerAgentPreDispatchFailureTests() {
     const sessionKey = "agent:main:main";
     const sessionId = "interrupted-session";
     const runId = "foreground-release-fails";
-    const storePath = "/tmp/sessions.json";
+    const storePath = getAgentTestStorePath();
     const store: Record<string, SessionEntry> = {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: {
           cycleId: "cycle-1",

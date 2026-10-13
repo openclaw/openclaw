@@ -153,6 +153,10 @@ async function prepareCodexInferenceRoute(params: {
       ...(params.authority ? { withCurrent: params.authority.withCurrent } : {}),
     }));
   assertCurrent();
+  const feature = (name: string) =>
+    params.config?.[`features.${name}`] ??
+    (isJsonObject(params.config?.features) ? params.config.features[name] : undefined) ??
+    (isJsonObject(snapshot.config.features) ? snapshot.config.features[name] : undefined);
   const unsupported = () => {
     if (owner.oauth) {
       throw new Error(
@@ -201,14 +205,7 @@ async function prepareCodexInferenceRoute(params: {
   }
   // Native system-proxy routing owns its transport, including loopback bypass.
   // Leave that profile intact instead of proxying its private inference IPC.
-  const systemProxy =
-    params.config?.["features.respect_system_proxy"] ??
-    (isJsonObject(params.config?.features)
-      ? params.config.features.respect_system_proxy
-      : undefined) ??
-    (isJsonObject(snapshot.config.features)
-      ? snapshot.config.features.respect_system_proxy
-      : undefined);
+  const systemProxy = feature("respect_system_proxy");
   if (systemProxy === true) {
     return unsupported();
   }
@@ -305,10 +302,7 @@ async function prepareCodexInferenceRoute(params: {
   const preserveCodexBackendRoutes =
     nativeProviderName === "OpenAI" &&
     (configured == null || configured.replace(/\/+$/, "").endsWith("/backend-api/codex"));
-  const memoryFeature =
-    params.config?.["features.memories"] ??
-    (isJsonObject(params.config?.features) ? params.config.features.memories : undefined) ??
-    (isJsonObject(snapshot.config.features) ? snapshot.config.features.memories : undefined);
+  const memoryFeature = feature("memories");
   const modelPolicyEnforced = params.modelPolicyEnforced !== false;
   const key = JSON.stringify([
     provider,

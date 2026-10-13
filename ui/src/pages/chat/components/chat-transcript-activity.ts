@@ -1,5 +1,6 @@
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import { sumRunOutputTokens } from "../chat-progress.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { getChatItemsGeneration, type buildCachedChatItems } from "../chat-thread.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -38,8 +39,13 @@ export function projectTranscriptActivity(
           )?.key
         : undefined,
   );
-  const runOutputTokens = workingIndicator?.runId
-    ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
-    : null;
+  // A run that resumed a handoff counts on from the runs before it. Its own
+  // run id and first usage report may not have arrived yet.
+  const earlierRunIds = workingIndicator?.request?.runIds ?? [];
+  const runOutputTokens =
+    sumRunOutputTokens(
+      props.runUsageById,
+      workingIndicator?.runId ? [...earlierRunIds, workingIndicator.runId] : [],
+    ) ?? sumRunOutputTokens(props.runUsageById, earlierRunIds);
   return { workingIndicator, activityRunId, activityGroupKey, runOutputTokens };
 }

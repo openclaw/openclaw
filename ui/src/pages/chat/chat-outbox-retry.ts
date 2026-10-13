@@ -96,9 +96,7 @@ export function consumeChatOutboxRetry(
   }
   clearTimeout(retry.timer);
   state.timers.delete(key);
-  if (itemId || ownerStale) {
-    state.attempts.delete(key);
-  }
+  state.attempts.delete(key);
   return false;
 }
 

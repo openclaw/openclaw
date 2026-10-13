@@ -124,7 +124,11 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         {
           model: preparedModel,
           context,
-          options: { ...(expected ? { reasoning: expected } : {}), apiKey: auth.apiKey },
+          options: {
+            ...(expected ? { reasoning: expected } : {}),
+            ...(reasoning === "off" ? { onPayload: expect.any(Function) } : {}),
+            apiKey: auth.apiKey,
+          },
         },
       ]);
     },

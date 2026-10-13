@@ -7,6 +7,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftBranches } from "./discovery.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 
 registerNewSessionSetupEnglish();
@@ -103,27 +104,17 @@ export function resolveCheckoutChip(params: {
   if (params.worktree && !params.repository && worktreeName) {
     return { label: t("newSession.checkoutWorktreeNamed", { name: worktreeName }) };
   }
-  if (params.destination === "cloud") {
-    return {
-      label: params.baseRef
-        ? t("newSession.checkoutCloudFrom", { branch: params.baseRef })
-        : t("newSession.checkoutCloud"),
-    };
-  }
-  if (params.repository) {
-    return {
-      label: params.baseRef
-        ? t("newSession.checkoutRepositoryFrom", { branch: params.baseRef })
-        : t("newSession.checkoutRepository"),
-    };
-  }
-  if (!params.worktree) {
+  if (params.destination !== "cloud" && !params.repository && !params.worktree) {
     return { label: params.headBranch || t("newSession.checkoutCurrent") };
   }
+  const labels =
+    params.destination === "cloud"
+      ? (["newSession.checkoutCloud", "newSession.checkoutCloudFrom"] as const)
+      : params.repository
+        ? (["newSession.checkoutRepository", "newSession.checkoutRepositoryFrom"] as const)
+        : (["newSession.checkoutWorktree", "newSession.checkoutWorktreeFrom"] as const);
   return {
-    label: params.baseRef
-      ? t("newSession.checkoutWorktreeFrom", { branch: params.baseRef })
-      : t("newSession.checkoutWorktree"),
+    label: params.baseRef ? t(labels[1], { branch: params.baseRef }) : t(labels[0]),
   };
 }
 
@@ -354,17 +345,9 @@ export function renderCheckoutChip(params: {
       for="new-session-checkout-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverShow();
-        }
-      }}
+      @wa-show=${onOwnPopoverEvent(() => params.onPopoverShow())}
       @wa-hide=${(event: Event) => handlePopoverHide(event, params.onPopoverHide)}
-      @wa-after-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverAfterHide();
-        }
-      }}
+      @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >
       <div class="new-session-page__picker-root">
         <div class="new-session-page__menu-title">${t("newSession.checkout")}</div>

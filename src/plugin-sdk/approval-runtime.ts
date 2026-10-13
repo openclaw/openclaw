@@ -23,15 +23,23 @@ export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-comman
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export {
   createChannelApproverDmTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
   createChannelNativeOriginTargetResolver,
+  createChannelNativeOriginTargetResolverAsync,
 } from "./approval-native-helpers.js";
 export {
   resolveApprovalRequestOriginTarget,
+  resolveApprovalRequestOriginTargetAsync,
   resolveApprovalRequestSessionTarget,
+  resolveApprovalRequestSessionTargetAsync,
   resolveExecApprovalSessionTarget,
+  resolveExecApprovalSessionTargetAsync,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
-export { doesApprovalRequestMatchChannelAccount } from "../infra/approval-request-account-binding.js";
+export {
+  doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestMatchChannelAccountAsync,
+} from "../infra/approval-request-account-binding.js";
 export {
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
@@ -50,6 +58,7 @@ export type {
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
 export {
   createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
@@ -77,3 +86,8 @@ export {
   formatChannelApprovalResolvedLabel,
 } from "./approval-terminal.js";
 export { createNativeApprovalControlRegistry } from "./approval-native-controls.js";
+
+export {
+  resolveApprovalRequestSessionDeliveryAsync,
+  type ApprovalRequestSessionDelivery,
+} from "../infra/approval-request-account-binding.js";

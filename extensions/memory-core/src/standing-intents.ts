@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import {
-  openOpenClawAgentSqliteWorkerStore,
-  resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -16,6 +11,7 @@ import {
   prepareStandingIntentMatch,
   type StandingIntent,
   type StandingIntentOperations,
+  type StandingIntentWorkerOperations,
   type StandingIntentRow,
   type StandingIntentStatus,
 } from "./standing-intents-model.js";
@@ -40,44 +36,30 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
 ): Promise<StandingIntentOperations[Key]["output"]> {
   const assertCurrent = params.assertCurrent;
   assertCurrent?.();
-  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  const options = {
-    agentId: params.agentId,
-    env,
-    path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
-  };
-  return runOpenClawAgentWriteAdmission(
+  const capturedCommand = structuredClone(command);
+  const options = captureMemoryAgentDatabaseOptions(params.agentId);
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<StandingIntentWorkerOperations>(
     options,
-    async (_identity, assertAdmission) =>
-      // Caller expiry refuses its operation, never a coalesced physical open.
-      withOpenClawAgentDatabaseAsync(
-        options,
-        async ({ db }) => {
-          assertCurrent?.();
-          const worker = await openOpenClawAgentSqliteWorkerStore<StandingIntentOperations>(
-            options,
-            db,
-            {
-              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
-              input: undefined,
-            },
-          );
-          try {
-            return await worker.run(
-              (scope) => scope.execute(command),
-              () => {
-                assertAdmission();
-                assertCurrent?.();
-              },
-            );
-          } finally {
-            await worker.close();
-          }
-        },
-        assertAdmission,
-      ),
-    true,
+    { version: 2, assertCurrent: () => assertCurrent?.() },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
+      input: undefined,
+    },
   );
+  try {
+    await worker.prepare();
+    let result = await worker.execute(capturedCommand, () => assertCurrent?.());
+    if (result.kind === "schema-prepared") {
+      // Only confirmed schema-only completion permits the separate business dispatch.
+      result = await worker.execute(capturedCommand, () => assertCurrent?.());
+    }
+    if (result.kind === "schema-prepared") {
+      throw new Error("Standing-intent schema changed before its business operation");
+    }
+    return result.value;
+  } finally {
+    await worker.close();
+  }
 }
 
 export async function createStandingIntent(params: {

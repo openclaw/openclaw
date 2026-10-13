@@ -317,7 +317,7 @@ suite.define(() => {
             stream.evaluate((element) => element.scrollHeight > element.clientHeight + 120),
           )
           .toBe(true);
-        const autoFollow = page.locator(".activity-live-autofollow wa-switch");
+        const autoFollow = page.locator(".activity-live-autofollow").getByRole("switch");
         await autoFollow.click();
         await stream.evaluate((element) => {
           element.scrollTop = 0;

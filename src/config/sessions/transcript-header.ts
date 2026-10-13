@@ -1,23 +1,20 @@
-// Transcript headers record session identity and version as the first entry.
 import { randomUUID } from "node:crypto";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
-/** Inputs for the first entry in a session transcript. */
-type SessionTranscriptHeaderParams = {
-  sessionId?: string;
-  /** Copied history retains its original model projection policy. */
-  version?: number;
-  cwd?: string;
-  /** Source transcript lineage recorded on forked transcript headers. */
-  parentSession?: string;
-  /** Stable timestamp shared with sibling records written in the same operation. */
-  timestamp?: string;
-};
-
-/** Creates a session transcript header entry with current version metadata. */
-export function createSessionTranscriptHeader(params: SessionTranscriptHeaderParams = {}) {
+export function createSessionTranscriptHeader(
+  params: {
+    sessionId?: string;
+    /** Copied history retains its original model projection policy. */
+    version?: number;
+    cwd?: string;
+    /** Source transcript lineage recorded on forked transcript headers. */
+    parentSession?: string;
+    /** Stable timestamp shared with sibling records written in the same operation. */
+    timestamp?: string;
+  } = {},
+) {
   return {
     type: "session",
     version: params.version ?? CURRENT_SESSION_VERSION,
@@ -51,15 +48,9 @@ export function readSessionTranscriptHeaderStartedAt(
   return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : undefined;
 }
 
-/** Session-row fields that record where a session actually runs. */
-type ResetHeaderCwdSource = {
-  spawnedCwd?: string;
-  spawnedWorkspaceDir?: string;
-};
-
 /** The prior transcript owns its workspace; caller context covers an unset row. */
 export function resolveResetBoundaryHeaderCwd(
-  priorEntry: ResetHeaderCwdSource,
+  priorEntry: { spawnedCwd?: string; spawnedWorkspaceDir?: string },
   fallbackCwd: string,
 ): string {
   return priorEntry.spawnedCwd ?? priorEntry.spawnedWorkspaceDir ?? fallbackCwd;

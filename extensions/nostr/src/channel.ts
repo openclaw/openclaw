@@ -217,11 +217,7 @@ export async function publishNostrProfile(
   return bus.publishProfile(profile);
 }
 
-export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_ID): Promise<{
-  lastPublishedAt: number | null;
-  lastPublishedEventId: string | null;
-  lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-} | null> {
+export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_ID) {
   const bus = getActiveNostrBuses().get(accountId);
   if (!bus) {
     return null;

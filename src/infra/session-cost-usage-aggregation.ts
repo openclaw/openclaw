@@ -1,3 +1,4 @@
+import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -7,11 +8,8 @@ import {
   withUsageCostIncognitoScope,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
-import {
-  prepareUsageCostWorker,
-  runUsageCostWorker,
-  type PreparedUsageCostWorker,
-} from "./session-cost-usage-worker-runtime.js";
+import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
+import type { UsageCostPendingFile } from "./session-cost-usage-worker.types.js";
 
 export async function refreshCostUsageCacheForAgent(params: {
   config?: OpenClawConfig;
@@ -20,64 +18,62 @@ export async function refreshCostUsageCacheForAgent(params: {
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
+  onRemaining?: (files: UsageCostPendingFile[]) => void;
   sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<"refreshed" | "busy"> {
-  const prepared = params.incognito
-    ? prepareUsageCostWorker({
-        ...params,
-        storePath: params.storePath ?? params.incognito.actor.path,
-      })
-    : undefined;
-  return withUsageCostIncognitoScope(params.incognito, (incognito) =>
-    refreshCapturedCostUsageCacheForAgent({ ...params, incognito }, prepared),
-  );
-}
-
-async function refreshCapturedCostUsageCacheForAgent(
-  params: Parameters<typeof refreshCostUsageCacheForAgent>[0],
-  prepared?: PreparedUsageCostWorker,
-): Promise<"refreshed" | "busy"> {
-  const agentId = normalizeAgentId(params.agentId);
-  try {
-    const result = await runUsageCostWorker(
-      prepared ?? prepareUsageCostWorker(params),
-      {
-        kind: "refresh",
-        maxFiles: params.maxFiles,
-        sessionsDir: params.sessionsDir,
-        sessionFiles: params.sessionFiles,
-        startMs: params.startMs,
-        rebuildRows: params.rebuildRows,
-      },
-      params.incognito,
-    );
-    if (result.kind === "busy") {
-      return "busy";
-    }
-    if (result.kind !== "refresh") {
-      throw new Error("Invalid usage refresh worker result");
-    }
-    if (result.changed) {
-      params.incognito?.actor.assertCurrent();
-      params.incognito?.authority.assertCurrent();
-      publishSessionCostUsageUpdated(agentId);
-    }
-    return "refreshed";
-  } catch (error) {
-    if (!getAsyncWorkSignal()?.aborted) {
+  const prepared = prepareUsageCostWorker(params);
+  return withUsageCostIncognitoScope<"refreshed" | "busy">(
+    prepared.incognito,
+    async (incognito) => {
+      const scoped = { ...params, incognito };
+      const agentId = normalizeAgentId(scoped.agentId);
       try {
-        params.incognito?.actor.assertCurrent();
-        params.incognito?.authority.assertCurrent();
-        publishSessionCostUsageUpdated(agentId, true);
-      } catch {
-        // Retired actors cannot publish failure facts for their successors.
+        const result = await runUsageCostWorker(
+          prepared,
+          {
+            kind: "refresh",
+            maxFiles: scoped.maxFiles,
+            sessionsDir: scoped.sessionsDir,
+            sessionFiles: scoped.sessionFiles,
+            startMs: scoped.startMs,
+            rebuildRows: scoped.rebuildRows,
+          },
+          scoped.incognito,
+        );
+        if (result.kind === "busy") {
+          return "busy";
+        }
+        if (result.kind !== "refresh") {
+          throw new Error("Invalid usage refresh worker result");
+        }
+        if (result.changed) {
+          scoped.incognito?.actor.assertCurrent();
+          scoped.incognito?.authority.assertCurrent();
+          publishSessionCostUsageUpdated(agentId);
+        }
+        if (result.remainingFiles?.length) {
+          scoped.onRemaining?.(result.remainingFiles);
+        }
+        return "refreshed";
+      } catch (error) {
+        if (!getAsyncWorkSignal()?.aborted) {
+          try {
+            scoped.incognito?.actor.assertCurrent();
+            scoped.incognito?.authority.assertCurrent();
+            publishSessionCostUsageUpdated(agentId, true);
+          } catch {
+            // Retired actors cannot publish failure facts for their successors.
+          }
+        }
+        throw error;
       }
-    }
-    throw error;
-  }
+    },
+    true,
+  );
 }

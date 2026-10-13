@@ -85,26 +85,19 @@ export function applyTargetToParams(params: {
     // SAFETY: Missing keys fall back to "none"; only "to" and "channelId" map a target below.
     MESSAGE_ACTION_TARGET_MODE[params.action as keyof typeof MESSAGE_ACTION_TARGET_MODE] ?? "none";
 
-  if (mode !== "none") {
-    if (hasLegacyTo || hasLegacyChannelId) {
-      throw new Error("Use `target` instead of `to`/`channelId`.");
-    }
-  } else if (hasLegacyTo) {
+  if (mode !== "none" && (hasLegacyTo || hasLegacyChannelId)) {
+    throw new Error("Use `target` instead of `to`/`channelId`.");
+  } else if (mode === "none" && hasLegacyTo) {
     throw new Error("Use `target` for actions that accept a destination.");
   }
 
   if (!target) {
     return;
   }
-  if (mode === "channelId") {
-    params.args.channelId = target;
-    return;
+  if (mode === "none") {
+    throw new Error(`Action ${params.action} does not accept a target.`);
   }
-  if (mode === "to") {
-    params.args.to = target;
-    return;
-  }
-  throw new Error(`Action ${params.action} does not accept a target.`);
+  params.args[mode] = target;
 }
 
 export type ActionDeliveryTargetAliasSpec = NonNullable<
@@ -119,9 +112,15 @@ type ActionTargetAliasOptions = {
 
 function resolvePluginActionTargetAliasSpec(
   action: ChannelMessageActionName,
-  channel: string,
-  selected: ActionDeliveryTargetAliasSpec | null | undefined,
+  params: Record<string, unknown>,
+  options?: ActionTargetAliasOptions,
 ): ActionDeliveryTargetAliasSpec | null | undefined {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  // Screen standard params before consulting plugin bootstrap metadata.
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return undefined;
+  }
+  const selected = options?.aliasSpec;
   return selected !== undefined
     ? selected
     : getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
@@ -144,16 +143,15 @@ export function resolveActionDeliveryTargetAlias(
   params: Record<string, unknown>,
   options?: ActionTargetAliasOptions,
 ): string | undefined {
-  const channel = normalizeOptionalLowercaseString(options?.channel);
-  if (!channel || !hasPotentialPluginActionParam(params)) {
+  const aliases = resolvePluginActionTargetAliasSpec(action, params, options);
+  if (!aliases) {
     return undefined;
   }
-  const aliases = resolvePluginActionTargetAliasSpec(action, channel, options?.aliasSpec);
-  const resolved = aliases?.resolveDeliveryTarget?.({ args: params });
+  const resolved = aliases.resolveDeliveryTarget?.({ args: params });
   if (resolved !== undefined) {
     return normalizeOptionalString(resolved);
   }
-  const deliveryAliases = aliases?.deliveryTargetAliases ?? [];
+  const deliveryAliases = aliases.deliveryTargetAliases ?? [];
   const targets = deliveryAliases
     .map((alias) => normalizeOptionalStringifiedId(params[alias]))
     .filter((value): value is string => Boolean(value));
@@ -169,11 +167,7 @@ export function actionHasResourceReference(
   params: Record<string, unknown>,
   options?: ActionTargetAliasOptions,
 ): boolean {
-  const channel = normalizeOptionalLowercaseString(options?.channel);
-  if (!channel || !hasPotentialPluginActionParam(params)) {
-    return false;
-  }
-  const aliases = resolvePluginActionTargetAliasSpec(action, channel, options?.aliasSpec);
+  const aliases = resolvePluginActionTargetAliasSpec(action, params, options);
   // Legacy alias specs do not distinguish conversations from resources.
   // Do not infer ambient authority unless the owner explicitly partitions them.
   if (!aliases?.deliveryTargetAliases) {
@@ -186,12 +180,10 @@ export function actionHasResourceReference(
   );
 }
 
-/** Reports whether an action normally needs a destination target. */
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
-/** Detects whether an action invocation already carries a usable target. */
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
@@ -200,12 +192,7 @@ export function actionHasTarget(
   if (hasNonEmptyString(params.to) || hasNonEmptyString(params.channelId)) {
     return true;
   }
-  const channel = normalizeOptionalLowercaseString(options?.channel);
-  // Screen standard params before consulting plugin bootstrap metadata.
-  const pluginAliases =
-    channel && hasPotentialPluginActionParam(params)
-      ? resolvePluginActionTargetAliasSpec(action, channel, options?.aliasSpec)?.aliases
-      : undefined;
+  const pluginAliases = resolvePluginActionTargetAliasSpec(action, params, options)?.aliases;
   return [...(ACTION_TARGET_ALIASES[action] ?? []), ...(pluginAliases ?? [])].some(
     (alias) => normalizeOptionalStringifiedId(params[alias]) !== undefined,
   );

@@ -15,9 +15,11 @@ import {
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -123,6 +125,7 @@ it(
         response.writeHead(500).end("fixture provider failed");
       });
     });
+    const agentExecutions: Array<{ release(): Promise<void> }> = [];
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let administrator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let backingClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -229,6 +232,10 @@ it(
         scopes: ["operator.read", "operator.write"],
       });
       await gateway.server.startupSettled;
+      // Keep both fixture agents resident while alternating owners; the runtime retains one idle executor.
+      for (const agentId of ["main", "work"]) {
+        agentExecutions.push(captureOpenClawAgentDatabaseExecution({ agentId, env: state.env }));
+      }
       administrator = await connectGatewayClient({
         url: `wss://127.0.0.1:${gateway.port}`,
         clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -270,13 +277,15 @@ it(
         },
       );
       expect(accepted.status).toBe("started");
-      await expect(
-        gateway.client.request<{ status: string }>(
-          "agent.wait",
-          { runId: accepted.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        ),
-      ).resolves.toMatchObject({ status: "ok" });
+      const acceptedTerminal = await gateway.client.request<{ status: string }>(
+        "agent.wait",
+        { runId: accepted.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      );
+      const acceptedDiagnostic = redactSensitiveText(JSON.stringify(acceptedTerminal), {
+        mode: "tools",
+      }).slice(0, 4_000);
+      expect(acceptedTerminal, acceptedDiagnostic).toMatchObject({ status: "ok" });
       const allowedTranscript = await loadTranscriptEvents(scope);
       expect(JSON.stringify(allowedTranscript)).toContain(allowedMessage);
       expect(JSON.stringify(allowedTranscript)).toContain("Authorized member reply.");
@@ -406,13 +415,26 @@ it(
                 },
               );
               expect(started.status).toBe(method === "chat.send" ? "started" : "accepted");
-              await expect(
-                gateway.client.request<{ status: string }>(
-                  "agent.wait",
-                  { runId: started.runId, timeoutMs: 30_000 },
-                  { timeoutMs: 35_000 },
-                ),
-              ).resolves.toMatchObject({ status: "ok" });
+              const terminal = await gateway.client.request<{ status: string }>(
+                "agent.wait",
+                { runId: started.runId, timeoutMs: 30_000 },
+                { timeoutMs: 35_000 },
+              );
+              const terminalDiagnostic =
+                terminal.status === "ok"
+                  ? undefined
+                  : redactSensitiveText(
+                      JSON.stringify({
+                        firstAgent: first,
+                        agentId,
+                        method,
+                        withAttachment,
+                        providerRequests: requests.length - requestOffset,
+                        terminal,
+                      }),
+                      { mode: "tools" },
+                    ).slice(0, 4_000);
+              expect(terminal, terminalDiagnostic).toMatchObject({ status: "ok" });
               const providerInput = requests.slice(requestOffset).join("\n");
               expect(providerInput).toContain(message);
               expect(providerInput).not.toContain(markers[otherAgentId]);
@@ -678,8 +700,15 @@ it(
           }
         } finally {
           if (gateway) {
-            await disconnectGatewayClient(gateway.client);
-            await gateway.server.close({ reason: "membership authority proof complete" });
+            try {
+              await disconnectGatewayClient(gateway.client);
+            } finally {
+              try {
+                await Promise.all(agentExecutions.map((execution) => execution.release()));
+              } finally {
+                await gateway.server.close({ reason: "membership authority proof complete" });
+              }
+            }
           }
         }
       } finally {

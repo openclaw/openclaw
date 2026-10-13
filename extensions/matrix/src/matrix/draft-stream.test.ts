@@ -166,32 +166,6 @@ describe("createMatrixDraftStream", () => {
     vi.useRealTimers();
   });
 
-  it("sends a normal text preview on first partial update", async () => {
-    const stream = createStream();
-
-    stream.update("Hello");
-    await stream.flush();
-
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sentContentAt(0).msgtype).toBe("m.text");
-    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]).toMatchObject({
-      includeMentions: false,
-      live: true,
-      msgtype: "m.text",
-    });
-    expect(stream.eventId()).toBe("$evt1");
-  });
-
-  it("tracks the provider-visible prepared draft content", async () => {
-    convertMarkdownTablesMock.mockImplementation((text: string) => `prepared:${text}`);
-    const stream = createStream();
-
-    stream.update("raw table");
-    await stream.flush();
-
-    expect(stream.content()).toBe("prepared:raw table");
-  });
-
   it("preserves indented code through draft sends, edits, and final comparisons", async () => {
     const stream = createStream();
     const firstMarkdown = "    @room";
@@ -200,6 +174,11 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sentContentAt(0).body).toBe(firstMarkdown);
+    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]).toMatchObject({
+      includeMentions: false,
+      live: true,
+      msgtype: "m.text",
+    });
     expect(stream.content()).toBe(firstMarkdown);
     expect(stream.matchesPreparedText(`${firstMarkdown}  `)).toBe(true);
     expect(stream.matchesPreparedText("@room")).toBe(false);
@@ -249,45 +228,15 @@ describe("createMatrixDraftStream", () => {
     expect(sendMessageMock).toHaveBeenCalledTimes(callCount);
   });
 
-  it("ignores updates after stop", async () => {
-    const stream = createStream();
-
-    stream.update("Hello");
-    await stream.stop();
-    const callCount = sendMessageMock.mock.calls.length;
-
-    stream.update("Ignored");
-    await stream.flush();
-    expect(sendMessageMock).toHaveBeenCalledTimes(callCount);
-  });
-
-  it("stop returns the event ID", async () => {
-    const stream = createStream();
-
-    stream.update("Hello");
-    const eventId = await stream.stop();
-    expect(eventId).toBe("$evt1");
-  });
-
-  it("stop does not finalize live drafts on its own", async () => {
-    const stream = createStream({
-      mode: "partial",
-    });
-
-    stream.update("Hello");
-    await stream.stop();
-
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls.at(0)?.[1]).toHaveProperty("org.matrix.msc4357.live");
-  });
-
   it("finalizeLive clears the live marker at most once", async () => {
     const stream = createStream({
       mode: "partial",
     });
 
     stream.update("Hello");
-    await stream.stop();
+    expect(await stream.stop()).toBe("$evt1");
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sentContentAt(0)).toHaveProperty("org.matrix.msc4357.live");
 
     await stream.finalizeLive();
     await stream.finalizeLive();
@@ -352,15 +301,6 @@ describe("createMatrixDraftStream", () => {
     // Only the initial failed attempt
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(stream.eventId()).toBeUndefined();
-  });
-
-  it("skips empty/whitespace text", async () => {
-    const stream = createStream();
-
-    stream.update("   ");
-    await stream.flush();
-
-    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it("stops on edit failure mid-stream", async () => {

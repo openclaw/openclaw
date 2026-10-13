@@ -79,7 +79,12 @@ it("matches randomized identities using index searches, including malformed and 
               (id) => typeof id === "string" && id.trim() === resumeSessionId,
             );
           })
-          .map(({ sessionKey }) => ({ sessionKey, session_id: "revision", updated_at: 100 }));
+          .map(({ sessionKey }) => ({
+            sessionKey,
+            session_id: "revision",
+            updated_at: 100,
+            agent: "harness-agent",
+          }));
         expect(
           readAcpSessionCommand(db, {
             type: "acpSessions.resume",
@@ -155,7 +160,12 @@ it("adds resume indexes to populated same-version state without changing canonic
         resumeSessionId: "resume",
       }).rows,
     ).toEqual([
-      { sessionKey: "agent:coder:acp:existing", session_id: "revision", updated_at: 100 },
+      {
+        sessionKey: "agent:coder:acp:existing",
+        session_id: "revision",
+        updated_at: 100,
+        agent: "coder",
+      },
     ]);
   });
 });

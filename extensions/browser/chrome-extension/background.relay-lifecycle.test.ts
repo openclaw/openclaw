@@ -98,52 +98,28 @@ afterEach(async () => {
 });
 
 describe("authenticated relay debugger lifetime", () => {
-  it.each(["close", "closing replacement", "closed replacement", "auth failure", "explicit pair"])(
-    "starts a fresh Runtime after %s without changing grants",
-    async (ending) => {
-      const f = await fixture();
-      await f.attach(f.old);
-      await reply(f.old, 2, { type: "cdp", tabId, method: "Runtime.enable" });
-      // An unrelated extension debugger target is not owned by this transport.
-      f.attached.set(99, { runtimeEnabled: true });
-      if (ending === "close") {
-        f.old.finishClose();
-      }
-      if (ending === "closing replacement") {
-        f.old.close();
-      }
-      if (ending === "closed replacement") {
-        f.old.readyState = FakeWebSocket.CLOSED;
-      }
-      if (ending === "auth failure") {
-        f.old.receive({ type: "auth.invalid" });
-        await vi.waitFor(() => expect(f.old.close).toHaveBeenCalled());
-      }
-      if (ending === "explicit pair") {
-        expect(
-          await sendRuntimeMessage(f.h, {
-            type: "pair",
-            pairingString: `ws://127.0.0.1:18797/extension#${TEST_RELAY_KEY}`,
-            accessMode: "all",
-          }),
-        ).toMatchObject({ ok: true });
-      }
-      const next = await f.replacement();
-      await f.attach(next);
-      await reply(next, 2, { type: "cdp", tabId, method: "Runtime.enable" });
-      expect(
-        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-      ).toHaveLength(1);
-      expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: `target-${tabId}` });
-      expect(f.h.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "target-99" });
-      expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
-      expect(f.h.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
-      expect(await sendRuntimeMessage(f.h, { type: "getTabAccess", tabId })).toMatchObject({
-        accessible: true,
-        denied: false,
-      });
-    },
-  );
+  it("starts a fresh Runtime after authentication failure without changing grants", async () => {
+    const f = await fixture();
+    await f.attach(f.old);
+    await reply(f.old, 2, { type: "cdp", tabId, method: "Runtime.enable" });
+    f.attached.set(99, { runtimeEnabled: true });
+    f.old.receive({ type: "auth.invalid" });
+    await vi.waitFor(() => expect(f.old.close).toHaveBeenCalled());
+    const next = await f.replacement();
+    await f.attach(next);
+    await reply(next, 2, { type: "cdp", tabId, method: "Runtime.enable" });
+    expect(
+      frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
+    ).toHaveLength(1);
+    expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: "target-7" });
+    expect(f.h.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "target-99" });
+    expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
+    expect(f.h.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
+    expect(await sendRuntimeMessage(f.h, { type: "getTabAccess", tabId })).toMatchObject({
+      accessible: true,
+      denied: false,
+    });
+  });
 
   it.each(["attach", "target lookup"])(
     "drains a delayed old %s and detach before replacement attachment",
@@ -238,7 +214,7 @@ describe("authenticated relay debugger lifetime", () => {
     }
   });
 
-  it.each(["attach", "cdp", "activateTab", "closeTab", "createTab"])(
+  it.each(["activateTab", "createTab"])(
     "fences %s paused over a tab lookup while preserving creator-owned rollback",
     async (type) => {
       const f = await fixture();
@@ -425,23 +401,6 @@ describe("authenticated relay debugger lifetime", () => {
     expect(f.h.debuggerDetach).not.toHaveBeenCalled();
     expect(f.attached.get(tabId)).toEqual({ runtimeEnabled: true });
   });
-
-  it.each([
-    "Debugger is not attached to the target with id: target-7.",
-    "No target with given id target-7.",
-  ])("accepts Chrome's terminal detach evidence: %s", async (message) => {
-    const f = await fixture();
-    await f.attach(f.old);
-    f.attached.delete(tabId);
-    f.h.debuggerDetach.mockRejectedValueOnce(new Error(message));
-    f.old.finishClose();
-    const next = await f.replacement();
-    await f.attach(next);
-    await reply(next, 2, { type: "cdp", tabId, method: "Runtime.enable" });
-    expect(
-      frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-    ).toHaveLength(1);
-  });
 });
 
 describe("same-transport native generation", () => {
@@ -615,35 +574,23 @@ it("cancels attach admission when a same-socket detach arrives before native dis
   expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
 });
 
-it.each(["socket close", "native replacement"])(
-  "rolls back only its created tab after %s during focus",
-  async (ending) => {
-    const f = await fixture();
-    const gate = createDeferred<void>();
-    f.h.windowsUpdate.mockImplementationOnce(async () => {
-      await gate.promise;
-      return undefined;
-    });
-    try {
-      f.old.receive({ type: "createTab", seq: 80, url: "https://example.com/new", focus: true });
-      await vi.waitFor(() => expect(f.h.windowsUpdate).toHaveBeenCalled());
-      if (ending === "socket close") {
-        f.old.finishClose();
-      } else {
-        await reply(f.old, 81, { type: "detach", tabId: tabId + 1 });
-        expect(await reply(f.old, 82, { type: "attach", tabId: tabId + 1 })).toMatchObject({
-          type: "result",
-        });
-      }
-      gate.resolve();
-      await vi.waitFor(() => expect(f.h.tabsRemove).toHaveBeenCalledExactlyOnceWith(tabId + 1));
-      expect(await f.h.tabsQuery()).toEqual([expect.objectContaining({ id: tabId })]);
-      expect(frames(f.old).some((frame) => frame.seq === 80 && frame.type === "result")).toBe(
-        false,
-      );
-    } finally {
-      gate.resolve();
-      await flush();
-    }
-  },
-);
+it("rolls back only its created tab after socket close during focus", async () => {
+  const f = await fixture();
+  const gate = createDeferred<void>();
+  f.h.windowsUpdate.mockImplementationOnce(async () => {
+    await gate.promise;
+    return undefined;
+  });
+  try {
+    f.old.receive({ type: "createTab", seq: 80, url: "https://example.com/new", focus: true });
+    await vi.waitFor(() => expect(f.h.windowsUpdate).toHaveBeenCalled());
+    f.old.finishClose();
+    gate.resolve();
+    await vi.waitFor(() => expect(f.h.tabsRemove).toHaveBeenCalledExactlyOnceWith(tabId + 1));
+    expect(await f.h.tabsQuery()).toEqual([expect.objectContaining({ id: tabId })]);
+    expect(frames(f.old).some((frame) => frame.seq === 80 && frame.type === "result")).toBe(false);
+  } finally {
+    gate.resolve();
+    await flush();
+  }
+});

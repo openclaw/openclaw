@@ -277,30 +277,24 @@ export function formatThinkingOverrideLabel(value: string, label?: string | null
   return formatThinkingLevelDisplayLabel(label?.trim() || normalized);
 }
 
+const THINKING_LEVEL_LABELS = new Map([
+  ["adaptive", "Adaptive"],
+  ["minimal", "Minimal"],
+  ["low", "Low"],
+  ["medium", "Medium"],
+  ["high", "High"],
+  ["xhigh", "Extra high"],
+  ["max", "Maximum"],
+  ["ultra", "Ultra"],
+]);
+
 function formatThinkingLevelDisplayLabel(value: string): string {
   const raw = normalizeLowercaseStringOrEmpty(value);
   if (["on", "enable", "enabled"].includes(raw)) {
     return "On";
   }
-  const normalized = normalizeThinkingOptionValue(value);
-  switch (normalized) {
-    case "adaptive":
-      return "Adaptive";
-    case "minimal":
-      return "Minimal";
-    case "low":
-      return "Low";
-    case "medium":
-      return "Medium";
-    case "high":
-      return "High";
-    case "xhigh":
-      return "Extra high";
-    case "max":
-      return "Maximum";
-    case "ultra":
-      return "Ultra";
-    default:
-      return value.charAt(0).toUpperCase() + value.slice(1);
-  }
+  return (
+    THINKING_LEVEL_LABELS.get(normalizeThinkingOptionValue(value)) ??
+    value.charAt(0).toUpperCase() + value.slice(1)
+  );
 }

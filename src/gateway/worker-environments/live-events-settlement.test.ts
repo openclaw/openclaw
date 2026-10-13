@@ -3,23 +3,28 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnership } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWorkerWrite,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import * as trajectoryStore from "../../trajectory/runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import * as support from "./service.test-support.js";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "reject_live_trajectory_append",
+    match: /^insert into trajectory_runtime_events\b/u,
+    sql: `CREATE TEMP TRIGGER reject_live_trajectory_append BEFORE INSERT ON main.trajectory_runtime_events
+      BEGIN SELECT RAISE(ABORT, 'synthetic trajectory persistence failure'); END;`,
+  },
+]);
 
 describe("worker live event write settlement", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -56,11 +61,7 @@ describe("worker live event write settlement", () => {
         result: { ackedSeq: 0 },
       });
 
-      const failureDatabase =
-        outcome === "failed"
-          ? openOpenClawAgentDatabase({ agentId: "main", path: storePath })
-          : undefined;
-      if (failureDatabase) {
+      if (outcome === "failed") {
         const warmupTarget = {
           ...target,
           sessionId: "session-live-settlement-warmup",
@@ -79,10 +80,7 @@ describe("worker live event write settlement", () => {
         );
         warmup.recordEvent("worker.warmup");
         await warmup.flush();
-        // Admit the real worker before adding a fault that must fail INSERT, not schema validation.
-        failureDatabase.db.exec(`CREATE TRIGGER reject_live_trajectory_append
-          BEFORE INSERT ON trajectory_runtime_events
-          BEGIN SELECT RAISE(ABORT, 'synthetic trajectory persistence failure'); END`);
+        fault.enable();
         warmup.recordEvent("worker.trigger-probe");
         await expect(warmup.flush()).rejects.toThrow("synthetic trajectory persistence failure");
       }
@@ -208,7 +206,7 @@ describe("worker live event write settlement", () => {
         await workerService.stop();
         releaseSource();
         unsubscribe();
-        failureDatabase?.db.exec("DROP TRIGGER reject_live_trajectory_append");
+        fault.disable();
         await drainStoreWriterQueuesForTest(
           SQLITE_SESSION_WRITER_QUEUES,
           "live event test cleanup",

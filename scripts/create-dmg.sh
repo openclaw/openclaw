@@ -201,7 +201,6 @@ if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
     echo "WARN: DMG background missing: $DMG_BACKGROUND_SMALL / $DMG_BACKGROUND_PATH" >&2
   fi
 
-  # Volume icon: reuse the app icon if available.
   ICON_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns"
   if [[ -f "$ICON_SRC" ]]; then
     cp "$ICON_SRC" "$MOUNT_POINT/.VolumeIcon.icns"

@@ -191,7 +191,7 @@ describe("status optional Git probes", () => {
       const startedAt = Date.now();
       const { output, update } = await runStatusProbe(opts, delayGitProbe(probe, null));
       expect(Date.now() - startedAt).toBe(budgetMs);
-      expect(output).toContain(`git probe did not finish within ${budgetMs / 1000} s (slow host)`);
+      expect(output).toContain(`git check did not finish within ${budgetMs / 1000} s (slow host)`);
       expect(output).not.toContain("remote reachability");
       if (opts.json) {
         expect(update.error).toMatchObject({ status: "unknown", timeoutMs: budgetMs });

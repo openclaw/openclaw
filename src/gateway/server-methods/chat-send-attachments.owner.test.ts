@@ -33,7 +33,7 @@ it.each(["off", "all"] as const)(
       for (const agentId of ["main", "work"]) {
         const bytes = `${agentId} attachment contents`;
         const fileName = "notes café 雪 🦞.txt";
-        const request = normalizeChatSendRequest({
+        const request = await normalizeChatSendRequest({
           client: null,
           params: {
             agentId,

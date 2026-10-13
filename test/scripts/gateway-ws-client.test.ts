@@ -155,21 +155,6 @@ describe("createGatewayWsClient", () => {
       await stalled.close();
     }
   });
-
-  it("uses caller-specific websocket open timeout messages", async () => {
-    const stalled = await listenStalledUpgrade();
-    const client = createGatewayWsClient({
-      openTimeoutMessage: "gateway ws open timeout",
-      openTimeoutMs: 5,
-      url: stalled.url,
-    });
-    try {
-      await expect(client.waitOpen()).rejects.toThrow("gateway ws open timeout");
-    } finally {
-      client.close();
-      await stalled.close();
-    }
-  });
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 1_000) {

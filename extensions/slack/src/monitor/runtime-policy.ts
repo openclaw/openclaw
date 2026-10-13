@@ -215,7 +215,7 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
     }
   }
 
-  const dmEntries = new Set(normalizeStringEntries(allowFrom).filter((entry) => entry !== "*"));
+  const dmEntries = new Set(allowFrom.filter((entry) => entry !== "*"));
   const userEntries = new Set(dmEntries);
   for (const channel of Object.values(channelsConfig ?? {})) {
     addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
@@ -236,7 +236,7 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
     resolved.filter((entry) => dmEntries.has(entry.input)),
     { formatResolved: formatSlackUserResolved },
   );
-  ctx.allowFrom = normalizeStringEntries(mergeAllowlist({ existing: allowFrom, additions }));
+  ctx.allowFrom = mergeAllowlist({ existing: allowFrom, additions });
   const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolved, {
     formatResolved: formatSlackUserResolved,
   });

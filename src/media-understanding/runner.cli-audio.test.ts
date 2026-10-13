@@ -220,6 +220,21 @@ describe("media-understanding CLI audio entry", () => {
     },
   );
 
+  it("substitutes an unset language as an empty argument instead of dropping it", async () => {
+    // No language at any level leaves {{Language}} unpopulated. Templates substitute
+    // an empty string rather than dropping the argument, so a flag-style pair keeps
+    // its flag and gains an empty value; CLI args stay literal by contract.
+    await runAudioEntry({
+      command: "mock-transcriber",
+      args: ["--language", "{{Language}}", "--file", "{{AttachmentPath}}"],
+    });
+    expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+      "mock-transcriber",
+      ["--language", "", "--file", expect.any(String)],
+      { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
+    );
+  });
+
   it.each(transcriptFileCases)("honors $name transcript file authority", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
       if (testCase.text !== null) {

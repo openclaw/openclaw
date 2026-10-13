@@ -1,4 +1,3 @@
-/** CLI entrypoint for `openclaw gateway probe`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
@@ -18,7 +17,6 @@ import {
 } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
-/** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
   opts: {
     url?: string;
@@ -94,18 +92,14 @@ export async function gatewayStatusCommand(
 
   const controller = new AbortController();
   let abortSignal: "SIGINT" | "SIGTERM" | undefined;
-  const onSigInt = () => {
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => {
     if (!abortSignal) {
-      abortSignal = "SIGINT";
+      abortSignal = signal;
       controller.abort();
     }
   };
-  const onSigTerm = () => {
-    if (!abortSignal) {
-      abortSignal = "SIGTERM";
-      controller.abort();
-    }
-  };
+  const onSigInt = () => onSignal("SIGINT");
+  const onSigTerm = () => onSignal("SIGTERM");
   process.on("SIGINT", onSigInt);
   process.on("SIGTERM", onSigTerm);
   const probePass = await (async () => {

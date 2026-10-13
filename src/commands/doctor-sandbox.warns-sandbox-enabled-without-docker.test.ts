@@ -268,7 +268,7 @@ describe("sandbox health", () => {
       platformSpy.mockRestore();
     }
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Codex bwrap ${kind} namespace probe failed`),
+      expect.stringContaining(`Codex bwrap ${kind} namespace check failed`),
       "Sandbox",
     );
     if (stage === "unshare") {
@@ -279,15 +279,15 @@ describe("sandbox health", () => {
       expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
     } else {
       const message = firstNoteCall()[0];
-      expect(message).toContain(`Codex bwrap ${kind} namespace probe failed`);
-      expect(message).toContain(`Probe result: ${denial}`);
-      expect(message).toContain(`Probe command: ${codexSandboxCommand}`);
+      expect(message).toContain(`Codex bwrap ${kind} namespace check failed`);
+      expect(message).toContain(`Check result: ${denial}`);
+      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
       expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`Probe result: ${denial}`),
+        expect.stringContaining(`Check result: ${denial}`),
         "Sandbox",
       );
       expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`Probe command: ${codexSandboxCommand}`),
+        expect.stringContaining(`Check command: ${codexSandboxCommand}`),
         "Sandbox",
       );
       expect(resolveCodexHealthApi).toHaveBeenCalledExactlyOnceWith({ cfg, ...options });
@@ -318,7 +318,7 @@ describe("sandbox health", () => {
     {
       name: "an older selected plugin without a sandbox probe",
       selection: { status: "available", api: {} },
-      reason: "The selected Codex plugin does not provide a workspace-write sandbox probe.",
+      reason: "The selected Codex plugin does not provide a workspace-write sandbox check.",
       ranProbe: false,
     },
   ])("reports $name as unverified without diagnosing namespace policy", async (scenario) => {
@@ -337,11 +337,11 @@ describe("sandbox health", () => {
     }
     const message = firstNoteCall()[0];
     expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
-    expect(message).toContain(`Probe result: ${scenario.reason}`);
-    expect(message).not.toContain("namespace probe failed");
+    expect(message).toContain(`Check result: ${scenario.reason}`);
+    expect(message).not.toContain("namespace check failed");
     expect(message).not.toContain("AppArmor");
     if (scenario.ranProbe) {
-      expect(message).toContain(`Probe command: ${codexSandboxCommand}`);
+      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
     } else {
       expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
     }

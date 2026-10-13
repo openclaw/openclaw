@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,6 +12,7 @@ import { appendTranscriptMessage } from "../config/sessions/session-accessor.js"
 import { upsertSessionEntry } from "../plugin-sdk/session-store-runtime.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../plugin-sdk/session-transcript-runtime.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
+import * as externalContent from "../security/external-content.js";
 import {
   importSessionCatalogHistory,
   preserveSessionCatalogHistory,
@@ -115,6 +116,53 @@ describe("session catalog history import store selection", () => {
 });
 
 describe("catalog transcript preservation", () => {
+  it("rechecks authority after awaited content preparation", async () => {
+    await withTempHome(async (home) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "prepared-import",
+        sessionKey: "agent:main:prepared-import",
+        storePath: path.join(fs.realpathSync(home), ".openclaw", "prepared", "sessions.json"),
+      };
+      const config = { session: { store: scope.storePath }, plugins: { enabled: false } };
+      await upsertSessionEntry({ ...scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } });
+      let current = true;
+      const wrap = externalContent.wrapExternalContent;
+      using preparing = vi
+        .spyOn(externalContent, "wrapExternalContent")
+        .mockImplementation((...args) => {
+          const result = wrap(...args);
+          queueMicrotask(() => {
+            current = false;
+          });
+          return result;
+        });
+      await expect(
+        preserveSessionCatalogHistory({
+          ...scope,
+          config,
+          catalogId: "fixture",
+          threadId: "source",
+          notice: "Import notice",
+          history: {
+            items: [{ type: "userMessage", text: "must not persist" }],
+            totalItems: 1,
+            complete: true,
+          },
+          commitGuard: () => {
+            if (!current) {
+              throw new Error("Catalog source revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Catalog source revoked");
+      expect(preparing).toHaveBeenCalledOnce();
+      expect(await readVisibleSessionTranscriptMessageEntries(scope)).toMatchObject([
+        { idempotencyKey: "catalog-preservation:notice" },
+      ]);
+    });
+  });
+
   it.each(["claude", "codex"])(
     "preserves %s items once across sync, including id-less duplicates and a shifted read window",
     async (catalogId) => {

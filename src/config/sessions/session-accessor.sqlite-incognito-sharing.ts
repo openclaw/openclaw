@@ -17,6 +17,17 @@ import type { SessionEntry } from "./types.js";
 
 type IncognitoSessionSharingFacts = CommittedSessionSharingFacts & {
   capability?: ReturnType<typeof projectSessionEntryCapabilityFacts>;
+  steering?: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "updatedAt"
+    | "status"
+    | "restartRecoveryDeliveryRunId"
+    | "restartRecoveryDeliverySourceRunId"
+    | "restartRecoveryDeliveryReceiptState"
+    | "restartRecoveryDeliveryToolCallId"
+    | "restartRecoveryTerminalRunIds"
+  >;
 };
 
 // Process-held stores cannot be reopened in a worker. Their existing writer publishes
@@ -84,7 +95,7 @@ export function commitIncognitoSessionSharingFacts(
 export function commitIncognitoSessionSharingField(
   database: DatabaseSync,
   sessionKey: string,
-  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
 ): void {
   const entries = incognitoSharingEntries.get(database)?.entries;
   const current = entries?.get(sessionKey);
@@ -105,13 +116,12 @@ export function readCommittedIncognitoSessionSharing(database: DatabaseSync, ses
   return current;
 }
 
-/** A native commit guard sees its transaction's producer-supplied postimage without SQL. */
-export function readIncognitoSessionEntryCurrent(database: DatabaseSync, sessionKey: string) {
+function readIncognitoSessionFactsCurrent(database: DatabaseSync, sessionKey: string) {
   const pending = database.isTransaction
     ? incognitoSharingEntries.get(database)?.pending.get(sessionKey)
     : undefined;
   if (!pending?.size) {
-    return readCommittedIncognitoSessionSharing(database, sessionKey)?.entry;
+    return readCommittedIncognitoSessionSharing(database, sessionKey);
   }
   let current: IncognitoSessionSharingFacts | null | undefined;
   for (const facts of pending.values()) {
@@ -120,7 +130,21 @@ export function readIncognitoSessionEntryCurrent(database: DatabaseSync, session
   if (current === null) {
     throw new Error("Incognito session currency projection is unavailable");
   }
-  return current?.entry;
+  return current;
+}
+
+/** A native commit guard sees its transaction's producer-supplied postimage without SQL. */
+export function readIncognitoSessionEntryCurrent(database: DatabaseSync, sessionKey: string) {
+  return readIncognitoSessionFactsCurrent(database, sessionKey)?.entry;
+}
+
+/** Receipt checks share the original native writer's pending and committed publications. */
+export function readIncognitoSessionSteeringEntry(database: DatabaseSync, sessionKey: string) {
+  const current = readIncognitoSessionFactsCurrent(database, sessionKey);
+  if (current?.entry && !current.steering) {
+    throw new Error("Incognito session steering projection is unavailable");
+  }
+  return current?.steering;
 }
 
 export function publishIncognitoSessionEntryChange(
@@ -135,6 +159,16 @@ export function publishIncognitoSessionEntryChange(
       ? {
           entry: projectSessionSharingEntry(entry),
           capability: projectSessionEntryCapabilityFacts(entry),
+          steering: {
+            sessionId: entry.sessionId,
+            updatedAt: entry.updatedAt,
+            status: entry.status,
+            restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+            restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+            restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+            restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
+            restartRecoveryTerminalRunIds: structuredClone(entry.restartRecoveryTerminalRunIds),
+          },
           membership: new Set(
             listSessionMembersInDatabase(database, update.sessionKey).map(
               (member) => member.identityId,
@@ -150,5 +184,6 @@ export function publishIncognitoSessionEntryChange(
     database,
     () => commitIncognitoSessionSharingFacts(database.db, update.sessionKey, current),
     () => stageIncognitoSharingPublication(database.db, update.sessionKey, { facts: current }),
+    () => commitIncognitoSessionSharingFacts(database.db, update.sessionKey, null),
   );
 }

@@ -32,12 +32,6 @@ export function canReplaceRestartTombstoneFromParent(params: {
   );
 }
 
-function restartTombstoneParentReplacementError(sessionKey: string): Error {
-  return new SessionRestartRecoveryTombstoneError(
-    `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
-  );
-}
-
 export async function prepareReplySessionParentFork(params: {
   agentId: string;
   alreadyForked: boolean;
@@ -56,18 +50,26 @@ export async function prepareReplySessionParentFork(params: {
   ) {
     return params.sessionEntry;
   }
-  const parentEntry = params.readEntry(params.parentSessionKey);
-  if (!parentEntry?.sessionId) {
+  const unresolvedParentFork = () => {
     if (params.requireParentForkReplacement === true) {
-      throw restartTombstoneParentReplacementError(params.sessionKey);
+      throw new SessionRestartRecoveryTombstoneError(
+        `Session "${params.sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
+      );
     }
     return params.sessionEntry;
+  };
+  const parentEntry = params.readEntry(params.parentSessionKey);
+  if (!parentEntry?.sessionId) {
+    return unresolvedParentFork();
   }
-  const decision = await resolveParentForkDecision({
+  const forkParams = {
+    parentSessionKey: params.parentSessionKey,
     parentEntry,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
     storePath: params.storePath,
-  });
+  };
+  const decision = await resolveParentForkDecision(forkParams);
   if (decision.status === "skip") {
     // The parent branch is too large to inherit usefully. Start fresh and
     // mark as handled so the thread does not retry this decision every turn.
@@ -77,18 +79,9 @@ export async function prepareReplySessionParentFork(params: {
     );
     return { ...params.sessionEntry, forkedFromParent: true };
   }
-  const fork = await forkSessionFromParent({
-    parentEntry,
-    agentId: params.agentId,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
+  const fork = await forkSessionFromParent(forkParams);
   if (!fork) {
-    if (params.requireParentForkReplacement === true) {
-      throw restartTombstoneParentReplacementError(params.sessionKey);
-    }
-    return params.sessionEntry;
+    return unresolvedParentFork();
   }
   params.warn(
     `forking from parent session: parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +

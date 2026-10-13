@@ -301,24 +301,35 @@ function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | u
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefined {
+function readEvidenceArray<T>(
+  value: unknown,
+  label: string,
+  read: (source: Record<string, unknown>, label: string) => T | undefined,
+): T[] | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Array.isArray(value)) {
-    throw new Error(
-      "Invalid stability bundle: evidence.memoryPressure.heapSpaces must be an array",
-    );
+    throw new Error(`Invalid stability bundle: ${label} must be an array`);
   }
-  const spaces: DiagnosticHeapSpaceSummary[] = [];
+  const entries: T[] = [];
   for (const [index, entry] of value.entries()) {
-    const label = `evidence.memoryPressure.heapSpaces[${index}]`;
-    const source = readObject(entry, label);
+    const entryLabel = `${label}[${index}]`;
+    const parsed = read(readObject(entry, entryLabel), entryLabel);
+    if (parsed !== undefined) {
+      entries.push(parsed);
+    }
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefined {
+  return readEvidenceArray(value, "evidence.memoryPressure.heapSpaces", (source, label) => {
     const spaceName = readOptionalCodeString(source.spaceName, `${label}.spaceName`);
     if (!spaceName) {
-      continue;
+      return undefined;
     }
-    spaces.push({
+    return {
       spaceName,
       spaceSizeBytes:
         readOptionalPositiveInteger(source.spaceSizeBytes, `${label}.spaceSizeBytes`) ?? 0,
@@ -332,9 +343,8 @@ function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefine
           source.physicalSpaceSizeBytes,
           `${label}.physicalSpaceSizeBytes`,
         ) ?? 0,
-    });
-  }
-  return spaces.length > 0 ? spaces : undefined;
+    };
+  });
 }
 
 function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary | undefined {
@@ -380,18 +390,7 @@ function readActiveResources(value: unknown): DiagnosticActiveResourceSummary | 
 }
 
 function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(
-      "Invalid stability bundle: evidence.memoryPressure.topSessionFiles must be an array",
-    );
-  }
-  const files: DiagnosticSessionFileSummary[] = [];
-  for (const [index, entry] of value.entries()) {
-    const label = `evidence.memoryPressure.topSessionFiles[${index}]`;
-    const source = readObject(entry, label);
+  return readEvidenceArray(value, "evidence.memoryPressure.topSessionFiles", (source, label) => {
     const relativePath = readRequiredString(source.relativePath, `${label}.relativePath`);
     if (
       path.isAbsolute(relativePath) ||
@@ -399,15 +398,14 @@ function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | unde
       relativePath.length > 300 ||
       /[\r\n]/u.test(relativePath)
     ) {
-      continue;
+      return undefined;
     }
-    files.push({
+    return {
       relativePath: sanitizeSessionEvidencePath(relativePath),
       sizeBytes: readOptionalPositiveInteger(source.sizeBytes, `${label}.sizeBytes`) ?? 0,
       mtimeMs: readOptionalPositiveInteger(source.mtimeMs, `${label}.mtimeMs`) ?? 0,
-    });
-  }
-  return files.length > 0 ? files : undefined;
+    };
+  });
 }
 
 function readMemoryPressureEvidence(
@@ -731,19 +729,24 @@ function isMemoryPressureReason(
 }
 
 function listDiagnosticStabilityBundleFilesSync(
-  options: DiagnosticStabilityBundleLocationOptions = {},
+  dir: string,
+  statFailure: "throw" | "use-zero",
 ): DiagnosticStabilityBundleFile[] {
-  const dir = resolveDiagnosticStabilityBundleDir(options);
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isFile() && isBundleFile(entry.name))
       .map((entry) => {
         const file = path.join(dir, entry.name);
-        return {
-          path: file,
-          mtimeMs: fs.statSync(file).mtimeMs,
-        };
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(file).mtimeMs;
+        } catch (error) {
+          if (statFailure === "throw") {
+            throw error;
+          }
+        }
+        return { path: file, mtimeMs };
       })
       .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
   } catch (error) {
@@ -781,7 +784,10 @@ export function readLatestDiagnosticStabilityBundleSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): ReadDiagnosticStabilityBundleResult {
   try {
-    const latest = listDiagnosticStabilityBundleFilesSync(options)[0];
+    const latest = listDiagnosticStabilityBundleFilesSync(
+      resolveDiagnosticStabilityBundleDir(options),
+      "throw",
+    )[0];
     if (!latest) {
       return {
         status: "missing",
@@ -796,25 +802,13 @@ export function readLatestDiagnosticStabilityBundleSync(
 
 function pruneOldBundles(dir: string, retainedFile: string): void {
   try {
-    const entries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && isBundleFile(entry.name))
-      .map((entry) => {
-        const file = path.join(dir, entry.name);
-        let mtimeMs = 0;
-        try {
-          mtimeMs = fs.statSync(file).mtimeMs;
-        } catch {
-          // Missing files are ignored below.
-        }
-        return { file, mtimeMs };
-      })
-      .filter((entry) => entry.file !== retainedFile)
-      .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file));
+    const entries = listDiagnosticStabilityBundleFilesSync(dir, "use-zero").filter(
+      (entry) => entry.path !== retainedFile,
+    );
 
     for (const entry of entries.slice(DIAGNOSTIC_STABILITY_BUNDLE_RETENTION - 1)) {
       try {
-        fs.unlinkSync(entry.file);
+        fs.unlinkSync(entry.path);
       } catch {
         // Retention cleanup must not block failure handling.
       }

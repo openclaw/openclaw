@@ -119,16 +119,27 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
             };
           })
       : undefined;
-  const settleRequest = async (observed: ObservedRequest) => {
+  const settleDispatch = async (observed: ObservedRequest) => {
     // RPC responses and final events assert outcomes; cleanup observes settlement.
     await Promise.allSettled([observed.request]);
     // Request admission can register detached execution after cleanup starts.
     await Promise.allSettled(observed.executions);
+  };
+  const settleRequest = async (observed: ObservedRequest) => {
+    await settleDispatch(observed);
     while (observed.effects.size > 0) {
       await Promise.allSettled(observed.effects);
     }
   };
   return {
+    // Queued custody intentionally retains effects until a later execution settles.
+    async waitForDispatch(runId: string) {
+      for (const observed of requests) {
+        if (observed.runId === runId) {
+          await settleDispatch(observed);
+        }
+      }
+    },
     async waitForCompletion(runId?: string) {
       for (const observed of requests) {
         if (runId !== undefined && observed.runId !== runId) {

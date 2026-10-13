@@ -11,7 +11,6 @@ import type { ChannelProviderOwnedMessageSendingDeliveryAdapter } from "./types.
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
-const loadSessionEntryReadOnly = vi.hoisted(() => vi.fn());
 const settlePendingFinalDelivery = vi.hoisted(() =>
   vi.fn(async (_completion: unknown, state: string) => ({ state })),
 );
@@ -32,11 +31,6 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
 }));
-
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return { ...actual, loadSessionEntryReadOnly };
-});
 
 vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => {
   const actual =
@@ -77,11 +71,12 @@ describe("channel turn failed-send custody", () => {
     sessionId: completion.sessionId,
   };
   const replacementWriter = { ...currentWriter, activeWriterRunId: "run-new" };
+  let currentEntry: typeof currentWriter | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     getGlobalHookRunner.mockReturnValue(null);
-    loadSessionEntryReadOnly.mockReturnValue(undefined);
+    currentEntry = undefined;
     settlePendingFinalDelivery.mockImplementation(async (_completion, state: string) => ({
       state,
     }));
@@ -103,15 +98,14 @@ describe("channel turn failed-send custody", () => {
             expectedWriterRunId: currentWriter.activeWriterRunId,
             sessionKey: completion.sessionKey,
             storePath: completion.storePath,
+            readCurrentSession: () => currentEntry,
           },
         },
       );
       dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
         createPayloadDispatch(payload, operation),
       );
-      loadSessionEntryReadOnly.mockReturnValue(
-        changesAfterRefresh ? currentWriter : replacementWriter,
-      );
+      currentEntry = changesAfterRefresh ? currentWriter : replacementWriter;
       const stages: string[] = [];
       const platformSend = vi.fn(async (_payload: ReplyPayload) => ({ visibleReplySent: true }));
       const providerSend: ChannelProviderOwnedMessageSendingDeliveryAdapter["deliverWithProviderMessageSending"] =
@@ -120,7 +114,7 @@ describe("channel turn failed-send custody", () => {
           await info.onPlatformSendDispatch();
           stages.push("refreshed");
           // Notice reads precede provider entry; revoke only after custody refresh.
-          loadSessionEntryReadOnly.mockReturnValue(replacementWriter);
+          currentEntry = replacementWriter;
           info.assertPlatformSendAuthorized();
           return platformSend(value);
         };
@@ -149,12 +143,6 @@ describe("channel turn failed-send custody", () => {
         }),
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
       expect(stages).toEqual(changesAfterRefresh ? ["entered", "refreshed"] : ["entered"]);
-      expect(loadSessionEntryReadOnly).toHaveBeenCalledWith({
-        agentId: "main",
-        readConsistency: "latest",
-        sessionKey: completion.sessionKey,
-        storePath: completion.storePath,
-      });
       expect(platformSend).not.toHaveBeenCalled();
       expect(raw).toHaveBeenCalledTimes(operation === "raw" ? 1 : 0);
       expect(prepared).toHaveBeenCalledTimes(operation === "prepared" ? 1 : 0);
@@ -162,7 +150,7 @@ describe("channel turn failed-send custody", () => {
   );
 
   it("serializes and revalidates custody before every provider post", async () => {
-    const custody = createDirectPendingFinalCustody(
+    const custody = await createDirectPendingFinalCustody(
       setReplyPayloadMetadata({ text: "reply" }, { pendingFinalDeliveryCompletion: completion }),
     );
     if (!custody) {

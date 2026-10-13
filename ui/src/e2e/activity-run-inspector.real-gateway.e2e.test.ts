@@ -151,6 +151,7 @@ suite.define(() => {
         await chat.goto(browserUrl);
         await waitForControlUiGatewayReady(chat);
         await chat.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await waitForControlUiGatewayReady(chat);
         await chat.getByText(replyText, { exact: true }).waitFor();
         const composer = chat.getByRole("textbox", { name: "Chat composer", exact: true });
         const draft = "Keep this unsent Inspector draft";
@@ -213,6 +214,7 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe(draft);
         }
         await chat.reload();
+        await waitForControlUiGatewayReady(chat);
         await chat.getByText(replyText, { exact: true }).waitFor();
       },
     });

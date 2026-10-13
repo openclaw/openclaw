@@ -69,7 +69,9 @@ private actor AttachmentGate {
         self.entered = true
         let waiters = self.arrivalWaiters
         self.arrivalWaiters.removeAll()
-        for waiter in waiters { waiter.resume() }
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     func waitUntilEntered() async {

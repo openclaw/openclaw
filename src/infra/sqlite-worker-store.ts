@@ -75,6 +75,7 @@ function resolveSqliteWorkerBroker() {
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
     (broker) => withCallerErrors(broker.close()),
+    "shared-state",
   );
 }
 
@@ -90,7 +91,7 @@ export function reserveSqliteWorkerInputPreparation(
 
 /**
  * Retain an admitted writer through native settlement. Backends request authority
- * after BEGIN and again immediately before COMMIT; the host never joins a native
+ * before BEGIN and again immediately before COMMIT; the host never joins a native
  * writer lock. A successful commit grant linearizes against subsequent revocation.
  */
 export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperations, T>(
@@ -199,6 +200,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
   custody: {
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
+    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     signal?: AbortSignal;
     assertCurrent(): void;
@@ -219,6 +221,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
       {
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
+        onNativeLost: custody.onNativeLost,
         onNativeStopped: custody.onNativeStopped,
         signal: custody.signal,
       },

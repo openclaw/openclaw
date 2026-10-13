@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   isEmbeddedAgentRunHandleActive,
@@ -7,6 +7,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -22,7 +23,11 @@ import {
   startGatewayDiagnosticHeartbeat,
   stopGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -46,9 +51,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("cloud worker run ownership", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { cancellation: "user", firstToolDelayMs: 0 },
@@ -118,7 +125,8 @@ describe("cloud worker run ownership", () => {
           input,
           vi.fn(),
         )
-        .catch((error: unknown) => error);
+        .catch((error: unknown) => error)
+        .finally(() => operation.complete());
       await launched.promise;
       const active = placements.get(SESSION_ID);
       if (!active) {
@@ -156,11 +164,16 @@ describe("cloud worker run ownership", () => {
         sessionKey: SESSION_KEY,
         state: "processing",
       });
+      const heartbeatClock = createGatewaySchedulerClock(Date.now());
+      let recovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
       startGatewayDiagnosticHeartbeat(
-        createTestGatewayScheduler("fake-timers"),
+        createTestGatewayScheduler(heartbeatClock.clock),
         { diagnostics: { enabled: true } },
         {
-          recoverStuckSession: recoverStuckDiagnosticSession,
+          recoverStuckSession: (request) => {
+            recovery = recoverStuckDiagnosticSession(request);
+            return recovery;
+          },
           sampleLiveness: () => null,
         },
       );
@@ -232,7 +245,14 @@ describe("cloud worker run ownership", () => {
           expect(isReplyRunEvidenceStale(operation)).toBe(false);
           vi.setSystemTime(turnStartedAtMs + input.timeoutMs + 1);
           expect(isReplyRunEvidenceStale(operation)).toBe(true);
-          await vi.advanceTimersByTimeAsync(60_000);
+          heartbeatClock.setTime(Date.now());
+          await heartbeatClock.wake();
+          // A delayed heartbeat defers recovery until the next healthy tick.
+          vi.setSystemTime(Date.now() + 30_000);
+          heartbeatClock.setTime(Date.now());
+          await heartbeatClock.wake();
+          expect(recovery).toBeDefined();
+          await recovery;
           expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
         }
         expect(workerSignal?.aborted).toBe(true);
@@ -287,9 +307,11 @@ describe("cloud worker run ownership", () => {
           sessionKey: SESSION_KEY,
           embeddedRunToolAuthorityBinding: () => {
             assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            const project = (_overlay: ReplyToolAuthorityOverlay) => "worker-turn-authority";
             return {
               source: "reply",
-              project: () => "worker-turn-authority",
+              project,
+              projectAsync: async (overlay) => project(overlay),
               assertActive: () => {},
             };
           },
@@ -299,6 +321,7 @@ describe("cloud worker run ownership", () => {
             placements,
             claim: firstClaim,
             turn: turn(runId),
+            isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           }),
       );
@@ -342,6 +365,7 @@ describe("cloud worker run ownership", () => {
             placements,
             claim: firstClaim,
             turn: turn(runId),
+            isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           });
           expect(captureWorkerTurnLiveEventOwner(identity)).not.toBe(eventOwner);
@@ -359,6 +383,7 @@ describe("cloud worker run ownership", () => {
               placements,
               claim: nextClaim,
               turn: turn(runId),
+              isReplyDelivered: () => false,
               sessionKey: SESSION_KEY,
             });
             expect(captureWorkerTurnLiveEventOwner(identity)).toBeUndefined();
@@ -406,6 +431,7 @@ describe("cloud worker run ownership", () => {
         placements,
         claim,
         turn: turn(runId),
+        isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
       });
       const previous = resolveActiveEmbeddedRunOwner(SESSION_ID);
@@ -430,6 +456,7 @@ describe("cloud worker run ownership", () => {
         placements,
         claim: requested,
         turn: { ...turn(runId), abortSignal: controller.signal },
+        isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
         assertCurrent: () => {
           if (!callerCurrent) {

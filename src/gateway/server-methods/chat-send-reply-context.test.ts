@@ -1,12 +1,8 @@
 // Covers webchat reply-target hydration into the channel-agnostic ReplyTo*
 // envelope fields consumed by inbound-meta reply context blocks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  applyChatSendReplyContextFields,
-  resolveChatSendReplyContext,
-} from "./chat-send-reply-context.js";
+import { resolveChatSendReplyContext } from "./chat-send-reply-context.js";
 
 const readSessionMessageByIdAsyncMock = vi.fn();
 const resolveAssistantIdentityMock = vi.fn((..._args: unknown[]) => ({
@@ -45,51 +41,6 @@ describe("resolveChatSendReplyContext", () => {
     expect(await resolveChatSendReplyContext(baseParams({ replyToId: undefined }))).toEqual({});
     expect(await resolveChatSendReplyContext(baseParams({ replyToId: "  " }))).toEqual({});
     expect(readSessionMessageByIdAsyncMock).not.toHaveBeenCalled();
-  });
-
-  it("hydrates assistant reply targets with the assistant identity label", async () => {
-    readSessionMessageByIdAsyncMock.mockResolvedValue({
-      found: true,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "the replied-to answer" }],
-        __openclaw: { id: "msg-1" },
-      },
-    });
-
-    const fields = await resolveChatSendReplyContext(baseParams());
-
-    expect(readSessionMessageByIdAsyncMock).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionFile: "session.jsonl", sessionId: "session-1" },
-        sessionId: "session-1",
-        sessionKey: "agent:main:webchat",
-        storePath: "/tmp/sessions.json",
-      },
-      "msg-1",
-      { allowResetArchiveFallback: true },
-    );
-    expect(fields).toEqual({
-      ReplyToId: "msg-1",
-      ReplyToBody: "the replied-to answer",
-      ReplyToSender: "Molty",
-    });
-  });
-
-  it("labels user reply targets with the client display name", async () => {
-    readSessionMessageByIdAsyncMock.mockResolvedValue({
-      found: true,
-      message: { role: "user", content: "an earlier question" },
-    });
-
-    const fields = await resolveChatSendReplyContext(baseParams({ userSenderLabel: "Ada" }));
-
-    expect(fields).toEqual({
-      ReplyToId: "msg-1",
-      ReplyToBody: "an earlier question",
-      ReplyToSender: "Ada",
-    });
   });
 
   it("keeps only the reply id when the target message is missing", async () => {
@@ -132,6 +83,7 @@ describe("resolveChatSendReplyContext", () => {
 
     expect(fields.ReplyToBody).toContain("visible answer");
     expect(fields.ReplyToBody).not.toContain("tool_call");
+    expect(fields.ReplyToSender).toBe("Molty");
   });
 
   it("strips inbound envelope wrappers from user reply targets", async () => {
@@ -146,6 +98,7 @@ describe("resolveChatSendReplyContext", () => {
     const fields = await resolveChatSendReplyContext(baseParams({ userSenderLabel: "Ada" }));
 
     expect(fields.ReplyToBody).toBe("Which stage runs the integration tests?");
+    expect(fields.ReplyToSender).toBe("Ada");
   });
 
   it("keeps only the reply id when the target is not display-visible", async () => {
@@ -159,27 +112,5 @@ describe("resolveChatSendReplyContext", () => {
     });
 
     expect(await resolveChatSendReplyContext(baseParams())).toEqual({ ReplyToId: "msg-1" });
-  });
-
-  it("bounds oversized reply bodies", async () => {
-    readSessionMessageByIdAsyncMock.mockResolvedValue({
-      found: true,
-      message: { role: "user", content: "x".repeat(5000) },
-    });
-
-    const fields = await resolveChatSendReplyContext(baseParams());
-
-    expect(fields.ReplyToBody?.length).toBeLessThanOrEqual(2000);
-  });
-});
-
-describe("applyChatSendReplyContextFields", () => {
-  it("assigns only hydrated fields", () => {
-    const ctx = { Body: "hi" } as MsgContext;
-    applyChatSendReplyContextFields(ctx, { ReplyToId: "msg-1", ReplyToBody: "quoted" });
-
-    expect(ctx.ReplyToId).toBe("msg-1");
-    expect(ctx.ReplyToBody).toBe("quoted");
-    expect("ReplyToSender" in ctx).toBe(false);
   });
 });

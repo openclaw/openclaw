@@ -29,7 +29,6 @@ export type IMessageActionConfig = {
 export type IMessageReactionNotificationMode = "off" | "own" | "all";
 export type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
-/** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = Omit<
   CommonChannelMessagingConfig,
   "mentionPatterns" | "replyToMode"
@@ -102,7 +101,6 @@ export type IMessageAccountConfig = Omit<
 
 /** Top-level iMessage config, with optional account map layered over default account fields. */
 export type IMessageConfig = {
-  /** Optional per-account iMessage configuration (multi-account). */
   accounts?: Record<string, IMessageAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;

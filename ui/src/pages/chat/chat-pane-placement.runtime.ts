@@ -39,7 +39,7 @@ async function selectChatPanePlacementTarget(params: {
     method: params.mode === "move" ? "sessions.move" : "sessions.dispatch",
     requiredScope: "operator.write",
   });
-  return await showSessionPlacementTargetDialog({
+  return showSessionPlacementTargetDialog({
     mode: params.mode,
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,

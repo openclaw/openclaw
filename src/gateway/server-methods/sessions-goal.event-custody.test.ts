@@ -35,7 +35,8 @@ vi.mock("../../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
 }));
-vi.mock("../../infra/kysely-sync.js", () => ({
+vi.mock("../../infra/kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/kysely-sync.js")>()),
   getNodeSqliteKysely: edge.forbidden,
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
@@ -59,13 +60,29 @@ vi.mock("../session-plugin-ownership.js", () => ({
 vi.mock("../session-request-agent.js", () => ({
   resolveRequestedSessionAgentId: () => ({ ok: true, agentId: "main" }),
 }));
+// mock-isolation: Goal-event fixtures control the sharing target and its revocation during delivery.
 vi.mock("../session-sharing.js", () => ({
   resolveSessionMutationAuthorization: () => ({
     authorization: { assertCurrent: edge.current },
     error: null,
   }),
-  resolveSessionSharingTarget: () => edge.target,
+  resolveSessionSharingTargetAsync: async () => edge.target,
   SessionMutationAuthorizationChangedError: class extends Error {},
+}));
+// mock-isolation: Goal-event fixtures supply revocable authorization without loading sharing storage.
+vi.mock("../session-sharing-authorization-async.js", () => ({
+  resolveSessionMutationAuthorizationAsync: async () => ({
+    authorization: { assertCurrent: edge.current },
+    error: null,
+  }),
+}));
+// mock-isolation: Goal-event tests retain fixture rows and explicitly revoke their custody.
+vi.mock("../../config/sessions/session-entry-current-check.js", () => ({
+  captureSessionEntryCurrentCheckAsyncInternal: async () => ({
+    entry: edge.target.entry,
+    source: edge.current,
+    release() {},
+  }),
 }));
 vi.mock("./gateway-client-identity.js", () => ({
   gatewayClientSessionCreator: () => ({ type: "human", id: "operator" }),

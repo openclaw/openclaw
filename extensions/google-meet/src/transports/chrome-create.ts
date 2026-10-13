@@ -27,15 +27,6 @@ const GOOGLE_MEET_BROWSER_POLL_MS = 500;
 
 type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
 
-type BrowserCreateStepResult = {
-  meetingUri?: string;
-  browserUrl?: string;
-  browserTitle?: string;
-  manualAction?: GoogleMeetBrowserManualActionState;
-  notes?: string[];
-  retryAfterMs?: number;
-};
-
 type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
   nodeId: string;
@@ -85,7 +76,7 @@ function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionS
     : undefined;
 }
 
-function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
+function readBrowserCreateResult(result: unknown) {
   const record = asRecord(result);
   const nested = asOptionalObjectRecord(record.result) ?? record;
   return {
@@ -236,7 +227,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
   const notes = new Set<string>();
-  let lastResult: BrowserCreateStepResult | undefined;
+  let lastResult: ReturnType<typeof readBrowserCreateResult> | undefined;
   let lastError: unknown;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {

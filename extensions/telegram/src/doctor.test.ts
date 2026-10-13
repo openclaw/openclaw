@@ -625,7 +625,7 @@ describe("telegram doctor", () => {
     expect(notes.infoNotes).toContainEqual(
       expect.stringContaining("no legacy listener is configured"),
     );
-    expect(notes.warningNotes.join("\n")).not.toContain("reserved for Gateway probes");
+    expect(notes.warningNotes.join("\n")).not.toContain("reserved for Gateway checks");
   });
 
   it("identifies an explicit default account in the webhook path warning", async () => {

@@ -107,12 +107,42 @@ describe("projects vitest config", () => {
     });
   });
 
-  it("resolves the complete root watch project graph", () => {
+  it("keeps the resolved root and generated projects in their explicit environments", () => {
     const result = spawnNodeEvalSync(
       `
+        import assert from "node:assert/strict";
         import { resolveConfig } from "vitest/node";
         import rootConfig from "./vitest.config.ts";
+        import { sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
         const resolved = await resolveConfig({ config: false }, rootConfig);
+        const generated = await resolveConfig({ config: false }, {
+          plugins: sharedVitestConfig.plugins,
+          test: {
+            projects: [undefined, "jsdom", "happy-dom"].map(environment => ({
+              extends: false,
+              plugins: sharedVitestConfig.plugins,
+              test: {
+                name: environment ? "ui-" + environment : "generated-node",
+                ...(environment ? { environment } : {}),
+              },
+            })),
+          },
+        });
+        const projects = [
+          resolved.test,
+          ...resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+          generated.test,
+          ...generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+        ];
+        for (const project of projects) {
+          if (!/^ui(?:-|$)/u.test(project.name ?? "")) {
+            assert.equal(project.environment, "node", project.name || "root");
+          }
+        }
+        assert.deepEqual(
+          generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig.environment),
+          ["node", "jsdom", "happy-dom"],
+        );
         console.log("ROOT_PROJECT_RESOLUTION " + resolved.test.resolvedProjects.length);
       `,
       {
@@ -262,8 +292,8 @@ describe("projects vitest config", () => {
     [
       "fake-timer unit-fast",
       createUnitFastFakeTimersVitestConfig,
-      ["src/acp/translator.stop-reason.test.ts"],
-      ["src/acp/translator.stop-reason.test.ts"],
+      ["src/utils.test.ts"],
+      ["src/utils.test.ts"],
     ],
   ] as const)(
     "limits %s include files to the project's owned tests",
@@ -273,7 +303,7 @@ describe("projects vitest config", () => {
         ...owned,
         "src/plugin-sdk/text-chunking.test.ts",
         "src/system-agent/assistant.configured.test.ts",
-        "src/acp/translator.stop-reason.test.ts",
+        "src/utils.test.ts",
         "src/gateway/openresponses-http.test.ts",
         unrelated,
       ]);
@@ -368,93 +398,100 @@ describe("projects vitest config", () => {
     },
   );
 
-  it.each([
-    { family: "channels", filter: undefined },
-    {
-      family: "channels",
-      filter: "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
-    },
-    {
-      family: "channels",
-      filter: "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
-    },
-    { family: "plugins", filter: undefined },
-    { family: "plugins", filter: "src/plugins/contracts/host-hook-state.identity.test.ts" },
-    { family: "plugins", filter: "src/plugins/contracts/host-hooks.contract.test.ts" },
-  ])(
-    "preserves public $family contract command coverage with include filter $filter",
-    ({ family, filter }) => {
-      const root =
-        family === "channels" ? "src/channels/plugins/contracts" : "src/plugins/contracts";
-      const includeFile = filter
+  it("preserves public contract command coverage across include filters", () => {
+    const scenarios = [
+      { family: "channels", filter: undefined },
+      {
+        family: "channels",
+        filter: "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      },
+      {
+        family: "channels",
+        filter: "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
+      },
+      { family: "plugins", filter: undefined },
+      { family: "plugins", filter: "src/plugins/contracts/host-hook-state.identity.test.ts" },
+      { family: "plugins", filter: "src/plugins/contracts/host-hooks.contract.test.ts" },
+    ].map(({ family, filter }) => ({
+      family,
+      includeFile: filter
         ? patternFiles.writePatternFile("command-include.json", [filter])
-        : undefined;
-      const result = spawnNodeEvalSync(
-        `
+        : undefined,
+    }));
+    // Keep real CLI/config resolution, but pay for its isolated process only once.
+    const result = spawnNodeEvalSync(
+      `
         import assert from "node:assert/strict";
         import { globSync, readFileSync, rmSync } from "node:fs";
         import path from "node:path";
         import { parseCLI, resolveConfig } from "vitest/node";
         import { createVitestRunSpecs, writeVitestIncludeFile } from "./scripts/test-projects.test-support.mts";
-        const command = JSON.parse(readFileSync("package.json", "utf8")).scripts[${JSON.stringify(`test:contracts:${family}`)}];
-        const argv = command.split(/\\s+/u);
-        const wrapper = argv.indexOf("scripts/test-projects.mts");
-        assert.notEqual(wrapper, -1);
-        const specs = createVitestRunSpecs(argv.slice(wrapper + 1));
-        const includeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
-        const matches = [];
-        for (const spec of specs) {
-          try {
-            if (spec.includeFilePath) {
-              writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
-            }
-            if (spec.env.OPENCLAW_VITEST_INCLUDE_FILE === undefined) {
-              delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
-            } else {
-              process.env.OPENCLAW_VITEST_INCLUDE_FILE = spec.env.OPENCLAW_VITEST_INCLUDE_FILE;
-            }
-            const { options } = parseCLI(["vitest", ...spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("run"))]);
-            const resolved = await resolveConfig(options);
-            for (const { projectConfig } of resolved.test.resolvedProjects) {
-              for (const file of globSync(projectConfig.include, { cwd: projectConfig.dir, exclude: projectConfig.exclude })) {
-                const relative = path.relative(process.cwd(), path.resolve(projectConfig.dir, file)).replaceAll("\\\\", "/");
-                matches.push(relative);
-                if (relative.endsWith("/session-binding.registry-backed.contract.test.ts")) {
-                  assert.equal(projectConfig.pool, "forks");
-                  assert.equal(projectConfig.maxWorkers, 1);
-                }
-                if (relative === "src/plugins/contracts/host-hook-state.identity.test.ts" || relative === "src/plugins/contracts/host-hooks.contract.test.ts") {
-                  assert.equal(projectConfig.isolate, true);
-                  assert.equal(projectConfig.name, "infra");
+        const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+        for (const { family, includeFile } of ${JSON.stringify(scenarios)}) {
+          if (includeFile === undefined) {
+            delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+          } else {
+            process.env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+          }
+          const command = scripts["test:contracts:" + family];
+          const argv = command.split(/\\s+/u);
+          const wrapper = argv.indexOf("scripts/test-projects.mts");
+          assert.notEqual(wrapper, -1);
+          const specs = createVitestRunSpecs(argv.slice(wrapper + 1));
+          const matches = [];
+          for (const spec of specs) {
+            try {
+              if (spec.includeFilePath) {
+                writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
+              }
+              if (spec.env.OPENCLAW_VITEST_INCLUDE_FILE === undefined) {
+                delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+              } else {
+                process.env.OPENCLAW_VITEST_INCLUDE_FILE = spec.env.OPENCLAW_VITEST_INCLUDE_FILE;
+              }
+              const { options } = parseCLI(["vitest", ...spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("run"))]);
+              const resolved = await resolveConfig(options);
+              for (const { projectConfig } of resolved.test.resolvedProjects) {
+                for (const file of globSync(projectConfig.include, { cwd: projectConfig.dir, exclude: projectConfig.exclude })) {
+                  const relative = path.relative(process.cwd(), path.resolve(projectConfig.dir, file)).replaceAll("\\\\", "/");
+                  matches.push(relative);
+                  if (relative.endsWith("/session-binding.registry-backed.contract.test.ts")) {
+                    assert.equal(projectConfig.pool, "forks");
+                    assert.equal(projectConfig.maxWorkers, 1);
+                  }
+                  if (relative === "src/plugins/contracts/host-hook-state.identity.test.ts" || relative === "src/plugins/contracts/host-hooks.contract.test.ts") {
+                    assert.equal(projectConfig.isolate, true);
+                    assert.equal(projectConfig.name, "infra");
+                  }
                 }
               }
+            } finally {
+              if (spec.includeFilePath) rmSync(spec.includeFilePath);
             }
-          } finally {
-            if (spec.includeFilePath) rmSync(spec.includeFilePath);
           }
+          const filters = includeFile ? JSON.parse(readFileSync(includeFile, "utf8")) : null;
+          const root = family === "channels" ? "src/channels/plugins/contracts" : "src/plugins/contracts";
+          const expected = globSync(root + "/**/*.test.ts")
+            .map(file => file.replaceAll("\\\\", "/"))
+            .filter(file => !filters || filters.some(filter => path.matchesGlob(file, filter)));
+          assert.deepEqual(matches.toSorted(), expected.toSorted(), family + ": " + (includeFile ?? "all"));
+          assert.equal(new Set(matches).size, matches.length);
         }
-        const filters = includeFile ? JSON.parse(readFileSync(includeFile, "utf8")) : null;
-        const expected = globSync(${JSON.stringify(`${root}/**/*.test.ts`)})
-          .map(file => file.replaceAll("\\\\", "/"))
-          .filter(file => !filters || filters.some(filter => path.matchesGlob(file, filter)));
-        assert.deepEqual(matches.toSorted(), expected.toSorted());
-        assert.equal(new Set(matches).size, matches.length);
       `,
-        {
-          imports: ["tsx"],
-          env: {
-            ...process.env,
-            GITHUB_ACTIONS: "true",
-            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
-          },
-          timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      {
+        imports: ["tsx"],
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: "true",
+          OPENCLAW_VITEST_INCLUDE_FILE: undefined,
         },
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr).toBe(0);
-    },
-  );
+        timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
+  });
 
   it("keeps shared and isolated UI owners together in root and full runtime runs", () => {
     for (const projects of [
@@ -529,17 +566,21 @@ describe("projects vitest config", () => {
     },
   );
 
-  it.each(["extensions/agentsapi/agentsapi-attempt.test.ts"])(
-    "routes real extension database consumer %s to its fork owner",
-    (file) => {
-      const project = "test/vitest/vitest.extension-database-workers.config.ts";
-      const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
-      expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-      expect(config.include).toContain(file.replace(/^extensions\//u, ""));
-      expect(config.pool).toBe(diagnosticForksPool);
-      expect(config.isolate).toBe(true);
-    },
-  );
+  it.each([
+    "extensions/agentsapi/agentsapi-attempt.test.ts",
+    "extensions/litellm/index.test.ts",
+    "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
+    "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
+    "extensions/qa-lab/src/gateway-child.test.ts",
+    "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
+  ])("routes real extension database consumer %s to its fork owner", (file) => {
+    const project = "test/vitest/vitest.extension-database-workers.config.ts";
+    const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+    expect(config.include).toContain(file.replace(/^extensions\//u, ""));
+    expect(config.pool).toBe(diagnosticForksPool);
+    expect(config.isolate).toBe(true);
+  });
 
   it.each([
     {

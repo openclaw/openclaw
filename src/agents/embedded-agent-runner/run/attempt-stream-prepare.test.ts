@@ -180,7 +180,7 @@ describe("prepareEmbeddedAttemptStream", () => {
               await release.promise;
               return undefined;
             });
-            const queued = vi.spyOn(session.agent, "steer");
+            const queued = vi.spyOn(session.agent, "admitSteeringMessage");
             const prepared = prepareCatalogExecutor({
               activeSession: session,
               attempt: preparedAttempt,
@@ -447,7 +447,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   it("rejects steering after session settlement while its lifecycle owner remains published", async () => {
     const sessionId = "session-output-schema";
     const { session, settled, releaseSettlement } = await createHeldSettlementSession();
-    const steer = vi.spyOn(session.agent, "steer");
+    const steer = vi.spyOn(session.agent, "admitSteeringMessage");
     const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
       "../../embedded-agent-subscribe.js",
     );
@@ -508,7 +508,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       releaseSettlement.resolve();
       await Promise.all([prompt, nestedPrompt]);
       prepared.stopAcceptingSteerMessages();
-      prepared.deferredLifecycleOwner?.discard();
+      await prepared.deferredLifecycleOwner?.discard();
       prepared.subscription.unsubscribe();
     }
   });
@@ -561,7 +561,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(session.agent.hasQueuedMessages()).toBe(false);
     } finally {
       unsubscribe();
-      prepared.deferredLifecycleOwner?.discard();
+      await prepared.deferredLifecycleOwner?.discard();
       prepared.subscription.unsubscribe();
     }
   });
@@ -595,7 +595,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(session.getSteeringMessages()).toEqual([]);
     } finally {
       unsubscribe();
-      prepared.deferredLifecycleOwner?.discard();
+      await prepared.deferredLifecycleOwner?.discard();
       prepared.subscription.unsubscribe();
     }
   });
@@ -683,7 +683,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     } else if (phase === "unsubscribe") {
       prepared.subscription.unsubscribe();
     } else if (phase === "discard") {
-      prepared.deferredLifecycleOwner!.discard();
+      await prepared.deferredLifecycleOwner!.discard();
     } else if (phase === "complete") {
       await prepared.deferredLifecycleOwner!.complete();
     }
@@ -696,7 +696,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     );
     prepared.stopAcceptingSteerMessages();
     prepared.subscription.unsubscribe();
-    prepared.deferredLifecycleOwner!.discard();
+    await prepared.deferredLifecycleOwner!.discard();
     prepared.subscription.unsubscribe();
     expect(listeners.size).toBe(0);
     for (const release of releases) {

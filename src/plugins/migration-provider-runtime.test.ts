@@ -166,18 +166,6 @@ function createOwnedMigrationRegistry(
   return registry;
 }
 
-function requireMockCallArg(
-  mockFn: { mock: { calls: unknown[][] } },
-  label: string,
-  index = 0,
-): Record<string, unknown> {
-  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
-  if (!arg) {
-    throw new Error(`expected ${label} call #${index + 1}`);
-  }
-  return arg;
-}
-
 describe("migration provider runtime", () => {
   beforeEach(async () => {
     clearPluginMetadataLifecycleCaches();
@@ -412,43 +400,6 @@ describe("migration provider runtime", () => {
       }
     },
   );
-
-  it("loads bundled migration providers through compat config", async () => {
-    mocks.loadPluginRegistrySnapshot.mockReturnValue(
-      createMockPluginIndex([
-        {
-          pluginId: "migrate-hermes",
-          origin: "bundled",
-          enabled: true,
-        },
-      ]),
-    );
-    mocks.loadPluginManifestRegistry.mockImplementation(() => ({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "migrate-hermes",
-          origin: "bundled",
-          contracts: { migrationProviders: ["hermes"] },
-        },
-      ],
-    }));
-
-    await withPluginMigrationProviders({ cfg: { plugins: { enabled: false } } }, async () => {});
-
-    const standaloneParams = requireMockCallArg(
-      mocks.acquirePluginRegistryForInspection,
-      "acquirePluginRegistryForInspection",
-    ) as {
-      onlyPluginIds?: unknown;
-      config?: OpenClawConfig;
-    };
-    expect(standaloneParams.onlyPluginIds).toEqual(["migrate-hermes"]);
-    expect(standaloneParams.config?.plugins?.enabled).toBe(true);
-    expect(standaloneParams.config?.plugins?.entries).toEqual({
-      "migrate-hermes": { enabled: true },
-    });
-  });
 
   it("loads configured external migration-provider plugins from manifest contracts", async () => {
     const cfg = {

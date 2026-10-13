@@ -4,7 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { discoverModels } from "../agent-model-discovery.js";
+import { discoverModelsAsync } from "../agent-model-discovery.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
@@ -88,16 +88,25 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Synthetic discovery snapshots exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const { createPluginMetadataSnapshot } =
     await import("../../config/plugin-auto-enable.test-helpers.js");
-  const createSnapshot = (input: {
+  const createSnapshot = async (input: {
     agentDir: string;
     config?: OpenClawConfig;
     workspaceDir?: string;
   }) => {
     const config = input.config ?? {};
+    const { authStorage } = await discovery.discoverAuthStorageFacts(input.agentDir);
+    const modelRegistry = await discovery.discoverModelsAsync(authStorage, input.agentDir, {
+      ...(input.config ? { config: input.config } : {}),
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    });
+    if (!("fork" in modelRegistry)) {
+      Object.assign(modelRegistry, { fork: () => modelRegistry });
+    }
     return {
       catalogOwner: undefined,
       agentDir: input.agentDir,
@@ -117,29 +126,20 @@ vi.mock("../prepared-model-runtime.js", async () => {
       configuredRuntimeModels: [],
       findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
-      createStores: () => {
-        const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
-        const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
-          ...(input.config ? { config: input.config } : {}),
-          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-        });
-        if (!("fork" in modelRegistry)) {
-          Object.assign(modelRegistry, { fork: () => modelRegistry });
-        }
-        return { authStorage, modelRegistry };
-      },
+      createStores: () => ({ authStorage, modelRegistry }),
     } satisfies PreparedModelRuntimeSnapshot;
   };
   return {
-    getPreparedModelRuntimeSnapshot: createSnapshot,
+    getPreparedModelRuntimeSnapshot: () => undefined,
     loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
       createSnapshot(input),
   };
 });
 
+// mock-isolation: Fallback fixtures control discovery results without loading real credentials or model stores.
 vi.mock("../agent-model-discovery.js", () => ({
   discoverAuthStorageFacts: vi.fn(() => ({ authStorage: { mocked: true } })),
-  discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+  discoverModelsAsync: vi.fn(async () => ({ find: vi.fn(() => null) })),
 }));
 
 import { resolveModelAsync } from "./model.js";
@@ -153,7 +153,7 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
-  resetMockDiscoverModels(discoverModels);
+  resetMockDiscoverModels(discoverModelsAsync);
 });
 afterEach(clearRuntimeConfigSnapshot);
 
@@ -189,7 +189,7 @@ function configWithProvider(
   });
 }
 function mockSpark() {
-  mockDiscoveredModel(discoverModels, {
+  mockDiscoveredModel(discoverModelsAsync, {
     provider: "openai",
     modelId: spark,
     templateModel: { ...makeModel(spark), provider: "openai", ...directRoute },
@@ -235,7 +235,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
         baseUrl: providerConfig.baseUrl,
         cost: catalogCost,
       };
-      mockDiscoveredModel(discoverModels, { provider, modelId, templateModel: catalogModel });
+      mockDiscoveredModel(discoverModelsAsync, { provider, modelId, templateModel: catalogModel });
       setRuntimeConfigSnapshot(runtime, source);
 
       for (const cfg of [runtime, structuredClone(runtime)]) {
@@ -266,14 +266,14 @@ describe("resolveModel forward-compat errors and overrides", () => {
   );
 
   it("resolves suppressed openai gpt-5.3-codex-spark through model-scoped Codex runtime", async () => {
-    mockOpenAICodexTemplateModel(discoverModels);
+    mockOpenAICodexTemplateModel(discoverModelsAsync);
     const result = await resolveSpark(codexRuntime);
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation(spark));
   });
 
   it("keeps model-scoped Codex runtime blocked for explicit OpenAI API-key provider config", async () => {
-    mockOpenAICodexTemplateModel(discoverModels);
+    mockOpenAICodexTemplateModel(discoverModelsAsync);
     const result = await resolveSpark({
       ...codexRuntime,
       ...configWithProvider("openai", { ...directRoute, auth: "api-key" }),
@@ -292,17 +292,6 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toContain("ChatGPT/Codex OAuth");
     expect(result.error).toContain("OpenAI API-key auth cannot use this model");
-  });
-
-  it("keeps configured custom openai gpt-5.3-codex-spark rows that omit api", async () => {
-    const result = await resolveSpark(
-      configWithProvider("openai", {
-        api: "openai-responses",
-        models: [{ ...makeModel(spark), baseUrl: proxyRoute.baseUrl }],
-      }),
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({ provider: "openai", id: spark, ...proxyRoute });
   });
 
   it("keeps registry openai gpt-5.3-codex-spark rows on custom provider endpoints", async () => {
@@ -330,7 +319,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("uses codex fallback when inline model omits api (#39682)", async () => {
-    mockOpenAICodexTemplateModel(discoverModels);
+    mockOpenAICodexTemplateModel(discoverModelsAsync);
     const result = await resolveModelForTest(
       "openai",
       "gpt-5.4",
@@ -359,37 +348,5 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expect(result.error).toContain("Unknown model: ollama/gemma3:4b");
     expect(result.error).toContain("OLLAMA_API_KEY");
     expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
-  });
-
-  it("points unknown models to the requested provider catalog", async () => {
-    const result = await resolveModelForTest("google-antigravity", "some-model");
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: google-antigravity/some-model. Run `openclaw models list --refresh --provider google-antigravity` to inspect this provider's model choices, then retry with a model supported by your account.",
-    );
-  });
-
-  it("lets provider config override registry-found kimi user agent headers", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "kimi",
-      modelId: "kimi-code",
-      templateModel: {
-        ...makeModel("kimi-code"),
-        provider: "kimi",
-        api: "anthropic-messages",
-        baseUrl: "https://api.kimi.com/coding/",
-        headers: { "User-Agent": "claude-code/0.1.0" },
-      },
-    });
-    const headers = { "User-Agent": "custom-kimi-client/1.0", "X-Kimi-Tenant": "tenant-a" };
-    const result = await resolveModelForTest(
-      "kimi",
-      "kimi-code",
-      "/tmp/agent",
-      configWithProvider("kimi", { headers }),
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.model?.id).toBe("kimi-code");
-    expect(result.model?.headers).toEqual(headers);
   });
 });

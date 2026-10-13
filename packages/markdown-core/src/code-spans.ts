@@ -15,26 +15,12 @@ export function createInlineCodeState(): InlineCodeState {
 
 type CodeSpan = Pick<FenceSpan, "start" | "end">;
 
-type InlineCodeSpansResult = {
-  spans: CodeSpan[];
-  state: InlineCodeState;
-};
-
-type CodeSpanIndex = {
-  /** Inline-code state to carry into the next streamed chunk. */
-  inlineState: InlineCodeState;
-  /** Fenced-code state to carry into the next streamed chunk. */
-  fenceState: FenceScanState;
-  /** True when an offset is inside fenced code or inline code. */
-  isInside: (index: number) => boolean;
-};
-
 /** Builds a lookup for fenced and inline code spans while preserving scanner state. */
 export function buildCodeSpanIndex(
   text: string,
   inlineState?: InlineCodeState,
   fenceState?: FenceScanState,
-): CodeSpanIndex {
+) {
   const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(text, fenceState);
   const { spans: inlineSpans, state: nextInlineState } = parseInlineCodeSpans(
     text,
@@ -56,7 +42,7 @@ function parseInlineCodeSpans(
   text: string,
   fenceSpans: FenceSpan[],
   initialState: InlineCodeState,
-): InlineCodeSpansResult {
+) {
   const spans: CodeSpan[] = [];
   let open = initialState.open;
   let ticks = initialState.ticks;

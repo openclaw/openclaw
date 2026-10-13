@@ -13,10 +13,6 @@ import OSLog
 public final class TalkBufferedAudioPlayer: NSObject {
     public static let shared = TalkBufferedAudioPlayer()
 
-    override public init() {
-        super.init()
-    }
-
     @MainActor
     private final class Playback {
         private var continuation: CheckedContinuation<StreamingPlaybackResult, Never>?

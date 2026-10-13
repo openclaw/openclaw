@@ -1,40 +1,23 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
-// v24 separates keyed cold session snapshots from hot entry facts without rewriting transcripts.
-// v23 compacts payloads and replaces deployed v22 lazy FTS ownership without rewriting FTS content.
-// v22 introduced exact FTS row ownership with nullable completeness and lazy repair.
-// v21 records canonical-session invalidation under node, window and policy mutations.
-// v20 records authoritative cold transcript archives; older readers cannot treat absent raw rows as empty history.
-// v19 qualifies immutable creator namespaces without deriving authority from sandbox policy.
-// v18 separates participant identity namespaces and preserves unknown historical times.
-// v17 retires the tenant-free per-agent state lease table.
-// v16 retires legacy top-level Media* transcript fields. It is a downgrade
-// guard only; the physical schema is unchanged and Doctor owns the data rewrite.
-// v15 makes board and session-sharing tables part of the canonical agent schema.
-// v14 = logical session nodes, generation windows, and node-owned artifact FKs.
-// v13 = one durable rewrite watermark per raw session transcript.
-// v12 = session-owned ACP parent-stream events.
-// v11 = durable delivery operations, canonical external conversation addresses,
-// and bounded per-session heartbeat outcome context.
-// v10 = materialized active transcript paths.
-// v9 = SQLite STRICT tables.
-// v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
-// v6 added session/transcript hot-path indexes.
-// v5 added transcript mutation watermarks.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 24;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 26;
+export const AGENT_JSON_PREDICATE_SCHEMA_VERSION = 26;
+export const CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION = 25;
 export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
 export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 // Bound the disk work shared by startup inspection, admission, and canonical preparation.
-export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
+export { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../infra/worker-pool-sizing.js";
 // Bounds startup session reconciliation for large fleets without letting one slow store hold every slot.
 export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
 
-/** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
   agentId: string;
   db: DatabaseSync;
@@ -42,7 +25,6 @@ export type OpenClawAgentDatabase = {
   walMaintenance: SqliteWalMaintenance;
 };
 
-/** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
 };
@@ -68,12 +50,22 @@ export type OpenClawAgentDatabaseRegistryReadResult =
   | { status: "available"; entries: OpenClawRegisteredAgentDatabase[] }
   | { status: "unavailable" };
 
+/** An in-process witness from the canonical invalidator, never serialized as authority. */
+export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: symbol }>;
+
 export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
   agentId: string;
   agentPath: string;
   stateDatabasePath: string;
   stateDatabaseIdentity: string;
 }>;
+
+export type AgentDatabaseRegistryWorkerOperations = {
+  "agentDatabaseRegistry.remove": {
+    input: { agentId: string; agentPath: string; identity: DatabasePathIdentity };
+    output: OpenClawAgentDatabaseRegistrationCommit;
+  };
+};
 
 export type OpenClawAgentDatabaseRegistrationObserver = {
   starting?: () => void;

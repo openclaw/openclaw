@@ -2,8 +2,8 @@ import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -45,6 +45,7 @@ describe("session companion RPC", () => {
   it("keeps an incognito source native through captured operator authority for durable side chat writes", async () => {
     expect(isMainThread).toBe(true);
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const profile = ensureProfileForEmail("incognito-companion@example.test");
       const client = {
         ...sharingPolicyClient({ user: profile.id, scopes: ["operator.admin"] }),
@@ -67,20 +68,13 @@ describe("session companion RPC", () => {
         updatedAt: 1,
         label: "before side chat",
       });
-      let hostQueries: string[] = [];
       const ask = vi.fn(async (request: Parameters<SessionCompanionService["ask"]>[0]) => {
         const authority = expectDefined(request.operatorAuthority, "Captured operator authority");
         expect(authority.profileId).toBe(profile.id);
-        const sql = observeHostDataSql();
-        try {
-          // The captured authority composes the real RPC source through the operator owner.
-          await patchSessionEntryCore(target, () => ({ label: "private source accepted" }), {
-            workerGuard: { source: authority.assertCurrent },
-          });
-        } finally {
-          hostQueries = sql.queries;
-          sql.restore();
-        }
+        // The captured authority composes the real RPC source through the operator owner.
+        await patchSessionEntryCore(target, () => ({ label: "private source accepted" }), {
+          workerGuard: { source: authority.assertCurrent },
+        });
         return { answer: "Private source accepted.", ts: 125 };
       });
       const respond = await invoke(
@@ -92,16 +86,17 @@ describe("session companion RPC", () => {
 
       expect(ask).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledWith(true, { answer: "Private source accepted.", ts: 125 });
-      expect(hostQueries).toEqual(
-        expect.arrayContaining([expect.stringMatching(/^update "session_nodes" set\b/i)]),
-      );
       expect(loadSessionEntry(target)?.label).toBe("private source accepted");
     });
   });
 
   it("carries the authenticated model policy and releases it after answering", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const client = { ...roleClient("view", "companion-policy"), connId: "policy-connection" };
+      using _ = {
+        [Symbol.dispose]: (await profileReader.prepareUserProfileCatalog()).release,
+      };
       const cfg = rolePolicyConfig();
       cfg.agents = {
         entries: { main: {} },
@@ -154,6 +149,7 @@ describe("session companion RPC", () => {
     "retains the original side chat request while profile preparation waits for %s",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const client = {
           ...roleClient("view", `companion-await-${change}`),
           connId: "original-connection",
@@ -314,7 +310,11 @@ describe("session companion RPC", () => {
     "hides a foreign draft before dispatching %s",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const owner = ensureProfileForEmail("owner@example.test");
+        using _ = {
+          [Symbol.dispose]: (await profileReader.prepareUserProfileCatalog()).release,
+        };
         const sessionKey = "agent:main:owner-private";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },

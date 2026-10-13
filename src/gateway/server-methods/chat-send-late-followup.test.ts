@@ -32,6 +32,8 @@ describe("chat.send late queued follow-up disposition", () => {
     expect(deliver).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
+        runId: "followup-run",
+        clientRunId: "original-run",
         completion: { kind: "completed" },
         payloads: [...progress.payloads, { text: "done" }],
       }),
@@ -87,7 +89,7 @@ describe("chat.send late queued follow-up disposition", () => {
     await source.deliver(batch("source-run"));
     await retry(batch("recovery-run"));
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ runId: "recovery-run" }),
+      expect.objectContaining({ runId: "recovery-run", clientRunId: "recovery-run" }),
     );
     expect(() => source.deliver.createSourceRetry()).toThrow();
   });

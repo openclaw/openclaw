@@ -29,6 +29,18 @@ A reply beginning with `LLM request rejected:` includes the provider's request-v
 
 For `Invalid service_tier argument`, check the selected model and speed setting. A provider or account supporting Fast or Ultrafast does not mean every model supports that tier. Retry with Standard (`/fast off`) or select a model that supports the requested tier. This error alone does not mean the conversation is corrupt. See [OpenAI Fast mode](/providers/openai/advanced#fast-mode).
 
+## Connection to the AI service failed
+
+If a reply says OpenClaw could not connect to the AI service, check the provider connection. For a local model, confirm that its server is running and reachable at the configured URL. A server that stops during a turn can leave completed work in the conversation; check those results before retrying. Use `openclaw logs --follow` for connection diagnostics.
+
+## Unreadable conversation history
+
+If a reply says OpenClaw could not read the conversation's history, ask the Gateway operator to try `openclaw doctor --fix` on the host and profile that own the session. This notice also appears for unmentioned group turns when silent replies are allowed.
+
+Doctor can restore a missing header when the stored transcript entries are already canonical. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
+
+See [Doctor's session repairs](/gateway/doctor/state-and-sessions) and [running Doctor](/gateway/doctor/running).
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.
@@ -59,6 +71,18 @@ Related:
 - [Groups](/channels/groups)
 - [Pairing](/channels/pairing)
 
+If a shared model catalog worker exits and its automatic runtime replacement fails,
+opening the model picker, preparing a chat, or sending a new message can check the
+failed runtime again without restarting the Gateway. The picker shows **Loading
+models…** while checking, then returns to **Models unavailable** if preparation
+still fails. Repeated foreground checks have a short cooldown. Cron and Heartbeat
+get one check per failure episode; later scheduled runs do not keep rebuilding a
+runtime that remains unavailable. Existing messages and tasks are not replayed.
+
+This recovery still waits for earlier preparation work to settle. A preparation
+that never finishes, unrelated configuration errors, and Gateway shutdown require
+their own diagnosis; a model check does not bypass those lifecycle boundaries.
+
 ## Dashboard control UI connectivity
 
 When the dashboard/control UI will not connect, validate its URL, authentication, and device identity.
@@ -73,7 +97,7 @@ openclaw gateway status --json
 
 Look for:
 
-- Correct probe URL and dashboard URL.
+- Correct check URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
 - Clients that connect without the required device identity. The current Control UI can create and sign identity over plain HTTP; see [Insecure HTTP](/web/control-ui#insecure-http).
 

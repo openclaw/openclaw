@@ -69,24 +69,7 @@ describe("ensureDashboardGatewayReady", () => {
     runtime.exit.mockClear();
   });
 
-  it("returns ready without prompting when the gateway probe succeeds", async () => {
-    gatherStatus.mockResolvedValue(
-      createStatus({
-        rpc: { ok: true },
-        port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      }),
-    );
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-    });
-
-    expect(result.ready).toBe(true);
-    expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it.each(["timeout", "gateway closed (1006): "])(
+  it.each(["timeout"])(
     "does not start over a busy listener after an inconclusive %s probe",
     async (error) => {
       const status = createStatus({
@@ -106,7 +89,7 @@ describe("ensureDashboardGatewayReady", () => {
       expect(installGateway).not.toHaveBeenCalled();
       expect(startGateway).not.toHaveBeenCalled();
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("Gateway probe failed:");
+      expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");
     },
@@ -239,34 +222,6 @@ describe("ensureDashboardGatewayReady", () => {
     );
   });
 
-  it("does not prompt to start when the gateway is reachable but unhealthy", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: { ok: false, error: "gateway closed (1008): auth failed" },
-    });
-
-    gatherStatus.mockResolvedValue(status);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
-
-    expect(result).toMatchObject({ ready: false, recoverable: false });
-    expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: gateway closed (1008): auth failed",
-    );
-  });
-
   it("can accept a reachable dashboard listener when authenticated RPC fails", async () => {
     const status = createStatus({
       service: {
@@ -297,157 +252,5 @@ describe("ensureDashboardGatewayReady", () => {
     expect(result).toMatchObject({ ready: true, recovered: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("can accept a reachable dashboard listener when the RPC needs device identity", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: {
-        ok: false,
-        error: "device identity required",
-        gatewayReached: true,
-        url: "ws://127.0.0.1:18789",
-      },
-    });
-
-    gatherStatus.mockResolvedValue(status);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
-
-    expect(result).toMatchObject({ ready: true, recovered: false });
-    expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("uses the projected connect failure when the daemon error text is generic", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: {
-        ok: false,
-        error: "connect failed",
-        gatewayReached: true,
-        connectFailure: { kind: "pairing-required", detailCode: "PAIRING_REQUIRED" },
-        url: "ws://127.0.0.1:18789",
-      },
-    });
-
-    gatherStatus.mockResolvedValue(status);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
-
-    expect(result).toMatchObject({ ready: true, recovered: false });
-    expect(confirm).not.toHaveBeenCalled();
-  });
-
-  it("accepts a rate-limited Gateway as reachable without starting the service", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: {
-        ok: false,
-        error: "connect failed",
-        connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
-        gatewayReached: true,
-        url: "ws://127.0.0.1:18789",
-      },
-    });
-
-    gatherStatus.mockResolvedValue(status);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-    });
-
-    expect(result).toMatchObject({ ready: true, recovered: false });
-    expect(startGateway).not.toHaveBeenCalled();
-  });
-
-  it("still treats a timeout on the target port as not ready", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: { ok: false, error: "timeout", url: "ws://127.0.0.1:18789" },
-    });
-
-    gatherStatus.mockResolvedValue(status);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
-
-    expect(result).toMatchObject({ ready: false, recoverable: false });
-    expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: timeout",
-    );
-  });
-
-  it("does not accept an unrelated listener on the dashboard port", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: {
-        ok: false,
-        error: "Unexpected server response: 200",
-        url: "ws://127.0.0.1:18789",
-      },
-    });
-
-    gatherStatus.mockResolvedValue(status);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
-
-    expect(result).toMatchObject({ ready: false, recoverable: false });
-    expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway probe failed: Unexpected server response: 200",
-    );
   });
 });

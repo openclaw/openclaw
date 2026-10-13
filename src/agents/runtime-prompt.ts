@@ -4,27 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareActiveNodeContext } from "../infra/active-node-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveChannelMessageToolHints, resolveChannelReactionGuidance } from "./channel-tools.js";
-import { prepareEmbeddedSessionActiveProjectKeys } from "./embedded-agent-runner/session-prompt-state.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
-import { resolveProjectKey } from "./project-memory-scope.js";
-import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
-import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
-
-export async function prepareAgentPromptProjects(
-  params: Parameters<typeof resolveSystemPromptRepoRoot>[0] & { sessionId: string },
-) {
-  const repoRoot = resolveSystemPromptRepoRoot(params) ?? null;
-  const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
-  return {
-    repoRoot,
-    projectKey,
-    activeProjectKeys: prepareEmbeddedSessionActiveProjectKeys(params.sessionId, projectKey),
-  };
-}
+import { buildSystemPromptParams } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
   config?: OpenClawConfig;
@@ -42,20 +26,12 @@ export async function resolveAgentRuntimePrompt(params: {
   requesterProfileId?: string;
   remoteWorkspace?: boolean;
 }) {
-  const runtimeChannel = normalizeMessageChannel(params.channel);
-  const channelPromptContext = {
+  const channelPromptContext = resolveRuntimeChannelPromptContext({
     cfg: params.config,
-    channel: runtimeChannel,
+    channel: params.channel,
     accountId: params.accountId,
-  };
-  const runtimeCapabilities = collectRuntimeChannelCapabilities(channelPromptContext);
-  const reactionGuidance =
-    runtimeChannel && params.config
-      ? resolveChannelReactionGuidance(channelPromptContext)
-      : undefined;
-  const messageToolHints = runtimeChannel
-    ? resolveChannelMessageToolHints(channelPromptContext)
-    : undefined;
+  });
+  const { runtimeChannel, runtimeCapabilities } = channelPromptContext;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -99,9 +75,6 @@ export async function resolveAgentRuntimePrompt(params: {
 
   return {
     ...systemPromptParams,
-    runtimeChannel,
-    runtimeCapabilities,
-    reactionGuidance,
-    messageToolHints,
+    ...channelPromptContext,
   };
 }

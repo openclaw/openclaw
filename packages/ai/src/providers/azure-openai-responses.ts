@@ -5,7 +5,10 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolvePromptCacheKey } from "../transports/openai-transport-shared.js";
+import {
+  resolvePromptCacheKey,
+  withOpenAIErrorResponseHook,
+} from "../transports/openai-transport-shared.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
@@ -54,11 +57,7 @@ interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 export const streamAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   AzureOpenAIResponsesOptions
-> = (
-  model: Model<"azure-openai-responses">,
-  context: Context,
-  options?: AzureOpenAIResponsesOptions,
-) => {
+> = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model, "azure-openai-responses");
 
@@ -91,7 +90,7 @@ export const streamAzureOpenAIResponses: StreamFunction<
 export const streamSimpleAzureOpenAIResponses: StreamFunction<
   "azure-openai-responses",
   SimpleStreamOptions
-> = (model: Model<"azure-openai-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
@@ -176,7 +175,11 @@ function createClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
     baseURL: baseUrl,
-    fetch: getAiTransportHost().buildModelFetch({ ...model, baseUrl }),
+    fetch: withOpenAIErrorResponseHook(
+      getAiTransportHost().buildModelFetch({ ...model, baseUrl }) ?? globalThis.fetch,
+      options?.onResponse,
+      model,
+    ),
     maxRetries: 0,
   };
   return isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)

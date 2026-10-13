@@ -12,7 +12,6 @@ import {
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { redactToolPayloadText } from "../../../lib/browser-redact.ts";
 import type { NormalizedMessage, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -29,6 +28,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
+import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
@@ -175,14 +175,10 @@ function toolIcon(call: ToolCard) {
 function renderToolLine(originalCall: ToolCard) {
   const call = resolveToolCardDisplay(originalCall);
   const view = resolveToolCallView(call);
-  const raw = redactToolPayloadText(
-    (view.command ?? view.code ?? call.inputText ?? call.name).trim(),
-  );
+  const raw = (view.command ?? view.code ?? call.inputText ?? call.name).trim();
   const command = view.command ? stripShellPreamble(view.command).command : undefined;
   const label = truncateUtf16Safe(
-    redactToolPayloadText(
-      view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
-    ),
+    view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
     160,
   );
   const outcome = resolveToolCardOutcome(call, false);
@@ -205,7 +201,9 @@ function renderToolLine(originalCall: ToolCard) {
 }
 
 function renderToolGroup(entry: Extract<Entry, { kind: "tools" }>) {
-  const overview = describeToolGroup(entry.activity);
+  const overview = describeToolGroup(entry.activity, {
+    ownSessionLaunches: ownSessionLaunchCalls(entry.calls.map(({ card }) => card)),
+  });
   return html`<details class="chat-task-feed__tool-group">
     <summary>
       <span class="chat-task-feed__overview">

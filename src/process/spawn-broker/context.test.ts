@@ -14,7 +14,7 @@ import { spawnBrokerContextEntrypoints } from "./context-runtime.test-support.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () => {
   it.each(["exit", "timeout"] as const)(
@@ -73,6 +73,12 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () =>
         return nextResolve(specifier,context);
       }});
       process.env.NODE_OPTIONS = ${JSON.stringify(`--import=${pathToFileURL(preload).href}`)};
+      const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
+      let startupClockOffset = 0n;
+      // The broker captures its clock at import; advance it with the startup timer below.
+      const monotonic = ${failure === "timeout"}
+        ? mock.method(process.hrtime, 'bigint', () => realMonotonic() + startupClockOffset)
+        : undefined;
       const {startGatewayServer} = await import(${JSON.stringify(serverUrl.href)});
       // Load cleanup's native promise timers before faking the startup clock.
       await import(${JSON.stringify(contextUrl)});
@@ -100,6 +106,7 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () =>
               throw new Error('Gateway started before the broker readiness deadline');
             })]);
             attemptWatcher.close();
+            startupClockOffset += 15_000_000_000n;
             mock.timers.tick(15_000);
           }
           const server = await starting;
@@ -109,6 +116,7 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () =>
       } finally {
         attemptWatcher?.close();
         mock.timers.reset();
+        monotonic?.mock.restore();
       }
     `;
       const node = resolveTestNodeExecPath();

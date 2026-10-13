@@ -58,7 +58,7 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
-import { patchSessionStatusModel } from "./session-status-model.js";
+import { patchSessionStatusModel, withActiveStatusModelIdentity } from "./session-status-model.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -86,8 +86,6 @@ import {
 } from "./sessions-helpers.js";
 
 const loadCommandsStatusRuntime = createLazyPromise(() => import("../../status/status-text.js"));
-
-type ActiveStatusModelIdentity = { provider?: string; model: string };
 
 type SessionStatusRouteDetails = {
   origin?: SessionStatusOriginDetails;
@@ -178,32 +176,6 @@ function buildSessionStatusRouteDetails(params: {
     ...(active ? { active } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
   };
-}
-
-function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): string | undefined {
-  if (Object.keys(details).length === 0) {
-    return undefined;
-  }
-  return `Route context:
-\`\`\`json
-${JSON.stringify(details, null, 2)}
-\`\`\``;
-}
-
-function withActiveStatusModelIdentity(
-  entry: SessionEntry,
-  identity: ActiveStatusModelIdentity,
-): SessionEntry {
-  const next: SessionEntry = {
-    ...entry,
-    model: identity.model,
-    ...(identity.provider ? { modelProvider: identity.provider } : {}),
-  };
-  delete next.providerOverride;
-  delete next.modelOverride;
-  delete next.modelOverrideSource;
-  delete next.modelOverrideRouteResolution;
-  return next;
 }
 
 export function createSessionStatusTool(opts?: {
@@ -330,15 +302,14 @@ export function createSessionStatusTool(opts?: {
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyInput,
+        requesterInternalKey: effectiveRequesterKey,
+      });
       const isSemanticCurrentRequest =
         requestedKeyInput === "current" ||
         isImplicitRunSessionStatus ||
-        Boolean(
-          resolveCurrentSessionClientAlias({
-            key: requestedKeyInput,
-            requesterInternalKey: effectiveRequesterKey,
-          }),
-        );
+        Boolean(currentSessionAlias);
 
       // Resolve semantic "current" to the live run session key for lookup purposes (#76708).
       // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
@@ -347,10 +318,6 @@ export function createSessionStatusTool(opts?: {
         requestedKeyInput = (opts.runSessionKey ?? effectiveRequesterKey).trim();
       }
 
-      const currentSessionAlias = resolveCurrentSessionClientAlias({
-        key: requestedKeyInput,
-        requesterInternalKey: effectiveRequesterKey,
-      });
       if (currentSessionAlias) {
         requestedKeyInput = (opts?.runSessionKey ?? currentSessionAlias).trim();
       }
@@ -407,7 +374,7 @@ export function createSessionStatusTool(opts?: {
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = deferTargetOwnerResolution
         ? undefined
-        : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
+        : await readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
 
       if (
         !resolved &&
@@ -469,18 +436,18 @@ export function createSessionStatusTool(opts?: {
             agentId,
             mainKey,
           });
-          resolved = readStatusEntry(requestedKeyInput);
+          resolved = await readStatusEntry(requestedKeyInput);
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
       }
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
-        resolved = readStatusEntry(effectiveRequesterLookupKey, false);
+        resolved = await readStatusEntry(effectiveRequesterLookupKey, false);
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = readStatusEntry(requestedKeyInput, true);
+        resolved = await readStatusEntry(requestedKeyInput, true);
       }
 
       if (!resolved && requestedKeyParam === undefined) {
@@ -488,7 +455,7 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyInput,
           mainKey,
         })) {
-          resolved = readStatusEntry(fallbackKey, true);
+          resolved = await readStatusEntry(fallbackKey, true);
           if (resolved) {
             resolvedViaImplicitCurrentFallback = true;
             break;
@@ -709,7 +676,12 @@ export function createSessionStatusTool(opts?: {
             activeDeliveryContext: opts?.activeDeliveryContext,
             isLiveRunSession: isLiveRouteSession,
           });
-          const routeContextText = formatSessionStatusRouteContext(routeDetails);
+          const routeContextText = Object.keys(routeDetails).length
+            ? `Route context:
+\`\`\`json
+${JSON.stringify(routeDetails, null, 2)}
+\`\`\``
+            : undefined;
           const stateVersion = await getSessionStateVersion(scopedResolved.key, agentId);
           const rawStateChanges =
             changesSince !== undefined
@@ -757,4 +729,3 @@ export function createSessionStatusTool(opts?: {
     }),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

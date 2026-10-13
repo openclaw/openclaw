@@ -1,18 +1,22 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
+import type { CodexThreadItem, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {
-  readCodexThreadHistoryPage,
-  readLegacyCodexHistoryPage,
-  type CodexHistoryItemEntry,
-} from "./app-server/thread-history-page.js";
-import { MAX_TRANSCRIPT_PAGE_BYTES } from "./session-catalog-parsing.js";
+  CatalogParamsError,
+  MAX_TRANSCRIPT_PAGE_BYTES,
+  parseTranscriptPage,
+  readControlCursor,
+} from "./session-catalog-parsing.js";
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 type TranscriptRequest = { threadId: string; cursor?: string; limit: number };
 type TranscriptPage = { items: SessionCatalogTranscriptItem[]; nextCursor?: string };
-type ReadTurns = Parameters<typeof readLegacyCodexHistoryPage>[0];
+type ReadTurns = (
+  params: TranscriptRequest & { sortDirection: "desc"; itemsView: "full" },
+) => Promise<CodexThreadTurnsListResponse>;
+const TURN_ITEM_CURSOR_PREFIX = "turn-item:";
 const transcriptPageSchema = z.strictObject({
   items: z.array(
     z.strictObject({
@@ -31,7 +35,7 @@ export function parseCodexCatalogTranscriptPage(value: unknown): TranscriptPage 
 }
 
 function projectTranscriptPage(
-  entries: CodexHistoryItemEntry[],
+  entries: { item: CodexThreadItem }[],
   limit: number,
 ): SessionCatalogTranscriptItem[] {
   const projected = entries.map(({ item }) => toGenericTranscriptItem(item));
@@ -53,15 +57,85 @@ function pageFitsNodeTransport(page: TranscriptPage): boolean {
   );
 }
 
-/** The legacy API can anchor a turn, but cannot continue within that turn. */
+function encodeTurnItemCursor(turnCursor: string, itemId: string): string {
+  return (
+    TURN_ITEM_CURSOR_PREFIX +
+    Buffer.from(JSON.stringify([turnCursor, itemId])).toString("base64url")
+  );
+}
+
+function decodeTurnItemCursor(cursor?: string): { turnCursor?: string; itemId?: string } {
+  if (!cursor?.startsWith(TURN_ITEM_CURSOR_PREFIX)) {
+    return { turnCursor: cursor };
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(
+      Buffer.from(cursor.slice(TURN_ITEM_CURSOR_PREFIX.length), "base64url").toString(),
+    );
+  } catch {
+    throw new CatalogParamsError("invalid Codex transcript item cursor");
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length !== 2 ||
+    typeof value[0] !== "string" ||
+    !value[0] ||
+    typeof value[1] !== "string" ||
+    !value[1]
+  ) {
+    throw new CatalogParamsError("invalid Codex transcript item cursor");
+  }
+  return { turnCursor: value[0], itemId: value[1] };
+}
+
+/** Legacy stores expose only turn cursors; an item identity preserves paging across appends. */
 export async function readLegacyCodexTranscriptPage(
   readTurns: ReadTurns,
   request: TranscriptRequest,
 ): Promise<TranscriptPage> {
-  return readLegacyCodexHistoryPage(readTurns, request, {
-    project: projectTranscriptPage,
-    fits: pageFitsNodeTransport,
-  });
+  const { turnCursor, itemId } = decodeTurnItemCursor(request.cursor);
+  const page = parseTranscriptPage(
+    await readTurns({
+      threadId: request.threadId,
+      limit: 1,
+      sortDirection: "desc",
+      itemsView: "full",
+      ...(turnCursor ? { cursor: turnCursor } : {}),
+    }),
+  );
+  const source = page.data.flatMap(({ items }) => items.toReversed().map((item) => ({ item })));
+  const anchorIndex = itemId ? source.findIndex(({ item }) => item.id === itemId) : -1;
+  if (itemId && anchorIndex < 0) {
+    throw new CatalogParamsError(
+      "Codex transcript changed; refresh the session before loading older items",
+    );
+  }
+  const remaining = source.slice(anchorIndex + 1);
+  const items = projectTranscriptPage(remaining.slice(0, request.limit), request.limit);
+  const result = (): TranscriptPage => {
+    const lastSource = remaining[items.length - 1];
+    const partial = lastSource !== undefined && items.length < remaining.length;
+    const nativeCursor = partial ? page.backwardsCursor : page.nextCursor;
+    const cursor = nativeCursor
+      ? partial
+        ? encodeTurnItemCursor(nativeCursor, lastSource.item.id)
+        : nativeCursor
+      : undefined;
+    if (partial && !cursor) {
+      throw new Error("Codex app-server did not provide a transcript continuation anchor");
+    }
+    return { items, ...(cursor ? { nextCursor: cursor } : {}) };
+  };
+  let bounded = result();
+  while (!pageFitsNodeTransport(bounded)) {
+    if (items.length <= 1) {
+      throw new Error("Codex transcript item exceeds the safe response size");
+    }
+    items.pop();
+    bounded = result();
+  }
+  return bounded;
 }
 
 /** Uses the native store's item cursor whenever that store supports item history. */
@@ -70,8 +144,28 @@ export async function readCodexCatalogTranscriptPage(
   request: TranscriptRequest,
 ): Promise<TranscriptPage> {
   const thread = await control.requireEligibleThread(request.threadId);
-  return readCodexThreadHistoryPage(control, thread, request, {
-    project: projectTranscriptPage,
-    fits: pageFitsNodeTransport,
-  });
+  if (thread.historyMode !== "paginated") {
+    return readLegacyCodexTranscriptPage((params) => control.listTurnPage(params), request);
+  }
+  let limit = request.limit;
+  for (;;) {
+    const page = await control.listItemPage({
+      threadId: request.threadId,
+      limit,
+      sortDirection: "desc",
+      ...(request.cursor ? { cursor: request.cursor } : {}),
+    });
+    const nextCursor = readControlCursor(page.nextCursor, "transcript next response");
+    const items = projectTranscriptPage(page.data, limit);
+    const result = { items, ...(nextCursor ? { nextCursor } : {}) };
+    const fittingCount = items.length - (pageFitsNodeTransport(result) ? 0 : 1);
+    if (fittingCount === page.data.length) {
+      return result;
+    }
+    if (fittingCount < 1) {
+      throw new Error("Codex transcript item exceeds the safe response size");
+    }
+    // The native cursor must describe exactly the delivered entries. Never slice and retain it.
+    limit = fittingCount;
+  }
 }

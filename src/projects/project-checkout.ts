@@ -44,11 +44,7 @@ export async function resolveProjectDirectory(projectPath: string): Promise<stri
   return requested;
 }
 
-export async function resolveProjectCheckout(projectPath: string): Promise<{
-  path: string;
-  repoRoot: string;
-  originUrl?: string;
-}> {
+export async function resolveProjectCheckout(projectPath: string) {
   const requested = await resolveProjectDirectory(projectPath);
   if (!insideGitCheckout(requested)) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);

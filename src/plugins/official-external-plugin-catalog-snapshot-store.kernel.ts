@@ -56,11 +56,6 @@ function rowToTrustState(
   };
 }
 
-function decodeBase64Payload(payload: string): string {
-  const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(normalized, "base64").toString("utf8");
-}
-
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document: unknown = JSON.parse(body);
@@ -68,7 +63,9 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
       return undefined;
     }
     const payload =
-      typeof document.payload === "string" ? decodeBase64Payload(document.payload) : body;
+      typeof document.payload === "string"
+        ? Buffer.from(document.payload, "base64").toString("utf8")
+        : body;
     const feed: unknown = typeof document.payload === "string" ? JSON.parse(payload) : document;
     if (!isRecord(feed) || !isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;

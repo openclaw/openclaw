@@ -42,13 +42,13 @@ const runtimeServiceMocks = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
-    countPendingDeliveryQueueEntries: vi.fn(() => 0),
+    countPendingDeliveryQueueEntries: vi.fn(async () => 0),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
-    assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
+    withAuthorizedQueuedConversationDelivery: vi.fn(),
   };
 });
 
@@ -84,9 +84,10 @@ vi.mock("../infra/delivery-queue-sqlite.js", async (importOriginal) => ({
   countPendingDeliveryQueueEntries: runtimeServiceMocks.countPendingDeliveryQueueEntries,
 }));
 
-vi.mock("./conversation-route-ownership.js", () => ({
-  assertQueuedConversationDeliveryAttemptAuthorized:
-    runtimeServiceMocks.assertQueuedConversationDeliveryAttemptAuthorized,
+vi.mock("./conversation-route-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./conversation-route-ownership.js")>()),
+  withAuthorizedQueuedConversationDelivery:
+    runtimeServiceMocks.withAuthorizedQueuedConversationDelivery,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
@@ -199,12 +200,12 @@ export function resetRuntimeServiceMocks() {
     skippedMaxRetries: 0,
     deferredBackoff: 0,
   });
-  runtimeServiceMocks.countPendingDeliveryQueueEntries.mockReset().mockReturnValue(0);
+  runtimeServiceMocks.countPendingDeliveryQueueEntries.mockReset().mockResolvedValue(0);
   runtimeServiceMocks.drainPendingDeliveries.mockReset();
   runtimeServiceMocks.drainPendingDeliveries.mockResolvedValue(undefined);
   runtimeServiceMocks.recoverPendingRestartContinuationDeliveries.mockClear();
   runtimeServiceMocks.deliverQueuedSessionDelivery.mockClear();
   runtimeServiceMocks.settleQueuedSessionDelivery.mockClear();
   runtimeServiceMocks.deliverOutboundPayloads.mockClear();
-  runtimeServiceMocks.assertQueuedConversationDeliveryAttemptAuthorized.mockReset();
+  runtimeServiceMocks.withAuthorizedQueuedConversationDelivery.mockReset();
 }

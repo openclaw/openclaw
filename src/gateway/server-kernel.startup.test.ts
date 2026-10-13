@@ -107,7 +107,7 @@ describe("Gateway startup", () => {
         pendingTask = delay(0).then(async () => {
           events.push("queued task");
           if (cancel) {
-            await prepared.beginClosePrelude();
+            await prepared.prepareClose();
           }
         });
         void pendingTask.catch(() => {});

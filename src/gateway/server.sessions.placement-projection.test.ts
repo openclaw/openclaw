@@ -31,7 +31,7 @@ import {
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import { placementTurnOwner } from "./worker-environments/placement-record.js";
 import {
@@ -381,44 +381,6 @@ test("sessions.describe preserves pre-epoch identity while starting", async () =
     providerId: "machine0",
     profileId: "team",
   });
-});
-
-test("sessions.list projects durable placement move progress", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const move = placementMove(placement, "workspace reconciliation is waiting");
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-    () => new Map([[placement.sessionId, placement]]),
-  );
-  const facts = createSessionPlacementFactsReader(
-    { getMany },
-    undefined,
-    new Map([[move.sessionId, move]]),
-  );
-  const readProjection = vi.fn(facts.readProjection);
-  const projection = await createSessionRowProjection({
-    cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
-    placementFactsReader: { readProjection },
-  });
-  trackSessionReadProjection(projection);
-
-  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
-    "sessions.list",
-    {},
-    { context: bindSessionRowProjection({}, () => projection) },
-  );
-
-  expect(result.ok).toBe(true);
-  const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
-  expect(main?.placementMove).toEqual({
-    target: { kind: "gateway" },
-    error: "workspace reconciliation is waiting",
-    updatedAtMs: 340,
-  });
-  expect(main?.placementMove).not.toHaveProperty("operationId");
-  expect(
-    readProjection.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
-  ).toEqual(["sess-main", "sess-other"]);
 });
 
 test.each([

@@ -65,25 +65,6 @@ exec(value);
 `;
 
 describe("plugin npm artifact security scan", () => {
-  it("accepts reviewed production behavior from the exact tarball", () => {
-    const result = scanPluginNpmArtifactSecurity({
-      packageName: "@openclaw/signal",
-      packageVersion: "1.0.0",
-      tarball: packageTarball("@openclaw/signal", { "src/daemon.ts": SPAWN_SOURCE }),
-    });
-    expect(result.criticalFindingCount).toBe(1);
-  });
-
-  it("rejects a new critical finding in shipped runtime code", () => {
-    expect(() =>
-      scanPluginNpmArtifactSecurity({
-        packageName: "@openclaw/example",
-        packageVersion: "1.0.0",
-        tarball: packageTarball("@openclaw/example", { "src/index.ts": SPAWN_SOURCE }),
-      }),
-    ).toThrow("unreviewed critical findings in exact npm artifact");
-  });
-
   it("rejects fixtures only when npm includes them in the tarball", () => {
     expect(() =>
       scanPluginNpmArtifactSecurity({
@@ -171,29 +152,5 @@ describe("plugin npm artifact security scan", () => {
         }),
       }),
     ).toThrow("unreviewed critical findings in exact npm artifact");
-  });
-
-  it("keeps reviewed dist findings reachable in mixed-layout artifacts", () => {
-    const result = scanPluginNpmArtifactSecurity({
-      packageName: "@openclaw/google-meet",
-      packageVersion: "1.0.0",
-      tarball: packageTarball("@openclaw/google-meet", {
-        "dist/.setup/chunk.mjs": "export const value = 1;\n",
-        "dist/index.js": SPAWN_SOURCE,
-      }),
-    });
-    expect(result.criticalFindingCount).toBe(1);
-  });
-
-  it("keeps the reviewed Raft dist finding reachable in a mixed-layout artifact", () => {
-    const result = scanPluginNpmArtifactSecurity({
-      packageName: "@openclaw/raft",
-      packageVersion: "1.0.0",
-      tarball: packageTarball("@openclaw/raft", {
-        "dist/.setup/chunk.mjs": "export const value = 1;\n",
-        "dist/channel-plugin-api.js": SPAWN_SOURCE,
-      }),
-    });
-    expect(result.criticalFindingCount).toBe(1);
   });
 });

@@ -13,7 +13,10 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  isArtifactPreservingStateRead,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
@@ -61,19 +64,15 @@ export type ConfigRecoveryCandidateTransform = (params: {
   deferredPluginMigrations: readonly DeferredPluginMigration[];
 }) => unknown;
 
-type ValidationPluginMetadataSnapshotLoader = {
-  load: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
-  loadAsync: (config: OpenClawConfig) => Promise<PreparedConfigValidationPluginMetadata>;
-  getSnapshot: () => PluginMetadataSnapshot | undefined;
-};
-
 export type ConfigIoContext = ReturnType<typeof createConfigIoContext>;
 
 export function createConfigIoContext(
   options: ConfigIoFactoryOptions = {},
   transformRecoveryCandidate?: ConfigRecoveryCandidateTransform,
 ) {
-  const deps = normalizeConfigIoDeps(options);
+  const deps = normalizeConfigIoDeps(
+    isArtifactPreservingStateRead("agent") ? { ...options, observe: false } : options,
+  );
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
   // resolvers need the original OS-home fallback or relative overrides expand twice.
@@ -133,7 +132,7 @@ export function createConfigIoContext(
 
   async function finalizeLoadedRuntimeConfigAsync(
     config: OpenClawConfig,
-    metadata: ValidationPluginMetadataSnapshotLoader,
+    metadata: ReturnType<typeof createValidationPluginMetadataSnapshotLoader>,
     assertCurrent?: () => void,
   ): Promise<OpenClawConfig> {
     if (!metadata.getSnapshot()) {
@@ -176,11 +175,11 @@ export function createConfigIoContext(
   function createValidationPluginMetadataSnapshotLoader(params: {
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
-  }): ValidationPluginMetadataSnapshotLoader {
+  }) {
     let snapshot: PluginMetadataSnapshot | undefined;
     let pending: Promise<PreparedConfigValidationPluginMetadata> | undefined;
     return {
-      load: (config) => {
+      load: (config: OpenClawConfig) => {
         snapshot ??= resolveConfigWidePluginMetadataSnapshot({
           config,
           env: params.env,
@@ -188,7 +187,7 @@ export function createConfigIoContext(
         });
         return { manifestRegistry: snapshot.manifestRegistry };
       },
-      loadAsync: (config) =>
+      loadAsync: (config: OpenClawConfig) =>
         (pending ??= (async () => {
           snapshot ??= await resolveConfigWidePluginMetadataSnapshotAsync({
             config,
@@ -337,18 +336,6 @@ export function createConfigIoContext(
     }
   }
 
-  function prepareRecoveryBackupCandidate(
-    candidate: ConfigRecoveryCandidate,
-  ): ConfigRecoveryCandidatePreparation {
-    return runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate));
-  }
-
-  async function prepareRecoveryBackupCandidateAsync(
-    candidate: ConfigRecoveryCandidate,
-  ): Promise<ConfigRecoveryCandidatePreparation> {
-    return await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate));
-  }
-
   return {
     deps,
     pathResolution,
@@ -363,7 +350,9 @@ export function createConfigIoContext(
     finalizeLoadedRuntimeConfigAsync,
     createValidationPluginMetadataSnapshotLoader,
     resolveRuntimePreflightSourceConfig,
-    prepareRecoveryBackupCandidate,
-    prepareRecoveryBackupCandidateAsync,
+    prepareRecoveryBackupCandidate: (candidate: ConfigRecoveryCandidate) =>
+      runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate)),
+    prepareRecoveryBackupCandidateAsync: async (candidate: ConfigRecoveryCandidate) =>
+      await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate)),
   };
 }

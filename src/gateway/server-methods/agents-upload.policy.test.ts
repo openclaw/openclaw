@@ -4,7 +4,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as workspaceOwner from "../../agents/workspace.js";
 import * as configBackup from "../../config/backup-rotation.js";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  registerRuntimeConfigWriteListener,
+} from "../../config/runtime-snapshot.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -23,6 +28,7 @@ let config: OpenClawConfig;
 let workspace: string;
 let identityPath: string;
 let serial = 0;
+let releaseConfigWriteListener: () => void;
 const context = createDirectChatContext({
   getRuntimeConfig: () => config,
   getCommittedRuntimeConfig: () => config,
@@ -72,8 +78,18 @@ function expectDisabled(respond: ReturnType<typeof vi.fn>) {
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ layout: "state-only", label: "agent-avatar-policy" });
+  // Standalone IO publishes its runtime snapshot before this notification. Upload
+  // authority stays separately injected so a concurrent revocation remains current.
+  releaseConfigWriteListener = registerRuntimeConfigWriteListener((event) => {
+    if (event.configPath === state.configPath) {
+      getRuntimeConfigWriteApplication(event)
+        ?.claim()
+        ?.settle(getRuntimeConfigSnapshot() === event.runtimeConfig ? "applied" : "failed");
+    }
+  });
 });
 afterAll(async () => {
+  releaseConfigWriteListener();
   await state.cleanup();
 });
 afterEach(() => {

@@ -26,6 +26,11 @@ export const FACETIME_FEED_DEVICE_NAME = "OpenClaw-Feed";
 export const FACETIME_MIC_DEVICE_NAME = "OpenClaw-Mic";
 const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
 
+type AudioProcess =
+  | { kind: "capture"; command: string }
+  | { kind: "playback" }
+  | { kind: "wake"; capturePid?: number };
+
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
@@ -144,6 +149,30 @@ function buildSoxOutputArguments(): string[] {
   ];
 }
 
+function spawnAudioProcess(process: AudioProcess, env: NodeJS.ProcessEnv): ChildProcess {
+  let command: string;
+  let args: string[];
+  let stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"];
+  switch (process.kind) {
+    case "capture":
+      command = process.command;
+      args = [];
+      stdio = ["pipe", "pipe", "pipe"];
+      break;
+    case "playback":
+      command = SOX_COMMAND;
+      args = buildSoxOutputArguments();
+      stdio = ["pipe", "ignore", "pipe"];
+      break;
+    case "wake":
+      command = CAFFEINATE_COMMAND;
+      args = ["-d", "-i", ...(process.capturePid ? ["-w", String(process.capturePid)] : [])];
+      stdio = ["ignore", "ignore", "pipe"];
+      break;
+  }
+  return spawn(command, args, { env, stdio });
+}
+
 async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (proc.killed && signal !== "SIGKILL") {
     return;
@@ -182,10 +211,10 @@ export function startFaceTimeAudioPump(params: {
   let playbackGeneration = 1;
   let drainTimer: NodeJS.Timeout | undefined;
   let outputProcess: ChildProcess;
-  const captureProcess = spawn(params.captureBinary, [], {
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const captureProcess = spawnAudioProcess(
+    { kind: "capture", command: params.captureBinary },
+    childEnv,
+  );
   let stopped = false;
   let mediaSuspended = false;
   let captureSuppressionActive = false;
@@ -254,10 +283,7 @@ export function startFaceTimeAudioPump(params: {
   const spawnOutput = () => {
     // Playback stays out of the capture helper: an in-process AVAudioEngine can
     // rebind OpenClaw-Feed after FaceTime claims it and tear down the carrier.
-    const proc = spawn(SOX_COMMAND, buildSoxOutputArguments(), {
-      env: childEnv,
-      stdio: ["pipe", "ignore", "pipe"],
-    });
+    const proc = spawnAudioProcess({ kind: "playback" }, childEnv);
     const onError = (error: Error) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(error, false);
@@ -326,11 +352,7 @@ export function startFaceTimeAudioPump(params: {
     ]);
   };
   const wakeProcess = existsSync(CAFFEINATE_COMMAND)
-    ? spawn(
-        CAFFEINATE_COMMAND,
-        ["-d", "-i", ...(captureProcess.pid ? ["-w", String(captureProcess.pid)] : [])],
-        { env: childEnv, stdio: ["ignore", "ignore", "pipe"] },
-      )
+    ? spawnAudioProcess({ kind: "wake", capturePid: captureProcess.pid }, childEnv)
     : undefined;
   wakeProcess?.on("error", () => undefined);
   captureProcess.on("error", (error) => reportFailure(error, true));

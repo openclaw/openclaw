@@ -3,7 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
@@ -100,7 +101,7 @@ export async function createSpawnBoundaryParent(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { stateDir, parentSessionKey, parentRunId, operatorAuthority } = params;
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const storePath = await writeSubagentSessionEntry({
     stateDir,
     agentId: "main",
@@ -299,6 +300,21 @@ export function createBoundSpawnInvocation(
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
+export type RequestCustodySpawnCaseOptions = {
+  createBoundParent: () => Promise<BoundParent>;
+  createBoundGateway: (bound: BoundParent) => Promise<{ runtime: GatewayRuntime }>;
+  closeBoundGateway: (
+    bound: BoundParent,
+    runtime: GatewayRuntime,
+    childRunId?: string,
+  ) => Promise<unknown[]>;
+  throwBoundFailures: (failures: unknown[]) => void;
+  parentSessionKey: string;
+  parentRunId: string;
+  assertNoModelExecution: () => void;
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+};
+
 export function registerYieldedRequesterBatchCase(options: {
   createBoundParent: () => Promise<BoundParent>;
   createGuestParent: (audit?: boolean) => Promise<{
@@ -328,7 +344,7 @@ export function registerYieldedRequesterBatchCase(options: {
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
       const { loadSubagentRegistryFromSqlite } =
-        await import("../registry/subagent-registry.store.sqlite.js");
+        await import("../registry/subagent-registry-state.fixture.test-support.js");
       const { settleSubagentRegistryPersistenceWork } =
         await import("../registry/subagent-registry.persistence.test-support.js");
       const announce = await import("../announce/subagent-announce.js");
@@ -409,6 +425,11 @@ export function registerYieldedRequesterBatchCase(options: {
         await registry.registerSubagentRun({
           runId: bound.parentRunId,
           childSessionKey: bound.parentSessionKey,
+          childAgentId: "main",
+          sessionEntry: expectDefined(
+            loadSessionEntry({ storePath: bound.storePath, sessionKey: bound.parentSessionKey }),
+            "registered parent session",
+          ),
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
           requesterDisplayKey: "main",

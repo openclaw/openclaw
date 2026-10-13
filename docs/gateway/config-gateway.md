@@ -175,7 +175,7 @@ For the full key index and the other top-level config domains, see [Configuratio
   provenance. OpenClaw leaves the external route unchanged and warns. The
   route can use generic proxy attribution only through an explicitly configured
   `gateway.trustedProxies` source with a valid forwarded client address;
-  Gateway-protected routes then require configured auth, while aggregate probes
+  Gateway-protected routes then require configured auth, while aggregate checks
   and plugin-authenticated webhooks retain their own response and authentication
   policies. First configure `gateway.auth.password` (prefer a SecretRef) or
   `OPENCLAW_GATEWAY_PASSWORD`, and set `gateway.auth.mode` to `password`. Then
@@ -221,7 +221,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Scope upgrades additionally require the connection itself to prove local-grade credentials (auth mode `none`, or the shared token/password); Tailscale, trusted-proxy, and device-token connects keep their paired scopes as a durable cap. Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
-- `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
+- `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; checks are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the persistent enable for classified commands such as `camera.snap`, `camera.clip`, `codex.exec-server.stdio.v1`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Codex remote execution on a paired device or enrolled cloud node additionally requires a separate critical allow-once approval for every exec-server attempt; persistent allowlisting never grants that approval. Desktop sharing (`desktop.stream`), Computer Control, and mobile UI control instead rely on node-local enablement plus pairing. Desktop sharing starts enabled on desktop nodes and remains subject to explicit deny entries. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. Gateway command-policy changes hot-apply to connected nodes under the default reload mode, without granting additional pairing approval. When a node changes its declared command list, reconnect it and approve the new command request so the Gateway stores the widened surface.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list for
@@ -283,7 +283,7 @@ Use the corresponding tool, terminal, channel, and plugin policies for those.
     Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
     and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
-  - `gateway.http.securityHeaders.strictTransportSecurity` hot-applies to subsequent responses, including health probes. Set only for HTTPS origins you control; use `false` or remove the value to stop sending the header. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
+  - `gateway.http.securityHeaders.strictTransportSecurity` hot-applies to subsequent responses, including health checks. Set only for HTTPS origins you control; use `false` or remove the value to stop sending the header. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
 
 ### Multi-instance isolation
 
@@ -336,10 +336,10 @@ operator-controlled: update them before reconnecting with a renewed certificate.
 
 Client commands such as `triage`, `gateway status`, and `gateway probe` only read the public certificate to determine a local TLS pin. They never generate or repair TLS files and do not need the server private key or CA bundle. Without `certPath`, they inspect `gateway/tls/gateway-cert.pem` under the state directory. A missing or unreadable certificate supplies no implicit pin; normal connection trust checks still apply. Start the Gateway to generate a missing pair, or provide the configured certificate files before connecting.
 
-Long-lived local health probes remember the last verified certificate for their
+Long-lived local health checks remember the last verified certificate for their
 endpoint, preserving health checks while replacement files are incomplete or
 reload is paused. They adopt a replacement only after verifying a connection.
-A new probe, or one that missed an intermediate renewal, cannot trust a serving
+A new check, or one that missed an intermediate renewal, cannot trust a serving
 certificate that is no longer in the configured file and was never verified.
 Complete or re-enable renewal so the listener and configured certificate agree.
 

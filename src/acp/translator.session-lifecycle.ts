@@ -25,7 +25,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
 import type { AcpEventLedgerReplay } from "./event-ledger.js";
-import { parseSessionMeta, resetSessionIfNeeded, resolveAcpSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resolveAcpSessionKey } from "./session-mapper.js";
 import type { SessionSnapshot } from "./translator.presentation.js";
 import { extractReplayChunks, type GatewayTranscriptMessage } from "./translator.replay.js";
 import {
@@ -39,15 +39,6 @@ import type { AcpTranslatorSessionState } from "./translator.session-state.js";
 import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
-
-function hasExplicitSessionRouting(
-  meta: ReturnType<typeof parseSessionMeta>,
-  opts: AcpServerOptions,
-): boolean {
-  return Boolean(
-    meta.sessionKey || meta.sessionLabel || opts.defaultSessionKey || opts.defaultSessionLabel,
-  );
-}
 
 export class AcpTranslatorSessionLifecycle {
   constructor(
@@ -95,7 +86,12 @@ export class AcpTranslatorSessionLifecycle {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
+    const hasExplicitRouting = Boolean(
+      meta.sessionKey ||
+      meta.sessionLabel ||
+      this.opts.defaultSessionKey ||
+      this.opts.defaultSessionLabel,
+    );
     const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
       ? { complete: false, events: [] }
       : await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId);
@@ -135,10 +131,27 @@ export class AcpTranslatorSessionLifecycle {
             return [];
           }),
     ]);
+    const replaySessionId = session.sessionId;
     if (ledgerReplay.complete) {
-      await this.replayLedgerSession(session.sessionId, ledgerReplay);
+      for (const event of ledgerReplay.events) {
+        await this.sessionUpdates.emit({
+          sessionId: replaySessionId,
+          update: event.update,
+          record: false,
+        });
+      }
     } else {
-      await this.replaySessionTranscript(session.sessionId, transcript);
+      for (const message of transcript) {
+        for (const chunk of extractReplayChunks(message)) {
+          await this.sessionUpdates.emit({
+            sessionId: replaySessionId,
+            update: {
+              sessionUpdate: chunk.sessionUpdate,
+              content: { type: "text", text: chunk.text },
+            },
+          });
+        }
+      }
     }
     return await this.publishSessionSnapshot(session, sessionSnapshot, false);
   }
@@ -334,12 +347,9 @@ export class AcpTranslatorSessionLifecycle {
       gateway: this.gateway,
       opts: this.opts,
     });
-    await resetSessionIfNeeded({
-      meta: params.meta,
-      sessionKey,
-      gateway: this.gateway,
-      opts: this.opts,
-    });
+    if (params.meta.resetSession ?? this.opts.resetSession ?? false) {
+      await this.gateway.request("sessions.reset", { key: sessionKey });
+    }
     return sessionKey;
   }
 
@@ -352,37 +362,6 @@ export class AcpTranslatorSessionLifecycle {
       return [];
     }
     return result.messages as GatewayTranscriptMessage[];
-  }
-
-  private async replaySessionTranscript(
-    sessionId: string,
-    transcript: ReadonlyArray<GatewayTranscriptMessage>,
-  ): Promise<void> {
-    for (const message of transcript) {
-      const replayChunks = extractReplayChunks(message);
-      for (const chunk of replayChunks) {
-        await this.sessionUpdates.emit({
-          sessionId,
-          update: {
-            sessionUpdate: chunk.sessionUpdate,
-            content: { type: "text", text: chunk.text },
-          },
-        });
-      }
-    }
-  }
-
-  private async replayLedgerSession(
-    sessionId: string,
-    ledgerReplay: AcpEventLedgerReplay,
-  ): Promise<void> {
-    for (const event of ledgerReplay.events) {
-      await this.sessionUpdates.emit({
-        sessionId,
-        update: event.update,
-        record: false,
-      });
-    }
   }
 
   private assertSupportedSessionSetup(mcpServers: ReadonlyArray<unknown>): void {

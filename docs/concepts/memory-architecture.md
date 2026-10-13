@@ -161,6 +161,14 @@ that compacts daily feeds the pipeline through the flush; a user who runs
 many short sessions feeds it through transcript ingestion. Both converge on
 the same consolidation pass.
 
+Session indexing coalesces transcript notifications over a five-second window.
+The background worker reads appended events since its last retained snapshot;
+rewrites and resets rebuild that snapshot. Each source publication batches new
+chunks, embeddings, and search metadata in one transaction, retaining unchanged
+chunks. A completed turn becomes searchable when that background pass finishes,
+normally after the coalescing window plus embedding time. Searches made earlier
+can still see the previous index.
+
 ## Dreaming: consolidation with gates
 
 Dreaming is enabled by default and runs as a scheduled background sweep with
@@ -238,7 +246,7 @@ Three mechanisms run on eligible turns with no model involvement:
 - **Trigger injection.** Writers can attach short trigger phrases to
   entries describing when they are relevant. Each inbound message runs a
   fast lexical and vector prefilter against those triggers; entries that
-  match strongly (score at or above 0.72) are injected as a compact hidden
+  match strongly (score at or above 0.65) are injected as a compact hidden
   context block, at most three per turn.
 
 Writers store both signals as trailing comments on the same `MEMORY.md` or

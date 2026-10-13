@@ -87,7 +87,10 @@ export function createSessionPatchGroupWriter(params: {
     Parameters<typeof applySessionEntryCanonicalReplacements<GroupAdmissionResult>>[0],
     "update"
   > & { sessionKeys: string[] };
-  patch: Pick<SessionsPatchParams, "agentRuntime" | "archived" | "label">;
+  patch: Pick<
+    SessionsPatchParams,
+    "agentRuntime" | "archived" | "label" | "model" | "nativeRuntimeConsent"
+  >;
   project: (
     entries: SqliteLifecycleTargetSnapshot,
     admission: "admitted" | "detached",
@@ -108,6 +111,8 @@ export function createSessionPatchGroupWriter(params: {
       update: (entries) => {
         const needsExternalPreparation =
           typeof params.patch.agentRuntime === "string" ||
+          typeof params.patch.model === "string" ||
+          typeof params.patch.nativeRuntimeConsent === "string" ||
           (typeof params.patch.archived === "boolean" &&
             entries.some(({ sessionKey, entry }) => targetKeys.has(sessionKey) && entry.worktree));
         if (needsExternalPreparation) {

@@ -120,6 +120,39 @@ function assertSafeIMessageOutboundMarkup(text: string): void {
   }
 }
 
+function findIMessageMarkupEnd(
+  text: string,
+  start: number,
+  kind: "instruction" | "declaration" | "private",
+  contentOffset = 2,
+): number {
+  const terminator = kind === "instruction" ? "?>" : ">";
+  let quote: "'" | '"' | undefined;
+  let bracketDepth = 0;
+  for (let index = start + contentOffset; index <= text.length - terminator.length; index += 1) {
+    if (kind === "private" && index - start > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
+      throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+    }
+    const character = text[index];
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+      }
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (kind === "declaration" && character === "[") {
+      bracketDepth += 1;
+    } else if (kind === "declaration" && character === "]" && bracketDepth > 0) {
+      bracketDepth -= 1;
+    } else if (kind === "private" && character === "<") {
+      throw new Error("iMessage outbound runtime scaffolding is malformed");
+    } else if (bracketDepth === 0 && text.startsWith(terminator, index)) {
+      return index + terminator.length;
+    }
+  }
+  return -1;
+}
+
 function stripIMessageBalancedPrivateRuntimeBlocks(
   text: string,
   verifyProtectedRoles?: (visible: string) => void,
@@ -185,7 +218,7 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       continue;
     }
 
-    let end = -1;
+    let end: number;
     let delimiterLength = 0;
     if (text.startsWith("<!--", start)) {
       end = text.indexOf("-->", start + 4);
@@ -194,42 +227,9 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       end = text.indexOf("]]>", start + 9);
       delimiterLength = 3;
     } else if (text.startsWith("<?", start)) {
-      let quote: "'" | '"' | undefined;
-      for (let index = start + 2; index < text.length - 1; index += 1) {
-        const character = text[index];
-        if (quote) {
-          if (character === quote) {
-            quote = undefined;
-          }
-        } else if (character === "'" || character === '"') {
-          quote = character;
-        } else if (character === "?" && text[index + 1] === ">") {
-          end = index;
-          delimiterLength = 2;
-          break;
-        }
-      }
+      end = findIMessageMarkupEnd(text, start, "instruction");
     } else if (/^<![a-z][a-z0-9_.:-]*\b/i.test(text.slice(start))) {
-      let quote: "'" | '"' | undefined;
-      let bracketDepth = 0;
-      for (let index = start + 2; index < text.length; index += 1) {
-        const character = text[index];
-        if (quote) {
-          if (character === quote) {
-            quote = undefined;
-          }
-        } else if (character === "'" || character === '"') {
-          quote = character;
-        } else if (character === "[") {
-          bracketDepth += 1;
-        } else if (character === "]" && bracketDepth > 0) {
-          bracketDepth -= 1;
-        } else if (character === ">" && bracketDepth === 0) {
-          end = index;
-          delimiterLength = 1;
-          break;
-        }
-      }
+      end = findIMessageMarkupEnd(text, start, "declaration");
     } else if (
       text.startsWith("<!", start) ||
       (text.startsWith("</", start) &&
@@ -289,29 +289,10 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
     }
 
-    let quote: "'" | '"' | undefined;
-    let end = start + token[0].length;
-    for (; end < text.length; end += 1) {
-      if (end - start > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
-        throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
-      }
-      const character = text[end];
-      if (quote) {
-        if (character === quote) {
-          quote = undefined;
-        }
-      } else if (character === "'" || character === '"') {
-        quote = character;
-      } else if (character === "<") {
-        throw new Error("iMessage outbound runtime scaffolding is malformed");
-      } else if (character === ">") {
-        break;
-      }
-    }
-    if (end >= text.length || quote) {
+    const end = findIMessageMarkupEnd(text, start, "private", token[0].length);
+    if (end < 0) {
       throw new Error("iMessage outbound runtime scaffolding is malformed");
     }
-    end += 1;
 
     if (enclosingBlock?.codeRegion && enclosingBlock.codeRegion === codeRegion) {
       if (!enclosingBlock.nestedCodeRegions) {
@@ -682,7 +663,6 @@ export function sanitizeOutboundText(text: string): string {
     isInsideCode(offset, closedFencedRegions) ? marker : "",
   );
 
-  // Collapse excessive blank lines left after stripping.
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 
   return cleaned;

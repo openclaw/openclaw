@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { isPathInside } from "./path-guards.js";
 import {
+  resolveUpdateCandidateAvatar,
   resolveUpdateCandidateStateIdentity,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
@@ -47,4 +48,19 @@ it.each([
   }
   expect(projected).not.toContain("?");
   expect(isPathInside(CANARY_ROOT, projected)).toBe(true);
+});
+
+// The process sits on D: so a drive-less root must take the workspace drive.
+it.each([
+  [String.raw`C:\Users\me\clawd`, String.raw`\Users\me\clawd\a.png`, String.raw`.\a.png`],
+  [String.raw`\\?\C:\Users\me\clawd`, String.raw`C:\Users\me\clawd\a.png`, String.raw`.\a.png`],
+  [String.raw`C:\Users\me\clawd`, String.raw`..\clawd\a.png`, String.raw`.\a.png`],
+  [
+    String.raw`C:\Users\me\clawd`,
+    String.raw`\Users\me\main\a.png`,
+    String.raw`C:\Users\me\main\a.png`,
+  ],
+] as const)("projects Windows workspace %s avatar %s as %s", (workspace, avatar, expected) => {
+  vi.spyOn(process, "cwd").mockReturnValue(String.raw`D:\work`);
+  expect(resolveUpdateCandidateAvatar(workspace, avatar)).toBe(expected);
 });

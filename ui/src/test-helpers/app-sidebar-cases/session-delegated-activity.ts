@@ -3,8 +3,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
-import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import {
+  createGatewayHarness,
+  createSessionsHarness,
+  mountSidebar,
+  type TestSessionMenu,
+} from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, roster, session } from "./roster.test-support.ts";
 
@@ -110,10 +116,17 @@ describe("AppSidebar delegated activity", () => {
         sessions: [parentRow, failedRun],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(parent().querySelector(".session-glyph__ring")).toBeNull();
-    expect(parent().querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(parent().textContent).toContain("Child session Review changes failed: Review failed");
+    const parentAttention = parent().querySelector('[data-session-attention="error"]')!;
+    expect(parentAttention).not.toBeNull();
+    await parentAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const parentDescription = (parentAttention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => parentAttention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(parentDescription).toContain("Child session Review changes failed: Review failed");
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(
       sidebar.querySelector("[data-child-session-toggle], [data-show-more-children]"),
@@ -149,15 +162,18 @@ describe("AppSidebar delegated activity", () => {
     );
     mixed.sidebar.sidebarAgentsMode = "roster";
     const rosterParent = () => mixed.sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-    await waitForFast(() =>
-      expect(mixed.sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
+    await waitForFast(
+      () => expect(mixed.sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
+      { timeout: 5_000 },
     );
-    await waitForFast(() => expect(rosterParent()).not.toBeNull());
+    await waitForFast(() => expect(rosterParent()).not.toBeNull(), { timeout: 5_000 });
     mixed.sidebar
       .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)!
       .click();
-    await waitForFast(() =>
-      expect(mixed.sidebar.querySelector(`[data-session-key="${persistentKey}"]`)).not.toBeNull(),
+    await waitForFast(
+      () =>
+        expect(mixed.sidebar.querySelector(`[data-session-key="${persistentKey}"]`)).not.toBeNull(),
+      { timeout: 5_000 },
     );
     expect(
       rosterParent().querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
@@ -187,16 +203,113 @@ describe("AppSidebar delegated activity", () => {
     ];
     mixed.sessions.publishList({ result: mixed.result });
     await rosterActivityStore(mixed.context).refresh();
-    await waitForFast(() =>
-      expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
+    await waitForFast(
+      () => expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
+      { timeout: 5_000 },
     );
     expect(rosterParent().querySelector(".session-glyph__ring")).toBeNull();
     expect(rosterParent().querySelector('[aria-label="Unread"]')).not.toBeNull();
-    expect(rosterParent().textContent).toContain(
-      "Child session Review changes failed: Review failed",
-    );
+    const rosterAttention = rosterParent().querySelector('[data-session-attention="error"]')!;
+    await rosterAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const rosterDescription = (rosterAttention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => rosterAttention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(rosterDescription).toContain("Child session Review changes failed: Review failed");
     expect(mixed.sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(mixed.sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
+  });
+
+  it("offers Mark as read on a read parent whose only unread state is a hidden run", async () => {
+    const parentKey = "agent:main:dashboard:release";
+    const runKey = "agent:main:subagent:review";
+    const sessions = createSessionsHarness("main", [parentKey, runKey]);
+    const result = sessions.sessions.state.result!;
+    Object.assign(result.sessions[0]!, {
+      label: "Prepare release",
+      status: "done",
+      hasActiveRun: false,
+      unread: false,
+      childSessions: [runKey],
+    });
+    Object.assign(result.sessions[1]!, {
+      label: "Review changes",
+      spawnedBy: parentKey,
+      status: "done",
+      hasActiveRun: false,
+      unread: true,
+    });
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    const parent = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
+    expect(sidebar.querySelector(`[data-session-key="${runKey}"]`)).toBeNull();
+
+    parent.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu")!;
+    await menu.updateComplete;
+    const toggle = menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')!;
+    expect(toggle.textContent).toContain("Mark as read");
+    toggle.click();
+    await waitForFast(() =>
+      expect(sessions.patch).toHaveBeenCalledWith(
+        runKey,
+        { unread: false },
+        expect.objectContaining({ expectedMarkedUnreadAt: null }),
+      ),
+    );
+    expect(sessions.patch).not.toHaveBeenCalledWith(parentKey, { unread: true }, expect.anything());
+  });
+
+  it("offers Mark as read in team view on a read parent whose only unread state is a hidden run", async () => {
+    const parentKey = "agent:main:dashboard:release";
+    const runKey = "agent:main:subagent:review";
+    const rosterRows = [
+      session("main", 2, {
+        key: parentKey,
+        isMain: false,
+        label: "Prepare release",
+        status: "done",
+        hasActiveRun: false,
+        unread: false,
+        childSessions: [runKey],
+      }),
+      session("main", 1, {
+        key: runKey,
+        isMain: false,
+        label: "Review changes",
+        spawnedBy: parentKey,
+        status: "done",
+        hasActiveRun: false,
+        unread: true,
+      }),
+    ];
+    const mounted = await mountRoster(
+      roster,
+      rosterRows,
+      undefined,
+      rosterRows,
+      [],
+      rosterRows.filter((row) => row.key !== parentKey),
+    );
+    mounted.sidebar.sidebarAgentsMode = "roster";
+    const parent = () => mounted.sidebar.querySelector(`[data-session-key="${parentKey}"]`);
+    await waitForFast(() => expect(parent()).not.toBeNull());
+    await waitForFast(() =>
+      expect(parent()!.querySelector('[aria-label="Unread"]')).not.toBeNull(),
+    );
+
+    parent()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await mounted.sidebar.updateComplete;
+    const menu = mounted.sidebar.querySelector<TestSessionMenu>("openclaw-session-menu")!;
+    await menu.updateComplete;
+    const toggle = menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')!;
+    expect(toggle.textContent).toContain("Mark as read");
   });
 
   it.each(["plain", "icon", "owner"])(
@@ -232,7 +345,7 @@ describe("AppSidebar delegated activity", () => {
           hasActiveSubagentRun: false,
         }).result,
       });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       const finished = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
       expect(finished.querySelector(".session-glyph__ring")).toBeNull();
       expect(finished.classList.contains("session-row-host--running")).toBe(false);

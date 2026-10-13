@@ -106,6 +106,22 @@ export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unkno
   return true;
 }
 
+export function printBrowserList<T>(
+  entries: T[],
+  emptyMessage: string,
+  format: (entry: T, index: number) => string,
+  header?: string,
+): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(emptyMessage);
+    return;
+  }
+  if (header !== undefined) {
+    defaultRuntime.log(header);
+  }
+  defaultRuntime.log(entries.map(format).join("\n"));
+}
+
 export function resolveBrowserProfileQuery(
   profile?: string,
   extra?: BrowserRequestParams["query"],

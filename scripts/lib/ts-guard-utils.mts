@@ -35,14 +35,17 @@ export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
 }
 
 export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: string[] = []) {
-  return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
+  return [...baseTestSuffixes, ...extraTestSuffixes].some(
+    (suffix) =>
+      filePath.endsWith(suffix) || (suffix.endsWith(".ts") && filePath.endsWith(`${suffix}x`)),
+  );
 }
 
 async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
 ): Promise<string[]> {
-  const fileExtensions = options.fileExtensions ?? [".ts"];
+  const fileExtensions = options.fileExtensions ?? [".ts", ".tsx"];
   const includeTests = options.includeTests ?? false;
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   const skipNodeModules = options.skipNodeModules ?? true;

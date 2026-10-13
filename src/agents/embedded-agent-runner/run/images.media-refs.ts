@@ -1,4 +1,4 @@
-import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import {
   isImageMediaFact,
   normalizeMediaFacts,
@@ -42,11 +42,7 @@ export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefi
   }
   let resolved = mediaUri;
   if (!resolved && /^file:/i.test(identity)) {
-    try {
-      resolved = safeFileURLToPath(identity);
-    } catch {
-      return undefined;
-    }
+    resolved = trySafeFileURLToPath(identity);
   } else if (
     !resolved &&
     (!URL_SCHEME_PATTERN.test(identity) || WINDOWS_DRIVE_PATH_PATTERN.test(identity))
@@ -63,7 +59,7 @@ export function resolveMediaFactLocalRef(fact: MediaFact): MediaFileRef | undefi
   };
 }
 
-function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef | undefined {
+export function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef | undefined {
   if (!isImageMediaFact(fact)) {
     return undefined;
   }
@@ -84,14 +80,6 @@ function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaImageRef 
     hydrate: Boolean(usableRef) && fact.hydrationSuppressed !== true,
     ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
   };
-}
-
-export function collectMediaImageRefs(
-  media?: readonly MediaFact[],
-): Array<MediaImageRef | undefined> {
-  return normalizeMediaFacts(media).flatMap((fact, factIndex) =>
-    isImageMediaFact(fact) ? [mediaFactToImageRef(fact, factIndex)] : [],
-  );
 }
 
 // Guards for transports that cannot carry attachments (paired-node CLI): only

@@ -207,6 +207,9 @@ describe("worktrees cli", () => {
           ]
         : [],
       issueCount: partial ? 1 : 0,
+      eligibleCount: partial ? 2 : 0,
+      deferredCount: 0,
+      failedCount: partial ? 1 : 0,
       protectedCount: 0,
       protectionReasons: {},
       orphansRetired: 0,
@@ -235,8 +238,7 @@ describe("worktrees cli", () => {
         signal: expect.any(AbortSignal),
         commitGuard: expect.any(Function),
         retryDeferred: partial,
-        shouldProtectOwner: expect.any(Function),
-        shouldRemoveOwner: expect.any(Function),
+        readOwnerState: expect.any(Function),
       }),
     );
   });

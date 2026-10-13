@@ -1,12 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import {
   buildAcpDatabaseSessionKey,
-  getAcpSessionKysely,
+  deleteAcpSessionMetaRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import type { AcpSessionRow } from "./session-meta-read.types.js";
+import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
 
 export function bindAcpSessionMeta(params: {
@@ -41,10 +43,11 @@ export function bindAcpSessionMeta(params: {
 export function applyAcpSessionMutation(
   db: DatabaseSync,
   input: Omit<AcpSessionMutationCommit, "agentId" | "source" | "updatedAt"> & { agentId?: string },
-): void {
+): Extract<SessionRowFacts, { kind: "acp" }> {
   const initialKey = buildAcpDatabaseSessionKey(input.storageSessionKey, input.agentId);
   const finalKey = buildAcpDatabaseSessionKey(input.sessionKey, input.agentId);
   const keys = new Set<string>();
+  let written: AcpSessionRow | undefined;
   if (input.decision.kind === "clear") {
     keys.add(initialKey);
     keys.add(finalKey);
@@ -52,15 +55,18 @@ export function applyAcpSessionMutation(
     if (!input.entry) {
       throw new Error("ACP metadata publication lost its canonical entry");
     }
-    upsertAcpSessionMetaRow(
-      db,
-      bindAcpSessionMeta({
-        sessionKey: finalKey,
-        sessionId: input.entry.sessionId,
-        lifecycleRevision: input.entry.lifecycleRevision,
-        meta: input.decision.meta,
-        updatedAt: input.entry.updatedAt,
-      }),
+    written = expectDefined(
+      upsertAcpSessionMetaRow(
+        db,
+        bindAcpSessionMeta({
+          sessionKey: finalKey,
+          sessionId: input.entry.sessionId,
+          lifecycleRevision: input.entry.lifecycleRevision,
+          meta: input.decision.meta,
+          updatedAt: input.entry.updatedAt,
+        }),
+      ),
+      "committed ACP metadata",
     );
     if (initialKey !== finalKey) {
       keys.add(initialKey);
@@ -72,10 +78,12 @@ export function applyAcpSessionMutation(
   ) {
     keys.add(input.currentRowKey);
   }
-  for (const key of keys) {
-    executeSqliteQuerySync(
-      db,
-      getAcpSessionKysely(db).deleteFrom("acp_sessions").where("session_key", "=", key),
-    );
-  }
+  deleteAcpSessionMetaRows(db, [...keys]);
+  return {
+    kind: "acp",
+    sessionId: input.entry?.sessionId,
+    lifecycleRevision: input.entry?.lifecycleRevision ?? null,
+    sessionStartedAt: input.entry?.sessionStartedAt,
+    acp: written ? rowToAcpSessionMeta(written) : null,
+  };
 }

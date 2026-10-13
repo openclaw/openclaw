@@ -6,6 +6,7 @@ import type {
   PluginsInspectResult,
   PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -36,6 +37,7 @@ import {
   emptyInstalledPluginComponents,
   projectInstalledPluginComponents,
 } from "./installed-plugin-components.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
@@ -58,7 +60,6 @@ import {
   prepareCatalogEntries,
   loadOfficialCatalog,
   normalizeKinds,
-  normalizeCatalogMetadata,
   normalizeFeaturedAt,
   firstPluginError,
   compareCatalogEntries,
@@ -68,6 +69,7 @@ import {
   resolveOfficialEntryById,
 } from "./management-catalog.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
+import { normalizeManifestCatalog } from "./manifest-capability-normalizers.js";
 import { readPluginMcpAuthStatus } from "./mcp-auth-status.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -76,11 +78,17 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
 import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
-import { createPluginCache, getProcessPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  getProcessPluginCache,
+  retainPluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import {
-  loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
@@ -110,29 +118,55 @@ export function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS
     : resolvePluginMetadataSnapshot(resolveManagedPluginMetadataParams(config, env));
 }
 
-export function loadFreshManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  // Gateway actions must cover every workspace shown in its management inventory.
-  return getProcessGatewayPluginMetadataSnapshot()
-    ? resolveConfigWidePluginMetadataSnapshot({ config, env, allowCurrent: false })
-    : loadPluginMetadataSnapshot({
-        ...resolveManagedPluginMetadataParams(config, env),
-        allowCurrent: false,
-      });
+export function loadFreshManagedPluginMetadata(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<PluginMetadataSnapshot> {
+  const capturedEnv = cloneEnvWithPlatformSemantics(env);
+  const current = getPluginCache();
+  const cache = current.kind === "operation" ? current : createPluginCache();
+  return withPluginCache(cache, async () => {
+    const configWide = Boolean(getProcessGatewayPluginMetadataSnapshot());
+    const params = configWide
+      ? { config, env: capturedEnv }
+      : resolveManagedPluginMetadataParams(config, capturedEnv);
+    const release = retainPluginCache(cache);
+    try {
+      const assertCurrent = await preparePluginMetadataMachineStateAsync({ env: capturedEnv });
+      assertCurrent();
+      // Management requires fresh inventory even when a generic reader could reuse boot facts.
+      return configWide
+        ? resolveConfigWidePluginMetadataSnapshot({ ...params, allowCurrent: false })
+        : loadPluginMetadataSnapshot({ ...params, allowCurrent: false });
+    } finally {
+      release();
+    }
+  });
 }
 
 /** Publish desired install state for management without replacing the Gateway's boot facts. */
-export function refreshManagedPluginMetadata(params: {
+export async function refreshManagedPluginMetadata(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): PluginMetadataSnapshot {
+  assertCurrent?: () => void;
+}): Promise<PluginMetadataSnapshot> {
   const env = params.env ?? process.env;
   const boot = getProcessGatewayPluginMetadataSnapshot();
+  const processCache = getProcessPluginCache();
+  const assertCurrent = params.assertCurrent;
   // Install writes may have replaced package bytes already seen by the operation.
   // Publish only a completely prepared generation; retained readers keep their original facts.
   const cache = createPluginCache();
-  const snapshot = withPluginCache(cache, () => loadFreshManagedPluginMetadata(params.config, env));
-  if (boot) {
-    getProcessPluginCache().desiredMetadata = { boot, cache, snapshot };
+  const snapshot = await withPluginCache(cache, () =>
+    loadFreshManagedPluginMetadata(params.config, env),
+  );
+  assertCurrent?.();
+  if (
+    boot &&
+    getProcessGatewayPluginMetadataSnapshot() === boot &&
+    getProcessPluginCache() === processCache
+  ) {
+    processCache.desiredMetadata = { boot, cache, snapshot };
   }
   return snapshot;
 }
@@ -249,7 +283,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
       const enabled = isEnabled(record.pluginId);
       const manifest = metadata.byPluginId.get(record.pluginId);
-      const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
+      const localCatalog = normalizeManifestCatalog(manifest?.catalog);
       const ownership = ownershipResolver.resolvePackage(record.pluginId);
       const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
@@ -265,7 +299,7 @@ export const listManagedPlugins = withManagedPluginCache(
         installedClawHubPackages.add(clawhubPackage);
       }
       const officialCatalogMetadata = officialEntry
-        ? normalizeCatalogMetadata(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
+        ? normalizeManifestCatalog(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
         : undefined;
       // Published plugin curation follows the live feed even after install, including
       // omission. Private bundled plugins without an exact package/source match stay local.
@@ -448,7 +482,7 @@ export const listManagedPlugins = withManagedPluginCache(
       const { entry, clawhub, npmPackage } = facts;
       const pluginId = resolveOfficialExternalPluginId(entry);
       const manifest = getOfficialExternalPluginCatalogManifest(entry);
-      const manifestCatalog = normalizeCatalogMetadata(manifest?.catalog);
+      const manifestCatalog = normalizeManifestCatalog(manifest?.catalog);
       const catalog =
         manifestCatalog || typeof entry.featured === "boolean"
           ? {

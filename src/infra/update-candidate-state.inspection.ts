@@ -130,10 +130,9 @@ export async function runUpdateStateInspectionWorker(params: {
     const result = await work;
     return { ...result, stderr: inspection.stderr(), inspection };
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      params.signal?.throwIfAborted();
     }
-    params.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
 }

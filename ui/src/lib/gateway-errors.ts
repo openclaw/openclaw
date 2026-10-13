@@ -1,4 +1,3 @@
-// Control UI shared Gateway error helpers.
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,

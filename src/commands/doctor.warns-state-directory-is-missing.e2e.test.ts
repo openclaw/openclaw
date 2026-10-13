@@ -257,7 +257,7 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -277,7 +277,7 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -297,7 +297,7 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -317,7 +317,7 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -340,7 +340,7 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -360,7 +360,7 @@ describe("doctor command", () => {
       return (
         title === "Gateway" &&
         String(message).includes(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
         )
       );
     });
@@ -381,7 +381,7 @@ describe("doctor command", () => {
       return (
         title === "Gateway" &&
         String(message).includes(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
         )
       );
     });
@@ -404,7 +404,7 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -426,7 +426,7 @@ describe("doctor command", () => {
       return (
         title === "Gateway" &&
         String(message).includes(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
         )
       );
     });
@@ -451,7 +451,7 @@ describe("doctor command", () => {
       return (
         title === "Gateway" &&
         String(message).includes(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
         )
       );
     });
@@ -477,7 +477,7 @@ describe("doctor command", () => {
       return (
         title === "Gateway" &&
         String(message).includes(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
         )
       );
     });

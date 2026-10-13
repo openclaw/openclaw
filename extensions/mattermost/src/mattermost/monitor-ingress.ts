@@ -82,10 +82,7 @@ function requiredString(value: unknown, field: string): string {
   );
 }
 
-function inspectMattermostIngressEvent(rawEvent: string): {
-  eventId: string;
-  laneKey: string;
-} | null {
+function inspectMattermostIngressEvent(rawEvent: string) {
   const envelope = parseRawObject(rawEvent, "Mattermost WebSocket event");
   if (envelope.event !== "posted") {
     return null;
@@ -108,13 +105,7 @@ function inspectMattermostIngressEvent(rawEvent: string): {
   return { eventId, laneKey: `channel:${channelId}` };
 }
 
-function parseClaimedEvent(
-  rawEvent: string,
-  eventId: string,
-): {
-  post: MattermostIngressPost;
-  payload: MattermostEventPayload;
-} {
+function parseClaimedEvent(rawEvent: string, eventId: string) {
   const payload = parseMattermostEventPayload(rawEvent);
   if (!payload || payload.event !== "posted") {
     throw new MattermostIngressPermanentError(
@@ -149,12 +140,6 @@ function resolveMattermostIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-type MattermostIngressMonitor = {
-  receive: (rawEvent: string) => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 export function createMattermostIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<MattermostIngressPayload>;
@@ -163,7 +148,7 @@ export function createMattermostIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): MattermostIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<
     string,
     Omit<MattermostIngressPayload, "version">,
@@ -216,7 +201,7 @@ export function createMattermostIngressMonitor(options: {
   monitor.start();
 
   return {
-    receive: async (rawEvent) => {
+    receive: async (rawEvent: string) => {
       try {
         await monitor.admit(rawEvent);
       } catch (error) {

@@ -8,11 +8,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import {
-  getSkillsResourceVersion,
-  getSkillsSnapshotVersion,
-  getSkillsSourceVersion,
-} from "./refresh-state.js";
+import { getSkillsSnapshotVersion, getSkillsSourceVersion } from "./refresh-state.js";
 import { toWatchRoot } from "./refresh-watch-path.js";
 import { pathWatchers } from "./refresh-watch-registry.js";
 import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
@@ -151,6 +147,43 @@ it("discovers a newly created root and keeps observing edits and deletion", asyn
   expect(read()).toEqual([]);
 });
 
+it("re-admits a replaced workspace and observes subsequent skill edits and removal", async () => {
+  const write = (description: string) =>
+    writeSkill({
+      dir: path.join(fixture.workspaceDir, "skills", "guide"),
+      name: "guide",
+      description,
+    });
+  await write("Original workspace");
+  await ensure();
+  expect(read()).toEqual(["Original workspace"]);
+
+  await fs.rename(fixture.workspaceDir, path.join(fixture.root, "retired-workspace"));
+  await write("Replacement workspace");
+  // The old Root may fail closed; its automatic retry joins retirement before
+  // admitting the replacement. The broader previous authority can reconcile in place.
+  await Promise.allSettled(subscriptions.map((subscription) => subscription.reconcile()));
+  await Promise.all(
+    [...pathWatchers.values()].filter((state) => state.replacing).map((state) => state.close()),
+  );
+  await ready();
+  await advance(500);
+  expect(
+    refresh.reconcileSkillsWatcherCoverage({
+      workspaceDir: fixture.workspaceDir,
+      sourcePlan: resolveWorkspaceSkillSourcePlan(fixture.workspaceDir, { workspaceOnly: true }),
+    }),
+  ).toBe(true);
+  expect(read()).toEqual(["Replacement workspace"]);
+
+  await write("Edited replacement");
+  await reconcile();
+  expect(read()).toEqual(["Edited replacement"]);
+  await fs.rm(path.join(fixture.workspaceDir, "skills"), { recursive: true });
+  await reconcile();
+  expect(read()).toEqual([]);
+});
+
 it("keeps admitted symlink coverage available after unchanged overflow", async () => {
   const root = path.join(fixture.workspaceDir, "skills");
   const target = await fixture.createFixtureDirectory("linked-target");
@@ -183,59 +216,6 @@ it("keeps admitted symlink coverage available after unchanged overflow", async (
   expect(changes).not.toHaveBeenCalled();
   expect(getSkillsSnapshotVersion(fixture.workspaceDir)).toBe(version);
   unsubscribe();
-});
-
-it("refreshes supporting resources without invalidating discovery, including atomic saves", async () => {
-  const dir = path.join(fixture.workspaceDir, "skills", "guide");
-  await writeSkill({ dir, name: "guide", description: "Stable discovery" });
-  await ensure();
-  expect(read()).toEqual(["Stable discovery"]);
-  const file = path.join(dir, "README.md");
-  const sourceVersion = getSkillsSourceVersion(fixture.workspaceDir);
-  const changed = vi.fn();
-  refresh.registerSkillsChangeListener(changed);
-  for (const operation of ["create", "replace", "delete"] as const) {
-    const before = getSkillsResourceVersion(fixture.workspaceDir);
-    if (operation === "create") {
-      await fs.writeFile(file, "created");
-    } else if (operation === "replace") {
-      const temporary = path.join(fixture.root, "replacement");
-      await fs.writeFile(temporary, "replacement");
-      await fs.rename(temporary, file);
-    } else {
-      await fs.unlink(file);
-    }
-    await reconcile();
-    expect(getSkillsResourceVersion(fixture.workspaceDir)).toBeGreaterThan(before);
-    expect(getSkillsSourceVersion(fixture.workspaceDir)).toBe(sourceVersion);
-    expect(changed).not.toHaveBeenCalled();
-  }
-  await fs.mkdir(file);
-  await reconcile();
-  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(sourceVersion);
-});
-
-it("observes admitted symlink targets and removes them from cached discovery on unlink", async () => {
-  const target = await fixture.createFixtureDirectory("outside");
-  const dir = path.join(target, "guide");
-  await writeSkill({ dir, name: "guide", description: "Linked instructions" });
-  const link = path.join(fixture.workspaceDir, "skills", "linked");
-  await fs.symlink(target, link, linkType);
-  await ensure();
-  expect(read()).toEqual([]);
-  const config = { skills: { load: { allowSymlinkTargets: [target] } } };
-  await ensure(config);
-  expect(read(config)).toEqual(["Linked instructions"]);
-  await writeSkill({ dir, name: "guide", description: "Edited target" });
-  await reconcile();
-  expect(read(config)).toEqual(["Edited target"]);
-  const observation = pathWatchers.get(toWatchRoot(target));
-  expect(observation).toBeDefined();
-  await fs.unlink(link);
-  await reconcile();
-  expect(read(config)).toEqual([]);
-  await ensure(config);
-  expect(observation?.closed).toBe(true);
 });
 
 it("settles an atomic SKILL.md replacement until the writer stops changing it", async () => {

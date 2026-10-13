@@ -1,4 +1,3 @@
-// Assertions for kitchen-sink plugin E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -226,10 +225,7 @@ function scanLogs() {
       }
       return true;
     });
-    if (omittedFindings) {
-      return false;
-    }
-    return true;
+    return !omittedFindings;
   });
   if (scannedFiles === 0) {
     throw new Error(
@@ -347,10 +343,10 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "tool metadata registration missing toolName",
     "worker provider registration missing method: resolveAllocation",
   ]);
-  const optionalErrorMessages = new Set([
+  const allowedErrorMessages = new Set([
+    ...expectedErrorMessages,
     "agent event subscription registration requires id and handle",
   ]);
-  const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
     const unexpected = [...errorMessages];
     if (unexpected.length > 0) {

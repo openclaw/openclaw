@@ -154,11 +154,10 @@ export type ReadConfigFileSnapshotInternalResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-export type ReadConfigFileSnapshotWithPluginMetadataResult = {
-  strictIssues?: ConfigValidationIssue[];
-  snapshot: ConfigFileSnapshot;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-};
+export type ReadConfigFileSnapshotWithPluginMetadataResult = Pick<
+  ReadConfigFileSnapshotInternalResult,
+  "strictIssues" | "snapshot" | "pluginMetadataSnapshot"
+>;
 
 export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
   apply: (beforeCommit?: () => void) => Promise<void>;

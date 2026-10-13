@@ -62,10 +62,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
     if (
       !before.isFile() ||
       !current.isFile() ||
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.dev !== current.dev ||
-      before.ino !== current.ino ||
+      [after, current].some((stat) => before.dev !== stat.dev || before.ino !== stat.ino) ||
       first !== 48 ||
       second !== 48 ||
       !header.subarray(0, 48).equals(header.subarray(48, 96))

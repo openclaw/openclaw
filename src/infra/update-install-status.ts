@@ -69,7 +69,7 @@ export async function resolveStartupInstallStatus(
     }
     const message = failure
       ? formatErrorMessage(failure)
-      : `Git update facts unavailable after two ${timeoutMs / 1000}s probes`;
+      : `Git update facts unavailable after two ${timeoutMs / 1000}s checks`;
     status = {
       ...(status ?? { root, installKind: "unknown", packageManager: "unknown" }),
       ...(status?.git ? { git: { ...status.git, error: message } } : {}),
@@ -117,7 +117,7 @@ export async function prepareStartupUpdateInstall(
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
 
-function resolveGitScheduleStatus(
+export function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,

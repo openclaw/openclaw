@@ -39,6 +39,7 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
+import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { VERSION } from "../../version.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -76,16 +77,20 @@ async function readChannelStatusIssues(
   timeoutMs = 5_000,
 ): Promise<ChannelStatusIssue[]> {
   try {
-    const [{ callGateway }, { collectChannelStatusIssues }] = await Promise.all([
-      import("../../gateway/call.js"),
-      import("../../infra/channels-status-issues.js"),
-    ]);
+    const [{ callGateway }, { collectChannelStatusIssues }, { loadDeviceIdentityIfPresent }] =
+      await Promise.all([
+        import("../../gateway/call.js"),
+        import("../../infra/channels-status-issues.js"),
+        import("../../infra/device-identity.js"),
+      ]);
     const payload = await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs },
       timeoutMs,
       config,
       sharedStateMode: "read-only",
+      // The RPC's default async identity lookup uses a writable actor, even for existing-only reads.
+      deviceIdentity: loadDeviceIdentityIfPresent(),
     });
     return collectChannelStatusIssues(payload, []);
   } catch {
@@ -94,6 +99,10 @@ async function readChannelStatusIssues(
 }
 
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
+  return await withArtifactPreservingStateReads(() => inspectUpdateStatus(opts));
+}
+
+async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const [root, config, runtimeFindings] = await Promise.all([
@@ -155,6 +164,18 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const channelLabel = channelInfo.label;
 
   const updateAvailability = resolveUpdateAvailability(update);
+  let immutableCoverage;
+  let immutableCoverageLines: string[] = [];
+  if (update.immutable) {
+    try {
+      const { inspectImmutableUpdateCoverage, formatImmutableUpdateCoverage } =
+        await import("../../infra/update-immutable-inspection.js");
+      immutableCoverage = await inspectImmutableUpdateCoverage({ root: update.immutable.root });
+      immutableCoverageLines = formatImmutableUpdateCoverage(immutableCoverage);
+    } catch (error) {
+      immutableCoverageLines = [`Immutable coverage unavailable: ${formatErrorMessage(error)}`];
+    }
+  }
 
   const runStatus = await readUpdateRunStatus();
   const recoveryStatus = await readUpdateRecoverySetStatus();
@@ -254,6 +275,10 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(immutableCoverage ? { immutableCoverage } : {}),
+      ...(update.immutable && !immutableCoverage
+        ? { immutableCoverageError: immutableCoverageLines[0] }
+        : {}),
       ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
       ...(serviceDefinition ? { serviceDefinition } : {}),
       ...(lastGatewayInstallationReplacement ? { lastGatewayInstallationReplacement } : {}),
@@ -283,18 +308,42 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
             ? update.packageManager
             : "unknown";
 
+  const immutable = update.immutable;
+  const activation = immutable?.activation;
+  const lastActivation = immutable?.lastActivation;
+  const verifiedGateway = lastActivation?.gateway;
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
-    ...(update.immutable
+    ...(immutable
       ? [
           {
             Item: "Immutable activation",
-            Value: update.immutable.activation
-              ? `${update.immutable.activation.phase} (${update.immutable.activation.operationId})`
-              : update.immutable.activationEnabled
+            Value: activation
+              ? `pending recovery · ${activation.phase} (${activation.operationId})`
+              : immutable.activationEnabled
                 ? "enabled"
                 : "preparation only",
+          },
+        ]
+      : []),
+    ...(activation?.failure ? [{ Item: "Immutable failure", Value: activation.failure }] : []),
+    ...(activation?.recoveryCommand
+      ? [{ Item: "Recovery command (external Node)", Value: activation.recoveryCommand }]
+      : []),
+    ...(lastActivation
+      ? [
+          {
+            Item: "Last immutable activation",
+            Value: `${lastActivation.outcome === "succeeded" ? "accepted" : "restored"} · ${lastActivation.selectedSha} · verified ${new Date(lastActivation.verifiedAtMs).toISOString()} (${lastActivation.operationId})`,
+          },
+        ]
+      : []),
+    ...(verifiedGateway
+      ? [
+          {
+            Item: "Last verified Gateway",
+            Value: `version ${verifiedGateway.version} · build ${verifiedGateway.buildId} · PID ${verifiedGateway.pid} · boot ${verifiedGateway.bootId}`,
           },
         ]
       : []),
@@ -351,6 +400,10 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  for (const line of immutableCoverageLines) {
+    defaultRuntime.log(safeMessage(line));
+  }
 
   if (lastGatewayInstallationReplacement) {
     const { reason, completedAtMs } = lastGatewayInstallationReplacement;

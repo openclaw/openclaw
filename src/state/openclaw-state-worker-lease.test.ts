@@ -1,5 +1,9 @@
+import { performance } from "node:perf_hooks";
 import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { Actor } from "../infra/sqlite-worker-broker.types.js";
 import { createSqliteWorkerClient } from "../infra/sqlite-worker-client.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
@@ -11,7 +15,11 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
-import { createOpenClawStateWorkerLease } from "./openclaw-state-worker-store.js";
+import { getOpenClawStateWorkerOwner } from "./openclaw-state-worker-owner.js";
+import {
+  createOpenClawStateWorkerLease,
+  runOpenClawStateWorkerOperation,
+} from "./openclaw-state-worker-store.js";
 
 type DomainScope = Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">;
 
@@ -22,6 +30,7 @@ const physical = vi.hoisted(() => ({
   events: [] as unknown[],
   beforeDispatch: undefined as (() => void) | undefined,
   openGate: undefined as Promise<void> | undefined,
+  onOpen: undefined as (() => void) | undefined,
   databaseAdmission: undefined as OpenClawStateWorkerContext["admission"] | undefined,
   ownerKey: Symbol("synthetic-shared-worker-owner"),
 }));
@@ -60,8 +69,8 @@ vi.mock("../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state-worker.js"),
 }));
 
-vi.mock("../infra/sqlite-worker-store.js", async () => {
-  const { SqliteWorkerError } = await import("../infra/sqlite-worker-contract.js");
+vi.mock("../infra/sqlite-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-worker-store.js")>();
   const { runSqliteWorkerClientOperation } = await import("../infra/sqlite-worker-client.js");
   const current = () => {
     if (!physical.client) {
@@ -70,8 +79,9 @@ vi.mock("../infra/sqlite-worker-store.js", async () => {
     return physical.client;
   };
   return {
-    SqliteWorkerError,
+    ...actual,
     openSharedStateSqliteWorkerStore: async () => {
+      physical.onOpen?.();
       await physical.openGate;
       return current().store;
     },
@@ -103,6 +113,7 @@ afterEach(() => {
   physical.events = [];
   physical.beforeDispatch = undefined;
   physical.openGate = undefined;
+  physical.onOpen = undefined;
   physical.databaseAdmission = undefined;
 });
 
@@ -132,7 +143,9 @@ function createLeaseFixture() {
     dispatch: async (payload, _signal, _scope, assertCurrent) => {
       physical.beforeDispatch?.();
       assertCurrent?.();
-      physical.events.push(deserialize(payload));
+      const command: unknown = deserialize(payload);
+      physical.events.push(command);
+      return isRecord(command) && command.type === "database.inspectIdle" ? "healthy" : undefined;
     },
     release: async () => {
       physical.events.push("physical-close");
@@ -262,6 +275,129 @@ it("drains a command accepted before cold acquisition after its callback returns
     await maintenance.close();
   }
   expect(physical.events).toEqual([acceptedCommand, "physical-close"]);
+});
+
+it("cancels a queued callback without abandoning the shared actor's cold acquisition", async ({
+  signal,
+}) => {
+  const openGate = createDeferredCore();
+  physical.openGate = openGate.promise;
+  const { maintenance, context } = createLeaseFixture();
+  const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
+  const canceled = new AbortController();
+  const pending = lease.execute(
+    { type: "capture.endSession", input: { sessionId: "canceled-before-open", endedAt: 1 } },
+    { signal: canceled.signal },
+  );
+  const reason = new Error("callback task deadline expired");
+  canceled.abort(reason);
+  try {
+    await withinTest(
+      expect(pending).rejects.toMatchObject({ name: "AbortError", cause: reason }),
+      signal,
+    );
+    expect(physical.events).toEqual([]);
+  } finally {
+    openGate.resolve();
+    await Promise.allSettled([pending, lease.ready]);
+    await maintenance.close();
+  }
+  expect(physical.events).toEqual(["physical-close"]);
+});
+
+it.for([
+  { kind: "raw Error abort", reason: new Error("canceled"), abort: true, persistent: false },
+  { kind: "normalized primitive abort", reason: "canceled", abort: true, persistent: false },
+  { kind: "normalized object abort", reason: { canceled: true }, abort: true, persistent: false },
+  { kind: "normalized null abort", reason: null, abort: true, persistent: false },
+  { kind: "uncanceled physical failure", reason: undefined, abort: false, persistent: true },
+  {
+    kind: "canceled persistent physical failure",
+    reason: "canceled",
+    abort: true,
+    persistent: true,
+  },
+])(
+  "preserves independent opening ownership for $kind",
+  async ({ reason, abort, persistent }, { signal }) => {
+    const openGate = createDeferredCore();
+    physical.openGate = openGate.promise;
+    const opens = vi.fn();
+    physical.onOpen = opens;
+    const { maintenance, context } = createLeaseFixture();
+    const owner = getOpenClawStateWorkerOwner();
+    const canceled = new AbortController();
+    const first = maintenance.run(() => owner.open(context, { signal: canceled.signal }));
+    const surviving = maintenance.run(() => owner.open(context));
+    const failure = persistent
+      ? new Error("shared physical failure")
+      : reason instanceof Error
+        ? reason
+        : new Error("normalized opening cancellation");
+    const firstRejected = expect(first).rejects.toBe(failure);
+    const survivingOutcome = persistent
+      ? expect(surviving).rejects.toBe(failure)
+      : expect(surviving).resolves.toBe(physical.client!.store);
+    if (abort) {
+      canceled.abort(reason);
+    }
+    if (!persistent) {
+      physical.openGate = undefined;
+    }
+    openGate.reject(failure);
+    try {
+      await withinTest(Promise.all([firstRejected, survivingOutcome]), signal);
+      expect(opens).toHaveBeenCalledTimes(abort ? 2 : 1);
+    } finally {
+      openGate.resolve();
+      await Promise.allSettled([first, surviving]);
+      await maintenance.close();
+    }
+    expect(physical.events).toEqual(persistent ? [] : ["physical-close"]);
+  },
+);
+
+it("retires an abandoned actor after joining its accepted native opening", async ({ signal }) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  const { context, maintenance } = createLeaseFixture();
+  const owner = getOpenClawStateWorkerOwner();
+  const openGate = createDeferredCore();
+  const opening = createDeferredCore();
+  physical.openGate = openGate.promise;
+  physical.onOpen = opening.resolve;
+  const cancel = new AbortController();
+  const reason = new Error("callback abandoned its accepted opening");
+  const operation = vi.fn(async () => undefined);
+  const pending = runOpenClawStateWorkerOperation(
+    { ...context, maintenanceScope: undefined },
+    operation,
+    { signal: cancel.signal },
+  );
+  const rejected = expect(pending).rejects.toBe(reason);
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void pending.then(markSettled, markSettled);
+  try {
+    await withinTest(opening.promise, signal);
+    cancel.abort(reason);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    openGate.resolve();
+    await withinTest(rejected, signal);
+    expect(operation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(physical.events).toContain("physical-close");
+  } finally {
+    openGate.resolve();
+    await Promise.allSettled([pending]);
+    await owner.close();
+    await maintenance.close();
+    monotonicClock.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 it.each(["removed", "reassigned", "replaced", "revoked"] as const)(

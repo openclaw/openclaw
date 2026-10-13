@@ -46,12 +46,6 @@ type PresenceTarget = {
 type SlackPresenceClient = Pick<WebClient["users"], "getPresence">;
 type PresenceSubject = { teamId?: string; userId: string };
 
-type SlackPresenceMonitor = {
-  observe: (prepared: PreparedSlackMessage) => void;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function resolveMode(
   channelConfig: SlackPresenceEventsConfig | undefined,
   accountConfig: SlackPresenceEventsConfig | undefined,
@@ -170,7 +164,7 @@ export function createSlackPresenceMonitor(params: {
   error?: (message: string) => void;
   enqueue?: typeof enqueueRoutedSystemEvent;
   wake?: typeof requestHeartbeat;
-}): SlackPresenceMonitor {
+}) {
   const resolveClient = params.resolveClient ?? (() => params.client);
   if (!params.client && !params.resolveClient) {
     throw new Error("Slack presence monitor requires a client or client resolver");
@@ -185,6 +179,20 @@ export function createSlackPresenceMonitor(params: {
   let started = false;
   const rateLimitedUntilByWorkspace = new Map<string, number>();
 
+  const collectEligibleSubjects = () => {
+    const subjects = new Map<string, PresenceSubject>();
+    for (const target of targets.values()) {
+      if (!isTargetEligible(target)) {
+        continue;
+      }
+      for (const userId of target.participants.keys()) {
+        const subject = { teamId: target.teamId, userId };
+        subjects.set(presenceSubjectKey(subject), subject);
+      }
+    }
+    return subjects;
+  };
+
   const pruneTargets = (now: number) => {
     for (const [key, target] of targets) {
       if (
@@ -195,20 +203,13 @@ export function createSlackPresenceMonitor(params: {
       }
     }
     pruneMapToMaxSize(targets, SLACK_PRESENCE_MAX_TARGETS);
-    const eligibleUsers = new Set(
-      Array.from(targets.values())
-        .filter(isTargetEligible)
-        .flatMap((target) =>
-          Array.from(target.participants.keys()).map((userId) =>
-            presenceSubjectKey({ teamId: target.teamId, userId }),
-          ),
-        ),
-    );
+    const eligibleSubjects = collectEligibleSubjects();
     for (const userId of presenceByUser.keys()) {
-      if (!eligibleUsers.has(userId)) {
+      if (!eligibleSubjects.has(userId)) {
         presenceByUser.delete(userId);
       }
     }
+    return eligibleSubjects;
   };
 
   const observe = (prepared: PreparedSlackMessage) => {
@@ -311,18 +312,7 @@ export function createSlackPresenceMonitor(params: {
 
   const performPoll = async () => {
     const now = nowMs();
-    pruneTargets(now);
-    const candidatesByKey = new Map<string, PresenceSubject>();
-    for (const target of targets.values()) {
-      if (!isTargetEligible(target)) {
-        continue;
-      }
-      for (const userId of target.participants.keys()) {
-        const subject = { teamId: target.teamId, userId };
-        candidatesByKey.set(presenceSubjectKey(subject), subject);
-      }
-    }
-    const candidates = Array.from(candidatesByKey.entries())
+    const candidates = Array.from(pruneTargets(now).entries())
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, subject]) => subject);
     if (candidates.length === 0) {

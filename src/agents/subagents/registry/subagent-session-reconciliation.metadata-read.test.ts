@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
@@ -17,7 +16,8 @@ import {
   resolveStoredSubagentCapabilities,
   resolvePersistedSubagentToolPolicyEnvelope,
 } from "../spawn/subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import {
   loadSubagentSessionEntry,
   resolveSubagentSessionCompletion,
@@ -92,29 +92,32 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
           .soft(transferred.some((message) => message.includes("TARGET_COLD_PAYLOAD_")))
           .toBe(false);
         reads.clear();
-        expect(loadSubagentSessionEntry({ childSessionKey, ...options })).toMatchObject({
+        expect(await loadSubagentSessionEntry({ childSessionKey, ...options })).toMatchObject({
           sessionId: "target",
           lifecycleRevision: "target-revision",
           status: "done",
           startedAt: 1000,
           endedAt: 2000,
         });
-        const queries = reads.calls
-          .flatMap((call) => call.mock.contexts)
-          .map((statement) => (statement as StatementSync).sourceSQL)
-          .filter((sql) => /from "session_nodes"/i.test(sql));
-        expect(queries).toHaveLength(1);
-        expect.soft(queries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
+        reads.expectIdle();
         expect
           .soft(parse.mock.calls.some(([value]) => value.includes("TARGET_COLD_PAYLOAD_")))
           .toBe(false);
-        expect(getSubagentDepthFromSessionStore(childSessionKey, options)).toBe(2);
-        expect(getSubagentDepthFromSessionStore("target", options)).toBe(2);
-        expect(resolveStoredSubagentCapabilities(childSessionKey, options)).toMatchObject({
+        expect(await getSubagentDepthFromSessionStoreInWorker(childSessionKey, options)).toBe(2);
+        expect(await getSubagentDepthFromSessionStoreInWorker("target", options)).toBe(2);
+        expect(
+          await withPreparedSessionCapabilityRead(() =>
+            resolveStoredSubagentCapabilities(childSessionKey, options),
+          ),
+        ).toMatchObject({
           depth: 2,
           canSpawn: true,
         });
-        expect(resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, options)).toMatchObject({
+        expect(
+          await withPreparedSessionCapabilityRead(() =>
+            resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, options),
+          ),
+        ).toMatchObject({
           spawnedBy: "agent:main:main",
           inheritedToolAllow: ["read"],
           inheritedToolDeny: ["exec"],
@@ -143,7 +146,6 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         {
           sessionId: "successor",
           updatedAt: 4000,
-          status: "running",
         },
       );
       expect(await resolveSubagentSessionCompletion(params)).toBeNull();
@@ -164,9 +166,13 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         "invalid persisted session row requires repair",
       );
 
-      expect(getSubagentDepthFromSessionStore(childSessionKey, { cfg: params.cfg })).toBe(1);
       expect(
-        resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, { cfg: params.cfg }),
+        await getSubagentDepthFromSessionStoreInWorker(childSessionKey, { cfg: params.cfg }),
+      ).toBe(1);
+      expect(
+        await withPreparedSessionCapabilityRead(() =>
+          resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, { cfg: params.cfg }),
+        ),
       ).toBeUndefined();
 
       for (const [requested, stored, matches] of [

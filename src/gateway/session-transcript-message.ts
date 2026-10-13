@@ -1,5 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -28,6 +30,8 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 export function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
+  isRunActive?: (runId: string) => boolean;
+  toolResultMaxChars?: number;
   message: unknown;
   messageId?: string;
   messageSeq?: number;
@@ -43,6 +47,7 @@ export function projectSessionMessagePayload(params: {
   payload?: Record<string, unknown>;
   projectionState: SessionMessageProjectionState;
   requiresHistoryReset?: true;
+  deferredAssistantError?: true;
 } {
   const idempotencyKey = readTranscriptMessageIdempotencyKey(params.message);
   const senderIsOwner = readTranscriptMessageSenderIsOwner(params.message);
@@ -53,12 +58,25 @@ export function projectSessionMessagePayload(params: {
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(params.messageSeq !== undefined ? { seq: params.messageSeq } : {}),
   });
+  const messageRunId = readSessionTranscriptRunId(rawMessage) ?? params.runId;
+  if (messageRunId && isPendingAssistantError(rawMessage) && params.isRunActive?.(messageRunId)) {
+    // A failed attempt is durable before recovery starts. Only defer its display;
+    // the terminal lifecycle refresh will expose it if this exact run really fails.
+    return {
+      deferredAssistantError: true,
+      projectionState: {
+        assistantErrorPending: true,
+        turnBoundaryPending: params.projectionState?.turnBoundaryPending ?? false,
+      },
+    };
+  }
   const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
         subagentCoordination: params.subagentCoordination,
         resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
+        toolResultMaxChars: params.toolResultMaxChars,
         activity: false,
       })
     : undefined;
@@ -87,6 +105,7 @@ export function projectSessionMessagePayload(params: {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
+            toolResultMaxChars: params.toolResultMaxChars,
             subagentCoordination: params.subagentCoordination,
             resolveCronJobName: params.resolveCronJobName,
           })

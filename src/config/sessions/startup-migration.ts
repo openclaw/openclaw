@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { readDeferredPluginSessionImport } from "../../infra/deferred-plugin-session-sources.js";
+import {
+  readDeferredPluginSessionImport,
+  readStaleDeferredPluginSessionImport,
+} from "../../infra/deferred-plugin-session-sources.js";
+import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
@@ -46,6 +50,7 @@ import {
 import {
   isConfiguredAgentDatabaseTarget,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseCandidatePaths,
   resolveConfiguredAgentDatabaseTargets,
 } from "./targets.js";
 
@@ -110,7 +115,19 @@ export function assertSessionStoreMigrationComplete(params: {
       const deletion =
         classifyDeletion?.(storePath, target.agentId) ??
         classifyDeletion?.(destination, target.agentId);
-      const retained = deletion !== undefined && deletion !== "unavailable";
+      const staleImport = readStaleDeferredPluginSessionImport({
+        target: { ...target, agentId: target.agentId },
+        sqlitePath: destination,
+        env,
+      });
+      if (staleImport) {
+        recordStartupMigrationWarnings([
+          `Session import receipt belongs to another database; serving live SQLite at ${destination}. Run openclaw doctor --fix to recover retained history.`,
+        ]);
+      }
+      // A foreign receipt leaves recovery inputs protected, not a migration veto on this database.
+      const retained =
+        (deletion !== undefined && deletion !== "unavailable") || Boolean(staleImport);
       owners.set(`${target.agentId}\0${destination}`, {
         target: { ...target, agentId: target.agentId },
         destination,
@@ -243,8 +260,12 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Set<string>();
+  let interruptedSessions = 0;
   const registeredDatabases = new Set(
     listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
+  );
+  const configuredTargets = resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, { env }).map(
+    (pathname) => ({ path: pathname }),
   );
   const tasks = targets.map((target) => async () => {
     params.assertCurrent?.();
@@ -281,7 +302,7 @@ export async function runSessionStartupMigration(params: {
         // Missing registry entries still need recovery before runtime can discover their lineage.
         if (
           registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
-          !isConfiguredAgentDatabaseTarget(params.cfg, options.agentId, databasePath, env)
+          !isConfiguredAgentDatabaseTarget(configuredTargets, options.agentId, databasePath)
         ) {
           return false;
         }
@@ -298,11 +319,13 @@ export async function runSessionStartupMigration(params: {
     let alreadyOpen: boolean | undefined;
     let handedOff = false;
     try {
+      const { repairLegacySessionRunOutcomes } =
+        await import("../../commands/doctor/shared/session-entry-rewrite.js");
       if (
         !(await runUnlessDeleted(async () => {
           alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+          const mainKey = params.cfg.session?.mainKey;
           try {
-            const mainKey = params.cfg.session?.mainKey;
             if (
               !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
               !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
@@ -319,6 +342,10 @@ export async function runSessionStartupMigration(params: {
               `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
             );
           }
+          interruptedSessions += await repairLegacySessionRunOutcomes(
+            { agentId: options.agentId, env, storePath: databasePath },
+            () => params.assertCurrent?.(),
+          );
         }))
       ) {
         return;
@@ -383,5 +410,8 @@ export async function runSessionStartupMigration(params: {
       throw firstError;
     }
   });
+  if (interruptedSessions > 0) {
+    params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to interrupted`);
+  }
   params.assertCurrent?.();
 }

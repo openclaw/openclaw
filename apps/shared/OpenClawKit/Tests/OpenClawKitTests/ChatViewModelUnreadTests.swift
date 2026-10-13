@@ -6,15 +6,28 @@ import Testing
 @testable import OpenClawChatUI
 
 private actor UnreadTestTransportState {
-    var historyCalls = 0 { didSet { self.wake() } }
-    var listCalls = 0 { didSet { self.wake() } }
-    var unreadPatchAttempts: [(String, Bool)] = [] { didSet { self.wake() } }
-    var unreadPatchStarts = 0 { didSet { self.wake() } }
+    var historyCalls = 0 {
+        didSet { self.wake() }
+    }
+
+    var listCalls = 0 {
+        didSet { self.wake() }
+    }
+
+    var unreadPatchAttempts: [(String, Bool)] = [] {
+        didSet { self.wake() }
+    }
+
+    var unreadPatchStarts = 0 {
+        didSet { self.wake() }
+    }
+
     var sessionOverride: [OpenClawChatSessionEntry]?
     var historyFailuresRemaining: Int
     var patchFailuresRemaining: Int
-    private var waiters: [(isSatisfied: (isolated UnreadTestTransportState) -> Bool,
-                           continuation: CheckedContinuation<Void, Never>)] = []
+    private var waiters: [(
+        isSatisfied: (isolated UnreadTestTransportState) -> Bool,
+        continuation: CheckedContinuation<Void, Never>)] = []
 
     init(historyFailures: Int, patchFailures: Int) {
         self.historyFailuresRemaining = historyFailures

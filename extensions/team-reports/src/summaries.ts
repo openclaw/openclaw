@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
+import type { TeamReportsConfig } from "./config.js";
 import type {
   GithubCounts,
   GithubItem,
@@ -14,13 +15,6 @@ export type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
 type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
 
-type SummaryOptions = {
-  enabled: boolean;
-  model?: string;
-  reasoning?: CompletionParams["reasoning"];
-  agentId?: string;
-};
-
 type SummaryResult = {
   report: ReportDocument;
   summary: SummaryDocument;
@@ -28,11 +22,6 @@ type SummaryResult = {
 
 const MAX_RESPONSE_CHARS = 128 * 1024;
 const MAX_DIGEST_BYTES = 2 * 1024 * 1024;
-
-function summaryOutputBudget(report: ReportDocument): number {
-  // Reserve overview space plus per-member prose for the complete roster on either attempt.
-  return Math.min(32_000, 4_000 + 300 * report.members.length);
-}
 
 class SummaryResponseError extends Error {
   constructor(
@@ -321,7 +310,7 @@ function fallbackResult(
 
 export async function generateSummaries(params: {
   report: ReportDocument;
-  options: SummaryOptions;
+  options: TeamReportsConfig["summaries"];
   llm: SummaryLlm;
   previous?: { report: ReportDocument; summary: SummaryDocument };
   signal?: AbortSignal;
@@ -360,7 +349,8 @@ export async function generateSummaries(params: {
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: digest },
   ];
-  const maxTokens = summaryOutputBudget(report);
+  // Reserve overview space plus per-member prose for the complete roster on either attempt.
+  const maxTokens = Math.min(32_000, 4_000 + 300 * report.members.length);
   let failureReason = "Model summary unavailable: invalid JSON after repair";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     signal?.throwIfAborted();

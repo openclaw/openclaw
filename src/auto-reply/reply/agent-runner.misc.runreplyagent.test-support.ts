@@ -10,7 +10,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -76,9 +76,10 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+// mock-isolation: Reply-runner cases fix auth mode without reading host profiles or environment keys.
 vi.mock("../../agents/model-auth.js", () => ({
   isMissingProviderAuthError: () => false,
-  resolveModelAuthMode: () => "api-key",
+  resolveModelAuthModeAsync: () => "api-key",
 }));
 
 vi.mock("../../agents/embedded-agent.js", () => {
@@ -141,7 +142,8 @@ vi.mock("../../runtime.js", () => {
 });
 
 // mock-isolation: Keep the process-wide followup queue and drain registry outside runner cases.
-vi.mock("./queue.js", () => {
+vi.mock("./queue.js", async () => {
+  const { resolveFollowupAbortSignal } = await import("./queue/types.js");
   return {
     admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
@@ -152,7 +154,7 @@ vi.mock("./queue.js", () => {
       fallback: vi.fn(),
       consume: vi.fn(),
     })),
-    resolveFollowupAbortSignal: vi.fn(() => undefined),
+    resolveFollowupAbortSignal,
     scheduleFollowupDrain: vi.fn(),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
@@ -208,7 +210,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
     await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
   return {
     ...actual,
-    getSwarmRunByLaunchReplayKey: () => undefined,
+    getSwarmRunByLaunchReplayKey: async () => undefined,
     markSubagentRunTerminated: () => 0,
   };
 });
@@ -216,8 +218,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
   ...(await importOriginal<
     typeof import("../../agents/subagents/registry/subagent-registry-read.js")
   >()),
-  getLatestSubagentRunByChildSessionKey: () => null,
-  listSubagentRunsForController: () => [],
+  getLatestSubagentRunByChildSessionKey: async () => null,
 }));
 
 // #85714: keep the real private-final decision but spy the WARN emitter so we
@@ -235,6 +236,7 @@ function setupAgentRunnerMocks(): void {
   vi.useRealTimers();
   registerCliBackendsForTest();
   clearRuntimeConfigSnapshot();
+  setRuntimeConfigSnapshot({});
   resetDiagnosticEventsForTest();
   resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();

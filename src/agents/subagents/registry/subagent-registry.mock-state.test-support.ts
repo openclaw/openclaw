@@ -10,7 +10,7 @@ import type { applySessionEntryExactReplacements } from "../../../config/session
 import type { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
 import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
-import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
@@ -129,10 +129,6 @@ export function createSubagentRegistryMockState() {
       (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
         new Map(runs),
     ),
-    getSubagentRunsSnapshotForController: vi.fn(
-      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
-        new Map(runs),
-    ),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
     runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
@@ -188,6 +184,18 @@ export function createSubagentRegistryMockState() {
       assertCurrent();
       return Promise.resolve({
         assertCurrent,
+        readSessionSettings: () => {
+          assertCurrent();
+          const entry = mocks.entries[input.sessionKey];
+          return {
+            permissionMode: entry?.permissionMode,
+            toolOverrides: entry?.toolOverrides,
+          };
+        },
+        bindCreation: () => {
+          throw new Error("Registry fixtures do not supply committed session creation receipts.");
+        },
+        isCreationAdopted: () => false,
         prepareRead: () => undefined,
         release: () => {
           active = false;
@@ -206,12 +214,7 @@ export function createSubagentRegistryMockState() {
       };
     },
     withSessionEntryReadOnlyInWorker: async <T>(
-      scope: SessionEntryReadScope,
-      assertCurrent: () => void,
-      consume: (
-        read: Result<SessionEntry | undefined, unknown>,
-        owner: SessionEntryReadWorkerOwner,
-      ) => Promise<T>,
+      ...[scope, assertCurrent, consume]: Parameters<typeof withSessionEntryReadOnlyInWorker<T>>
     ): Promise<T> => {
       assertCurrent();
       let read: Result<SessionEntry | undefined, unknown>;

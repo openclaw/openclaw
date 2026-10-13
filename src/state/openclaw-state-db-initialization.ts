@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readAgentStorePathsFromConfig } from "../config/agent-store-source.js";
-import { listSqliteTargetCandidatePathsInDirectory } from "../config/sessions/session-sqlite-target-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { resolveOpenClawAgentDatabaseDiscoveryPaths } from "./openclaw-agent-db-discovery-paths.js";
 import {
   resolveOpenClawStateDirForDatabasePath,
   resolveQuarantineStorePath,
@@ -56,8 +56,11 @@ export function prepareStateDatabaseInitialization(
       ) {
         return { kind: "unavailable" };
       }
-      candidates.add(path.join(agentDir, "openclaw-agent.sqlite"));
-      for (const candidate of listSqliteTargetCandidatePathsInDirectory(agentDir)) {
+      for (const candidate of resolveOpenClawAgentDatabaseDiscoveryPaths({
+        agentDir,
+        agentId: entry.name,
+        env,
+      })) {
         candidates.add(candidate);
       }
     }

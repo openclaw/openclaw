@@ -1,19 +1,12 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 /** Throttled draft-stream sender used by channels that edit in-progress replies. */
-export type DraftStreamLoop<T = string> = {
-  update: (value: T) => void;
-  flush: () => Promise<void>;
-  stop: () => void;
-  resetPending: () => void;
-  resetThrottleWindow: () => void;
-  waitForInFlight: () => Promise<void>;
+export type DraftStreamLoop<T = string> = Omit<
+  ReturnType<typeof createDraftStreamLoop<T>>,
+  "takePending"
+> & {
   /** Removes queued (not in-flight) text atomically and cancels its scheduled flush. */
   takePending?: () => T;
-};
-
-type CreatedDraftStreamLoop<T> = DraftStreamLoop<T> & {
-  takePending: () => T;
 };
 
 export function createDraftStreamLoop<T = string>(params: {
@@ -26,7 +19,7 @@ export function createDraftStreamLoop<T = string>(params: {
   emptyValue?: T;
   isEmpty?: (value: T) => boolean;
   onBackgroundFlushError?: (err: unknown) => void;
-}): CreatedDraftStreamLoop<T> {
+}) {
   const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
   const emptyValue = params.emptyValue ?? ("" as T);
   const isEmpty =

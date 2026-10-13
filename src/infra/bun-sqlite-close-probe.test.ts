@@ -31,7 +31,8 @@ vi.mock("node:fs/promises", () => ({
   rm: state.remove,
 }));
 vi.mock("node:timers/promises", () => ({ setImmediate: async () => {} }));
-vi.mock("node:worker_threads", () => ({
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: class extends EventEmitter {
     terminate = vi.fn(() => state.join);
     unref = vi.fn(() => this);
@@ -67,8 +68,8 @@ it.each([
   ["timeout", undefined, "timed out", false],
   ["error", new Error("native probe failed"), "native probe failed", false],
   ["exit", 1, "exited before its reply", false],
-  ["message", undefined, "Invalid SQLite close probe reply", false],
-  ["message", "SQLite close probe cannot establish WAL mode", "WAL", false],
+  ["message", undefined, "Invalid SQLite close check reply", false],
+  ["message", "SQLite close check cannot establish WAL mode", "WAL", false],
   ["timeout", undefined, "timed out", true],
   ["error", new Error("probe failed"), "probe failed", true],
 ] as const)(

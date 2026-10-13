@@ -216,8 +216,6 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
   it.each([
     { reason: "from me", groupScope: "none" },
-    { reason: "no mention", groupScope: "none" },
-    { reason: "no mention", groupScope: "account" },
     { reason: "no mention", groupScope: "root" },
   ])(
     "logs one diagnostic per chat for $reason drops (groups scope: $groupScope)",

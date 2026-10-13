@@ -1,11 +1,8 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GitHubIdentityController } from "../features/github-connections/github-identity-controller.ts";
-import { renderGitHubConnectionSetup } from "../features/github-connections/github-identity-view.ts";
 import { renderWorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.ts";
 import { renderDevicePairSetup } from "../pages/devices/view-pairing.runtime.ts";
-import { renderSessionsCard } from "../pages/usage/view-overview.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
@@ -83,46 +80,6 @@ const surfaces = [
         onGetApps: vi.fn(),
       }),
     selector: ".device-pair-setup__actions button",
-  },
-  {
-    name: "GitHub authorization code",
-    view: (text: string) => {
-      const controller = new GitHubIdentityController({ requestUpdate: vi.fn() });
-      controller.statusReadable = controller.authorizable = true;
-      vi.spyOn(controller, "connectionReady", "get").mockReturnValue(true);
-      vi.spyOn(controller, "authorization", "get").mockReturnValue({
-        phase: "code",
-        requestId: "github-device-test",
-        userCode: text,
-        verificationUri: "https://github.com/login/device",
-        expiresInMs: 60_000,
-        pollAfterMs: 5_000,
-        displayExpiresAtMs: 70_000,
-      });
-      return renderGitHubConnectionSetup(controller);
-    },
-    selector: ".github-device-code + button",
-  },
-  {
-    name: "usage session label",
-    view: (text: string) =>
-      renderSessionsCard(
-        [{ key: "session", label: text, usage: null }],
-        [],
-        [],
-        true,
-        "recent",
-        "desc",
-        [],
-        "all",
-        vi.fn(),
-        vi.fn(),
-        vi.fn(),
-        vi.fn(),
-        1,
-        vi.fn(),
-      ),
-    selector: ".session-bar-actions button",
   },
   {
     name: "workspace conflict command",

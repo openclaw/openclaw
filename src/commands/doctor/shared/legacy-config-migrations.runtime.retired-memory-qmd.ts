@@ -15,10 +15,7 @@ function hasRetiredAgentMemoryQmd(value: unknown): boolean {
   return Boolean(search && Object.hasOwn(search, "qmd"));
 }
 
-type RetiredQmdExternalPath = {
-  path: string;
-  pattern?: string;
-};
+type RetiredQmdExternalPath = Exclude<MemoryExtraPath, string>;
 
 function readRetiredQmdExternalPaths(value: unknown): RetiredQmdExternalPath[] {
   if (!Array.isArray(value)) {

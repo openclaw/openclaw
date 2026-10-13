@@ -181,7 +181,7 @@ type BuildSkillStatusContext = Readonly<
 >;
 
 function buildSkillRequirements(entry: SkillEntry, context: SkillRequirementsContext) {
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const { config, eligibility, allowBundled } = context;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
@@ -223,8 +223,12 @@ function buildSkillRequirements(entry: SkillEntry, context: SkillRequirementsCon
 function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): SkillStatusEntry {
   const { prefs, agentSkillSet } = context;
   const { required, ...requirements } = buildSkillRequirements(entry, context);
-  const blockedByAgentFilter = agentSkillSet !== undefined && !agentSkillSet.has(entry.skill.name);
   const skillSource = resolveSkillSource(entry.skill);
+  // Learned Workshop skills are always visible to their agent; allowlists never hide them.
+  const blockedByAgentFilter =
+    skillSource !== "openclaw-workshop" &&
+    agentSkillSet !== undefined &&
+    !agentSkillSet.has(entry.skill.name);
   // Loader provenance owns bundled status; a matching name cannot establish source.
   const bundled = skillSource === "openclaw-bundled" || skillSource === "openclaw-custodian";
   const availableToAgent = requirements.eligible && !blockedByAgentFilter;

@@ -77,6 +77,19 @@ These compute pools share a CPU admission limit of `max(1, availableParallelism(
 within the calling isolate, reserving a CPU where possible for the Gateway. Ordered
 database and model-generation workers keep their existing independent limits.
 
+Reader pools cap at two workers even on hosts with many CPUs; extra read isolates
+replicate loaded code and caches without helping workloads whose queues are already
+short. Compute pools retain a four-worker cap, while writers and singletons remain
+serial. Pools create workers on demand and use their existing idle retirement.
+Physical session disk accounting uses the reader limit so independent stores can
+scan concurrently without creating a worker for each store.
+Shared-state readers retain at least two slots so a held settlement read cannot
+block a fresh catalog read. Foreground transcript history and search also use the
+two-worker reader cap. The SQLite broker multiplexes independent database owners
+over two writer isolates, preserving per-database ordering without multiplying
+loaded backends on high-core hosts. These pools keep their existing admission and
+native-resource cleanup owners.
+
 File-tool workers perform pure edit matching, Unicode normalization, and diff
 computation. One prepared patch supplies both display and unified-patch receipts,
 including previews. The file-tool caller keeps the mutation queue, filesystem

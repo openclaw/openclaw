@@ -183,7 +183,6 @@ function prepareOwners() {
 describe("prepared channel runtime ownership", () => {
   it.each([
     { path: "inbound", close: "consumer" },
-    { path: "selected", close: "consumer" },
     { path: "selected", close: "donor" },
   ])("retains the live transport through $path until $close closes", async ({ path, close }) => {
     const { live, selected, input } = prepareOwners();

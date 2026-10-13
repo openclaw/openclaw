@@ -104,7 +104,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     if (parentPlacement.state !== "active") {
       throw new Error("Expected active ancestor fixture");
     }
-    const move = placements.beginPlacementMove({
+    const move = await placements.beginPlacementMove({
       sessionId: "parent",
       source: {
         generation: parentPlacement.generation,

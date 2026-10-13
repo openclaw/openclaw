@@ -150,22 +150,16 @@ export function mintDesktopAudioObserver(params: {
                 stream.off("error", fail);
                 stream.off("data", forward);
               };
-              const finish = () => {
+              const settle = (complete: () => void) => {
                 if (settled) {
                   return;
                 }
                 settled = true;
                 cleanup();
-                resolve();
+                complete();
               };
-              const fail = (error: Error) => {
-                if (settled) {
-                  return;
-                }
-                settled = true;
-                cleanup();
-                reject(error);
-              };
+              const finish = () => settle(resolve);
+              const fail = (error: Error) => settle(() => reject(error));
               const forward = (chunk: Buffer) => {
                 if (!current()) {
                   controller.abort();

@@ -1,9 +1,3 @@
-/**
- * Built-in OpenClaw harness registration.
- *
- * Harness selection uses this factory to expose the embedded OpenClaw runtime
- * through the same AgentHarness contract as external harness plugins.
- */
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
@@ -87,7 +81,6 @@ function buildRestrictedFinalizationAttempt(
   };
 }
 
-/** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
 export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
     ...BUILTIN_AGENT_HARNESS_METADATA,

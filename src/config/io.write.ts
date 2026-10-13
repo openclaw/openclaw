@@ -17,8 +17,9 @@ import {
   recordUpdateDoctorConfigWrite,
 } from "../infra/update-doctor-result.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
+import { assertAgentDeletionTargetsUnchanged } from "./agent-workspace-roster-transition.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
-import { collectChangedPaths } from "./config-change-paths.js";
+import { collectChangedPaths, collectConfigWriteChangedPaths } from "./config-change-paths.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import {
   configSnapshotAuditRecordMatchesPath,
@@ -77,6 +78,7 @@ import {
 import { logConfigWarningsOnce } from "./io.warnings.js";
 import {
   ConfigWritePostCommitError,
+  createConfigWriteSafetyRejectionError,
   createConfigValidationFailedError,
   type ConfigWriteRollbackStatus,
 } from "./io.write-errors.js";
@@ -101,6 +103,7 @@ import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
@@ -117,10 +120,10 @@ export async function writeConfigFileFromContext(
     const original = options;
     options = {
       ...options,
-      assertConfigPathForWrite: () => {
-        sourceGuard();
-        original.assertConfigPathForWrite?.();
-      },
+      assertConfigPathForWrite: composeConfigWriteAssertions(
+        sourceGuard,
+        original.assertConfigPathForWrite,
+      ),
       beforeCommit: async () => {
         await original.beforeCommit?.();
         sourceGuard();
@@ -164,7 +167,7 @@ export async function writeConfigFileFromContext(
     persistCanonicalAgentRoster,
     preserveLegacyAgentRoster,
     cronOwner,
-  } = prepareConfigWriteTopology({
+  } = await prepareConfigWriteTopology({
     ...snapshotRead,
     nextConfig: configForWrite,
     options,
@@ -186,14 +189,10 @@ export async function writeConfigFileFromContext(
     : undefined;
 
   let persistCandidate: unknown = authoredConfig;
-  const changedPaths = new Set<string>();
-  collectChangedPaths(inputBasis.config, authoredConfig, "", changedPaths);
-  for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
-    const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
-    if (normalizedPath) {
-      changedPaths.add(normalizedPath);
-    }
-  }
+  const changedPaths = collectConfigWriteChangedPaths(inputBasis.config, authoredConfig, [
+    ...explicitSetPaths,
+    ...(options.unsetPaths ?? []),
+  ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
@@ -287,6 +286,7 @@ export async function writeConfigFileFromContext(
       : initializeNativeSessionCatalogPreferences(validatedCandidate),
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
+    deps.env,
   );
   // Resolve policy from included facts, but persist only its delta beside authored directives.
   persistCandidate = applyMergePatch(
@@ -310,14 +310,16 @@ export async function writeConfigFileFromContext(
     undefined,
     deps.homedir(),
   ) as OpenClawConfig;
-  const outputConfig = preserveDeferredPluginMigrationConfig({
-    sourceConfig: snapshot.parsed,
-    nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
-    pending: deferredPluginMigrations,
-  });
   const stampedOutputConfig = stampConfigWriteMetadata(
-    outputConfig,
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig: snapshot.parsed,
+      nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
+      pending: deferredPluginMigrations,
+      writeOptions: { unsetPaths: options.unsetPaths },
+    }),
     options.lastTouchedVersionOverride,
+    undefined,
+    deps.env,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
@@ -330,13 +332,13 @@ export async function writeConfigFileFromContext(
     raw: snapshot.raw,
     json5: deps.json5,
     lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+    env: deps.env,
   });
   const nextBytes = Buffer.byteLength(json, "utf-8");
   const previousStat = snapshot.exists
     ? await deps.fs.promises.stat(configPath).catch(() => null)
     : null;
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
-  const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
   const includeFileHashes: Record<string, string> = {};
   const includeFileTargets: Record<string, string> = {};
@@ -413,7 +415,7 @@ export async function writeConfigFileFromContext(
     changedPaths: [...changedPaths],
     origin: options.auditOrigin,
     hasMetaBefore,
-    hasMetaAfter,
+    hasMetaAfter: hasConfigMeta(stampedOutputConfig),
     gatewayModeBefore,
     gatewayModeAfter,
     suspicious: suspiciousReasons,
@@ -446,15 +448,19 @@ export async function writeConfigFileFromContext(
     const saveDetail = rejectedSave.ok
       ? `Rejected payload saved to ${rejectedPath}.`
       : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
-    const error = Object.assign(new Error(message), {
+    const diagnosticMessage = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
+    const diagnosticError = Object.assign(new Error(diagnosticMessage), {
       code: "CONFIG_WRITE_REJECTED",
       ...(rejectedSave.ok ? { rejectedPath } : {}),
       reasons: blockingReasons,
     });
-    deps.logger.warn(message);
-    await appendWriteAudit("rejected", error);
-    throw error;
+    const userFacingError = createConfigWriteSafetyRejectionError({
+      reasons: blockingReasons,
+      ...(rejectedSave.ok ? { rejectedPath } : {}),
+    });
+    deps.logger.warn(diagnosticMessage);
+    await appendWriteAudit("rejected", diagnosticError);
+    throw userFacingError;
   }
 
   const preCommitRuntimePreflight =
@@ -537,6 +543,7 @@ export async function writeConfigFileFromContext(
       assertBeforeMutation: writeGuard.assertBeforeMutation,
       onDestinationState: writeGuard.onDestinationState,
     });
+    await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
@@ -550,7 +557,7 @@ export async function writeConfigFileFromContext(
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
-      recordConfigWriteMetadata();
+      await recordConfigWriteMetadata();
     } catch (error) {
       deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }

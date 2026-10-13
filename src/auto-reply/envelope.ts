@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
@@ -72,7 +69,7 @@ function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvel
   if (!trimmed) {
     return { mode: "local" };
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
   }
@@ -197,21 +194,14 @@ export function formatInboundEnvelope(params: {
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
   const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
-  const body =
-    isDirect && params.fromMe
-      ? `(self): ${params.body}`
-      : isDirect && directSender
-        ? `${directSender}: ${params.body}`
-        : !isDirect && resolvedSender
-          ? `${resolvedSender}: ${params.body}`
-          : params.body;
+  const bodyLabel = isDirect ? (params.fromMe ? "(self)" : directSender) : resolvedSender;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,
     timestamp: params.timestamp,
     previousTimestamp: params.previousTimestamp,
     envelope: params.envelope,
-    body,
+    body: bodyLabel ? `${bodyLabel}: ${params.body}` : params.body,
   });
 }
 
@@ -225,16 +215,9 @@ export function formatInboundFromLabel(params: {
   groupFallback?: string;
 }): string {
   // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
-  if (params.isGroup) {
-    const label = normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group";
-    const id = params.groupId?.trim();
-    return id ? `${label} id:${id}` : label;
-  }
-
-  const directLabel = params.directLabel.trim();
-  const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) {
-    return directLabel;
-  }
-  return `${directLabel} id:${directId}`;
+  const label = params.isGroup
+    ? normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group"
+    : params.directLabel.trim();
+  const id = (params.isGroup ? params.groupId : params.directId)?.trim();
+  return id && (params.isGroup || id !== label) ? `${label} id:${id}` : label;
 }

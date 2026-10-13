@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,6 +8,7 @@ import { chromium, webkit, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
@@ -118,21 +119,39 @@ async function prepareOnlineLoopback(page: Page): Promise<void> {
   expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 }
 
-async function createInstallGate(): Promise<InstallGate> {
-  let releaseResponse = () => {};
+async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
+  let requestCount = 0;
+  let released = false;
+  const pendingResponses = new Set<ServerResponse>();
+  const releaseResponse = (response: ServerResponse) => {
+    if (!response.writableEnded) {
+      response.statusCode = 204;
+      response.end();
+    }
+  };
+  const release = () => {
+    released = true;
+    for (const response of pendingResponses) {
+      releaseResponse(response);
+    }
+    pendingResponses.clear();
+  };
   let resolveRequested = () => {};
   const requested = new Promise<void>((resolve) => {
     resolveRequested = resolve;
   });
   const gateServer = createHttpServer((_request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
-    releaseResponse = () => {
-      if (!response.writableEnded) {
-        response.statusCode = 204;
-        response.end();
-      }
-    };
-    resolveRequested();
+    // Worker installation may retry or overlap; release is permanent for this gate.
+    if (released) {
+      releaseResponse(response);
+    } else {
+      pendingResponses.add(response);
+      response.once("close", () => pendingResponses.delete(response));
+    }
+    if (++requestCount === expectedRequests) {
+      resolveRequested();
+    }
   });
   await new Promise<void>((resolve, reject) => {
     gateServer.once("error", reject);
@@ -148,9 +167,9 @@ async function createInstallGate(): Promise<InstallGate> {
   return {
     url: `http://127.0.0.1:${address.port}/release-install`,
     requested,
-    release: () => releaseResponse(),
+    release,
     close: async () => {
-      releaseResponse();
+      release();
       await new Promise<void>((resolve, reject) => {
         gateServer.close((error) => (error ? reject(error) : resolve()));
       });
@@ -267,6 +286,19 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
+  it("releases concurrent and later worker installation requests", async ({ signal }) => {
+    const gate = await createInstallGate(2);
+    const requests = [fetch(gate.url, { signal }), fetch(gate.url, { signal })];
+    try {
+      await gate.requested;
+      gate.release();
+      expect((await Promise.all(requests)).map((response) => response.status)).toEqual([204, 204]);
+      expect((await fetch(gate.url, { signal })).status).toBe(204);
+    } finally {
+      await gate.close();
+    }
+  });
+
   it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
     // The built index.html references ./assets/* relatively, so a document at
     // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
@@ -284,9 +316,13 @@ describe("Control UI service-worker production update E2E", () => {
     });
     try {
       expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(() => Boolean(customElements.get("openclaw-app")), undefined, {
-        timeout: controlUiE2eWaitTimeoutMs,
-      });
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().ready === true,
+        undefined,
+        {
+          timeout: controlUiE2eWaitTimeoutMs,
+        },
+      );
     } catch (error) {
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -441,10 +477,25 @@ describe("Control UI service-worker production update E2E", () => {
           expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
             client: { buildId: buildA },
           });
-          await page.getByRole("button", { name: "Discard", exact: true }).click();
         }
         const reloaded = page.waitForEvent("domcontentloaded");
-        await resume();
+        if (mode === "config") {
+          await page.getByRole("button", { name: "Discard", exact: true }).click();
+        }
+        try {
+          await resume();
+        } catch (error) {
+          // Discard can let the first foreground check reload before this trigger returns.
+          if (
+            mode !== "config" ||
+            !(error instanceof Error) ||
+            !error.message.includes(
+              "Execution context was destroyed, most likely because of a navigation",
+            )
+          ) {
+            throw error;
+          }
+        }
         await reloaded;
         await expect
           .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
@@ -520,23 +571,15 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(
           async () =>
-            page.evaluate(() => {
+            evaluateControlUiContext(page, (application) => {
               const panel = document.querySelector("openclaw-terminal-panel") as
                 | (HTMLElement & { available: boolean })
                 | null;
-              const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-                runtime?: {
-                  context?: {
-                    config: { current: { terminalEnabled: boolean } };
-                    gateway: { snapshot: { phase: string; hello: unknown } };
-                  };
-                };
-              };
               return {
                 available: panel?.available ?? null,
-                phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
-                terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
-                hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+                phase: application.gateway.snapshot.phase,
+                terminalEnabled: application.config.current.terminalEnabled,
+                hasHello: application.gateway.snapshot.hello !== null,
               };
             }),
           { timeout: controlUiE2eWaitTimeoutMs },

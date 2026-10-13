@@ -89,6 +89,15 @@ export function hasSamePreparedModelCatalogAuth(
   );
 }
 
+export type ModelServiceTierObservation = {
+  modelId: string;
+  runtimeId: string;
+  api: string;
+  baseUrl: string;
+  requestedTier: string;
+  responseTier?: string;
+};
+
 /** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
 export type PreparedAccountCatalogAccess = {
   reconcileAuth: (
@@ -96,17 +105,17 @@ export type PreparedAccountCatalogAccess = {
     includesProvider: (provider: string) => boolean,
     profileIds?: readonly string[],
   ) => void;
-  readServiceTiers: (params: {
+  readServiceTierObservation: (params: {
     identityKey: string;
     modelId: string;
     runtimeId: string;
     api: string;
     baseUrl: string;
-  }) => readonly string[] | undefined;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier"> | undefined;
   prepareServiceTierObserver: (params: {
     selectedCredential: SelectedModelCredential;
     credential?: AuthProfileCredential;
-  }) => (observation: NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number]) => boolean;
+  }) => (observation: ModelServiceTierObservation) => boolean;
   acquire: (params: {
     profileId: string;
     credential: AuthProfileCredential;

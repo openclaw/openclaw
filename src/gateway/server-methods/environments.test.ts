@@ -3,28 +3,33 @@ import {
   ErrorCodes,
   type EnvironmentsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import * as rfbProbe from "../desktop/rfb-probe.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod as call,
+  createDevicePairingNodeSnapshot,
   FakeWorkerServiceError,
   mockContext,
   pairedNodeDevice,
   workerRecord,
   workerService,
 } from "./environments.test-support.js";
+import { registerWorkerInferenceEnvironmentTests } from "./environments.worker-inference.suite.js";
 
-vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
-  listDevicePairing: vi.fn(),
+vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-store-readonly.js")>()),
+  readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
-vi.mock("../node-registry-private.js", () => ({
+vi.mock("../node-registry-private.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-registry-private.js")>()),
   collectNodeCatalogRuntimeState: vi.fn(() => ({
     sessionHostNodeIds: new Set(),
     issuesByNodeId: new Map(),
@@ -33,6 +38,7 @@ vi.mock("../node-registry-private.js", () => ({
   })),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const NOW = 10_000;
 const workerId = { environmentId: "worker-1" };
 const createParams = { profileId: "development", idempotencyKey: "request-1" };
@@ -52,22 +58,23 @@ beforeEach(() => {
     workerBundleByNodeId: new Map(),
   };
   vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue(runtimeState);
-  vi.mocked(listDevicePairing).mockResolvedValue({
-    pending: [],
-    paired: [
+  vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
+    createDevicePairingNodeSnapshot([
       pairedNodeDevice("node-live", { commands: ["system.run"] }),
       pairedNodeDevice("node-offline", {
         displayName: "Offline Node",
         caps: ["screen"],
         commands: ["camera.snap"],
       }),
-    ],
-  });
+    ]),
+  );
 });
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  registerWorkerInferenceEnvironmentTests((prefix) => tempDirs.make(prefix));
+
   it("probes disabled host setup only when requested without advertising or granting desktop access", async () => {
     const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({
       kind: "rfb",
@@ -114,9 +121,8 @@ describe("environment gateway methods", () => {
       version: "2026.8.9",
     });
     runtimeState.issuesByNodeId.set("node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]);
-    vi.mocked(listDevicePairing).mockResolvedValue({
-      pending: [],
-      paired: [
+    vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
+      createDevicePairingNodeSnapshot([
         pairedNodeDevice("node-live", { commands: ["system.run"] }),
         pairedNodeDevice(
           "node-never",
@@ -135,19 +141,20 @@ describe("environment gateway methods", () => {
           },
           { lastSeenAtMs: 3_000, lastSeenReason: "silent_push" },
         ),
-      ],
-    });
+      ]),
+    );
     const context = {
       ...mockContext(),
       getRuntimeConfig: () => ({
         desktop: { host: { enabled: true } },
         gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
       }),
-      nodeRegistry: {
+      nodeRegistry: Object.assign(new NodeRegistry(), {
         listConnectedForPairingStates: () => [
           {
             nodeId: "node-live",
             connId: "conn-live",
+            client: { invalidated: false },
             displayName: "Live Node",
             platform: "ios",
             caps: ["camera"],
@@ -158,15 +165,22 @@ describe("environment gateway methods", () => {
           {
             nodeId: "node-desktop",
             connId: "conn-desktop",
+            client: { invalidated: false },
             platform: "linux",
             deviceFamily: "Linux",
             caps: [],
             commands: [NODE_DESKTOP_STREAM_COMMAND],
             connectedAtMs: 123,
           },
-          { nodeId: "node-other", connId: "conn-other", caps: [], commands: [] },
+          {
+            nodeId: "node-other",
+            connId: "conn-other",
+            client: { invalidated: false },
+            caps: [],
+            commands: [],
+          },
         ],
-      },
+      }),
     };
     const respond = vi.fn();
     await environmentsHandlers["environments.list"]?.({
@@ -249,7 +263,7 @@ describe("environment gateway methods", () => {
       listOperatingSystems: vi.fn(async (id) => (id === "aws" ? systems : [systems[0]!])),
       supportsExecutionMode: vi.fn((id, mode) => id === "aws" || mode === "remote-exec"),
     });
-    vi.mocked(listDevicePairing).mockClear();
+    vi.mocked(readDevicePairingNodeSnapshot).mockClear();
     const [ok, payload] = await call(
       "environments.list",
       { projection: "profiles", includePreparedDetails: true },
@@ -280,7 +294,7 @@ describe("environment gateway methods", () => {
     });
     expect(service.list).not.toHaveBeenCalled();
     expect(service.readPreparedPoolSummary).not.toHaveBeenCalled();
-    expect(listDevicePairing).not.toHaveBeenCalled();
+    expect(readDevicePairingNodeSnapshot).not.toHaveBeenCalled();
     expect(service.create).not.toHaveBeenCalled();
   });
 
@@ -554,5 +568,44 @@ describe("environment gateway methods", () => {
     expect(payload).toMatchObject({ worker: { state: "destroyed" } });
     expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
     expect(service.destroyUnattached).toHaveBeenCalledBefore(reconcileActive);
+  });
+});
+
+describe("environments.prepare", () => {
+  const request = { profileId: "development", projectPath: "/projects/app" };
+
+  it("rejects invalid params before preparation", async () => {
+    const service = workerService();
+    const [ok, , error] = await call(
+      "environments.prepare",
+      { profileId: "development" },
+      { service },
+    );
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ code: ErrorCodes.INVALID_REQUEST });
+    expect(service.prepare).not.toHaveBeenCalled();
+  });
+
+  it("returns the admitted preparation", async () => {
+    const result = { environmentId: "worker-1", preparationKey: "project-key", reused: true };
+    const prepare = vi.fn(async () => result);
+    expect(
+      await call("environments.prepare", request, { service: workerService({ prepare }) }),
+    ).toEqual([true, result, undefined]);
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(request, expect.any(Function));
+  });
+
+  it.each([
+    ["profile_not_found", ErrorCodes.INVALID_REQUEST, "unknown worker profile"],
+    ["invalid_profile", ErrorCodes.INVALID_REQUEST, "profile cannot prepare projects"],
+    ["invalid_project", ErrorCodes.INVALID_REQUEST, "project must be a local Git checkout"],
+    ["capacity", ErrorCodes.UNAVAILABLE, "prepared worker pool is full"],
+  ])("preserves actionable %s errors", async (code, rpcCode, message) => {
+    const service = workerService({ prepare: rejectService(code, message) });
+    expect(await call("environments.prepare", request, { service })).toEqual([
+      false,
+      undefined,
+      { code: rpcCode, message, details: { code } },
+    ]);
   });
 });

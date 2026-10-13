@@ -125,7 +125,7 @@ describe("SSH post-seed inbound staging", () => {
             : undefined;
 
         if (sourceKind === "upload") {
-          const request = normalizeChatSendRequest({
+          const request = await normalizeChatSendRequest({
             client: null,
             params: {
               sessionKey: "agent:main:chat",

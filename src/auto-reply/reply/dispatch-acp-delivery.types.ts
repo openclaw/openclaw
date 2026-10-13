@@ -50,8 +50,7 @@ export type AcpDispatchDeliveryState = {
   deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
-  queuedUntrackedVisibleTextDeliveries: number;
-  settledUntrackedVisibleText: boolean;
+  untrackedVisibleText: "none" | "pending" | "settled";
   routedCounts: Record<ReplyDispatchKind, number>;
   suppressionReason?: NormalizeReplySkipReason;
   toolMessageByCallId: Map<string, ToolMessageHandle>;

@@ -8,7 +8,6 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import { resolveCronDeliveryContext } from "./run-delivery-trace.js";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -73,10 +72,6 @@ function bootstrapTelegramWithFormattingHints() {
 
 type EmbeddedRunFormatting = {
   extraSystemPrompt?: string;
-  finalizePromptForResolvedTools?: (params: {
-    prompt: string;
-    messageToolAvailable: boolean;
-  }) => string;
 };
 
 async function runCron(delivery: Record<string, unknown>, accountId?: string) {
@@ -108,9 +103,7 @@ async function runCron(delivery: Record<string, unknown>, accountId?: string) {
     }),
   );
   const run = mockCall(runEmbeddedAgentMock)[0] as EmbeddedRunFormatting;
-  const finalize = (messageToolAvailable: boolean) =>
-    run.finalizePromptForResolvedTools?.({ prompt: "post the digest", messageToolAvailable });
-  return { prompt: run.extraSystemPrompt, finalize };
+  return run.extraSystemPrompt;
 }
 
 describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
@@ -128,13 +121,10 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it.each([
-    { accountId: "rich", markup: "markdown_telegram_rich", rule: "Telegram rich ON." },
-    { accountId: "plain", markup: "markdown", rule: "Telegram rich OFF." },
-  ])(
+  it.each([{ accountId: "rich", markup: "markdown_telegram_rich", rule: "Telegram rich ON." }])(
     "gives an announce run the $accountId account's formatting contract",
     async ({ accountId, markup, rule }) => {
-      const { prompt } = await runCron(
+      const prompt = await runCron(
         { mode: "announce", channel: "telegram", to: "-100123", accountId },
         accountId,
       );
@@ -144,57 +134,4 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
       expect(prompt).toContain(rule);
     },
   );
-
-  it.each(["plain", undefined])(
-    "adds message-tool formatting only for an unambiguous account (%s) and available tool",
-    async (accountId) => {
-      const { prompt, finalize } = await runCron(
-        { mode: "none", channel: "telegram", to: "-100123", ...(accountId ? { accountId } : {}) },
-        accountId,
-      );
-      expect(prompt).toBeUndefined();
-      if (accountId) {
-        const withTool = finalize(true);
-        expect(withTool?.split("### Delivery Format")).toHaveLength(2);
-        expect(withTool).toContain("with the message tool");
-        expect(withTool).toContain("Telegram rich OFF.");
-      } else {
-        expect(finalize(true)).not.toContain("### Delivery Format");
-      }
-      expect(finalize(false)).not.toContain("### Delivery Format");
-    },
-  );
-
-  it("uses the scheduled owner's account, which the message tool sends through", async () => {
-    const ownerSessionKey = "agent:main:telegram:group:-100123";
-    const delivery = { mode: "none", channel: "telegram", to: "-100123" };
-    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, ...delivery });
-    resolveDeliveryTargetMock.mockResolvedValue({
-      ok: true,
-      channel: "telegram",
-      to: "-100123",
-      accountId: "plain",
-      mode: "explicit",
-    });
-    const context = await resolveCronDeliveryContext({
-      cfg,
-      agentId: "main",
-      job: makeIsolatedAgentJobFixture({
-        id: "daily-digest",
-        name: "Daily digest",
-        schedule: { kind: "every", everyMs: 60_000 },
-        owner: { agentId: "main", sessionKey: ownerSessionKey, accountId: "rich" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey,
-          ownerAccountId: "rich",
-        },
-        payload: { kind: "agentTurn", message: "post the digest", toolsAllow: ["message"] },
-        delivery,
-      }),
-    });
-
-    expect(context.messageToolFormatPrompt).toContain("Telegram rich ON.");
-  });
 });

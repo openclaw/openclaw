@@ -1,7 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  ensureSqliteLibrarySelected,
+  SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
+  type SqliteLibrarySelection,
+} from "./bun-sqlite-library.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteIndexContract,
   createSqliteTableContract,
@@ -31,7 +39,12 @@ import {
 
 export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-schema-issues.js";
 
-type SqliteSchemaContract = Map<string, SqliteTableContract>;
+type SqliteSchemaContract = ReadonlyMap<string, SqliteTableContract>;
+
+export type PreparedSqliteSchemaContract = {
+  schemaSql: string;
+  tables: SqliteSchemaContract;
+};
 
 export type SqliteTableContractReader = (tableName: string) => SqliteTableContract | undefined;
 
@@ -43,7 +56,63 @@ export type CanonicalSqliteNamedIndexContract = {
   unique: boolean;
 };
 
-const schemaContractCache = new Map<string, SqliteSchemaContract>();
+type ExpectedSchemaContractCache = {
+  pid: number;
+  runtime: {
+    executable: string;
+    nodeVersion: string;
+    bunVersion: string | undefined;
+    library: SqliteLibrarySelection;
+  };
+  contracts: Map<string, SqliteSchemaContract>;
+};
+
+function expectedSchemaContracts(): Map<string, SqliteSchemaContract> {
+  return resolveGlobalSingleton(Symbol.for(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY), () => {
+    const runtime = {
+      executable: process.execPath,
+      nodeVersion: process.versions.node,
+      bunVersion: process.versions.bun,
+      library: ensureSqliteLibrarySelected(),
+    };
+    // SAFETY: The existing worker launcher clones only this owner's versioned envelope.
+    const inherited = getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY) as
+      | ExpectedSchemaContractCache
+      | undefined;
+    const cache: ExpectedSchemaContractCache =
+      inherited?.pid === process.pid &&
+      isDeepStrictEqual(inherited.runtime, runtime) &&
+      inherited.contracts instanceof Map
+        ? inherited
+        : { pid: process.pid, runtime, contracts: new Map() };
+    // The retained supervisor captures this current map for each new descendant.
+    setEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY, cache);
+    return cache.contracts;
+  });
+}
+
+/** Capture only an existing canonical contract; callers must not build it on a host request. */
+export function captureSqliteSchemaContracts(
+  schemaSqls: readonly string[],
+): PreparedSqliteSchemaContract[] {
+  const schemaContractCache = expectedSchemaContracts();
+  return schemaSqls.flatMap((schemaSql) => {
+    const tables = schemaContractCache.get(schemaSql);
+    return tables ? [{ schemaSql, tables }] : [];
+  });
+}
+
+/** Private worker IPC transfers canonical facts under their exact schema SQL cache key. */
+export function adoptSqliteSchemaContracts(
+  contracts: readonly PreparedSqliteSchemaContract[],
+): void {
+  const schemaContractCache = expectedSchemaContracts();
+  for (const contract of contracts) {
+    if (!schemaContractCache.has(contract.schemaSql)) {
+      schemaContractCache.set(contract.schemaSql, contract.tables);
+    }
+  }
+}
 
 /** Reuse actual table facts only within one unchanged read transaction on this connection. */
 export function createSqliteTableContractReader(database: DatabaseSync): SqliteTableContractReader {
@@ -75,7 +144,7 @@ export function collectSqliteSchemaIssues(
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
 ): SqliteSchemaIssue[] {
-  return runSqlitePinnedReadSnapshotSync(database, () =>
+  return runSqliteSchemaReadSnapshotSync(database, () =>
     collectSqliteSchemaIssuesInSnapshot(database, schemaSql, compatibility, readTable),
   );
 }
@@ -88,6 +157,8 @@ function collectSqliteSchemaIssuesInSnapshot(
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const readActualTable = readTable ?? createSqliteTableContractReader(database);
+  const excludedTables = new Set(compatibility.excludedTables ?? []);
+  const excludedIndexes = new Set(compatibility.excludedIndexes ?? []);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
   const allowedMissingIndexes = new Set(compatibility.allowedMissingIndexes ?? []);
 
@@ -96,6 +167,9 @@ function collectSqliteSchemaIssuesInSnapshot(
     issues.push(createSqliteSchemaIssue(code, objectName, message));
   };
   for (const [tableName, expectedTable] of expected) {
+    if (excludedTables.has(tableName)) {
+      continue;
+    }
     const actualTable = readActualTable(tableName);
     if (!actualTable) {
       if (allowedMissingTables.has(tableName)) {
@@ -119,6 +193,9 @@ function collectSqliteSchemaIssuesInSnapshot(
     );
     const expectedIndexFingerprints = new Set<string>();
     for (const expectedIndex of expectedTable.indexes) {
+      if (expectedIndex.name !== null && excludedIndexes.has(expectedIndex.name)) {
+        continue;
+      }
       const fingerprint = JSON.stringify(expectedIndex);
       expectedIndexFingerprints.add(fingerprint);
       if (!actualIndexFingerprints.has(fingerprint)) {
@@ -295,10 +372,10 @@ export function collectSqliteNamedIndexContract(
     return undefined;
   }
   const index = (
-    database.prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`).all() as
-      | SqliteIndexListRow[]
-      | undefined
-  )?.find((candidate) => candidate.name === indexName);
+    database
+      .prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`)
+      .all() as SqliteIndexListRow[]
+  ).find((candidate) => candidate.name === indexName);
   return index ? collectSqliteIndexContract(database, index) : undefined;
 }
 
@@ -331,6 +408,7 @@ function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
 }
 
 function getSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
+  const schemaContractCache = expectedSchemaContracts();
   let expected = schemaContractCache.get(schemaSql);
   if (!expected) {
     expected = buildSqliteSchemaContract(schemaSql);
@@ -423,10 +501,11 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
 }
 
 function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContract {
+  // Authorize catalog ownership even when there are no tables to inspect.
   const rows = database
     .prepare(
       `
-        SELECT name, sql
+        SELECT name, sql, tbl_name
         FROM main.sqlite_schema
         WHERE type = 'table'
           AND name NOT LIKE 'sqlite_%'
@@ -438,42 +517,8 @@ function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContra
     return new Map();
   }
   const facts = collectSqliteSchemaFacts(database);
-  if (!facts) {
-    return new Map(
-      rows.map((table) => [
-        table.name,
-        collectSqliteTableContractFromRow(database, table.name, table),
-      ]),
-    );
-  }
   return new Map(
-    rows.map((table) => {
-      const tableList = facts.tableOptions.find(
-        (entry) => entry.schema === "main" && entry.name === table.name,
-      );
-      if (!tableList) {
-        throw new Error(`Could not inspect SQLite table options for ${table.name}.`);
-      }
-      const termsByIndex = groupCanonicalRows(
-        facts.terms.get(table.name) ?? [],
-        (term) => term.index_seq,
-      );
-      const indexes = (facts.indexes.get(table.name) ?? [])
-        .map((index) =>
-          createSqliteIndexContract(index, index.sql, termsByIndex.get(index.index_seq) ?? []),
-        )
-        .toSorted(compareJson);
-      return [
-        table.name,
-        createSqliteTableContract(
-          table.name,
-          table,
-          tableList,
-          indexes,
-          facts.triggers.get(table.name) ?? [],
-        ),
-      ];
-    }),
+    rows.map((table) => [table.name, collectSqliteTableContractFromRow(database, table, facts)]),
   );
 }
 
@@ -500,32 +545,48 @@ function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
 
 function collectSqliteTableContractFromRow(
   database: DatabaseSync,
-  tableName: string,
   table: SqliteSchemaRow,
+  facts: ReturnType<typeof collectSqliteSchemaFacts>,
 ): SqliteTableContract {
-  const quotedTable = quoteSqliteIdentifier(tableName);
-  const tableList = (
-    database.prepare(`PRAGMA main.table_list(${quotedTable})`).all() as SqliteTableListRow[]
-  ).find((entry) => entry.schema === "main" && entry.name === tableName);
+  const tableName = table.name;
+  const quotedTable = facts ? undefined : quoteSqliteIdentifier(tableName);
+  const tableOptions =
+    facts?.tableOptions ??
+    (database.prepare(`PRAGMA main.table_list(${quotedTable})`).all() as SqliteTableListRow[]);
+  const tableList = tableOptions.find(
+    (entry) => entry.schema === "main" && entry.name === tableName,
+  );
   if (!tableList) {
     throw new Error(`Could not inspect SQLite table options for ${tableName}.`);
   }
-  const indexes = (
-    database.prepare(`PRAGMA main.index_list(${quotedTable})`).all() as SqliteIndexListRow[]
-  )
-    .map((index) => collectSqliteIndexContract(database, index))
-    .toSorted(compareJson);
-  const triggers = executeWithCachedStatement(
-    database,
-    `
+  let indexes: SqliteIndexContract[];
+  if (facts) {
+    const termsByIndex = groupCanonicalRows(
+      facts.terms.get(tableName) ?? [],
+      (term) => term.index_seq,
+    );
+    indexes = (facts.indexes.get(tableName) ?? []).map((index) =>
+      createSqliteIndexContract(index, index.sql, termsByIndex.get(index.index_seq) ?? []),
+    );
+  } else {
+    indexes = (
+      database.prepare(`PRAGMA main.index_list(${quotedTable})`).all() as SqliteIndexListRow[]
+    ).map((index) => collectSqliteIndexContract(database, index));
+  }
+  indexes = indexes.toSorted(compareJson);
+  const triggers = facts
+    ? (facts.triggers.get(tableName) ?? [])
+    : (executeWithCachedStatement(
+        database,
+        `
           SELECT name, sql
           FROM main.sqlite_schema
           WHERE type = 'trigger' AND tbl_name = ?
           ORDER BY name
         `,
-    [tableName],
-    (statement) => statement.all(tableName),
-  ) as SqliteSchemaRow[];
+        [tableName],
+        (statement) => statement.all(tableName),
+      ) as SqliteSchemaRow[]);
   return createSqliteTableContract(tableName, table, tableList, indexes, triggers);
 }
 
@@ -595,7 +656,7 @@ function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
   );
 }
 
-export function collectSqliteIndexContract(
+function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
 ): SqliteIndexContract {

@@ -683,6 +683,51 @@ describe("voice-call CLI status fallback", () => {
     expect(result.output).toContain('{"word":"café"}\n');
   });
 
+  it("passes a structured brief and routes steering through the Gateway", async () => {
+    callGatewayFromCliMock.mockResolvedValue({ callId: "call-1", success: true });
+    const program = buildProgram({}, { ringTimeoutMs: 1000 });
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(
+        [
+          "voicecall",
+          "call",
+          "--message",
+          "Hello",
+          "--to",
+          "+15550001111",
+          "--brief",
+          '{"task":"Arrange a visit"}',
+        ],
+        { from: "user" },
+      );
+      expect(callGatewayFromCliMock.mock.calls[0]?.[2]).toMatchObject({
+        brief: { task: "Arrange a visit" },
+      });
+      await program.parseAsync(
+        [
+          "voicecall",
+          "steer",
+          "--call-id",
+          "call-1",
+          "--message",
+          "Ask for Tuesday",
+          "--mode",
+          "guidance",
+        ],
+        { from: "user" },
+      );
+      expect(callGatewayFromCliMock).toHaveBeenLastCalledWith(
+        "voicecall.steer",
+        expect.anything(),
+        { callId: "call-1", message: "Ask for Tuesday", mode: "guidance" },
+        expect.anything(),
+      );
+    } finally {
+      capturer.restore();
+    }
+  });
+
   it("caps oversized operation timeouts through the start command", async () => {
     callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
     const program = buildProgram({}, { ringTimeoutMs: Number.MAX_SAFE_INTEGER });
@@ -720,7 +765,7 @@ describe("voice-call CLI status fallback", () => {
       status: "pending",
       pollTimeoutMs: Number.NaN,
     });
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(50_000);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(50_000);
     const program = buildProgram({}, { transcriptTimeoutMs: 100 });
     await expect(
       program.parseAsync(["voicecall", "continue", "--call-id", "call-1", "--message", "hello"], {
@@ -770,5 +815,59 @@ describe("voice-call CLI status fallback", () => {
     await vi.advanceTimersByTimeAsync(500);
     await rejected;
     expect(Date.now() - startedAtMs).toBe(1_500);
+  });
+
+  it("keeps the continue poll deadline on the monotonic clock across a wall-clock jump", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    callGatewayFromCliMock
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "pending",
+        pollTimeoutMs: 5_000,
+      })
+      .mockResolvedValue({ status: "pending" });
+
+    const program = buildProgram({}, { transcriptTimeoutMs: 100 });
+    const execution = program.parseAsync(
+      ["voicecall", "continue", "--call-id", "call-1", "--message", "hello"],
+      { from: "user" },
+    );
+
+    // Let the start RPC resolve so the deadline seed (performance.now()=0,
+    // budget 5000ms) is captured, then let the first continue.result poll
+    // resolve and the 1000ms sleep elapse.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // Wall clock jumps forward 300s (NTP correction, resume from sleep). If the
+    // deadline were on the wall clock, the next remainingMs read would go
+    // negative and the loop would break immediately, reporting a timeout after
+    // ~1000ms of real polling. On the monotonic clock the 5000ms budget is
+    // unaffected and the poll keeps going.
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(300_000);
+    // Advance past the next 1000ms sleep; the loop must keep polling instead
+    // of breaking on the wall-clock jump.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // Pre-fix (wall-clock deadline): the loop already broke on the jump and
+    // the command reported a premature timeout. Post-fix: the poll is still
+    // running and fires another continue.result RPC.
+    const settled = await Promise.race([
+      execution.then(
+        () => "resolved",
+        () => "rejected",
+      ),
+      Promise.resolve("pending" as const),
+    ]);
+    expect(settled).toBe("pending");
+    expect(callGatewayFromCliMock).toHaveBeenCalledTimes(4);
+    wallClockSpy.mockRestore();
+
+    // Draining the remaining monotonic budget (5000ms) finally times out.
+    const rejected = expect(execution).rejects.toThrow(
+      "voicecall continue timed out waiting for gateway operation",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejected;
   });
 });

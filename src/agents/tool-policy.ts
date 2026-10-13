@@ -1,8 +1,3 @@
-/**
- * Tool allow/deny policy helpers.
- * Normalizes core and plugin tool groups, expands plugin entries, and extracts
- * explicit operator allow/deny lists.
- */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeTrimmedStringList,
@@ -113,9 +108,7 @@ export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
   if (!policy) {
     return false;
   }
-  if (
-    expandToolGroups(policy.deny ?? []).some((entry) => Boolean(normalizeToolPolicyName(entry)))
-  ) {
+  if (expandToolGroups(policy.deny).length > 0) {
     return true;
   }
   const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
@@ -123,7 +116,7 @@ export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
     ? restrictions.some((allow) => allow.length === 0 || toolPolicyRestrictsTools({ allow }))
     : Array.isArray(policy.allow) &&
         policy.allow.length > 0 &&
-        !expandToolGroups(policy.allow).some((entry) => normalizeToolPolicyName(entry) === "*");
+        !expandToolGroups(policy.allow).includes("*");
 }
 
 /** Replaces an allowlist with the normalized names of an effective tool array. */
@@ -132,18 +125,11 @@ export function replaceWithEffectiveToolAllowlist(
   tools: ReadonlyArray<{ name: string }>,
 ): void {
   target.length = 0;
-  const seen = new Set<string>();
-  for (const tool of tools) {
-    const normalized = normalizeToolPolicyName(tool.name);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    target.push(normalized);
+  for (const name of uniqueStrings(normalizeToolList(tools.map((tool) => tool.name)))) {
+    target.push(name);
   }
 }
 
-/** Collects explicit allow entries from layered policies. */
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
@@ -171,12 +157,10 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
   return uniqueStrings(entries);
 }
 
-/** Collects explicit deny entries from layered policies. */
 export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
   return policies.flatMap((policy) => normalizeTrimmedStringList(policy?.deny));
 }
 
-/** Builds plugin tool groups from tool metadata. */
 export function buildPluginToolGroups<T extends { name: string }>(params: {
   tools: T[];
   toolMeta: (tool: T) => { pluginId: string } | undefined;
@@ -212,9 +196,8 @@ function expandPluginGroups(
   }
   const expanded: string[] = [];
   for (const entry of renamed) {
-    const normalized = normalizeToolPolicyName(entry);
-    const tools = normalized === "group:plugins" ? groups.all : groups.byPlugin.get(normalized);
-    expanded.push(...(tools?.length ? tools : [normalized]));
+    const tools = entry === "group:plugins" ? groups.all : groups.byPlugin.get(entry);
+    expanded.push(...(tools?.length ? tools : [entry]));
   }
   return uniqueStrings(expanded);
 }
@@ -279,7 +262,7 @@ export function analyzeAllowlistByToolType(
   if (!policy?.allow || policy.allow.length === 0) {
     return { unknownAllowlist: [] };
   }
-  const normalized = normalizeToolList(expandShippedCoreToolPolicyNames(policy.allow));
+  const normalized = expandShippedCoreToolPolicyNames(policy.allow)?.filter(Boolean) ?? [];
   if (normalized.length === 0) {
     return { unknownAllowlist: [] };
   }
@@ -319,7 +302,6 @@ export function analyzeAllowlistByToolType(
   };
 }
 
-/** Merges alsoAllow entries into an existing allow policy. */
 export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
   policy: TPolicy | undefined,
   alsoAllow?: string[],

@@ -12,6 +12,64 @@ struct ScreenSnapshotResult: Sendable {
 }
 
 @MainActor
+enum ScreenCaptureSupport {
+    static func requirePermission(failure: (String) -> any Error) throws {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw failure("Screen Recording permission required; relaunch without --no-activate and retry")
+        }
+    }
+
+    static func display(
+        at index: Int?,
+        noDisplays: any Error,
+        invalidIndex: (Int) -> any Error) async throws -> SCDisplay
+    {
+        let content = try await SCShareableContent.current
+        let displays = content.displays.sorted { $0.displayID < $1.displayID }
+        guard !displays.isEmpty else { throw noDisplays }
+        let index = index ?? 0
+        guard displays.indices.contains(index) else { throw invalidIndex(index) }
+        return displays[index]
+    }
+}
+
+struct ScreenCaptureDisplayGeometry {
+    let displayID: CGDirectDisplayID
+    let geometry: OpenClawComputerDisplayGeometry
+    let sourceWidth: Double
+    let sourceHeight: Double
+
+    init(display: SCDisplay, noDisplays: any Error) throws {
+        let bounds = CGDisplayBounds(display.displayID)
+        self.displayID = display.displayID
+        self.geometry = OpenClawComputerDisplayGeometry(
+            originX: bounds.origin.x,
+            originY: bounds.origin.y,
+            widthPoints: bounds.width,
+            heightPoints: bounds.height)
+        self.sourceWidth = Double(display.width)
+        self.sourceHeight = Double(display.height)
+        // A display can disappear after ScreenCaptureKit enumerates it.
+        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
+            sourceWidth: self.sourceWidth,
+            sourceHeight: self.sourceHeight,
+            display: self.geometry)
+        else { throw noDisplays }
+    }
+
+    func frameId(referenceWidth: Int) -> String {
+        OpenClawComputerInputGeometry.displayFrameId(
+            displayID: self.displayID,
+            sourceWidth: self.sourceWidth,
+            sourceHeight: self.sourceHeight,
+            referenceWidth: referenceWidth,
+            display: self.geometry)
+    }
+}
+
+@MainActor
 final class ScreenSnapshotService {
     enum ScreenSnapshotError: LocalizedError {
         case noDisplays
@@ -25,9 +83,7 @@ final class ScreenSnapshotService {
                 "No displays available for screen snapshot"
             case let .invalidScreenIndex(idx):
                 "Invalid screen index \(idx)"
-            case let .captureFailed(message):
-                message
-            case let .encodeFailed(message):
+            case let .captureFailed(message), let .encodeFailed(message):
                 message
             }
         }
@@ -40,27 +96,15 @@ final class ScreenSnapshotService {
         format: OpenClawScreenSnapshotFormat?) async throws
         -> ScreenSnapshotResult
     {
-        guard AppLaunchRuntimePlan.current.allowsActivation ||
-            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
-        else {
-            throw ScreenSnapshotError.captureFailed(
-                "Screen Recording permission required; relaunch without --no-activate and retry")
-        }
+        try ScreenCaptureSupport.requirePermission(failure: ScreenSnapshotError.captureFailed)
         let format = format ?? .jpeg
         let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
         let quality = min(1.0, max(0.05, quality ?? 0.72))
 
-        let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else {
-            throw ScreenSnapshotError.noDisplays
-        }
-
-        let idx = screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else {
-            throw ScreenSnapshotError.invalidScreenIndex(idx)
-        }
-        let display = displays[idx]
+        let display = try await ScreenCaptureSupport.display(
+            at: screenIndex,
+            noDisplays: ScreenSnapshotError.noDisplays,
+            invalidIndex: ScreenSnapshotError.invalidScreenIndex)
         let displayFrameId = try Self.displayFrameId(
             for: display,
             referenceWidth: maxWidth)
@@ -116,27 +160,8 @@ final class ScreenSnapshotService {
         for display: SCDisplay,
         referenceWidth: Int) throws -> String
     {
-        let bounds = CGDisplayBounds(display.displayID)
-        let geometry = OpenClawComputerDisplayGeometry(
-            originX: bounds.origin.x,
-            originY: bounds.origin.y,
-            widthPoints: bounds.width,
-            heightPoints: bounds.height)
-        let sourceWidth = Double(display.width)
-        let sourceHeight = Double(display.height)
-        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            display: geometry)
-        else {
-            throw ScreenSnapshotError.noDisplays
-        }
-        return OpenClawComputerInputGeometry.displayFrameId(
-            displayID: display.displayID,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            referenceWidth: referenceWidth,
-            display: geometry)
+        try ScreenCaptureDisplayGeometry(display: display, noDisplays: ScreenSnapshotError.noDisplays)
+            .frameId(referenceWidth: referenceWidth)
     }
 
     private static func targetSize(width: Int, height: Int, maxWidth: Int) -> (width: Int, height: Int) {

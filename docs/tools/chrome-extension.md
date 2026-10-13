@@ -74,7 +74,7 @@ Automatic registration belongs to the default app profile; named profiles keep
 explicit setup because Chrome shares one native-host registration per user.
 
 **Dashboard → Settings → This Mac → Browser → Set up Chrome on this device** retries
-the same serialized canonical setup controller. It always prepares this Mac,
+the same serialized setup controller. It always prepares this Mac,
 not the remote Gateway. Browser setup and the native helper read configuration
 without Gateway-wide Doctor or migration of an independently managed Gateway
 database. Ordinary browser commands still report invalid configuration. A
@@ -113,7 +113,7 @@ If you previously removed the extension, Chrome remembers that choice. Explicitl
 add it again from the Store. OpenClaw does not clear Chrome's removal decision.
 
 On macOS and Linux, the origin-locked native host permits the exact official
-Store identity and OpenClaw's deterministic development IDs. Once enabled, the
+Store identity and OpenClaw's path-derived development IDs. Once enabled, the
 extension pairs on its first native call. The installer inspects the profile's
 `Preferences` and `Secure Preferences`
 backing files and verifies the exact Store ID independently from any extension
@@ -138,7 +138,7 @@ Use the unpacked copy as a development fallback:
 
 Leave the install command running while completing either Store or development
 setup. For unpacked development, the installer verifies that Chrome loaded the
-approved realpath under its predicted deterministic ID.
+approved realpath under its predicted path-derived ID.
 
 The installer recognizes the official Store installation only by the exact
 Foundation Store ID. That identity never makes a recorded path OpenClaw-owned.
@@ -148,8 +148,8 @@ For unpacked development, it accepts an ID only when all of these are true:
 - Chrome records the install location as unpacked.
 - the recorded extension path resolves exactly to the installed or bundled
   OpenClaw extension directory.
-- the recorded ID equals Chromium's deterministic path ID for that exact
-  canonical realpath.
+- the recorded ID equals Chromium's path-derived ID for that exact
+  resolved path.
 
 The extension name is not trusted. Existing native-host files with the same
 host name are not overwritten unless they are verifiably OpenClaw-owned.
@@ -290,14 +290,14 @@ bundled unpacked development copy is the source-build validation path.
 
 Automatic wake-up requires the exact `127.0.0.1` host that the daemon serves.
 Other loopback aliases, including `localhost` and IPv6, do not trigger wake-up.
-Use the canonical IPv4 endpoint when pairing for standalone operation.
+Use the standard IPv4 endpoint when pairing for standalone operation.
 
-Wake-up uses the port in the extension's existing canonical pairing. It does
+Wake-up uses the port in the extension's existing pairing. It does
 not switch to the first configured profile. The native host resolves current
 [`browser.profiles`](/gateway/config-browser-ui-desktop#browser) and permits
 only an extension-driver relay port, including
 automatically allocated ports and explicit `cdpPort` pins. A removed profile
-or stale port fails closed. Correct the pairing to match the current profile.
+or stale port is rejected. Correct the pairing to match the current profile.
 Gateway `/browser/extension` routes and remote pairings never trigger local
 daemon wake-up. Browser-node pairings that use a direct loopback relay can use
 it even when their Gateway hint points to a remote host.
@@ -627,18 +627,18 @@ non-secret failure code. The bootstrap request remains exactly
 `{v:1, op:"ensure_relay", nonce, relayPort}` with a required integer port from
 1 through 65535. Missing, duplicate, malformed, or extra fields are rejected.
 After manifest and caller validation, the host checks the requested port
-against current extension profiles before probing or spawning. No request can
+against current extension profiles before checking or spawning. No request can
 supply a host, executable path, or credential to the launcher.
 The response is below Chrome's 1 MiB native-message limit. Pairing keys never
 appear in launcher arguments, manifests, status JSON, or diagnostics.
 
-The POSIX launcher and manifest use absolute canonical paths under an
+The POSIX launcher and manifest use absolute resolved paths under an
 OpenClaw-owned mode-`0700` directory. Manifests are mode `0600`. The launcher is
 owner-executable. Symlinks, foreign ownership, unsafe modes, path traversal,
-wildcard origins, and foreign same-name registrations fail closed.
+wildcard origins, and foreign same-name registrations are rejected.
 
 The managed manifest authorizes the exact Foundation Chrome Web Store origin
-plus deterministic development origins in canonical order. The Store identity
+plus path-derived development origins in a fixed order. The Store identity
 is a fixed product trust grant, not proof that an arbitrary path is
 OpenClaw-owned.
 
@@ -647,7 +647,7 @@ development copies you trust: Chrome can give a key-matched unpacked build the
 same extension identity and native-host access.
 
 The unpacked development ID calculation matches Chromium's
-`crx_file::id_util::GenerateIdForPath`: hash the canonical absolute path's raw
+`crx_file::id_util::GenerateIdForPath`: hash the resolved absolute path's raw
 bytes with SHA-256 (native UTF-16LE path bytes on Windows, with only a lowercase
 drive letter uppercased), keep the first 16 digest bytes, then map hexadecimal
 digits `0` through `f` to letters `a` through `p`. The unpacked extension

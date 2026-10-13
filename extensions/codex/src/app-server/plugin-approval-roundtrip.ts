@@ -47,7 +47,6 @@ export function codexApprovalTimeoutText(kind: CodexApprovalKind): string {
   return `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
 }
 
-/** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
   | "approved-once"
   | "approved-session"
@@ -129,7 +128,6 @@ export async function waitForPluginApprovalDecision(params: {
   );
 }
 
-/** Converts a gateway exec approval decision into the app-server approval outcome enum. */
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
 ): Exclude<AppServerApprovalOutcome, "cancelled"> {
@@ -160,11 +158,7 @@ export async function requestPluginApprovalOutcome(
     }
     const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
       ? undefined
-      : await waitForPluginApprovalDecision({
-          hostCapabilities: params.hostCapabilities,
-          approvalId,
-          signal: params.signal,
-        });
+      : await waitForPluginApprovalDecision({ ...params, approvalId });
     if (params.signal?.aborted) {
       return "cancelled";
     }

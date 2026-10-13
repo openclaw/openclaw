@@ -99,12 +99,32 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
   </Accordion>
 </AccordionGroup>
 
-Reply options accept `onVisibleWorkSessions(sessions)` to receive accepted visible work sessions before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the canonical `url`, and an optional `label`; descriptors are deduplicated by session key in acceptance order.
+Reply options accept `onVisibleWorkSessions(sessions)` to receive visible work sessions. For a fresh child created through the local Gateway, the host awaits this callback before the child's first turn, so plugins can persist session-scoped context first. Accepted sessions are also reported before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the canonical `url`, and an optional `label`. A child can be reported at creation and again at settlement; consumers must be idempotent by session key.
 
 ## Awaited conversation binding mutations
 
 Import routing and service helpers from
 `openclaw/plugin-sdk/conversation-binding-runtime`.
+
+Await `service.bind(input)` and `service.unbind(input)` before publishing a binding
+change. Current-conversation persistence uses the existing worker owner and
+rechecks the selected adapter before committing. A failed or uncertain write
+does not authorize replay. Released synchronous selectors retain their current
+contract; bundled session listings await the internal owner.
+
+For directory ownership checks, implement
+`messaging.prepareConversationRouteOwnersAsync(inputs, inspectBindings)`. Await
+the supplied `inspectBindings(refs)` once for the batch to prepare binding facts
+in workers. It returns a synchronous reader over those facts. Return exactly one
+synchronous resolver per input, in the same order, and call the reader inside
+each resolver so in-process write receipts invalidate ownership before an effect.
+Core preserves the resolver's error and fallback handling and releases prepared
+facts when the operation ends; do not retain the reader for later operations.
+
+The released synchronous `resolveConversationRouteOwner` hook remains deprecated
+compatibility while plugins migrate. The unreleased synchronous
+`prepareConversationRouteOwners` hook has been removed. See
+[binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 Await `getSessionBindingService().touchAsync(bindingId, at, scope)` when recording
 binding activity. Adapters implement `touchAsync` to return a Promise that settles
@@ -193,8 +213,8 @@ An adapter exposing both variants keeps them under the same state owner.
 During the staged migration, async dispatch falls back to an adapter's existing
 synchronous method when its async counterpart is absent. This preserves external
 plugin compatibility; that fallback does not make a legacy adapter nonblocking.
-Generic and account-scoped bind/unbind operations, list operations, and separate
-lifecycle setters still require their own persistence migrations. Other bundled
-stores also retain their existing behavior until their respective cutovers.
-Worker-backed route reads and activity updates do not imply a fully migrated
-binding service or stronger durability for those remaining operations.
+Generic and account-scoped bind/unbind operations and bundled session listings
+use the shared-state worker. Their released synchronous selectors remain available
+through the compatibility boundary. Separate lifecycle setters and other bundled
+stores retain their existing behavior until their respective cutovers; this
+execution change does not strengthen their durability contracts.

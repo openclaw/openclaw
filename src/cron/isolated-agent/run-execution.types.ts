@@ -19,7 +19,6 @@ export type CronRunExecutionParams = Pick<
   | "usesDetachedRunSession"
   | "workspaceDir"
   | "cwd"
-  | "executionRoot"
   | "timeoutMs"
   | "runTimeoutOverrideMs"
   | "suppressExecNotifyOnExit"
@@ -38,6 +37,7 @@ export type CronRunExecutionParams = Pick<
   | "commandBody"
   | "inputProvenance"
   | "persistSessionEntry"
+  | "preRunSessionPersisted"
 > &
   Pick<
     RunCronAgentTurnParams,
@@ -59,11 +59,11 @@ export type CronRunExecutionParams = Pick<
       agentRuntime: string,
     ) => Promise<ModelCatalogEntry[]>;
     persistRunContinuationSession?: CronRunContinuationSession["sync"];
-    setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
     abortSignal?: AbortSignal;
     abortReason: () => string;
     isAborted: () => boolean;
     lifecycle: Omit<AgentLifecycleTerminalBackstop, "emit">;
+    onPromptAdmission: (admission: { close: () => void; finish: () => Promise<void> }) => void;
     onExecutionStarted?: (info?: CronRunnerStartedInfo) => void;
     onExecutionPhase?: (
       info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &

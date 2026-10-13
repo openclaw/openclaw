@@ -1,6 +1,5 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
-// Imessage plugin module implements channel behavior.
 import {
   createAccountStatusSink,
   resolveOutboundSendDep,

@@ -1,4 +1,5 @@
 // Voice Call tests cover twilio plugin behavior.
+import { createHmac } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
   guardedJsonApiRequest: guardedJsonApiRequestMock,
 }));
 
+import { VoiceCallConfigSchema } from "../config.js";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
@@ -165,6 +167,130 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it.each(["leave-message", "hang-up"] as const)(
+    "requests asynchronous AMD for %s and parses its dedicated callback",
+    async (onMachine) => {
+      const provider = createProvider();
+      const apiRequest = createApiRequestMock(async () => ({ sid: "CA-amd", status: "queued" }));
+      (provider as unknown as { apiRequest: TwilioApiRequest }).apiRequest = apiRequest;
+      await provider.initiateCall({
+        callId: "call-amd",
+        from: "+14155550100",
+        to: "+14155550123",
+        webhookUrl: "https://example.ngrok.app/voice/webhook",
+        voicemail: VoiceCallConfigSchema.parse({
+          voicemail: {
+            detection: "twilio",
+            onMachine,
+            ...(onMachine === "hang-up"
+              ? {
+                  machineDetectionSpeechThresholdMs: 5500,
+                  machineDetectionSpeechEndThresholdMs: 1500,
+                  machineDetectionSilenceTimeoutMs: 8000,
+                  machineDetectionTimeoutMs: 59000,
+                }
+              : {}),
+          },
+        }).voicemail,
+      });
+      const body = new URLSearchParams(apiRequest.mock.calls[0]?.[1] as Record<string, string>);
+      expect(body.get("MachineDetection")).toBe(
+        onMachine === "leave-message" ? "DetectMessageEnd" : "Enable",
+      );
+      expect(body.get("AsyncAmd")).toBe("true");
+      expect(body.get("AsyncAmdStatusCallback")).toBe(
+        "https://example.ngrok.app/voice/webhook?callId=call-amd&type=amd",
+      );
+      expect(body.get("AsyncAmdStatusCallbackMethod")).toBe("POST");
+      expect(body.get("MachineDetectionSpeechThreshold")).toBe(
+        onMachine === "hang-up" ? "5500" : "6000",
+      );
+      expect(body.get("MachineDetectionSpeechEndThreshold")).toBe(
+        onMachine === "hang-up" ? "1500" : "1200",
+      );
+      expect(body.get("MachineDetectionSilenceTimeout")).toBe(
+        onMachine === "hang-up" ? "8000" : "5000",
+      );
+      expect(body.get("MachineDetectionTimeout")).toBe(onMachine === "hang-up" ? "59" : "30");
+      provider.setPublicUrl("https://example.ngrok.app/voice/webhook");
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        for (const answeredBy of ["machine_start", "machine_end_other"]) {
+          const callbackUrl = expectDefined(body.get("AsyncAmdStatusCallback"), "AMD callback URL");
+          const rawBody = `CallSid=CA-amd&AnsweredBy=${answeredBy}`;
+          const signature = createHmac("sha1", "secret")
+            .update(`${callbackUrl}AnsweredBy${answeredBy}CallSidCA-amd`)
+            .digest("base64");
+          const context: WebhookContext = {
+            ...createContext(rawBody, { callId: "call-amd", type: "amd" }),
+            url: callbackUrl,
+            headers: { "x-twilio-signature": signature },
+          };
+          const verification = provider.verifyWebhook(context);
+          expect(verification.ok).toBe(true);
+          const result = provider.parseWebhookEvent(context, {
+            verifiedRequestKey: verification.verifiedRequestKey,
+          });
+          expect(result.events).toMatchObject([
+            { type: "call.amd", callId: "call-amd", answeredBy },
+          ]);
+          expect(result.providerResponseBody).toBe(
+            '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+          );
+        }
+        expect(log.mock.calls.map(([message]) => message)).toEqual([
+          expect.stringMatching(
+            /^\[voice-call\] AMD classification callId=call-amd answeredBy=machine_start at=\d+$/,
+          ),
+          expect.stringMatching(
+            /^\[voice-call\] AMD classification callId=call-amd answeredBy=machine_end_other at=\d+$/,
+          ),
+        ]);
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
+  it("preserves terminal status callbacks carrying AnsweredBy", () => {
+    const provider = createProvider();
+    const result = provider.parseWebhookEvent(
+      createContext("CallSid=CA-finished&CallStatus=completed&AnsweredBy=machine_end_beep", {
+        callId: "finished",
+        type: "status",
+      }),
+    );
+    expect(result.events).toMatchObject([
+      { type: "call.ended", reason: "completed", answeredBy: "machine_end_beep" },
+    ]);
+  });
+
+  it("normalizes an initial inbound request without CallStatus for manager admission", () => {
+    const provider = createProvider();
+    const result = provider.parseWebhookEvent(
+      createContext("CallSid=CA-inbound&Direction=inbound&From=%2B15550000002&To=%2B15550000000"),
+    );
+    expect(result.events).toMatchObject([
+      { type: "call.initiated", providerCallId: "CA-inbound", direction: "inbound" },
+    ]);
+    expect(provider.parseWebhookEvent(createContext("Direction=inbound")).events).toEqual([]);
+  });
+
+  it("leaves carrier voicemail with Say followed by Hangup and no speech gather", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock();
+    (provider as unknown as { apiRequest: TwilioApiRequest }).apiRequest = apiRequest;
+    await provider.playMessageAndHangup({
+      callId: "voicemail",
+      providerCallId: "CA-message",
+      text: "Call back about A&B.",
+    });
+    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "voicemail API request");
+    expect(endpoint).toBe("/Calls/CA-message.json");
+    expect(params.Twiml).toMatch(/<Say[^>]*>Call back about A&amp;B.<\/Say>\s*<Hangup\/>/);
+    expect(params.Twiml).not.toContain("<Gather");
+  });
+
   it("redacts turnToken query params from failed verification warnings", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 

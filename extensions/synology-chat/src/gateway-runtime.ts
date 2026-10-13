@@ -26,11 +26,7 @@ type SynologyGatewayStartupIssueCode =
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path"
   | "duplicate-webhook-url";
-type SynologyGatewayStartupIssue = {
-  code: SynologyGatewayStartupIssueCode;
-  logLevel: "info" | "warn";
-  message: string;
-};
+type SynologyGatewayStartupIssue = ReturnType<typeof buildStartupIssue>;
 
 const activeRouteCleanups = new Map<string, () => Promise<void>>();
 
@@ -38,7 +34,7 @@ function buildStartupIssue(
   code: SynologyGatewayStartupIssueCode,
   message: string,
   logLevel: "info" | "warn" = "warn",
-): SynologyGatewayStartupIssue {
+) {
   return { code, logLevel, message };
 }
 

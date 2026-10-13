@@ -12,6 +12,7 @@ import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:speech-supplement";
@@ -295,6 +296,7 @@ suite.define(() => {
                 );
               });
               await page.goto(url.href);
+              await enterControlUiSession(page);
               await waitForControlUiGatewayReady(page);
               const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
               const send = async (text: string) => {
@@ -343,7 +345,7 @@ suite.define(() => {
               await page.locator(".chat-bubble").getByText("TTS enabled for this chat.").waitFor();
               for (const [index, text] of replies.slice(0, 2).entries()) {
                 await send(`Please give spoken answer ${index + 1}.`);
-                await answer(text).waitFor();
+                await expect.poll(() => answer(text).isVisible()).toBe(true);
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 if (index === 1) {
                   // The first turn covers live delivery; this turn covers speech after hydration.

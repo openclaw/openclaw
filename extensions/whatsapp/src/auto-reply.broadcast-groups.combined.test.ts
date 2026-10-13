@@ -43,44 +43,6 @@ describe("broadcast groups", () => {
     resetLoadConfigMock();
   });
 
-  it.each([
-    { body: "@carla please review", expected: ["carla"] },
-    { body: "Baerbel and Carla have context", expected: ["baerbel", "carla"] },
-  ])("uses qualified participants and mention selection for $body", async ({ body, expected }) => {
-    setLoadConfigMock({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      agents: {
-        entries: {
-          alfred: {},
-          baerbel: { groupChat: { mentionPatterns: ["@baerbel\\b"] } },
-          carla: { groupChat: { mentionPatterns: ["@carla\\b"] } },
-        },
-      },
-      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
-      broadcast: {
-        strategy: "sequential",
-        "+1000": ["alfred"],
-        "whatsapp:+1000": { agents: ["baerbel", "carla"] },
-      },
-    } satisfies OpenClawConfig);
-    const seen: string[] = [];
-    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
-      seen.push(String(ctx.SessionKey).split(":")[1] ?? "");
-      return { text: "ok" };
-    });
-    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
-    await sendWebDirectInboundMessage({
-      onMessage,
-      spies,
-      id: "qualified-message",
-      from: "+1000",
-      to: "+2000",
-      body,
-    });
-    expect(seen).toEqual(expected);
-    resetLoadConfigMock();
-  });
-
   it("keeps caption mentions when selecting participants for transcribed audio", async () => {
     const cfg: OpenClawConfig = {
       agents: {

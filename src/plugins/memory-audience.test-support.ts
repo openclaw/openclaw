@@ -9,11 +9,13 @@ export type FakeSessionRow = Partial<SessionEntry> & { sessionId: string; update
 export const fakeSessionOwner = {
   rows: new Map<string, FakeSessionRow>(),
   pendingKeys: new Set<string>(),
+  publications: new Map<string, Promise<void>>(),
   workerReads: [] as string[],
   activeLeases: 0,
   reset() {
     this.rows.clear();
     this.pendingKeys.clear();
+    this.publications.clear();
     this.workerReads.length = 0;
     this.activeLeases = 0;
   },
@@ -54,6 +56,12 @@ export const fakeSessionGenerationModule = {
           throw new Error("Session delivery generation is unavailable");
         }
         assertGeneration(input);
+      },
+      prepareRead: () => {
+        if (!active) {
+          throw new Error("Session delivery generation is unavailable");
+        }
+        return fakeSessionOwner.publications.get(input.sessionKey);
       },
       release: () => {
         if (active) {

@@ -1,4 +1,5 @@
 import { normalizeOptionalString as relationKey } from "@openclaw/normalization-core/string-coerce";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -17,17 +18,13 @@ export type WorkerSessionToolSource = {
   entry: SessionEntry;
 };
 
-export type WorkerSessionToolTarget = {
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  storePath: string;
-  topologyParent?: {
-    agentId: string;
-    sessionKey: string;
-    sessionId: string;
-    storePath: string;
-  };
+type WorkerSessionToolIdentity = Pick<
+  BoundAgentRunSessionTarget,
+  "agentId" | "sessionKey" | "sessionId" | "storePath"
+>;
+
+export type WorkerSessionToolTarget = WorkerSessionToolIdentity & {
+  topologyParent?: WorkerSessionToolIdentity;
 };
 
 export async function readWorkerSessionToolEntry(sessionKey: string, agentId?: string) {

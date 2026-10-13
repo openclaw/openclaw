@@ -24,10 +24,7 @@ export async function describeUnverifiedPortListeners(
     const name = listener.command ?? "unknown";
     return pid ? `pid ${pid} (${name}, ${identity})` : `${name} (${identity})`;
   });
-  const pids = listeners
-    .map((listener) => listener.pid)
-    .filter((pid): pid is number => typeof pid === "number");
-  const hint = pids.length
+  const hint = listeners.some((listener) => typeof listener.pid === "number")
     ? ` If one of these is this gateway, stop it with "Stop-Process -Id <pid> -Force" and retry.`
     : "";
   return ` Remaining listener(s): ${described.join(", ")}. If gateway.cmd redirects output, quote the entire redirection target, including environment variables.${hint}`;

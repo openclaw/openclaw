@@ -1,5 +1,6 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, type Mock } from "vitest";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionStateEvents from "../../../sessions/session-state-events.js";
 import {
   cleanupSessionStateTestState,
@@ -8,7 +9,7 @@ import {
 import type { LifecycleControllerFixtureOptions } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerTerminalStateSignalAuthorityTests({
@@ -59,49 +60,44 @@ export function registerTerminalStateSignalAuthorityTests({
         let observed = false;
         let successorWrite: Promise<void> | undefined;
         const serializedSuccessor = change === "provisional kill" || change === "corrected outcome";
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        const observe = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (!observed && request.stage === stage) {
-                observed = true;
-                if (serializedSuccessor) {
-                  successorWrite = mutateSubagentRuns(
-                    [entry.runId],
-                    (rows) => {
-                      const current = rows.get(entry.runId);
-                      if (!current) {
-                        throw new Error("Terminal fixture lost admitted run");
-                      }
-                      const draft = structuredClone(current);
-                      if (change === "provisional kill") {
-                        draft.killReconciliation = { killedAt: 4_001 };
-                      } else {
-                        draft.execution = {
-                          ...draft.execution,
-                          outcome: { status: "error", error: "corrected outcome" },
-                        };
-                      }
-                      return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
-                    },
-                    { runs },
-                  );
-                  void successorWrite.catch(() => {});
-                } else if (change === "newer session run") {
-                  const successor = createRunEntry({
-                    runId: "successor",
-                    generation: 2,
-                    createdAt: 5_000,
-                  });
-                  runs.set(successor.runId, successor);
-                } else if (change === "retired session") {
-                  sessionCurrent = false;
-                }
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const observe = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (!observed && request.stage === stage) {
+            observed = true;
+            if (serializedSuccessor) {
+              successorWrite = mutateSubagentRuns(
+                [entry.runId],
+                (rows) => {
+                  const current = rows.get(entry.runId);
+                  if (!current) {
+                    throw new Error("Terminal fixture lost admitted run");
+                  }
+                  const draft = structuredClone(current);
+                  if (change === "provisional kill") {
+                    draft.killReconciliation = { killedAt: 4_001 };
+                  } else {
+                    draft.execution = {
+                      ...draft.execution,
+                      outcome: { status: "error", error: "corrected outcome" },
+                    };
+                  }
+                  return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+                },
+                { runs },
+              );
+              void successorWrite.catch(() => {});
+            } else if (change === "newer session run") {
+              const successor = createRunEntry({
+                runId: "successor",
+                generation: 2,
+                createdAt: 5_000,
+              });
+              runs.set(successor.runId, successor);
+            } else if (change === "retired session") {
+              sessionCurrent = false;
+            }
+          }
+          admit(request, grant);
+        });
         restoreAdmission = () => observe.mockRestore();
         const assertSessionCurrent = () => {
           if (!sessionCurrent) {

@@ -4,11 +4,8 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "../../plugins/types.js";
 import { decodeTalkRelayAudioBase64 } from "./relay-audio-base64.js";
-import {
-  createTalkRealtimeRelaySession,
-  sendTalkRealtimeRelayAudio,
-  stopTalkRealtimeRelaySession,
-} from "./relay/index.js";
+import { sendTalkRealtimeRelayAudio, stopTalkRealtimeRelaySession } from "./relay/operations.js";
+import { createTalkRealtimeRelaySession } from "./relay/session-create.js";
 import { drainingRelaySessions } from "./relay/state.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
 import {
@@ -95,7 +92,7 @@ describe("Talk relay audio base64", () => {
       providerConfig: {},
       instructions: "brief",
       tools: [],
-      sessionTarget: prepareTalkSessionTarget({}, "agent:main:main"),
+      sessionTarget: await prepareTalkSessionTarget({}, "agent:main:main"),
     });
     realtime.set(session.relaySessionId, "conn");
     await Promise.resolve();

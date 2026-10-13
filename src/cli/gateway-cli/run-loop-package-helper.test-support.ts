@@ -114,7 +114,6 @@ export async function startPackageLifecycleStopFixture(params: {
       });
     },
     async expectHostedPending() {
-      expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
       await expect(host.request("stop", () => {})).resolves.toMatchObject({ ok: false });
       expect(fixtures.hostedStopPrepare).toHaveBeenCalledOnce();
       expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();

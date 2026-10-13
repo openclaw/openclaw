@@ -248,12 +248,7 @@ export async function uploadAndShareSharePoint(
     chatId?: string;
     usePerUserSharing?: boolean;
   } & MSTeamsSendHandoff,
-): Promise<{
-  itemId: string;
-  webUrl: string;
-  shareUrl: string;
-  name: string;
-}> {
+) {
   const uploaded = await uploadToSharePoint(params);
 
   let recipientObjectIds: string[] | undefined;

@@ -11,7 +11,6 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendTextContext,
   type ChannelMessageSendMediaContext,
-  type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
@@ -153,13 +152,6 @@ const collectSynologyChatCriticalFindings = createConditionalWarningCollector.fi
   title: "Synology Chat security warning",
 });
 
-type SynologyChatOutboundResult = {
-  channel: typeof CHANNEL_ID;
-  messageId: string;
-  target: { kind: "chat"; id: string };
-  receipt: MessageReceipt;
-};
-
 function requireIncomingUrl(account: ResolvedSynologyChatAccount): string {
   if (!account.incomingUrl) {
     throw new Error("Synology Chat incoming URL not configured");
@@ -177,16 +169,13 @@ function normalizeSynologyChatTarget(target: string): string | undefined {
   return chatUserId === undefined ? undefined : String(chatUserId);
 }
 
-function createSynologyChatSendResult(params: {
-  chatId: string;
-  kind: MessageReceiptPartKind;
-}): SynologyChatOutboundResult {
+function createSynologyChatSendResult(params: { chatId: string; kind: MessageReceiptPartKind }) {
   return {
     channel: CHANNEL_ID,
     // The webhook acknowledges delivery without returning a platform message id.
     // Keep the empty receipt so a chat id cannot become a fabricated message id.
     messageId: "",
-    target: { kind: "chat", id: params.chatId },
+    target: { kind: "chat" as const, id: params.chatId },
     receipt: createMessageReceiptFromOutboundResults({
       results: [],
       threadId: params.chatId,
@@ -195,9 +184,7 @@ function createSynologyChatSendResult(params: {
   };
 }
 
-async function sendSynologyChatText(
-  ctx: Omit<ChannelMessageSendTextContext, "onDeliveryResult">,
-): Promise<SynologyChatOutboundResult> {
+async function sendSynologyChatText(ctx: Omit<ChannelMessageSendTextContext, "onDeliveryResult">) {
   const account = resolveAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
   const codeRegions = findCodeRegions(ctx.text);
@@ -225,9 +212,7 @@ async function sendSynologyChatText(
   });
 }
 
-async function sendSynologyChatMedia(
-  ctx: SynologyMediaContext & { mediaUrl: string },
-): Promise<SynologyChatOutboundResult> {
+async function sendSynologyChatMedia(ctx: SynologyMediaContext & { mediaUrl: string }) {
   const account = resolveAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
   const prepared = await prepareSynologyHostedMedia({

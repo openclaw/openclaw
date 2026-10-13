@@ -27,6 +27,7 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| Speech bubbles   | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
 ## Control UI Labs
@@ -35,7 +36,7 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the canonical Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Decision assistance, Code Mode, Tool Search for all models, Custom
+Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models, Custom
 plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
@@ -104,7 +105,7 @@ Core implementations can import
 from `src/agents/decision-assistance.ts`. Supply prepared config and the trusted
 owning agent ID, not a model-provided ID. The helper returns exactly
 `decisionAssistance === true && resolveDecisionModelSetting(config, agentId) !== undefined`.
-It performs no provider probes, secret resolution, file reads, network requests,
+It performs no provider checks, secret resolution, file reads, network requests,
 model loading, or inference, and returns no provider-readiness diagnostics.
 This is an internal foundation boundary, not a new plugin SDK surface.
 
@@ -194,7 +195,7 @@ remain errors rather than starting fallback work. Cold model loading may exceed
 the budget. Classifier estimates are not guarantees that every action request
 will retain its optional tools.
 
-Filtering skips raw probes, continuations, internal events, queued steering,
+Filtering skips raw checks, continuations, internal events, queued steering,
 orphan repair, pending tool work, hook-set `toolsAllow` restrictions, and
 authority-dependent prompt-build hooks that require finalized tools. Ordinary
 prompt-build hooks run normally and their resolved fields can inform the Decision

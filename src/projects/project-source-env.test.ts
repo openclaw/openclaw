@@ -38,7 +38,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("./project-registration.js", () => ({ registerResolvedProject: vi.fn() }));
 vi.mock("../state/openclaw-state-db.js", () => ({
   runOpenClawStateWriteTransaction: mocks.forbiddenSqlite,
 }));

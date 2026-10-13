@@ -91,7 +91,10 @@ export async function refreshUpdateRunReportArtifact(
     const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
       ? ""
       : nativeFailureDiagnostics(run.steps);
-    const report = renderUpdateRunReport(run, { mode: run.target.kind });
+    const report = renderUpdateRunReport(run, {
+      mode: run.target.kind,
+      markdownLimit: Infinity,
+    });
     await writeTextAtomic(
       outputPath,
       redactSupportString(

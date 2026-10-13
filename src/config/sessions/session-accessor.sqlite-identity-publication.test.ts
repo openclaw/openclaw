@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import {
   emitSessionIdentityMutation,
@@ -12,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveRestartRecoverySteeringBlockReason } from "./restart-recovery-receipt.js";
 import {
   readPreparedSessionEntryChange,
   readPreparedSessionSharingChange,
@@ -26,7 +28,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
+import {
+  readCommittedIncognitoSessionSharing,
+  readIncognitoSessionSteeringEntry,
+} from "./session-accessor.sqlite-incognito-sharing.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
@@ -316,7 +321,7 @@ it.each(["session ID", "lifecycle revision"] as const)(
   },
 );
 
-it("uses incognito transaction postimages for currency while delivery retains committed facts", async () => {
+it("uses incognito transaction postimages for currency and steering while delivery retains committed facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "main";
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env });
@@ -338,8 +343,26 @@ it("uses incognito transaction postimages for currency while delivery retains co
       ...originalCurrency,
       incognito: true,
       updatedAt: 1,
+      restartRecoveryDeliveryRunId: "original-run",
+      restartRecoveryDeliverySourceRunId: "original-source",
+      restartRecoveryTerminalRunIds: ["earlier-source"],
     } satisfies InternalSessionEntry;
     const database = openOpenClawAgentDatabase(options);
+    const readSteeringBlockReason = () => {
+      const sql = observeHostDataSql();
+      try {
+        const entry = readIncognitoSessionSteeringEntry(database.db, scope.sessionKey);
+        const reason = resolveRestartRecoverySteeringBlockReason(
+          entry,
+          original.sessionId,
+          "original-source",
+        );
+        expect(sql.queries).toEqual([]);
+        return reason;
+      } finally {
+        sql.restore();
+      }
+    };
     runOpenClawAgentWriteTransaction(
       (writer) => writeSessionEntry(writer, scope.sessionKey, original),
       options,
@@ -365,6 +388,7 @@ it("uses incognito transaction postimages for currency while delivery retains co
     const rollback = new Error("roll back incognito currency postimage");
     try {
       expect(reader.readCurrent()).toMatchObject(originalCurrency);
+      expect(readSteeringBlockReason()).toBeUndefined();
       expect(() =>
         runOpenClawAgentWriteTransaction((writer) => {
           writeSessionEntry(writer, scope.sessionKey, {
@@ -373,6 +397,8 @@ it("uses incognito transaction postimages for currency while delivery retains co
             activeWriterRunId: "pending-writer",
             subagentRecovery: { lastRunId: "pending-hidden-run" },
             updatedAt: 2,
+            restartRecoveryDeliveryReceiptState: "terminal-pending",
+            restartRecoveryDeliveryToolCallId: "pending-tool",
           });
           // A later field publication must retain the staged entry's currency fields.
           addSessionMember(scope, { identityId: "member", addedBy: "operator" });
@@ -381,6 +407,7 @@ it("uses incognito transaction postimages for currency while delivery retains co
             activeWriterRunId: "pending-writer",
             subagentRecovery: { lastRunId: "pending-hidden-run" },
           });
+          expect(readSteeringBlockReason()).toBe("terminal-pending");
           expect(() => readCommittedIncognitoSessionSharing(writer.db, scope.sessionKey)).toThrow(
             "publication is pending",
           );
@@ -392,6 +419,7 @@ it("uses incognito transaction postimages for currency while delivery retains co
       ).toThrow(rollback);
       expect(database.db.isTransaction).toBe(false);
       expect(reader.readCurrent()).toMatchObject(originalCurrency);
+      expect(readSteeringBlockReason()).toBeUndefined();
       generation.assertCurrent();
       runOpenClawAgentWriteTransaction(
         (writer) =>
@@ -400,6 +428,8 @@ it("uses incognito transaction postimages for currency while delivery retains co
             lifecycleRunId: "committed-run",
             subagentRecovery: { lastRunId: "committed-hidden-run" },
             updatedAt: 3,
+            restartRecoveryDeliveryReceiptState: "delivered-terminal",
+            restartRecoveryDeliveryToolCallId: "committed-tool",
           }),
         options,
       );
@@ -407,6 +437,7 @@ it("uses incognito transaction postimages for currency while delivery retains co
         lifecycleRunId: "committed-run",
         subagentRecovery: { lastRunId: "committed-hidden-run" },
       });
+      expect(readSteeringBlockReason()).toBe("delivered-terminal");
       // Delivery owns session/lifecycle identity, not recovery's execution predicate.
       generation.assertCurrent();
     } finally {

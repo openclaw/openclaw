@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { nodeProbeOutput } from "./install.test-helpers.js";
@@ -33,6 +34,28 @@ const {
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([true, false])(
+    "attests pre-write service holds only from native refusal facts (%s)",
+    async (typed) => {
+      const message = "Service is masked. Run `systemctl --user unmask openclaw-gateway.service`.";
+      service.readCommand.mockRejectedValueOnce(
+        typed ? new ServiceStartRefusalError({ reason: "masked", message }) : new Error(message),
+      );
+
+      await runDaemonInstall({ json: true, force: true });
+
+      expect(actionState.failed[0]?.message).toBe(
+        typed
+          ? `SERVICE_DEFINITION_UNKNOWN: ${message}`
+          : "SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.",
+      );
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    },
+  );
 
   describe("restore service CLI", () => {
     const expected = { revision: "observed", definition: "failed-app-service", stored: true };

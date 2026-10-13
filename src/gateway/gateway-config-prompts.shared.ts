@@ -39,33 +39,17 @@ export const TAILSCALE_DOCS_LINES = [
   "https://docs.openclaw.ai/web",
 ] as const;
 
-function normalizeTailnetHostForUrl(rawHost: string): string | null {
+function buildTailnetHttpsOrigin(rawHost: string): string | null {
   const trimmed = rawHost.trim().replace(/\.$/, "");
   if (!trimmed) {
     return null;
   }
   const parsed = parseCanonicalIpAddress(trimmed);
-  if (parsed && isIpv6Address(parsed)) {
-    return `[${normalizeLowercaseStringOrEmpty(parsed.toString())}]`;
-  }
-  return trimmed;
-}
-
-function buildTailnetHttpsOrigin(rawHost: string): string | null {
-  const normalizedHost = normalizeTailnetHostForUrl(rawHost);
-  if (!normalizedHost) {
-    return null;
-  }
+  const normalizedHost =
+    parsed && isIpv6Address(parsed)
+      ? `[${normalizeLowercaseStringOrEmpty(parsed.toString())}]`
+      : trimmed;
   return URL.parse(`https://${normalizedHost}`)?.origin ?? null;
-}
-
-function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
-  const current = existing ?? [];
-  const normalized = normalizeLowercaseStringOrEmpty(origin);
-  if (current.some((entry) => normalizeLowercaseStringOrEmpty(entry) === normalized)) {
-    return current;
-  }
-  return [...current, origin];
 }
 
 export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
@@ -85,9 +69,9 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
     return params.config;
   }
 
-  const existing = resolveControlUiAllowedOrigins(params.config);
-  const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
-  if (updatedOrigins === existing) {
+  const existing = resolveControlUiAllowedOrigins(params.config) ?? [];
+  const normalized = normalizeLowercaseStringOrEmpty(tsOrigin);
+  if (existing.some((entry) => normalizeLowercaseStringOrEmpty(entry) === normalized)) {
     return params.config;
   }
   // Preserve all unrelated gateway/controlUi config while adding the derived
@@ -98,7 +82,7 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
       ...params.config.gateway,
       controlUi: {
         ...params.config.gateway?.controlUi,
-        allowedOrigins: updatedOrigins,
+        allowedOrigins: [...existing, tsOrigin],
       },
     },
   };

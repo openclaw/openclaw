@@ -324,6 +324,11 @@ final dispatch boundary may make this assertion. Never use the marker after a
 finalization/send call begins or returns an ambiguous result; false marking can
 duplicate messages.
 
+For a permanent local preflight rejection, such as an unresolved account owner,
+pass `{ cause: error, retryable: false }`. The delivery failed without dispatch;
+it is not an ambiguous send and should not be retried until the configuration
+is corrected.
+
 ## Existing outbound adapters
 
 If the channel already has a compatible `outbound` adapter, derive the

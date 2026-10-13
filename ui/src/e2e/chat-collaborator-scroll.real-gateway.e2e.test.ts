@@ -15,8 +15,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -51,7 +51,7 @@ const proof: Record<string, unknown> = {
   captures: "separate full browser views; no transcript/footer compositing",
 };
 const suite = createControlUiE2eSuite({
-  name: "Real Gateway sender-local collaborator scroll",
+  name: "Real Gateway collaborator scroll",
   startServerBeforeBrowser: true,
   async startServer() {
     artifactDir = createControlUiE2eArtifactDir("collaborator-scroll-real-gateway");
@@ -224,10 +224,8 @@ async function send(
   return { request, runId };
 }
 async function identity(page: Page) {
-  return page.evaluate(() => {
-    const snapshot = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-      "openclaw-app",
-    )?.runtime?.context.gateway.snapshot;
+  return evaluateControlUiContext(page, (application) => {
+    const snapshot = application.gateway.snapshot;
     return {
       user: snapshot?.selfUser,
       connId: snapshot?.hello?.server?.connId,
@@ -301,7 +299,7 @@ async function wheel(page: Page, delta: number) {
 }
 
 suite.define(() => {
-  it("only follows local submissions, preserving remote-send anchors through queue, stream, and persistence", async (context) => {
+  it("preserves reader intent through remote queue, stream, and persistence", async (context) => {
     await suite.runScenario(context, {
       retainedState: () => instance.stateDir,
       run: async () => {
@@ -356,20 +354,22 @@ suite.define(() => {
                 ).toBe(200);
                 await waitForControlUiGatewayReady(page);
                 if (index === 0) {
-                  proof.session = await page.evaluate(async (key) => {
-                    const client = document.querySelector<
-                      HTMLElement & { runtime?: ApplicationRuntime }
-                    >("openclaw-app")?.runtime?.context.gateway.snapshot.client;
-                    if (!client) {
-                      throw new Error("Authenticated reader client missing");
-                    }
-                    return await client.request("sessions.create", {
-                      key,
-                      agentId: "main",
-                      label: "Sender-local scroll proof",
-                      visibility: "shared",
-                    });
-                  }, sessionKey);
+                  proof.session = await evaluateControlUiContext(
+                    page,
+                    async (application, key) => {
+                      const client = application.gateway.snapshot.client;
+                      if (!client) {
+                        throw new Error("Authenticated reader client missing");
+                      }
+                      return await client.request("sessions.create", {
+                        key,
+                        agentId: "main",
+                        label: "Sender-local scroll proof",
+                        visibility: "shared",
+                      });
+                    },
+                    sessionKey,
+                  );
                 }
                 await page.goto(controlUiSessionUrl(urls[index]!, sessionKey));
                 await waitForControlUiGatewayReady(page);
@@ -529,15 +529,23 @@ suite.define(() => {
                       current: latest,
                     }),
                   );
-                  expect
-                    .soft(
-                      Math.abs((latest.anchor ?? Infinity) - before.anchor!),
-                      mode + ": " + stage + " anchor",
-                    )
-                    .toBeLessThanOrEqual(1);
-                  expect
-                    .soft(Math.abs(latest.top - before.top), mode + ": " + stage + " scrollTop")
-                    .toBeLessThanOrEqual(1);
+                  if (mode.startsWith("reading")) {
+                    expect
+                      .soft(
+                        Math.abs((latest.anchor ?? Infinity) - before.anchor!),
+                        mode + ": " + stage + " anchor",
+                      )
+                      .toBeLessThanOrEqual(1);
+                    // Persistence can regroup rows above the reader. The visible
+                    // anchor and follow lock must survive that offset correction.
+                    expect
+                      .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
+                      .toBe(true);
+                  } else {
+                    expect
+                      .soft(latest.distance, mode + ": " + stage + " follows")
+                      .toBeLessThanOrEqual(8);
+                  }
                 };
                 await checkpoint("real-pending-input");
                 await turn.append(paragraphs(mode + " continuing", 3));
@@ -604,9 +612,11 @@ suite.define(() => {
                   samples,
                   maxDrift,
                 });
-                expect
-                  .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
-                  .toBeLessThanOrEqual(1);
+                if (mode.startsWith("reading")) {
+                  expect
+                    .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
+                    .toBeLessThanOrEqual(1);
+                }
                 await capture("03-" + mode + "-after-remote");
                 // A deliberate local submission from real wheel scrollback must resume follow.
                 await wheel(reader, -420);

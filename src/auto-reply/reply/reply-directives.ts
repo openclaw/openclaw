@@ -1,4 +1,3 @@
-/** Parses inline reply directives such as media, reply targets, audio, and silence. */
 import { trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
@@ -8,7 +7,6 @@ import {
 import { appendReplyMediaFailures, type ReplyMediaFailure } from "../reply-payload.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
-/** Parsed outbound reply directives and media extracted from model text. */
 export type ReplyDirectiveParseResult = {
   text: string;
   mediaUrls?: string[];
@@ -20,20 +18,16 @@ export type ReplyDirectiveParseResult = {
   isSilent: boolean;
 };
 
-/** Options for extracting reply directives from model text. */
-type ReplyDirectiveParseOptions = {
-  currentMessageId?: string;
-  silentToken?: string;
-  extractMarkdownImages?: boolean;
-  extractMediaDirectives?: boolean;
-  preserveTrailingWhitespace?: boolean;
-  onAudioDirective?: () => void;
-};
-
-/** Parses media, reply-target, audio, and silent directives from reply text. */
 export function parseReplyDirectives(
   raw: string,
-  options: ReplyDirectiveParseOptions = {},
+  options: {
+    currentMessageId?: string;
+    silentToken?: string;
+    extractMarkdownImages?: boolean;
+    extractMediaDirectives?: boolean;
+    preserveTrailingWhitespace?: boolean;
+    onAudioDirective?: () => void;
+  } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,

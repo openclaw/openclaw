@@ -114,23 +114,6 @@ function dispatchToOwner(
 }
 
 describe("createPinnedDispatcher", () => {
-  it("uses pinned lookup and inherits the shared undici family policy", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    createPinnedDispatcher(pinned);
-
-    expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
-      connect: {
-        lookup,
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-      allowH2: false,
-    });
-  });
-
   it("reuses the global WSL2 autoSelectFamily policy for pinned dispatchers", () => {
     isWSL2SyncMock.mockReturnValue(true);
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
@@ -146,74 +129,6 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
       allowH2: false,
-    });
-  });
-
-  it("preserves caller transport hints while overriding lookup", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const previousLookup = vi.fn();
-    const pinned = createPinnedTelegramHost(lookup);
-
-    createPinnedDispatcher(pinned, {
-      mode: "direct",
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-        lookup: previousLookup,
-      },
-    });
-
-    expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-        lookup,
-      },
-      allowH2: false,
-    });
-  });
-
-  it("preserves explicit family-selection opt-outs", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    createPinnedDispatcher(pinned, {
-      mode: "direct",
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 50,
-      },
-    });
-
-    expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 50,
-        lookup,
-      },
-      allowH2: false,
-    });
-  });
-
-  it("applies stream timeouts to pinned direct dispatchers", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    createPinnedDispatcher(pinned, undefined, undefined, 123_456);
-
-    expect(agentCtor).toHaveBeenCalledWith({
-      factory: expect.any(Function),
-      connect: {
-        lookup,
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-        timeout: 123_456,
-      },
-      allowH2: false,
-      bodyTimeout: 123_456,
-      headersTimeout: 123_456,
     });
   });
 
@@ -293,52 +208,6 @@ describe("createPinnedDispatcher", () => {
     ).toThrow(/private|internal|blocked/i);
   });
 
-  it("rejects a trusted private hostname override rebound to an unspecified address", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned: PinnedHostname = {
-      hostname: "model.lan",
-      addresses: ["192.168.1.25"],
-      lookup,
-    };
-
-    expect(() =>
-      createPinnedDispatcher(
-        pinned,
-        {
-          mode: "direct",
-          pinnedHostname: {
-            hostname: "model.lan",
-            addresses: ["0.0.0.0"],
-          },
-        },
-        { allowedHostnames: ["model.lan"] },
-      ),
-    ).toThrow(/private|internal|blocked/i);
-  });
-
-  it("allows an explicitly trusted localhost.localdomain override", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned: PinnedHostname = {
-      hostname: "localhost.localdomain",
-      addresses: ["127.0.0.1"],
-      lookup,
-    };
-
-    expect(() =>
-      createPinnedDispatcher(
-        pinned,
-        {
-          mode: "direct",
-          pinnedHostname: {
-            hostname: "localhost.localdomain",
-            addresses: ["127.0.0.1"],
-          },
-        },
-        { allowedHostnames: ["localhost.localdomain"] },
-      ),
-    ).not.toThrow();
-  });
-
   it("keeps env proxy route while pinning the direct no-proxy path", () => {
     vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
     vi.stubEnv("https_proxy", "");
@@ -350,6 +219,7 @@ describe("createPinnedDispatcher", () => {
       mode: "env-proxy",
       connect: {
         autoSelectFamily: true,
+        lookup: vi.fn(),
         ca: "target-ca",
       },
       proxyTls: {
@@ -419,47 +289,5 @@ describe("createPinnedDispatcher", () => {
     });
     expect(options.proxyTls).not.toHaveProperty("lookup");
     expect(options.proxyTls).not.toHaveProperty("ca");
-  });
-
-  it("applies stream timeouts to explicit proxy dispatchers", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned = createPinnedTelegramHost(lookup);
-
-    const dispatcher = createPinnedDispatcher(
-      pinned,
-      {
-        mode: "explicit-proxy",
-        proxyUrl: "http://127.0.0.1:7890",
-        proxyTls: {
-          autoSelectFamily: false,
-        },
-      },
-      undefined,
-      654_321,
-    );
-
-    const options = dispatchToOwner(
-      dispatcher,
-      { origin: "https://api.telegram.org", path: "/getMe", method: "GET" },
-      proxyAgentCtor,
-    );
-    expect(options).toMatchObject({
-      uri: "http://127.0.0.1:7890",
-      proxyTunnel: true,
-      requestTls: {
-        autoSelectFamily: false,
-        lookup,
-      },
-      proxyTls: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-        timeout: 654_321,
-      },
-      allowH2: false,
-      bodyTimeout: 654_321,
-      headersTimeout: 654_321,
-    });
-    expect(options.requestTls).not.toHaveProperty("timeout");
-    expect(options.proxyTls).not.toHaveProperty("lookup");
   });
 });

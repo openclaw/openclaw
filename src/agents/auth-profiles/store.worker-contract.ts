@@ -1,9 +1,11 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
   AuthProfileCredential,
-  AuthProfileRowRead,
   AuthProfileStore,
-  UserModelAuthProfile,
+  AuthProfileStoreOwner,
+  OAuthCredential,
+  SharedAuthStoreOwnership,
 } from "./types.js";
 import type {
   PersonalAuthProfileUsageReduction,
@@ -50,22 +52,26 @@ export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type AuthProfileWorkerOperations = {
-  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
-  "authProfiles.personalUsage": {
-    input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
-    output: PersonalAuthProfileUsageResult | undefined;
-  };
-  "authProfiles.read": {
-    input: { artifactPreserving: boolean };
-    output: AuthProfileRowRead;
-  };
-  "authProfiles.sharedOwnership": {
-    input: { artifactPreserving: boolean };
-    output: unknown;
-  };
-  "authProfiles.personal": {
-    input: { profileId: string; artifactPreserving: boolean };
-    output: UserModelAuthProfile | undefined;
-  };
+export type AuthStoreUpdateInput = {
+  owner: AuthProfileStoreOwner;
+  agentDir?: string;
+  envOnly: boolean;
+  peerGeneration?: { profileId: string; generation: OAuthCredential };
+};
+
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
+
+export type AuthStoreUpdateOperations = {
+  "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
+};
+
+export type AuthProfileBootstrapInput = {
+  sourcePath: string;
+  sourceIdentity?: DatabasePathIdentity;
+  legacySourcePaths: string[];
+};
+
+export type AuthProfileBootstrapResult = {
+  ownership: SharedAuthStoreOwnership;
+  relocated: boolean;
 };

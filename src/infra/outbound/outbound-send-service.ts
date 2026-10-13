@@ -1,5 +1,3 @@
-// Outbound send service chooses plugin-handled message actions or the core
-// message/poll path while preserving media policy and transcript mirrors.
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -56,14 +54,10 @@ export function materializeMessagePresentationFallback(params: {
 }): string {
   const presentation = normalizeMessagePresentation(params.payload.presentation);
   const text = (params.text ?? params.payload.text ?? "").trim();
-  if (!presentation) {
-    return text;
-  }
-  const fallback = renderMessagePresentationFallbackText({ presentation });
-  if (!fallback || text.includes(fallback)) {
-    return text;
-  }
-  return [text, fallback].filter(Boolean).join("\n\n");
+  const fallback = presentation ? renderMessagePresentationFallbackText({ presentation }) : "";
+  return !fallback || text.includes(fallback)
+    ? text
+    : [text, fallback].filter(Boolean).join("\n\n");
 }
 
 export function hasCorePresentationDelivery(outbound?: ChannelOutboundAdapter): boolean {
@@ -139,7 +133,6 @@ async function tryHandleWithPluginAction(params: {
   };
 }
 
-/** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: SendActionParams): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -164,10 +157,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   const requiresCoreDelivery =
     params.ctx.input.forceCoreDelivery === true ||
     params.ctx.input.requireQueuePersistence === true;
-  const preparationPlugin = params.ctx.channelPlugin;
+  const channelPlugin = params.ctx.channelPlugin;
   const prepareSendPayload =
-    !requiresCoreDelivery && preparationPlugin?.outbound
-      ? preparationPlugin.actions?.prepareSendPayload
+    !requiresCoreDelivery && channelPlugin?.outbound
+      ? channelPlugin.actions?.prepareSendPayload
       : undefined;
   const preparedPayload = prepareSendPayload
     ? await prepareSendPayload({
@@ -179,7 +172,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         threadId: params.threadId,
       })
     : undefined;
-  const channelPlugin = params.ctx.channelPlugin;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   // A hook that declines owns the plugin action path, including presentations.
   const corePayload = requiresCoreDelivery
@@ -212,10 +204,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
           if (partialDelivery || !params.ctx.mirror) {
             return;
           }
-          const materializedPresentationFallback = pluginMessage !== params.message;
-          const mirrorText = materializedPresentationFallback
-            ? pluginMessage
-            : params.ctx.mirror.text?.trim() || pluginMessage;
+          const mirrorText =
+            pluginMessage !== params.message
+              ? pluginMessage
+              : params.ctx.mirror.text?.trim() || pluginMessage;
           const mirrorMediaUrls =
             params.ctx.mirror.mediaUrls ??
             params.mediaUrls ??
@@ -323,6 +315,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
     onDeliveryIntent: params.ctx.input.onDeliveryIntent,
     onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,
+    withDirectAdapterHandoff: params.ctx.input.withDirectAdapterHandoff,
     onDeliveryResult: async (evidence) => {
       await params.ctx.onSendAccepted?.();
       await params.ctx.input.onDeliveryResult?.(evidence);
@@ -351,7 +344,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   };
 }
 
-/** Executes a message-tool poll through plugin handlers or the core poll path. */
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
   resolveCorePoll: () => {

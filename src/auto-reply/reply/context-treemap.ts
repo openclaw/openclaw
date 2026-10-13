@@ -7,7 +7,6 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { encodePngRgba } from "../../media/png-encode.js";
 
-/** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
   x: number;
   y: number;
@@ -178,14 +177,12 @@ class PngCanvas {
     const y0 = Math.max(0, Math.floor(rect.y));
     const x1 = Math.min(WIDTH, Math.ceil(rect.x + rect.width));
     const y1 = Math.min(HEIGHT, Math.ceil(rect.y + rect.height));
+    if (!(x1 > x0 && y1 > y0)) {
+      return;
+    }
+    const pixel = Buffer.from([color.r, color.g, color.b, 255]);
     for (let y = y0; y < y1; y += 1) {
-      for (let x = x0; x < x1; x += 1) {
-        const offset = (y * WIDTH + x) * 4;
-        this.data[offset] = color.r;
-        this.data[offset + 1] = color.g;
-        this.data[offset + 2] = color.b;
-        this.data[offset + 3] = 255;
-      }
+      this.data.fill(pixel, (y * WIDTH + x0) * 4, (y * WIDTH + x1) * 4);
     }
   }
 
@@ -379,7 +376,6 @@ function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total
   });
 }
 
-/** Renders a prompt context treemap PNG and returns the written file path. */
 export async function renderContextTreemapPng(params: {
   report: SessionSystemPromptReport;
   session: ContextTreemapSessionStats;

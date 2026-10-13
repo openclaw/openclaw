@@ -55,7 +55,7 @@ function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessage {
     }
   };
 
-  const body = (text ?? "").trim();
+  const body = text.trim();
   if (!body) {
     return envelope;
   }

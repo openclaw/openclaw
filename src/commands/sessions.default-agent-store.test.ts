@@ -21,6 +21,10 @@ vi.mock("../config/config.js", async () => {
     ...actual,
     getRuntimeConfig: loadConfigMock,
     loadConfig: loadConfigMock,
+    captureRuntimeConfigAsyncReader:
+      (...args: Parameters<typeof loadConfigMock>) =>
+      async () =>
+        loadConfigMock(...args),
   };
 });
 

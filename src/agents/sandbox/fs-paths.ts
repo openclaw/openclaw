@@ -121,32 +121,30 @@ export function resolveSandboxFsPathWithMounts(params: {
     );
     if (containerMount) {
       resolveSandboxFsMount(mountsByContainer, inputPosix, params.containerOnlyMounts);
-      return resolveMountedContainerPath({
-        mount: containerMount,
-        containerPath: inputPosix,
-        defaultContainerRoot: params.defaultContainerRoot,
-      });
+      return resolveMountedContainerPath(containerMount, inputPosix, params.defaultContainerRoot);
     }
   }
 
   if (!isSandboxHostPathAbsolute(inputPosix)) {
-    const containerCandidate = resolveRelativeContainerCandidate({
-      inputPosix,
-      cwd: params.cwd,
-      defaultContainerRoot: params.defaultContainerRoot,
-      mountsByHost,
-    });
+    const cwdMount = findMountByHostPath(mountsByHost, path.resolve(params.cwd));
+    const cwd = cwdMount ? mountedHostPathToContainer(cwdMount) : normalizePosixInput(params.cwd);
+    const containerCandidate = normalizeContainerPathCore(
+      path.posix.resolve(
+        cwdMount || path.posix.isAbsolute(cwd) ? cwd : params.defaultContainerRoot,
+        inputPosix,
+      ),
+    );
     const containerMount = resolveSandboxFsMount(
       mountsByContainer,
       containerCandidate,
       params.containerOnlyMounts,
     );
     if (containerMount) {
-      return resolveMountedContainerPath({
-        mount: containerMount,
-        containerPath: containerCandidate,
-        defaultContainerRoot: params.defaultContainerRoot,
-      });
+      return resolveMountedContainerPath(
+        containerMount,
+        containerCandidate,
+        params.defaultContainerRoot,
+      );
     }
   }
 
@@ -160,11 +158,7 @@ export function resolveSandboxFsPathWithMounts(params: {
       params.containerOnlyMounts,
     );
     if (visibleMount) {
-      return resolveMountedContainerPath({
-        mount: visibleMount,
-        containerPath,
-        defaultContainerRoot: params.defaultContainerRoot,
-      });
+      return resolveMountedContainerPath(visibleMount, containerPath, params.defaultContainerRoot);
     }
   }
 
@@ -184,46 +178,23 @@ export function resolveSandboxFsPathWithMounts(params: {
   );
 }
 
-function resolveMountedContainerPath(params: {
-  mount: SandboxFsMount;
-  containerPath: string;
-  defaultContainerRoot: string;
-}): SandboxResolvedFsPath {
-  const rel = path.posix.relative(params.mount.containerRoot, params.containerPath);
+function resolveMountedContainerPath(
+  mount: SandboxFsMount,
+  requestedPath: string,
+  defaultContainerRoot: string,
+): SandboxResolvedFsPath {
+  const rel = path.posix.relative(mount.containerRoot, requestedPath);
   const hostPath = rel
-    ? path.resolve(params.mount.hostRoot, ...rel.split("/").filter(Boolean))
-    : params.mount.hostRoot;
-  const containerPath = rel
-    ? path.posix.join(params.mount.containerRoot, rel)
-    : params.mount.containerRoot;
-  const relativePath = path.posix.relative(params.defaultContainerRoot, containerPath);
+    ? path.resolve(mount.hostRoot, ...rel.split("/").filter(Boolean))
+    : mount.hostRoot;
+  const containerPath = rel ? path.posix.join(mount.containerRoot, rel) : mount.containerRoot;
+  const relativePath = path.posix.relative(defaultContainerRoot, containerPath);
   return {
     hostPath,
     containerPath,
     relativePath: relativePathEscapesContainerRoot(relativePath) ? containerPath : relativePath,
-    writable: params.mount.writable,
+    writable: mount.writable,
   };
-}
-
-function resolveRelativeContainerCandidate(params: {
-  inputPosix: string;
-  cwd: string;
-  defaultContainerRoot: string;
-  mountsByHost: SandboxFsMount[];
-}): string {
-  const cwdMount = findMountByHostPath(params.mountsByHost, path.resolve(params.cwd));
-  if (cwdMount) {
-    return normalizeContainerPathCore(
-      path.posix.resolve(mountedHostPathToContainer(cwdMount), params.inputPosix),
-    );
-  }
-  const cwdPosix = normalizePosixInput(params.cwd);
-  if (path.posix.isAbsolute(cwdPosix)) {
-    return normalizeContainerPathCore(path.posix.resolve(cwdPosix, params.inputPosix));
-  }
-  return normalizeContainerPathCore(
-    path.posix.resolve(params.defaultContainerRoot, params.inputPosix),
-  );
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {

@@ -17,6 +17,18 @@ import {
 import { normalizeOtelLogString } from "./service-content-normalization.js";
 import type { SecuritySeverityText } from "./service-types.js";
 
+export function assignOptionalNumberAttrs(
+  attributes: Record<string, string | number | boolean>,
+  prefix: string,
+  values: Record<string, number | undefined>,
+): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined) {
+      attributes[`${prefix}${key}`] = value;
+    }
+  }
+}
+
 export function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
   const redactedAttributes: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(attributes)) {

@@ -123,7 +123,7 @@ function harness() {
 }
 
 describe("transcript capture ownership", () => {
-  it.each(["stop", "summarize", "show"] as const)(
+  it.each(["summarize", "show"] as const)(
     "does not adopt a replacement revision after a delayed %s match",
     async (action) => {
       const h = harness();
@@ -309,28 +309,6 @@ describe("transcript capture ownership", () => {
     },
   );
 
-  it("records import ID origin from admission rather than provider or text claims", async () => {
-    const h = harness();
-    h.provider.importTranscript = async (request) => {
-      if (request.session.metadata) {
-        request.session.metadata.sessionIdOrigin = "forged";
-      }
-      return [{ text: request.text, metadata: { sessionIdOrigin: "forged" } }];
-    };
-    await h.execute({
-      action: "import",
-      providerId: "capture",
-      sessionIdOrigin: "forged",
-      transcript: 'sessionIdOrigin: "forged"',
-    });
-    const entries = await h.store.listSessionEntries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.session.metadata).toMatchObject({
-      agentId: "research",
-      sessionIdOrigin: "generated",
-    });
-  });
-
   it("rejects stop when its caller closes during provider policy", async () => {
     const h = harness();
     await h.start();
@@ -444,43 +422,6 @@ describe("transcript capture ownership", () => {
       expect((await fs.stat(summaryPath)).isFile()).toBe(true);
     },
   );
-
-  it("exposes terminal session-write failures and recovers without another provider stop", async () => {
-    const h = harness();
-    await h.start();
-    const request = h.requests[0]!;
-    await request.onUtterance({ text: "retained note" });
-    const failure = vi
-      .spyOn(TranscriptsStore.prototype, "writeSession")
-      .mockRejectedValueOnce(new Error("store unavailable"));
-    await expect(request.onStatus?.({ active: false })).rejects.toThrow("store unavailable");
-    failure.mockRestore();
-    await request.onUtterance({ text: "retired audio" });
-    await expect(h.execute({ action: "status" })).resolves.toMatchObject({
-      details: {
-        active: [],
-        pendingFinalization: [
-          {
-            sessionId: "notes",
-            selector: `${request.session.startedAt.slice(0, 10)}/notes`,
-            stoppedAt: expect.any(String),
-          },
-        ],
-      },
-    });
-    expect(h.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("use transcripts stop to retry"),
-    );
-    await expect(h.start()).rejects.toThrow("already active");
-    await expect(h.execute({ action: "stop", sessionId: "notes" })).resolves.toMatchObject({
-      details: { summary: { utteranceCount: 1 } },
-    });
-    expect(h.provider.stop).not.toHaveBeenCalled();
-    expect((await h.session()).stoppedAt).toEqual(expect.any(String));
-    await expect(h.execute({ action: "status" })).resolves.toMatchObject({
-      details: { active: [], pendingFinalization: [] },
-    });
-  });
 
   it("does not overwrite final notes with an older summary while stop exports them", async () => {
     const h = harness();

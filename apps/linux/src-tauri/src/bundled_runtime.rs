@@ -10,6 +10,13 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 const MANIFEST: &str = include_str!(concat!(env!("OUT_DIR"), "/desktop-runtime.json"));
 const LINUX_RESOURCE_PREFIX: &[u8] = b"OPENCLAW-BUN-RUNTIME-V1\n";
+const BUN_PATH: &str = if cfg!(target_os = "windows") {
+    "bin/bun.exe"
+} else {
+    "bin/bun"
+};
+
+type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,14 +27,39 @@ struct Manifest {
     platform: String,
     arch: String,
     files: BTreeMap<String, String>,
+    #[serde(default, rename = "authenticodeSigned")]
+    authenticode_signed: Option<bool>,
+    #[serde(default, rename = "testOnly")]
+    test_only: Option<bool>,
 }
 
 pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
-    let manifest: Manifest = serde_json::from_str(MANIFEST)
-        .map_err(|_| "This build has no embedded runtime.".to_string())?;
+    let manifest: Manifest = serde_json::from_str(MANIFEST).map_err(|_| {
+        if cfg!(target_os = "windows") {
+            missing_runtime_message()
+        } else {
+            "This build has no embedded runtime."
+        }
+        .to_string()
+    })?;
     validate_manifest(&manifest)?;
     let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    Ok(runtime_directory(&prefix, MANIFEST, &manifest).join("bin/bun"))
+    let path = runtime_directory(&prefix, MANIFEST, &manifest).join(BUN_PATH);
+    #[cfg(target_os = "windows")]
+    let path = match fs::canonicalize(&path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path,
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(path)
+}
+
+fn missing_runtime_message() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "This app does not include a signed Windows Gateway runtime. Install an updated OpenClaw desktop app when a signed Windows runtime is available, or connect to a remote Gateway."
+    } else {
+        "This build has no embedded runtime. Build with the Tauri CLI or run apps/linux/scripts/stage-runtime.mjs before rebuilding."
+    }
 }
 
 fn runtime_directory(prefix: &Path, bytes: &str, manifest: &Manifest) -> PathBuf {
@@ -46,7 +78,7 @@ pub(crate) fn seed(app: &AppHandle) -> Result<BundledRuntime, String> {
         .resolve("desktop-runtime", BaseDirectory::Resource)
         .map_err(|error| format!("Embedded runtime resources are unavailable: {error}"))?;
     let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    seed_at(&source, &prefix, MANIFEST, &verify_revision)
+    seed_at(&source, &prefix, MANIFEST, &verify_revision).map_err(|error| error.to_string())
 }
 
 fn seed_at(
@@ -54,7 +86,7 @@ fn seed_at(
     prefix: &Path,
     manifest_bytes: &str,
     probe: &dyn Fn(&Path, &Manifest) -> Result<(), String>,
-) -> Result<BundledRuntime, String> {
+) -> RuntimeResult<BundledRuntime> {
     if !prefix.is_absolute()
         || prefix
             .components()
@@ -62,9 +94,8 @@ fn seed_at(
     {
         return Err("The OpenClaw home must be an absolute, non-traversing path.".into());
     }
-    let manifest: Manifest = serde_json::from_str(manifest_bytes).map_err(|_| {
-        "This build has no embedded runtime. Build with the Tauri CLI or run apps/linux/scripts/stage-runtime.mjs before rebuilding.".to_string()
-    })?;
+    let manifest: Manifest =
+        serde_json::from_str(manifest_bytes).map_err(|_| missing_runtime_message().to_string())?;
     validate_manifest(&manifest)?;
     verify_payload(source, manifest_bytes, &manifest, true)?;
     let store = prefix.join("tools/desktop-runtime");
@@ -74,8 +105,8 @@ fn seed_at(
         verify_payload(&destination, manifest_bytes, &manifest, false)?;
     } else {
         let staging = store.join(format!(".stage-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&staging).map_err(|error| error.to_string())?;
-        let result = (|| {
+        fs::create_dir(&staging)?;
+        let result: RuntimeResult<()> = (|| {
             for file in manifest.files.keys() {
                 let output = staging.join(file);
                 ensure_directory(output.parent().expect("runtime file parent"))?;
@@ -83,28 +114,28 @@ fn seed_at(
                 let mut output_file = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(&output)
-                    .map_err(|error| error.to_string())?;
-                std::io::copy(&mut input, &mut output_file).map_err(|error| error.to_string())?;
-                output_file.sync_all().map_err(|error| error.to_string())?;
+                    .open(&output)?;
+                std::io::copy(&mut input, &mut output_file)?;
+                output_file.sync_all()?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    fs::set_permissions(output, fs::Permissions::from_mode(0o555))
-                        .map_err(|error| error.to_string())?;
+                    fs::set_permissions(output, fs::Permissions::from_mode(0o555))?;
                 }
             }
             let mut output = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(staging.join("manifest.json"))
-                .map_err(|error| error.to_string())?;
-            output
-                .write_all(manifest_bytes.as_bytes())
-                .map_err(|error| error.to_string())?;
-            output.sync_all().map_err(|error| error.to_string())?;
+                .open(staging.join("manifest.json"))?;
+            output.write_all(manifest_bytes.as_bytes())?;
+            output.sync_all()?;
+            // Windows cannot rename the runtime directory while its manifest is open.
+            drop(output);
             verify_payload(&staging, manifest_bytes, &manifest, false)?;
-            probe(&staging.join("bin/bun"), &manifest)?;
+            probe(&staging.join(BUN_PATH), &manifest)?;
+            // Windows flushes each file above; Rust cannot open directory handles for
+            // fsync there. Atomic publication still prevents partial runtime copies.
+            #[cfg(unix)]
             for directory in [
                 Some(staging.join("bin")),
                 manifest
@@ -116,29 +147,29 @@ fn seed_at(
             .into_iter()
             .flatten()
             {
-                fs::File::open(directory)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| error.to_string())?;
+                fs::File::open(directory).and_then(|directory| directory.sync_all())?;
             }
             // Never repair or overwrite a previously published runtime in place:
             // a service or CLI launcher may still reference those exact bytes.
             if fs::symlink_metadata(&destination).is_ok() {
                 verify_payload(&destination, manifest_bytes, &manifest, false)?;
             } else {
-                fs::rename(&staging, &destination).map_err(|error| error.to_string())?;
-                fs::File::open(&store)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| error.to_string())?;
+                fs::rename(&staging, &destination)?;
+                #[cfg(unix)]
+                fs::File::open(&store).and_then(|directory| directory.sync_all())?;
             }
-            Ok::<_, String>(())
+            Ok(())
         })();
         if staging.exists() {
             let _ = fs::remove_dir_all(&staging);
         }
         result?;
     }
+    // Windows canonical paths include the extended prefix required by runtime admission.
+    #[cfg(target_os = "windows")]
+    let destination = fs::canonicalize(destination)?;
     Ok(BundledRuntime {
-        bun: destination.join("bin/bun"),
+        bun: destination.join(BUN_PATH),
         sqlite: manifest
             .files
             .contains_key("lib/libsqlite3.dylib")
@@ -168,12 +199,14 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     if !safe_tag
         || manifest.platform != platform
         || manifest.arch != arch
-        || !matches!(platform, "linux" | "darwin")
+        || !matches!(platform, "linux" | "darwin" | "windows")
+        || (platform == "windows"
+            && (manifest.authenticode_signed != Some(true) || manifest.test_only != Some(false)))
         || manifest.commit.len() != 40
         || !manifest.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
         || manifest.revision.is_empty()
         || manifest.files.len() != expected
-        || !manifest.files.contains_key("bin/bun")
+        || !manifest.files.contains_key(BUN_PATH)
         || (platform == "darwin" && !manifest.files.contains_key("lib/libsqlite3.dylib"))
         || manifest
             .files
@@ -185,19 +218,20 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_directory(path: &Path) -> Result<(), String> {
+fn ensure_directory(path: &Path) -> RuntimeResult<()> {
     if let Some(parent) = path.parent().filter(|parent| *parent != path) {
         ensure_directory(parent)?;
     }
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(metadata) if metadata.is_dir() => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(path).map_err(|error| error.to_string())
+            fs::create_dir(path).map_err(Into::into)
         }
         _ => Err(format!(
             "Runtime directory is unavailable or redirected: {}",
             path.display()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -206,9 +240,9 @@ fn verify_payload(
     bytes: &str,
     manifest: &Manifest,
     bundled: bool,
-) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+) -> RuntimeResult<()> {
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir() {
         return Err("Embedded runtime directory is redirected.".into());
     }
     let mut expected: Vec<PathBuf> = manifest.files.keys().map(PathBuf::from).collect();
@@ -221,10 +255,7 @@ fn verify_payload(
     collect_files(root, Path::new(""), &mut observed)?;
     expected.sort();
     observed.sort();
-    if observed != expected
-        || fs::read(root.join("manifest.json")).map_err(|error| error.to_string())?
-            != bytes.as_bytes()
-    {
+    if observed != expected || fs::read(root.join("manifest.json"))? != bytes.as_bytes() {
         return Err("Embedded runtime manifest or file set changed; reinstall the app.".into());
     }
     for (file, expected_hash) in &manifest.files {
@@ -232,7 +263,7 @@ fn verify_payload(
         let mut digest = Sha256::new();
         let mut buffer = [0; 64 * 1024];
         loop {
-            let count = input.read(&mut buffer).map_err(|error| error.to_string())?;
+            let count = input.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
@@ -244,16 +275,16 @@ fn verify_payload(
             .map(|byte| format!("{byte:02x}"))
             .collect();
         if actual != *expected_hash {
-            return Err(format!(
-                "Embedded runtime checksum changed: {file}; reinstall the app."
-            ));
+            return Err(
+                format!("Embedded runtime checksum changed: {file}; reinstall the app.").into(),
+            );
         }
     }
     Ok(())
 }
 
-fn open_payload(path: &Path, enveloped: bool) -> Result<fs::File, String> {
-    let mut input = fs::File::open(path).map_err(|error| error.to_string())?;
+fn open_payload(path: &Path, enveloped: bool) -> RuntimeResult<fs::File> {
+    let mut input = fs::File::open(path)?;
     if enveloped {
         // The Linux bundle is data so linuxdeploy cannot rewrite its ELF bytes.
         // Installed executables have no envelope and retain the admitted hash.
@@ -265,10 +296,10 @@ fn open_payload(path: &Path, enveloped: bool) -> Result<fs::File, String> {
     Ok(input)
 }
 
-fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(root.join(relative)).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let kind = entry.file_type().map_err(|error| error.to_string())?;
+fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> RuntimeResult<()> {
+    for entry in fs::read_dir(root.join(relative))? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
         let file = relative.join(entry.file_name());
         if kind.is_file() {
             files.push(file);
@@ -323,7 +354,7 @@ mod tests {
             fs::create_dir_all(source.join("bin")).unwrap();
             write_source(&source, b"synthetic runtime");
             let mut files = BTreeMap::from([(
-                "bin/bun",
+                BUN_PATH,
                 Sha256::digest(b"synthetic runtime")
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
@@ -341,8 +372,9 @@ mod tests {
                 );
             }
             let manifest = serde_json::json!({ "tag": "test-fork", "commit": "a".repeat(40), "revision": "test-revision",
-                "platform": if cfg!(target_os = "macos") { "darwin" } else { "linux" },
-                "arch": if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }, "files": files }).to_string();
+                "platform": if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS },
+                "arch": if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }, "files": files,
+                "authenticodeSigned": true, "testOnly": false }).to_string();
             fs::write(source.join("manifest.json"), &manifest).unwrap();
             Self {
                 prefix: root.join("state"),
@@ -354,6 +386,7 @@ mod tests {
 
         fn seed(&self) -> Result<BundledRuntime, String> {
             seed_at(&self.source, &self.prefix, &self.manifest, &|_, _| Ok(()))
+                .map_err(|error| error.to_string())
         }
     }
 
@@ -369,7 +402,7 @@ mod tests {
         } else {
             bytes.to_vec()
         };
-        fs::write(source.join("bin/bun"), encoded).unwrap();
+        fs::write(source.join(BUN_PATH), encoded).unwrap();
     }
 
     #[test]
@@ -465,13 +498,61 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plain_windows_home_seeds_a_runtime_accepted_by_launcher_binding() {
+        let mut fixture = Fixture::new();
+        fixture.prefix = PathBuf::from(
+            fixture
+                .prefix
+                .to_str()
+                .unwrap()
+                .strip_prefix(r"\\?\")
+                .unwrap(),
+        );
+        let runtime = fixture.seed().unwrap();
+        let entry = fixture.prefix.join("package").join("entry.js");
+        fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        fs::write(&entry, "synthetic entry").unwrap();
+        crate::runtime_action::install_launcher(
+            &fixture.prefix,
+            &runtime,
+            &entry,
+            crate::runtime_action::Purpose::Gateway,
+        )
+        .unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn refuses_unsigned_test_only_or_foreign_runtime_before_installation() {
+        let fixture = Fixture::new();
+        for (field, value) in [
+            ("authenticodeSigned", serde_json::json!(false)),
+            ("testOnly", serde_json::json!(true)),
+            ("platform", serde_json::json!("linux")),
+        ] {
+            let mut manifest: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
+            manifest[field] = value;
+            assert!(seed_at(
+                &fixture.source,
+                &fixture.prefix,
+                &manifest.to_string(),
+                &|_, _| Ok(())
+            )
+            .is_err());
+            assert!(!fixture.prefix.exists());
+        }
+    }
+
     #[test]
     fn rejects_missing_manifest_identity_and_unexpected_resources() {
         let fixture = Fixture::new();
         assert!(
             seed_at(&fixture.source, &fixture.prefix, "{}", &|_, _| Ok(()))
                 .unwrap_err()
-                .contains("no embedded runtime")
+                .to_string()
+                .contains(missing_runtime_message())
         );
         fs::write(fixture.source.join("extra"), "unexpected").unwrap();
         assert!(fixture.seed().is_err());

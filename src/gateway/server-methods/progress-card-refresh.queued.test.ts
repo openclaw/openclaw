@@ -110,6 +110,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
   const card: ProgressCard = { sessionKey, revision: 7, updatedAt: 1, markdown: "Previous status" };
   const context = {
     dedupe: new Map(),
+    chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     broadcast: vi.fn(),
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

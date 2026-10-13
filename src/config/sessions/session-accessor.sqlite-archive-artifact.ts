@@ -160,10 +160,15 @@ export function writeTranscriptArchive(params: {
 function writeDurableFileExclusive(filePath: string, content: Buffer): void {
   const fd = fs.openSync(filePath, "wx", 0o600);
   try {
-    fs.writeFileSync(fd, content);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+    try {
+      fs.writeFileSync(fd, content);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    fs.rmSync(filePath, { force: true });
+    throw error;
   }
 }
 

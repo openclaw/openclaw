@@ -13,6 +13,19 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 
+export type ChatReasoning = {
+  runId: string;
+  items: ChatReasoningItem[];
+};
+
+type ChatReasoningItem = {
+  itemId: string;
+  text: string;
+  startedAt: number;
+  /** Durable IDs survive display reindexing; source ownership can differ from the client run. */
+  receipt?: { runId: string; messageId: string; persisted?: true };
+};
+
 export type AgentEventPayload = AgentEvent & {
   sessionKey?: string;
   agentId?: string;
@@ -37,9 +50,8 @@ export type ToolStreamEntry = {
   resultReceived?: boolean;
   startedAt: number;
   receivedAt: number;
-  /** User boundaries observed while this live tool belonged to the active run. */
-  afterBoundaryRunId?: string;
-  boundaryRunId?: string;
+  /** Live-only placement; durable invocation positions supersede this boundary. */
+  afterUserSendId?: string;
   message: Record<string, unknown>;
 };
 
@@ -88,6 +100,7 @@ export type ToolStreamHost = {
   chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;

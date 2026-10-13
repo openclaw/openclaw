@@ -285,7 +285,6 @@ function registerToolSearchCatalog(params: {
     disposeCodeModeResults(params.catalogRef);
   }
   delete params.catalogRef.closedTelemetry;
-  params.catalogRef.onChange?.();
 }
 
 export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogRef }): void {
@@ -306,10 +305,7 @@ export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogR
     delete params.catalogRef.baselineDirectOnlyToolNames;
     disposeCodeModeResults(params.catalogRef);
     disposeToolSearchSchedule(params.catalogRef);
-    params.catalogRef.disposeObserver?.();
     params.catalogRef.onDispose?.forEach((dispose) => dispose());
-    delete params.catalogRef.onChange;
-    delete params.catalogRef.disposeObserver;
     delete params.catalogRef.onDispose;
   }
 }
@@ -344,7 +340,6 @@ export function restrictToolSearchCatalog(params: {
     ...metadata,
     fingerprint: catalogEntriesFingerprint(current.entries),
   });
-  params.catalogRef?.onChange?.();
   return entries.length;
 }
 
@@ -428,20 +423,14 @@ export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
 export function applyToolCatalogCompaction(
   params: ToolSearchCatalogCompactionParams,
 ): ToolSearchCatalogApplyResult {
-  if (!params.enabled) {
-    return {
-      tools: params.tools,
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
-  }
-  const hasControlTool = params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const hasControlTool =
+    params.enabled && params.tools.some((tool) => params.isVisibleControlTool(tool));
   const catalogRef = params.catalogRef;
   if (!hasControlTool || !catalogRef) {
     return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      tools: params.enabled
+        ? params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+        : params.tools,
       compacted: false,
       catalogToolCount: 0,
       catalogRegistered: false,

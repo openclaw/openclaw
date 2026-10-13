@@ -40,10 +40,7 @@ type ZalouserIngressDispatch = (
 
 const ZalouserIngressPayloadError = createChannelIngressError("ZalouserIngressPayloadError");
 
-function inspectZalouserIngressMessage(message: unknown): {
-  eventId: string;
-  laneKey: string;
-} {
+function inspectZalouserIngressMessage(message: unknown) {
   if (!isRecord(message) || !isRecord(message.data)) {
     throw new ZalouserIngressPayloadError("zca-js message envelope must contain data.");
   }

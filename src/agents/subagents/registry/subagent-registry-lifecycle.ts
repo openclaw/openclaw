@@ -27,8 +27,8 @@ import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
-import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-attempt.js";
 import { completeCleanupBookkeeping } from "./subagent-registry-lifecycle-bookkeeping.js";
+import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-cleanup.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
   CleanupBookkeepingParams,
@@ -37,7 +37,7 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
-import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
+import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
   cancelRequesterSettleWake,
   scheduleRequesterSettleWake,
@@ -151,16 +151,23 @@ export class SubagentLifecycleController {
 
   pruneRetiredRuns = (changedRunIds?: readonly string[]): void => {
     const changed = changedRunIds && new Set(changedRunIds);
+    const changedOwners = changedRunIds && new Set<object>();
+    for (const runId of changedRunIds ?? []) {
+      const entry = this.options.runs.get(runId);
+      if (entry) {
+        changedOwners?.add(getSubagentRunRuntimeKey(entry));
+      }
+    }
     for (const [identity, observed] of this.runtimeRuns) {
-      const current = getCurrentSubagentRunOwner(this.options.runs, observed);
       if (
         changed &&
         !changed.has(observed.runId) &&
         !(observed.collect && observed.swarmRunId && changed.has(observed.swarmRunId)) &&
-        !(current && changed.has(current.runId))
+        !changedOwners?.has(identity)
       ) {
         continue;
       }
+      const current = getCurrentSubagentRunOwner(this.options.runs, observed);
       if (current) {
         this.runtimeRuns.set(identity, current);
       }
@@ -339,14 +346,6 @@ export class SubagentLifecycleController {
     this.scheduledResumeTimers.clear();
     for (const scheduled of this.scheduledRequesterSettleWakeTimers.values()) {
       clearTimeout(scheduled.timer);
-      this.pendingRequesterSettleWakeCommits
-        .get(getSubagentRunRuntimeKey(scheduled.entry))
-        ?.initialTransfer?.retire();
-    }
-    for (const entry of this.options.runs.values()) {
-      this.pendingRequesterSettleWakeCommits
-        .get(getSubagentRunRuntimeKey(entry))
-        ?.initialTransfer?.retire();
     }
     this.scheduledRequesterSettleWakeTimers.clear();
     this.pendingRequesterSettleWakeRearms = new Set();
@@ -600,8 +599,6 @@ export class SubagentLifecycleController {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
           assertCurrent?.();
         },
-        scheduleRetry: (entry) =>
-          scheduleRequesterSettleWake(this, entry.runId, entry, stateContext),
       });
   }
 
@@ -661,6 +658,10 @@ export class SubagentLifecycleController {
             this.options.resumeSubagentRun(runId);
           }
           return;
+        }
+        if (source === "restore" && entry.requesterSettleWake) {
+          // The transfer owns this initial wake even if it settles while restore reads siblings.
+          this.options.resumedRuns.add(getSubagentRunRuntimeKey(entry));
         }
         if (this.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
           this.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));

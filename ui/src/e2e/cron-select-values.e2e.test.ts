@@ -7,6 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -180,7 +181,8 @@ suite.define(() => {
           if (narrow) {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await expect
             .poll(() =>
               scroller.evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd),

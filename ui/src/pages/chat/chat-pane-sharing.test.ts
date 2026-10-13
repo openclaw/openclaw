@@ -241,7 +241,7 @@ describe("public session sharing", () => {
       });
       await pane.copySessionPublicLink(row);
       expect(copyPublicShare).toHaveBeenCalledWith(
-        `https://example.test/control/share/session?token=${publicShare.token}`,
+        "https://example.test/control/chat/main/current",
         expect.any(Function),
       );
       await pane.setSessionPublicShare(row, false);

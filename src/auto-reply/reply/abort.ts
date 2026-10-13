@@ -4,6 +4,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type {
+  AsyncSessionSourceCheck,
+  SessionSourceCheck,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { isAbortRequestText } from "./abort-primitives.js";
@@ -12,7 +16,7 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 export type FastAbortRequestParams = {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
-  isCommandTargetCurrent?: () => boolean;
+  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
 };
 
 export type FastAbortResult = {
@@ -58,8 +62,7 @@ function resolveFastAbortRequest(params: FastAbortRequestParams) {
   const raw = stripStructuralPrefixes(ctx.commandText);
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
-  const abortRequested = isAbortRequestText(stripped);
-  if (!abortRequested) {
+  if (!isAbortRequestText(stripped)) {
     return undefined;
   }
 

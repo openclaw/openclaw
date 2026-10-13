@@ -2,7 +2,9 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -242,6 +244,13 @@ suite.define(() => {
           models: [model],
           methodResponses: {
             "sessions.list": sessionsResponse(),
+            "chat.startup": {
+              sessionId: "metadata-session",
+              sessionInfo: sessionsResponse().sessions[0],
+              messages: [],
+              thinkingLevel: null,
+              metadata: { commands: [], models: [model] },
+            },
             "chat.metadata": { commands: [] },
             "models.list": {
               models: [
@@ -283,7 +292,7 @@ suite.define(() => {
         expect(await sessionFacts()).toHaveLength(factsBefore);
         await page.clock.runFor(2_500);
         expect.soft(await requestCounts(gateway)).toEqual({
-          "chat.metadata": before["chat.metadata"] + 1,
+          "chat.metadata": before["chat.metadata"],
           "models.list": before["models.list"] + 1,
         });
         expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
@@ -306,7 +315,7 @@ suite.define(() => {
         await setDocumentVisibility(page, "visible");
         await page.clock.runFor(100);
         expect(await requestCounts(gateway)).toEqual({
-          "chat.metadata": visibleCounts["chat.metadata"] + 1,
+          "chat.metadata": visibleCounts["chat.metadata"],
           "models.list": visibleCounts["models.list"] + 1,
         });
 
@@ -344,7 +353,7 @@ suite.define(() => {
             expectCatalog(panes.nth(1), selectedModel.name),
           ]);
           expect(await requestCounts(gateway)).toEqual({
-            "chat.metadata": beforeAccount["chat.metadata"] + 1,
+            "chat.metadata": beforeAccount["chat.metadata"],
             "models.list": beforeAccount["models.list"] + 1,
           });
           if (proof) {
@@ -392,7 +401,7 @@ suite.define(() => {
         ],
       });
       const startupsBefore = (await gateway.getRequests("chat.startup")).length;
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       await expect.poll(() => panes.count()).toBe(2);
       await gateway.waitForRequest("chat.startup", { after: startupsBefore });
       await gateway.resolveDeferred("chat.metadata");
@@ -424,7 +433,7 @@ suite.define(() => {
     "late follower without metadata",
     "late follower without metadata, metadata first",
     "late follower, catalog first",
-  ])("coalesces invalidations behind an unfinished pair (%s)", async (presentation) => {
+  ])("shares pending catalog reads across metadata invalidations (%s)", async (presentation) => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const paneCount = presentation === "shared" ? 2 : 1;
       if (presentation === "shared") {
@@ -452,16 +461,17 @@ suite.define(() => {
       await gateway.setMethodResponse("models.list", { models: [freshModel] });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      if (presentation.includes("without metadata")) {
+      if (presentation.startsWith("late follower")) {
         await gateway.setMethodResponse("chat.startup", {
           sessionId: "metadata-session",
           sessionInfo: { key: sessionKeys[0], kind: "direct" },
           messages: [],
           thinkingLevel: null,
+          ...(!presentation.includes("without metadata")
+            ? { metadata: { commands: [], models: [model] } }
+            : {}),
         });
-      }
-      if (presentation.startsWith("late follower")) {
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         await expect.poll(() => panes.count()).toBe(2);
       }
       expect(await requestCounts(gateway)).toEqual({
@@ -500,7 +510,7 @@ suite.define(() => {
           (presentation.startsWith("late follower") && !presentation.includes("without metadata")
             ? 1
             : 2),
-        "models.list": before["models.list"] + 2,
+        "models.list": before["models.list"] + 1,
       });
     });
   });
@@ -584,11 +594,8 @@ suite.define(() => {
         )
         .toBe("global");
       await gateway.setMethodResponse("models.list", { models: [freshModel] });
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: { agentSelection: { set: (agent: string) => void } } };
-        };
-        app.runtime.context.agentSelection.set("work");
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.set("work");
       });
       await expect
         .poll(() =>

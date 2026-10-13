@@ -271,11 +271,7 @@ function scheduleRequesterSettleWakeRetry(
 ): void {
   const pending = getPendingWakeCommit(context, entry);
   const nextAttemptAt = pending?.nextAttemptAt ?? entry.requesterSettleWake?.nextAttemptAt;
-  if (
-    pending?.initialTransfer?.blocked ||
-    nextAttemptAt === undefined ||
-    nextAttemptAt <= Date.now()
-  ) {
+  if (nextAttemptAt === undefined || nextAttemptAt <= Date.now()) {
     return;
   }
   const rearmGeneration = pending?.generation ?? entry.requesterSettleWake?.rearmGeneration;
@@ -316,14 +312,14 @@ export function scheduleRequesterSettleWake(
     return;
   }
   let entry = publishedAtAdmission ?? observedEntry;
-  if (context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
+  const runtimeKey = getSubagentRunRuntimeKey(entry);
+  if (context.cancelledRequesterSettleWakeRuns.has(runtimeKey)) {
     return;
   }
   const pendingAtAdmission = getPendingWakeCommit(context, entry);
   const admittedWake = entry.requesterSettleWake;
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
-    pendingAtAdmission?.initialTransfer?.blocked ||
     (!admittedWake && !pendingAtAdmission) ||
     entry.collect ||
     (!pendingAtAdmission &&
@@ -335,7 +331,7 @@ export function scheduleRequesterSettleWake(
     (!pendingAtAdmission?.initialTransfer &&
       entry.requesterTurnRunId &&
       entry.expectsCompletionMessage === true) ||
-    context.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))
+    context.scheduledRequesterSettleWakeRuns.has(runtimeKey)
   ) {
     return;
   }
@@ -353,7 +349,7 @@ export function scheduleRequesterSettleWake(
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       entry = currentSubagentRunOrObserved(params.runs, entry);
       return (
-        !context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry)) &&
+        !context.cancelledRequesterSettleWakeRuns.has(runtimeKey) &&
         isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), admittedIdentity) &&
         hasRequesterWakeOwner(context, entry)
       );
@@ -379,7 +375,7 @@ export function scheduleRequesterSettleWake(
     const member = params.runs.get(id);
     return member ? [member] : [];
   });
-  context.scheduledRequesterSettleWakeRuns.add(getSubagentRunRuntimeKey(entry));
+  context.scheduledRequesterSettleWakeRuns.add(runtimeKey);
   runWithoutOwnedSessionTranscriptWrites(() => {
     void context
       .runRequesterSettleWake(
@@ -400,10 +396,10 @@ export function scheduleRequesterSettleWake(
                 getPendingWakeCommit(context, entry) === undefined
               ) {
                 pending.needsWakeContinuation = false;
-                context.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));
+                context.pendingRequesterSettleWakeRearms.add(runtimeKey);
               }
               if (pending.initialTransfer?.completed) {
-                context.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));
+                context.pendingRequesterSettleWakeRearms.add(runtimeKey);
               }
               return;
             }
@@ -466,7 +462,6 @@ export function scheduleRequesterSettleWake(
                     retainReplay ||
                     episode.committedWake !== undefined ||
                     hasSqliteWorkerOutcomeUnknown(error),
-                  false,
                   stateContext,
                 );
                 if (!published && isCurrent()) {
@@ -479,6 +474,10 @@ export function scheduleRequesterSettleWake(
                   batch,
                   rearmGeneration,
                   async (members, episode) => {
+                    // A no-outcome decision needs its whole batch; let the next sweep reselect it.
+                    if (!outcome && !episode.committedWake && members.length !== batch.length) {
+                      return true;
+                    }
                     if (
                       Boolean(admittedWake?.pauseNotice) !==
                       Boolean(entry.requesterSettleWake?.pauseNotice)
@@ -499,7 +498,6 @@ export function scheduleRequesterSettleWake(
                     return committed;
                   },
                   true,
-                  outcome === undefined,
                   stateContext,
                 ),
             });
@@ -567,7 +565,6 @@ export function scheduleRequesterSettleWake(
                         },
                       ),
                 true,
-                false,
                 stateContext,
               );
             } catch (settleError) {
@@ -591,9 +588,7 @@ export function scheduleRequesterSettleWake(
       .finally(() => {
         entry = currentSubagentRunOrObserved(params.runs, entry);
         context.unmarkRequesterSettleWakeRunScheduled(entry);
-        const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(
-          getSubagentRunRuntimeKey(entry),
-        );
+        const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(runtimeKey);
         if (hasRetainedWake(context, entry)) {
           if (wasRearmedWhileRunning) {
             scheduleRequesterSettleWake(context, runId, entry, stateContext);

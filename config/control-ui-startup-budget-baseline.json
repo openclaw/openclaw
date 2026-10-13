@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 372878,
-  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
-  "updatedAt": "2026-10-02"
+  "startupJsGzipBytes": 450000,
+  "reason": "Solid transition allowance: Peter approved relaxing the startup budget while Lit and Solid coexist (2026-10-11). Main measured 422,013 B gzip at 9fec51a0; the 450,000 B ceiling leaves headroom for remaining ports. Restore to 374,285 B or lower after the Lit sweep (the Solid shell saves about 18 KB). Retain the 64 B build-variance and 512 B growth allowances and all request, CSS, asset, and route budgets except the startup CSS request count (2 during the transition).",
+  "updatedAt": "2026-10-11"
 }

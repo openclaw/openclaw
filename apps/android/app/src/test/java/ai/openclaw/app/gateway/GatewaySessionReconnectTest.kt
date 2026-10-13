@@ -1835,7 +1835,7 @@ class GatewaySessionReconnectTest {
         socketField.set(connection, RejectFirstSendWebSocket(socket) { rejectedNodeEvent.complete(Unit) })
         val outbox =
           NotificationNodeEventOutbox {
-            harness.session.sendNodeEventWithOutcome(it.event, it.payloadJson)
+            harness.session.sendNodeEventWithOutcomeForEndpoint(null, it.event, it.payloadJson)
           }
         val deliveryJob = launch { outbox.deliver() }
 
@@ -2442,7 +2442,7 @@ class GatewaySessionReconnectTest {
     onDisconnected: (String) -> Unit = {},
     deviceAuthStore: DeviceAuthTokenStore = ReconnectDeviceAuthStore(),
     onEvent: (String, String?) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult = {
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult = {
       GatewaySession.InvokeResult.ok("""{"handled":true}""")
     },
     connectTimeoutMs: Long = 20_000,

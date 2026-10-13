@@ -1,11 +1,22 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
+import {
+  hasPreparedGatewayDeviceAuthority,
+  readGatewayDeviceRevocationGuard,
+} from "./device-revocation.js";
+import {
+  isInternalApprovalCommitGuard,
+  retainInternalApprovalCommitGuard,
+} from "./internal-approval-authority.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -159,10 +170,12 @@ async function withInProcessGatewayDispatch<T>(
         );
       }
     }
-    // A launched agent is autonomous; retaining tool-call AsyncLocalStorage would
-    // leak the human authority into later model-selected work after closure.
-    return method === "agent" && readOperatorToolGatewayAuthority()
-      ? await runOutsideOperatorToolGatewayAuthority(() => run(resolved))
+    // Autonomous turns establish their own transcript writer and must not retain
+    // the caller's tool authority after that invocation closes.
+    return method === "agent"
+      ? await runWithoutOwnedSessionTranscriptWrites(() =>
+          runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+        )
       : await run(resolved);
   } finally {
     releaseOperatorAuthority?.();
@@ -313,8 +326,33 @@ export async function dispatchGatewayMethodInProcessRaw(
         }
         assertSource();
       },
+      {
+        preparedCheck: (assertSource) => {
+          throwIfGatewayDispatchAborted(method, options?.signal);
+          if (
+            !hasPreparedGatewayDeviceAuthority(resolved.client, resolved.hasCurrentClientAuthority)
+          ) {
+            throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+          }
+          assertSource();
+        },
+      },
     );
     const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+    const sessionMutationCommitGuard = composeSessionSourceAssertion([
+      resolved.assertContextCurrent,
+      resolved.assertInvocationCurrent,
+      assertExplicitRequestCurrent,
+    ]);
+    if (
+      isGatewayWorkerApprovalMethod(method) &&
+      (!options?.sessionMutationCommitGuard ||
+        isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)) &&
+      (!resolved.hasCurrentClientAuthority ||
+        readGatewayDeviceRevocationGuard(resolved.hasCurrentClientAuthority))
+    ) {
+      retainInternalApprovalCommitGuard(sessionMutationCommitGuard);
+    }
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
       context: resolved.context,
@@ -331,11 +369,9 @@ export async function dispatchGatewayMethodInProcessRaw(
         resolved.assertContextCurrent,
         resolved.assertInvocationCurrent,
       ]),
-      sessionMutationCommitGuard: composeSessionSourceAssertion([
-        resolved.assertContextCurrent,
-        resolved.assertInvocationCurrent,
-        assertExplicitRequestCurrent,
-      ]),
+      sessionMutationCommitGuard,
+      questionCallerRead: readQuestionDispatchCapability(options?.prepareDispatchCurrent)
+        ?.callerRead,
       ...(assertCreatedInputSourceCurrent
         ? {
             assertCreatedInputSourceCurrent: composeSessionSourceAssertion([

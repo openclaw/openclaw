@@ -6,12 +6,7 @@ export const MAX_CONCEPT_TAGS = 8;
 
 type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
-export type ConceptTagScriptCoverage = {
-  latinEntryCount: number;
-  cjkEntryCount: number;
-  mixedEntryCount: number;
-  otherEntryCount: number;
-};
+export type ConceptTagScriptCoverage = ReturnType<typeof summarizeConceptTagScriptCoverage>;
 
 const LANGUAGE_STOP_WORDS = {
   shared: [
@@ -287,8 +282,7 @@ const HIRAGANA_RE = /\p{Script=Hiragana}/u;
 const KATAKANA_RE = /\p{Script=Katakana}/u;
 const HANGUL_RE = /\p{Script=Hangul}/u;
 
-const DEFAULT_WORD_SEGMENTER =
-  typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
+const DEFAULT_WORD_SEGMENTER = new Intl.Segmenter("und", { granularity: "word" });
 
 function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
@@ -379,12 +373,9 @@ function collectGlossaryMatches(source: string): string[] {
 }
 
 function collectSegmentTokens(source: string): string[] {
-  if (DEFAULT_WORD_SEGMENTER) {
-    return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
-      part.isWordLike ? part.segment : "",
-    ).filter(Boolean);
-  }
-  return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
+    part.isWordLike ? part.segment : "",
+  ).filter(Boolean);
 }
 
 export function deriveConceptTags(params: { path: string; snippet: string }): string[] {
@@ -414,10 +405,8 @@ export function deriveConceptTags(params: { path: string; snippet: string }): st
   return tags;
 }
 
-export function summarizeConceptTagScriptCoverage(
-  conceptTagsByEntry: string[][],
-): ConceptTagScriptCoverage {
-  const coverage: ConceptTagScriptCoverage = {
+export function summarizeConceptTagScriptCoverage(conceptTagsByEntry: string[][]) {
+  const coverage = {
     latinEntryCount: 0,
     cjkEntryCount: 0,
     mixedEntryCount: 0,

@@ -9,8 +9,17 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
   if (!role) {
     return undefined;
   }
-  const { modelPolicy: _modelPolicy, ...sourcePolicy } = role;
-  return sourcePolicy;
+  // Persisted sources and current policy share one exact JSON shape. Explicit
+  // undefined optional fields must not turn a valid restart into a policy change.
+  return {
+    sessions: role.sessions,
+    agents: role.agents,
+    scopes: role.scopes,
+    ...(role.sandbox !== undefined ? { sandbox: role.sandbox } : {}),
+    ...(role.accessPolicyPlugin !== undefined
+      ? { accessPolicyPlugin: role.accessPolicyPlugin }
+      : {}),
+  };
 }
 
 export function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {

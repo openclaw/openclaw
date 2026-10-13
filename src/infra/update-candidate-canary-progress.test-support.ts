@@ -7,6 +7,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { validateUpdateCandidateWithProgress } from "../cli/update-cli/update-command-candidate-validation.js";
 import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import * as bundledDirectory from "../plugins/bundled-dir.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -45,7 +46,6 @@ export function registerCanaryProgressWorkerTests(
     "recorded-text",
     "reopened",
     "source-replaced",
-    "revoked-at-commit",
     "interrupted-after-acceptance",
     "uncertain",
   ] as const)(
@@ -53,6 +53,9 @@ export function registerCanaryProgressWorkerTests(
     async (outcome) => {
       const root = getRoot();
       stubHealthyGateway();
+      const sourcePackageRoot = path.join(root, "serving-runtime");
+      const sourceBundle = path.join(sourcePackageRoot, "dist", "extensions");
+      vi.spyOn(bundledDirectory, "resolveBundledPluginsDir").mockReturnValue(sourceBundle);
       const json = outcome !== "recorded-text";
       const stdout = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -74,6 +77,12 @@ export function registerCanaryProgressWorkerTests(
           },
         ) => {
           const request: unknown = JSON.parse(options.input);
+          if (isRecord(request) && request.mode === "inventory") {
+            expect(request.sourceBundledPlugins).toEqual({
+              packageRoot: sourcePackageRoot,
+              directory: sourceBundle,
+            });
+          }
           if (outcome === "reopened" && isRecord(request) && request.mode === "inventory") {
             beforeInventory = await readSqliteSidecarIdentities(
               writeOptions.context.admission.databasePath,
@@ -167,9 +176,6 @@ export function registerCanaryProgressWorkerTests(
           if (outcome === "interrupted-after-acceptance" && firstCommit) {
             run.interrupted = true;
           }
-          if (outcome === "revoked-at-commit") {
-            opts.run = { ...run };
-          }
         }
       };
       const onStepComplete = vi.fn();
@@ -177,6 +183,7 @@ export function registerCanaryProgressWorkerTests(
         validateUpdateCandidateWithProgress(
           {
             root,
+            sourcePackageRoot,
             config: {},
             env,
             assertCurrent: guards.assertCurrent,
@@ -204,33 +211,17 @@ export function registerCanaryProgressWorkerTests(
           expect(mocks.spawn).not.toHaveBeenCalled();
           return;
         }
-        if (outcome === "revoked-at-commit" || outcome === "interrupted-after-acceptance") {
+        if (outcome === "interrupted-after-acceptance") {
           await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
           expect(checkedCommit).toBe(true);
           const saved = await getUpdateRunAsync(run.runId, { env });
-          if (outcome === "revoked-at-commit") {
-            expect(saved).toEqual({
-              ...created,
-              updatedAtMs: expect.any(Number),
-              steps: [
-                ...created.steps,
-                {
-                  step: "candidate-state-snapshot",
-                  status: "in_progress",
-                  startedAtMs: expect.any(Number),
-                  detail: "Preparing update checks",
-                },
-              ],
-            });
-          } else {
-            expect(saved?.steps).toContainEqual(
-              expect.objectContaining({
-                step: "candidate-state-snapshot",
-                status: "in_progress",
-                detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
-              }),
-            );
-          }
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({
+              step: "candidate-state-snapshot",
+              status: "in_progress",
+              detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
+            }),
+          );
           expect(onStepComplete).toHaveBeenCalledWith(
             expect.objectContaining({
               name: "candidate-state-snapshot",

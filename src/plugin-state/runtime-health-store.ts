@@ -29,19 +29,6 @@ type RuntimeHealthStoreOptions<T extends RuntimeHealthRecordEnvelope> = {
   pick: "earliest" | "latest";
 };
 
-type RuntimeHealthStore<T extends RuntimeHealthRecordEnvelope> = {
-  /** Persists a record under the key, overwriting any prior value. */
-  register(key: string, record: T, assertCurrent?: () => void): Promise<void>;
-  /** One record per display group, restricted to live recorder processes. */
-  list(): Promise<T[]>;
-  /** Removes records recorded by the process and selected by its health owner. */
-  clearForProcess(
-    processId: number,
-    selection: RuntimeHealthClearSelection,
-    assertCurrent?: () => void,
-  ): Promise<boolean>;
-};
-
 /** Builds the common health envelope for records owned by this process. */
 export function createRuntimeHealthRecordEnvelope(failedAt: Date): RuntimeHealthRecordEnvelope {
   return {
@@ -69,7 +56,7 @@ function processLooksLive(record: RuntimeHealthRecordEnvelope): boolean {
 /** Opens a SQLite-backed health record namespace shared across runtime processes. */
 export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
   options: RuntimeHealthStoreOptions<T>,
-): RuntimeHealthStore<T> {
+) {
   // The keyed store is opened per operation so records follow the state dir
   // active at call time (tests and embedded runtimes swap OPENCLAW_STATE_DIR).
   const storeOptions = () => ({
@@ -83,7 +70,7 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
     hasValidRuntimeHealthEnvelope(value) ? options.normalizeRecord(value) : undefined;
 
   return {
-    async register(key, record, assertCurrent) {
+    async register(key: string, record: T, assertCurrent?: () => void) {
       await createCorePluginStateKeyedStore<T>(storeOptions()).register(key, record, {
         assertCurrent,
       });
@@ -112,7 +99,11 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
         return [];
       }
     },
-    async clearForProcess(processId, selection, assertCurrent) {
+    async clearForProcess(
+      processId: number,
+      selection: RuntimeHealthClearSelection,
+      assertCurrent?: () => void,
+    ) {
       try {
         await clearRuntimeHealthInWorker({
           pluginId: options.ownerId,

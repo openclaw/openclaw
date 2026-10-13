@@ -1,4 +1,3 @@
-import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -8,6 +7,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceResources,
@@ -23,6 +23,7 @@ export {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
+  isOpenClawDatabaseMaintenanceWorkerAccess,
   observeOpenClawDatabaseMaintenanceResource,
   runOutsideOpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-maintenance-context.js";
@@ -116,7 +117,16 @@ export function createOpenClawDatabaseMaintenanceScope(
         if (access === "read") {
           return;
         }
-        throw new Error("Database maintenance authority check cannot admit a nested effect");
+        // Function names identify the admission without exposing stack paths or arguments.
+        const callers = new Error().stack
+          ?.split("\n")
+          .slice(2, 6)
+          .flatMap((line) => line.match(/^\s+at (?:async )?([\w$.]+) \(/u)?.[1] ?? [])
+          .join(" <- ")
+          .slice(0, 160);
+        throw new Error(
+          `Database maintenance authority check cannot admit a nested effect (access=effect; caller=${callers || "unknown"})`,
+        );
       }
       checkingOwner = true;
       try {
@@ -277,8 +287,17 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     return { integrity: { identity, revision, epoch: 0n, proof: proofFor() } };
   };
 
+  const publishCreatedIdentity = (record: IdentityRecord, identity: DatabasePathIdentity) => {
+    // Pre-creation integrity cannot certify the newly bound physical file.
+    Atomics.add(new BigInt64Array(record.generation.integrity.revision), 0, 1n);
+    records.delete(record.identity.key);
+    record.identity = identity;
+    record.generation.integrity.identity = identity;
+    records.set(identity.key, record);
+  };
+
   const known = (pathname: string) =>
-    recordsByPath.get(pathname) ?? recordsByPath.get(path.resolve(pathname));
+    recordsByPath.get(pathname) ?? recordsByPath.get(resolveDatabasePath({ path: pathname }));
   const bindPath = (record: IdentityRecord, pathname: string) => {
     record.paths.add(pathname);
     if (!recordsByPath.has(pathname)) {
@@ -370,10 +389,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       });
       if (record) {
-        records.delete(record.identity.key);
-        record.identity = identity;
-        record.generation.integrity.identity = identity;
-        records.set(identity.key, record);
+        publishCreatedIdentity(record, identity);
       }
     }
     if (!record) {
@@ -391,7 +407,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     return record;
   };
   const resolveForNative = (pathname: string): IdentityRecord | undefined => {
-    const resolvedPath = path.resolve(pathname);
+    const resolvedPath = resolveDatabasePath({ path: pathname });
     const cached = recordsByPath.get(resolvedPath);
     if (cached) {
       return cached;
@@ -477,12 +493,6 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.admissions.set(databasePath, admission);
     return admission;
   };
-  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
-    const record = resolve(databasePath);
-    assertOpen(record);
-    return captureRecord(record, databasePath);
-  };
-
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
@@ -493,24 +503,21 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     integrity(this: void, pathname: string): OpenClawStateIntegrityAdmission | undefined {
       const record = resolveForNative(pathname);
       return record && !isSealed(record)
-        ? captureRecord(record, path.resolve(pathname)).captureIntegrity?.()
+        ? captureRecord(record, resolveDatabasePath({ path: pathname })).captureIntegrity?.()
         : undefined;
     },
     publish(pathname: string): {
       identity: DatabasePathIdentity;
       admission: OpenClawStateDatabaseReadAdmission;
     } {
-      const resolvedPath = path.resolve(pathname);
+      const resolvedPath = resolveDatabasePath({ path: pathname });
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
       let record = findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
-          records.delete(previous.identity.key);
-          previous.identity = identity;
-          previous.generation.integrity.identity = identity;
-          records.set(identity.key, previous);
+          publishCreatedIdentity(previous, identity);
           record = previous;
         } else {
           invalidate(previous);
@@ -536,7 +543,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       }
     },
-    register(resource: OpenClawStateDatabaseAsyncResource): () => void {
+    register(this: void, resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
       for (const attempt of attempts.values()) {
         attempt.queue?.add(resource);
@@ -552,10 +559,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         retained.assertCurrent();
         return retained;
       }
-      return captureResolved(path.resolve(pathname));
+      const databasePath = resolveDatabasePath({ path: pathname });
+      const record = resolve(databasePath);
+      assertOpen(record);
+      return captureRecord(record, databasePath);
     },
     holdExclusion(pathname: string): () => void {
-      const record = resolve(path.resolve(pathname));
+      const record = resolve(resolveDatabasePath({ path: pathname }));
       const held = seal(record);
       return () => {
         seals.delete(held);

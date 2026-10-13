@@ -71,7 +71,7 @@ export type GitWorktreeOperations = {
     output: { paths: string[]; estimatedBytes: number };
   };
   "worktree.git-size": {
-    input: { repoRoot: string; ref: string; replacementRefBase?: string };
+    input: { repoRoot: string; ref: string; replacementRefBase?: string; preparationKey?: string };
     output: number;
   };
   "worktree.checkout-transition-size": {
@@ -104,6 +104,7 @@ export type GitWorktreeOperationResult =
   GitWorktreeOperations[keyof GitWorktreeOperations]["output"];
 
 export type GitWorktreeEffects = {
+  "worktree.snapshot-inventory": { input: { tracked: number; untracked: number }; output: void };
   "worktree.assert-current": { input: Record<string, never>; output: void };
   "worktree.eviction-fence": { input: { worktreeIds: string[] }; output: void };
   "worktree.eviction-admit": { input: Record<string, never>; output: void };

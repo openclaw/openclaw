@@ -10,18 +10,6 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
-function resolveAgentHeartbeatModelRaw(params: {
-  cfg: FollowupRun["run"]["config"];
-  agentId?: string;
-}): string | undefined {
-  const defaultModel = normalizeOptionalString(params.cfg.agents?.defaults?.heartbeat?.model);
-  const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
-  const agentModel = agentId
-    ? normalizeOptionalString(resolveAgentConfig(params.cfg, agentId)?.heartbeat?.model)
-    : undefined;
-  return agentModel ?? defaultModel;
-}
-
 function modelRefsEqual(left: ModelRef, right: ModelRef | undefined): boolean {
   const provider = normalizeLowercaseStringOrEmpty(left.provider);
   const model = normalizeLowercaseStringOrEmpty(left.model);
@@ -78,10 +66,12 @@ function resolveHeartbeatBleedHint(params: {
   if (modelRefsEqual(primaryRef, runtimeRef)) {
     return undefined;
   }
-  const heartbeatModelRaw = resolveAgentHeartbeatModelRaw({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
+  const defaultModel = normalizeOptionalString(params.cfg.agents?.defaults?.heartbeat?.model);
+  const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
+  const agentModel = agentId
+    ? normalizeOptionalString(resolveAgentConfig(params.cfg, agentId)?.heartbeat?.model)
+    : undefined;
+  const heartbeatModelRaw = agentModel ?? defaultModel;
   const heartbeatRef = heartbeatModelRaw
     ? resolveModelRefFromString({
         cfg: params.cfg,
@@ -123,7 +113,6 @@ function resolveHeartbeatBleedHint(params: {
   );
 }
 
-/** Builds recovery instructions for context-overflow failures. */
 export function buildContextOverflowRecoveryText(params: {
   cfg: FollowupRun["run"]["config"];
   agentId?: string;

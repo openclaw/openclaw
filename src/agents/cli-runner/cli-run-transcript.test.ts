@@ -56,6 +56,7 @@ it.each([
       const result = await persistCliAssistantTranscript({
         runParams: {
           ...target,
+          config: {},
           sessionFile: `sqlite://agents/main/${target.sessionId}`,
           workspaceDir: root,
           prompt: "Review the worker result",
@@ -117,6 +118,7 @@ it.each([
       const result = await persistCliAssistantTranscript({
         runParams: {
           ...target,
+          config: {},
           sessionFile: `sqlite://agents/main/${target.sessionId}`,
           workspaceDir: root,
           prompt: "make an artifact",
@@ -132,6 +134,7 @@ it.each([
         yielded,
       });
       expect(result.owned).toBe(true);
+      expect(result.idempotencyKey).toBe("cli-assistant:cli-media-run");
       expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ content: [{ type: "text", text: sourceText }] }),
         sourceText,

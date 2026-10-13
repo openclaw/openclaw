@@ -1,6 +1,7 @@
 import { nothing, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
@@ -81,6 +82,7 @@ it("does not let an aborted late renewal replace a newly mounted pane retry", as
   expect(retryButton).not.toBeNull();
   retryButton!.click();
   expect(renewalSignal?.aborted).toBe(true);
+  flush();
   expect(fetchMock).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(0);
 

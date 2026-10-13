@@ -1,9 +1,6 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  PluginStateCompareIntent,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { IMessageAccountConfig } from "../account-types.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
@@ -36,26 +33,10 @@ export type IMessageCatchupRow = {
   isFromMe?: boolean;
 };
 
-export type IMessageCatchupSummary = {
-  querySucceeded: boolean;
-  fullyCaughtUp: boolean;
-  fetchedCount: number;
-  replayed: number;
-  skippedFromMe: number;
-  skippedPreCursor: number;
-  /** GUIDs already at the retry ceiling before this pass. */
-  skippedGivenUp: number;
-  failed: number;
-  /** GUIDs that reached the retry ceiling during this pass. */
-  givenUp: number;
-  cursorBefore: { lastSeenMs: number; lastSeenRowid: number } | null;
-  cursorAfter: { lastSeenMs: number; lastSeenRowid: number };
-  windowStartMs: number;
-  windowEndMs: number;
-};
+export type IMessageCatchupSummary = Awaited<ReturnType<typeof performIMessageCatchup>>;
 
-function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor> {
-  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
+function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor, 2> {
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
@@ -127,50 +108,38 @@ function decideCatchupCursorSave(
   existingValue: IMessageCatchupCursor | undefined,
   cursor: IMessageCatchupCursor,
   allowCursorRewindForRetries: boolean,
-): PluginStateCompareIntent<IMessageCatchupCursor> {
+): IMessageCatchupCursor | undefined {
   const existing = normalizeIMessageCatchupCursor(existingValue);
   if (existing && cursor.lastSeenRowid < existing.lastSeenRowid) {
     if (!allowCursorRewindForRetries) {
-      return { operation: "update", action: "keep" };
+      return undefined;
     }
-    return {
-      operation: "update",
-      action: "set",
-      value: buildIMessageCatchupCursor(
-        {
-          lastSeenMs: cursor.lastSeenMs,
-          lastSeenRowid: cursor.lastSeenRowid,
-          failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
-        },
-        cursor.updatedAt,
-      ),
-    };
+    return buildIMessageCatchupCursor(
+      {
+        lastSeenMs: cursor.lastSeenMs,
+        lastSeenRowid: cursor.lastSeenRowid,
+        failureRetries: { ...existing.failureRetries, ...cursor.failureRetries },
+      },
+      cursor.updatedAt,
+    );
   }
-  return { operation: "update", action: "set", value: cursor };
+  return cursor;
 }
 
 async function updateIMessageCatchupCursor(
   accountId: string,
-  decide: (
-    existing: IMessageCatchupCursor | undefined,
-  ) => PluginStateCompareIntent<IMessageCatchupCursor>,
+  decide: (existing: IMessageCatchupCursor | undefined) => IMessageCatchupCursor | undefined,
 ): Promise<boolean> {
-  const store = openCatchupCursorStore();
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error(
-      "iMessage catchup cursor persistence requires plugin-state comparison support.",
-    );
-  }
   const key = resolveIMessageCatchupCursorKey(accountId);
-  let observation = await store.observe(key);
-  for (;;) {
-    const intent = decide(observation.value);
-    const result = await store.compareAndApply(key, observation.comparison, intent);
-    if (result.status !== "conflict") {
-      return result.status === "applied";
+  return await cursorWriteQueue.enqueue(key, async () => {
+    const store = openCatchupCursorStore();
+    const next = decide(await store.lookup(key));
+    if (!next) {
+      return false;
     }
-    observation = result.current;
-  }
+    await store.register(key, next);
+    return true;
+  });
 }
 
 export type ResolvedCatchupConfig = Required<IMessageCatchupConfig>;
@@ -237,29 +206,25 @@ function decideLiveCatchupCursorAdvance(
   existingValue: IMessageCatchupCursor | undefined,
   next: IMessageCatchupCursor,
   maxFailureRetries: number,
-): PluginStateCompareIntent<IMessageCatchupCursor> {
+): IMessageCatchupCursor | undefined {
   const cursor = normalizeIMessageCatchupCursor(existingValue);
   if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
-    return { operation: "update", action: "keep" };
+    return undefined;
   }
   const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
     (count) => count < maxFailureRetries,
   );
   if (blockingFailure) {
-    return { operation: "update", action: "keep" };
+    return undefined;
   }
-  return {
-    operation: "update",
-    action: "set",
-    value: buildIMessageCatchupCursor(
-      {
-        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
-        lastSeenRowid: next.lastSeenRowid,
-        failureRetries: cursor?.failureRetries,
-      },
-      next.updatedAt,
-    ),
-  };
+  return buildIMessageCatchupCursor(
+    {
+      lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+      lastSeenRowid: next.lastSeenRowid,
+      failureRetries: cursor?.failureRetries,
+    },
+    next.updatedAt,
+  );
 }
 
 export async function advanceIMessageCatchupCursor(
@@ -271,18 +236,13 @@ export async function advanceIMessageCatchupCursor(
     return false;
   }
 
-  return await cursorWriteQueue.enqueue(resolveIMessageCatchupCursorKey(accountId), async () => {
-    const cursor = buildIMessageCatchupCursor(next, Date.now());
-    const maxFailureRetries = config.maxFailureRetries;
-    return updateIMessageCatchupCursor(accountId, (existing) =>
-      decideLiveCatchupCursorAdvance(existing, cursor, maxFailureRetries),
-    );
-  });
+  const cursor = buildIMessageCatchupCursor(next, Date.now());
+  return await updateIMessageCatchupCursor(accountId, (existing) =>
+    decideLiveCatchupCursorAdvance(existing, cursor, config.maxFailureRetries),
+  );
 }
 
-export async function performIMessageCatchup(
-  params: PerformCatchupParams,
-): Promise<IMessageCatchupSummary> {
+export async function performIMessageCatchup(params: PerformCatchupParams) {
   const now = params.now ?? Date.now();
   const cfg = params.config;
   const cursor = await loadIMessageCatchupCursor(params.accountId);
@@ -293,15 +253,17 @@ export async function performIMessageCatchup(
   const windowEndMs = now;
   const sinceRowid = cursor?.lastSeenRowid ?? 0;
 
-  const summary: IMessageCatchupSummary = {
+  const summary = {
     querySucceeded: false,
     fullyCaughtUp: false,
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
     skippedPreCursor: 0,
+    // GUIDs already at the retry ceiling before this pass.
     skippedGivenUp: 0,
     failed: 0,
+    // GUIDs that reached the retry ceiling during this pass.
     givenUp: 0,
     cursorBefore: cursor
       ? { lastSeenMs: cursor.lastSeenMs, lastSeenRowid: cursor.lastSeenRowid }

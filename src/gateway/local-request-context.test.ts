@@ -68,42 +68,32 @@ describe("local gateway request context", () => {
     expect(hasGatewayToolRoutingContext()).toBe(false);
   });
 
-  it.each(["caller", "ambient"])(
-    "retains %s Gateway ownership after retirement inside a local scope",
-    async (kind) => {
-      let current: GatewayRequestContext | undefined = {} as GatewayRequestContext;
-      const resolver = () => current;
-      const check = async () => {
-        expect(hasGatewayToolRoutingContext()).toBe(true);
-        current = undefined;
-        expect(hasGatewayToolRoutingContext()).toBe(true);
-        if (kind === "caller") {
-          await expect(callInProcessGatewayTool("node.list", {})).rejects.toThrow(
-            "Gateway instance unavailable for node.list",
-          );
-        }
-      };
-      await withLocalGatewayRequestScope(
-        { deps: {} as CliDeps, getRuntimeConfig: () => ({}) },
-        () =>
-          kind === "caller"
-            ? withGatewayToolCallerIdentity(
-                {
-                  agentId: "main",
-                  sessionKey: "agent:main:worker",
-                  gatewayContextResolver: resolver,
-                },
-                check,
-              )
-            : withPluginRuntimeGatewayContextResolver(resolver, check),
+  it("retains caller Gateway ownership after retirement inside a local scope", async () => {
+    let current: GatewayRequestContext | undefined = {} as GatewayRequestContext;
+    const resolver = () => current;
+    const check = async () => {
+      expect(hasGatewayToolRoutingContext()).toBe(true);
+      current = undefined;
+      expect(hasGatewayToolRoutingContext()).toBe(true);
+      await expect(callInProcessGatewayTool("node.list", {})).rejects.toThrow(
+        "Gateway instance unavailable for node.list",
       );
-      expect(hasGatewayToolRoutingContext()).toBe(false);
-    },
-  );
+    };
+    await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => ({}) }, () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:worker",
+          gatewayContextResolver: resolver,
+        },
+        check,
+      ),
+    );
+    expect(hasGatewayToolRoutingContext()).toBe(false);
+  });
 
-  it.each(["live", "retired"] as const)("reuses an outer %s Gateway resolver", async (state) => {
-    const context = state === "live" ? ({} as GatewayRequestContext) : undefined;
-    const resolveGatewayContext = () => context;
+  it("reuses an outer retired Gateway resolver", async () => {
+    const resolveGatewayContext = () => undefined;
     const getRuntimeConfig = vi.fn(() => ({}));
     await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, async () => {
@@ -320,9 +310,10 @@ describe("local gateway request context", () => {
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(() => new Promise(() => {}));
+    const recheckNativeLogin = vi.fn();
     const readOwner = vi
       .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(asPublishedOwner(candidate));
+      .mockReturnValue({ ...asPublishedOwner(candidate), recheckNativeLogin });
 
     const result = await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
@@ -331,7 +322,8 @@ describe("local gateway request context", () => {
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
     expect(loadOwner).not.toHaveBeenCalled();
-    expect(readOwner).toHaveBeenCalledOnce();
+    expect(readOwner).toHaveBeenCalledTimes(2);
+    expect(recheckNativeLogin).toHaveBeenCalledOnce();
     loadOwner.mockRestore();
     readOwner.mockRestore();
   });

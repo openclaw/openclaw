@@ -197,7 +197,7 @@ function isForbiddenKey(key: string | number): boolean {
 }
 
 type PathContainer = {
-  current: unknown;
+  current: Record<string | number, unknown>;
   lastKey: string | number;
 };
 
@@ -211,13 +211,11 @@ function resolvePathContainer(
   }
 
   let current: unknown = obj;
-  for (let i = 0; i < path.length - 1; i += 1) {
+  for (let i = 0; i < path.length; i += 1) {
     const key = path[i];
     const nextKey = path[i + 1];
-    if (key === undefined) {
-      return null;
-    }
     if (
+      key === undefined ||
       typeof current !== "object" ||
       current === null ||
       (typeof key === "number" && !Array.isArray(current))
@@ -225,6 +223,9 @@ function resolvePathContainer(
       return null;
     }
     const record = current as Record<string | number, unknown>;
+    if (i === path.length - 1) {
+      return { current: record, lastKey: key };
+    }
     let child = record[key];
     if (child == null) {
       if (!createMissing) {
@@ -236,14 +237,7 @@ function resolvePathContainer(
     current = child;
   }
 
-  const lastKey = path.at(-1);
-  if (lastKey === undefined) {
-    return null;
-  }
-  return {
-    current,
-    lastKey,
-  };
+  return null;
 }
 
 export function setPathValue(
@@ -252,18 +246,8 @@ export function setPathValue(
   value: unknown,
 ) {
   const container = resolvePathContainer(obj, path, true);
-  if (!container) {
-    return;
-  }
-
-  if (typeof container.lastKey === "number") {
-    if (Array.isArray(container.current)) {
-      container.current[container.lastKey] = value;
-    }
-    return;
-  }
-  if (typeof container.current === "object" && container.current != null) {
-    (container.current as Record<string, unknown>)[container.lastKey] = value;
+  if (container) {
+    container.current[container.lastKey] = value;
   }
 }
 
@@ -276,13 +260,9 @@ export function removePathValue(
     return;
   }
 
-  if (typeof container.lastKey === "number") {
-    if (Array.isArray(container.current)) {
-      container.current.splice(container.lastKey, 1);
-    }
-    return;
-  }
-  if (typeof container.current === "object" && container.current != null) {
-    delete (container.current as Record<string, unknown>)[container.lastKey];
+  if (typeof container.lastKey === "number" && Array.isArray(container.current)) {
+    container.current.splice(container.lastKey, 1);
+  } else {
+    delete container.current[container.lastKey];
   }
 }

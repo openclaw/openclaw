@@ -108,9 +108,6 @@ async function readUpdateRunAsync(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "updateRuns.get") {
-    throw new Error("Unexpected update run lookup result");
-  }
   return reply.run;
 }
 
@@ -169,20 +166,7 @@ export function createUpdateRunAdmissionReader(
 export async function getUpdateRunStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.status" },
-      { preferIndependentWarmRead: true },
-    ),
-  );
-  if (!reply) {
-    return {};
-  }
-  if (!reply.ok || reply.type !== "updateRuns.status") {
-    throw new Error("Unexpected update run status result");
-  }
-  return reply.status;
+  return readUpdateRunStatusAsync("updateRuns.status", options);
 }
 
 export async function getUpdateRunHistoryStatusAsync(
@@ -192,18 +176,18 @@ export async function getUpdateRunHistoryStatusAsync(
   lastRun?: UpdateRunRecord;
   expiredRun?: UpdateRunRecord;
 }> {
+  return readUpdateRunStatusAsync("updateRuns.historyStatus", options);
+}
+
+async function readUpdateRunStatusAsync(
+  type: "updateRuns.status" | "updateRuns.historyStatus",
+  options: OpenClawStateDatabaseOptions,
+) {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.historyStatus" },
-      { preferIndependentWarmRead: true },
-    ),
+    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
   );
   if (!reply) {
     return {};
-  }
-  if (!reply.ok || reply.type !== "updateRuns.historyStatus") {
-    throw new Error("Unexpected update run history status result");
   }
   return reply.status;
 }
@@ -222,9 +206,6 @@ export async function listUpdateRunsAsync(
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "updateRuns.list") {
-    throw new Error("Unexpected update run list result");
   }
   return reply.runs;
 }

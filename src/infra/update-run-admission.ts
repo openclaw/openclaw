@@ -16,10 +16,16 @@ export function runUpdateRunAdmission<T>(
   operation: (db: DatabaseSync, recoveryChanges: string[]) => T,
   options: UpdateRunLedgerOptions,
   recoverTaskDeliveryOrphans: boolean,
+  assertCurrent?: (stage: "transaction" | "commit") => void,
 ): T {
   if (options.database) {
     throw new Error("Update run admission requires its own writable connection");
   }
+  const admitted = (db: DatabaseSync, recoveryChanges: string[]) => {
+    const result = operation(db, recoveryChanges);
+    assertCurrent?.("commit");
+    return result;
+  };
   // Admission precedes managed shutdown. An older serving Gateway must not
   // force diagnostic writes through this candidate's runtime migrations.
   // Once a file exists, failures remain failures; never retry via bootstrap.
@@ -36,13 +42,14 @@ export function runUpdateRunAdmission<T>(
       return { repairable: error };
     }
   }, options);
+  assertCurrent?.("transaction");
   if (inspection) {
     if (inspection.repairable && !recoverTaskDeliveryOrphans) {
       throw inspection.repairable;
     }
     try {
       return runExistingOpenClawStateWriteTransaction(
-        ({ db, recoveryChanges }) => operation(db, recoveryChanges),
+        ({ db, recoveryChanges }) => admitted(db, recoveryChanges),
         options,
         {
           schemaSql: updateRunLedgerSchema,
@@ -72,7 +79,7 @@ export function runUpdateRunAdmission<T>(
     ({ db }) => {
       // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
       db.exec(updateRunLedgerSchema); // sqlite-allow-raw -- Canonical first-use ledger DDL in its write transaction.
-      return operation(db, []);
+      return admitted(db, []);
     },
     options,
     { operationLabel: "update.run" },

@@ -12,10 +12,7 @@ import {
   positionTranscriptDisplayEvents,
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
-import {
-  isVisibleHistoryNonMessageEvent,
-  parseStoredTranscriptEvent,
-} from "./session-accessor.sqlite-history-interval.js";
+import { parseStoredTranscriptEvent } from "./session-accessor.sqlite-history-interval.js";
 import {
   readActiveTranscriptCoordinate,
   resolveVisibleHistoryEventCount,
@@ -27,8 +24,10 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 type SqliteSourceCursor = Exclude<SessionTranscriptSourceCursor, { kind: "archive" }>;
 
@@ -160,7 +159,7 @@ export function readSessionTranscriptSourcePageFromProjection(
         : readSnapshotEventRows(
             projection,
             selected.map((row) => row.seq),
-          ).map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
+          ).map((row) => [row.seq, parseStoredTranscriptEvent(readTranscriptPayload(row))]),
     );
     let messageSeq: number = cursor.messageSeq;
     for (const row of selected) {

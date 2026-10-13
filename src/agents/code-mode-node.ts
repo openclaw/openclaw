@@ -31,9 +31,11 @@ import type {
   CodeModeWorkerResult,
 } from "./code-mode-executor-types.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
+import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+  type CodeModeNodeInput,
   type CodeModeWorkerBoundary,
   type CodeModeWorkerThreadResult,
 } from "./code-mode-worker-types.js";
@@ -46,7 +48,28 @@ type NodePool = {
 };
 type NodePoolLifetime = { scheduler: GatewaySchedulerScope; pools: Set<NodePool> };
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
-type NodeWorkerInput = NodeInput & { progress: SharedArrayBuffer; inlineHost: boolean };
+type NodeWorkerInput = CodeModeNodeInput;
+function prepareInput(input: NodeInput) {
+  if (input.kind === "resume") {
+    return input;
+  }
+  const {
+    [codeModeNodeInitialization]: initialization,
+    catalog,
+    namespaces,
+    apiFiles,
+    swarmEnabled,
+    ...execution
+  } = input;
+  return {
+    ...execution,
+    initialization:
+      initialization ??
+      prepareCodeModeNodeCatalog({ catalog, namespaces, apiFiles, swarmEnabled })[
+        codeModeNodeInitialization
+      ],
+  };
+}
 const retiringPools = new Set<NodePool>();
 const idlePools = new Map<NodePool, GatewayScheduledJob>();
 const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
@@ -159,7 +182,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     memoryLimitBytes,
     tasks: new WorkerTaskPool({
       workerUrl,
-      maxWorkers: 1,
+      workerClass: "singleton",
       idleTimeoutMs: 0,
       restartOnError: false,
       sharedCompute: true,
@@ -281,7 +304,7 @@ async function run(
           throw new CodeModeHeadlessTimeoutError();
         }
         return {
-          ...input,
+          ...prepareInput(input),
           progress: progress.buffer,
           inlineHost: Boolean(inlineHost),
           config: { ...input.config, timeoutMs: admittedTimeoutMs },
@@ -289,6 +312,7 @@ async function run(
       },
       {
         timeoutMs: Math.min(options.timeoutMs, input.config.timeoutMs) - preparationMs,
+        hostTimeout: "owner",
         signal,
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
         onInputConsumed: () => {

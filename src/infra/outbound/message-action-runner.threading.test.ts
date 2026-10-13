@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
@@ -20,47 +19,6 @@ const replyContext = {
 } satisfies Parameters<typeof resolveAndApplyOutboundReplyToId>[1];
 
 describe("message action threading helpers", () => {
-  it("mirrors an inherited reply through its canonical root", async () => {
-    const actionParams: Record<string, unknown> = { replyTo: "child-777" };
-    const sessionKey = "agent:main:forum:channel:123:thread:root-42";
-    const resolveOutboundSessionRoute = vi
-      .fn<Parameters<typeof prepareOutboundMirrorRoute>[0]["resolveOutboundSessionRoute"]>()
-      .mockResolvedValue({
-        sessionKey,
-        baseSessionKey: "base",
-        peer: { id: "123", kind: "channel" },
-        chatType: "channel",
-        from: "forum:123",
-        to: "forum:123",
-        threadId: "root-42",
-      });
-
-    const result = await prepareOutboundMirrorRoute({
-      ...threadContext,
-      channel: "forum",
-      actionParams,
-      agentId: "main",
-      replyToIsExplicit: false,
-      resolveAutoThreadId: ({ replyToId }) => (replyToId ? undefined : "root-42"),
-      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
-        replyToId: replyToIsExplicit || threadId == null ? replyToId : String(threadId),
-        threadId: threadId ?? null,
-      }),
-      resolveOutboundSessionRoute,
-    });
-
-    expect(resolveOutboundSessionRoute).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ replyToId: "root-42", threadId: "root-42" }),
-    );
-    expect(result.outboundRoute?.sessionKey).toBe(sessionKey);
-    expect(actionParams).toEqual({
-      replyTo: "root-42",
-      threadId: "root-42",
-      __sessionKey: sessionKey,
-      __agentId: "main",
-    });
-  });
-
   it("skips auto-threading for an explicit null threadId", () => {
     const resolveAutoThreadId = vi.fn(() => "42");
     const resolved = resolveAndApplyOutboundThreadId(

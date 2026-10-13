@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readDoctorAgentEntries } from "./doctor-agent-config.js";
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -24,14 +25,9 @@ type InspectConfiguredProvider = (params: {
 }) => Promise<ProviderFailure | null>;
 
 function listConfiguredAgentIds(config: unknown): string[] {
-  // Blocked include migrations can leave the health-check candidate in its raw roster shape.
-  const agents = asOptionalObjectRecord(asOptionalObjectRecord(config)?.agents);
-  const ids = new Set(Object.keys(asOptionalObjectRecord(agents?.entries) ?? {}));
-  const legacyList =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
-  for (const value of legacyList) {
+  const { keyed, listed } = readDoctorAgentEntries(config);
+  const ids = new Set(Object.keys(keyed ?? {}));
+  for (const value of listed) {
     const entry = asOptionalObjectRecord(value);
     if (typeof entry?.id === "string" && entry.id.trim()) {
       ids.add(entry.id.trim());
@@ -93,16 +89,12 @@ async function readExistingVectorModel(databasePath: string): Promise<string | n
 }
 
 function resolveConfigPrefix(config: unknown, agentId: string): string {
-  const agents = asOptionalObjectRecord(asOptionalObjectRecord(config)?.agents);
-  const keyedEntry = asOptionalObjectRecord(asOptionalObjectRecord(agents?.entries)?.[agentId]);
+  const { keyed, listed } = readDoctorAgentEntries(config);
+  const keyedEntry = asOptionalObjectRecord(keyed?.[agentId]);
   if (asOptionalObjectRecord(keyedEntry?.memory)?.search) {
     return `agents.entries.${agentId}.memory.search`;
   }
-  const legacyList =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
-  const listedEntry = legacyList.map(asOptionalObjectRecord).find((entry) => entry?.id === agentId);
+  const listedEntry = listed.map(asOptionalObjectRecord).find((entry) => entry?.id === agentId);
   if (asOptionalObjectRecord(listedEntry?.memory)?.search) {
     return `agents.list[].memory.search (agent id ${agentId})`;
   }

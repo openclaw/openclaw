@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
   normalizeDatabasePath,
   readDatabasePathIdentitySync,
+  resolveDatabasePathKey,
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -29,7 +31,12 @@ const identities = resolveGlobalSingleton(
 /** Prepare physical and connection identity once at open; cached aliases are not resolved again. */
 export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
   const filename = normalizeDatabasePath(db.location() ?? "");
-  const file = filename ? readDatabasePathIdentitySync(filename) : undefined;
+  const admitted = filename ? getSqliteDatabaseAdmissionIdentityForPath(filename) : undefined;
+  const file = admitted
+    ? { ...admitted, canonicalPath: resolveDatabasePathKey(filename) }
+    : filename
+      ? readDatabasePathIdentitySync(filename)
+      : undefined;
   if (file && !file.key.startsWith("file:")) {
     throw new Error("OpenClaw agent database disappeared before identity registration");
   }
@@ -89,24 +96,18 @@ export function assertOpenClawAgentDatabaseIdentity(
   }
 }
 
-export type OpenClawAgentDatabaseClaim = {
-  identity: OpenClawAgentDatabaseIdentity;
-  /** Changes on reopen even when the underlying file is unchanged. */
-  incarnation: string;
-  isCurrent: () => boolean;
-  assertCurrent: () => void;
-  release: () => void;
-};
+export type OpenClawAgentDatabaseClaim = ReturnType<typeof createOpenClawAgentDatabaseClaim>;
 
 export function createOpenClawAgentDatabaseClaim(
   database: AgentDatabaseOwner,
   release: () => void,
-): OpenClawAgentDatabaseClaim {
+) {
   let released = false;
   const isCurrent = () => !released && database.db.isOpen;
   const { identity, incarnation } = readOpenClawAgentDatabaseIdentity(database);
   return {
     identity,
+    // Changes on reopen even when the underlying file is unchanged.
     incarnation,
     isCurrent,
     assertCurrent: () => {

@@ -3,10 +3,17 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+  projectSubagentRunForSessionList,
+} from "./subagents/registry/subagent-delivery-state.js";
+import type { PendingFinalDeliveryPayload } from "./subagents/registry/subagent-registry-read.types.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -136,6 +143,8 @@ export function createSubagentStateMock(
 ) {
   return {
     // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
+    getSubagentSessionListRunsSnapshotForRead: (runs: Map<string, SubagentRunRecord>) =>
+      new Map([...runs].map(([id, entry]) => [id, projectSubagentRunForSessionList(entry)])),
     withSubagentRunReadSnapshot: (async (runs, select, consume) => {
       await Promise.resolve();
       const selected = select(new Map(runs));
@@ -202,6 +211,8 @@ export function createSubagentRunParams(
 ): RegisterSubagentRunParams {
   return {
     childSessionKey: "agent:main:subagent:child",
+    childAgentId: parseAgentSessionKey(overrides.childSessionKey)?.agentId ?? "main",
+    sessionEntry: { sessionId: "sess-child" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: overrides.runId,
@@ -348,3 +359,16 @@ export function createSubagentRegistryHarness(
     registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
   };
 }
+
+export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+  const now = Date.now();
+  const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
+
+  const delivery = ensureDeliveryState(args.entry);
+  delivery.status = "pending";
+  delivery.createdAt ??= now;
+  delivery.lastAttemptAt = now;
+  delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+  delivery.lastError = args.error ?? null;
+  delivery.payload = payload;
+};

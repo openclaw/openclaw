@@ -1,5 +1,3 @@
-// Gateway startup Control UI origin seeding.
-// Adds runtime-only browser origins for non-loopback binds when safe.
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isContainerEnvironment } from "./net.js";

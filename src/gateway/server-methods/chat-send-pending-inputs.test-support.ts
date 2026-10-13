@@ -10,6 +10,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
@@ -18,6 +19,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
@@ -27,6 +29,27 @@ import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resou
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "./types.js";
+
+export function setClientProfile(
+  client: GatewayClient,
+  profile: { id: string; updatedAt: number },
+) {
+  client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+export function setNativeIosClient(client: GatewayClient) {
+  client.connect.client = {
+    id: "openclaw-ios",
+    version: "test",
+    platform: "ios",
+    mode: "ui",
+  };
+}
 
 export function useBrowserFollowupFixture() {
   const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -47,26 +70,29 @@ export function useBrowserFollowupFixture() {
       preserveContent?: boolean;
       transientProjectionFailures?: number;
       persistDuringDispatch?: boolean;
+      storage?: "durable" | "native-incognito";
     } = {},
   ) {
     const active = options.active !== false;
     const storePath = path.join(temporaryDirs.make("openclaw-chat-custody-"), "sessions.json");
     testState.sessionStorePath = storePath;
+    const nativeIncognito = options.storage === "native-incognito";
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: nativeIncognito ? "agent:main:dashboard:incognito-custody" : "agent:main:main",
       sessionId: "cloud-session",
       storePath,
     };
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+      status: active ? undefined : ("done" as const),
+      ...(options.createdActor ? { createdActor: options.createdActor } : {}),
+      ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+    };
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-          status: active ? "running" : "done",
-          ...(options.createdActor ? { createdActor: options.createdActor } : {}),
-          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
-        },
+        ...(!nativeIncognito ? { main: entry } : {}),
         unrelated: {
           sessionId: "unrelated-browser-session",
           updatedAt: Date.now(),
@@ -74,6 +100,10 @@ export function useBrowserFollowupFixture() {
         },
       },
     });
+    if (nativeIncognito) {
+      scope.storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId });
+      await upsertSessionEntryCore(scope, { ...entry, incognito: true });
+    }
     await appendTranscriptMessage(scope, {
       message: { role: "user", content: "Keep working on the current task.", timestamp: 1 },
     });

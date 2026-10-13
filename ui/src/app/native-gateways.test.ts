@@ -42,6 +42,24 @@ function installBridge() {
 }
 
 describe("native gateways", () => {
+  it.each([
+    ["", "This computer"],
+    ["This Mac", "This Mac"],
+    ["My desktop", "My desktop"],
+  ])("uses a shell's local label with a neutral fallback (%s)", async (name, expected) => {
+    installBridge();
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_GATEWAYS__: {
+        ...snapshot,
+        gateways: [{ ...snapshot.gateways[0], name }],
+      },
+    });
+    const { nativeSetupCapability } = await import("./native-setup.ts");
+    const capability = nativeSetupCapability({ nativeDeviceSettings: null, navigate: vi.fn() });
+
+    expect(capability?.currentGateway).toEqual({ name: expected, kind: "local" });
+  });
+
   it("returns null without the WebKit bridge", async () => {
     const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
 

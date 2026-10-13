@@ -112,7 +112,7 @@ export function createFeishuBotMenuHandler(params: {
             }
             return;
           }
-          return await handleLegacyMenu();
+          return handleLegacyMenu();
         })
         .catch(async (err: unknown) => {
           if (isFeishuRetryableSyntheticEventError(err)) {

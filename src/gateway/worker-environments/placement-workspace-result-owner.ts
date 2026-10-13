@@ -45,6 +45,15 @@ export function isCurrentWorkerWorkspacePendingResultOwner(
   return matchesWorkspaceResultGeneration(placement, pending.placementGeneration);
 }
 
+export function isWorkerWorkspaceResultReconciling(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult,
+): boolean {
+  const isPostTerminal =
+    placement?.turnClaim?.owner === "worker" || pending.stagedResultRef !== null;
+  return isPostTerminal && isCurrentWorkerWorkspacePendingResultOwner(placement, pending);
+}
+
 export function matchesWorkspaceResultClaim(
   placement: WorkerSessionPlacementRecord,
   pending: WorkerWorkspacePendingResult,

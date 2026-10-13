@@ -1,4 +1,3 @@
-/** Lists active ClawHub promotional model offers. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";

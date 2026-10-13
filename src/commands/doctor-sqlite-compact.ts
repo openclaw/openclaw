@@ -7,28 +7,13 @@ import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
 import { SqliteWalCheckpointBusyError, truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
-export type DoctorSqliteCompactSnapshot = {
-  autoVacuum: number;
-  dbSizeBytes: number;
-  freelistPages: number;
-  pageSizeBytes: number;
-  walSizeBytes: number;
-};
+type DoctorSqliteCompactSnapshot = ReturnType<typeof readCompactSnapshot>;
 
 type DoctorSqliteCompactResult = {
   after: DoctorSqliteCompactSnapshot;
   before: DoctorSqliteCompactSnapshot;
   integrityCheck: "ok";
   reclaimedBytes: number;
-};
-
-type DoctorSqliteCompactOptions = {
-  afterSuccess?: () => void;
-  busyTimeoutMs?: number;
-  operation?: "import-finalize";
-  requireExisting?: boolean;
-  sqlitePath: string;
-  validateBeforeMutation?: (database: DatabaseSync) => void;
 };
 
 /** The initial checkpoint was busy, before conversion, and the connection has closed. */
@@ -41,9 +26,14 @@ export class DoctorSqliteCompactionDeferredError extends Error {}
  * the database files. A busy checkpoint is a hard failure, never partial
  * success, so VACUUM cannot race an active reader or writer.
  */
-export function compactDoctorSqliteFile(
-  options: DoctorSqliteCompactOptions,
-): DoctorSqliteCompactResult {
+export function compactDoctorSqliteFile(options: {
+  afterSuccess?: () => void;
+  busyTimeoutMs?: number;
+  operation?: "import-finalize";
+  requireExisting?: boolean;
+  sqlitePath: string;
+  validateBeforeMutation?: (database: DatabaseSync) => void;
+}): DoctorSqliteCompactResult {
   const database = openNodeSqliteDatabase(
     options.requireExisting ? resolveExistingSqliteFileUri(options.sqlitePath) : options.sqlitePath,
   );
@@ -127,10 +117,7 @@ export function compactDoctorSqliteFile(
   return result;
 }
 
-function readCompactSnapshot(
-  database: DatabaseSync,
-  sqlitePath: string,
-): DoctorSqliteCompactSnapshot {
+function readCompactSnapshot(database: DatabaseSync, sqlitePath: string) {
   return {
     autoVacuum: readPragmaNumber(database, "auto_vacuum"),
     dbSizeBytes: fileSize(sqlitePath),

@@ -33,7 +33,7 @@ const retryingCompactionEnd = () =>
   }) as const;
 
 type StreamUsage = AssistantMessage["usage"] & { reasoningTokens?: number };
-type UsageCall = {
+type UsageCall = Pick<AssistantMessage, "responseId" | "turnId"> & {
   usage: StreamUsage;
   streamedUsage?: StreamUsage;
   text?: string;
@@ -132,6 +132,8 @@ async function runUsageCalls(
         api: model.api,
         provider: model.provider,
         model: model.id,
+        responseId: call.responseId,
+        turnId: call.turnId,
         usage: call.usage,
         stopReason: call.stopReason ?? "stop",
         ...(call.stopReason && call.stopReason !== "stop"
@@ -215,26 +217,32 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
       });
       const controller = createEmbeddedRunFailoverRetryController({
-        runParams: {
-          sessionId: "async-progress",
-          sessionFile: "unused",
-          runId: "async-progress",
-          workspaceDir: "/tmp/async-progress",
-          prompt: "Continue",
-          timeoutMs: 300_000,
+        runInput: {
+          runParams: {
+            sessionId: "async-progress",
+            sessionFile: "unused",
+            runId: "async-progress",
+            workspaceDir: "/tmp/async-progress",
+            prompt: "Continue",
+            timeoutMs: 300_000,
+          },
+          globalLane: "test",
+          agentDir: "/tmp/async-progress",
+          fallbackConfigured: false,
         },
-        provider: "test-provider",
-        modelId: "usage-model",
-        globalLane: "test",
-        agentDir: "/tmp/async-progress",
-        fallbackConfigured: false,
-        profileFailureStore: { version: 1, profiles: {} },
-        getLastProfileId: () => undefined,
+        preparedRuntime: {
+          provider: "test-provider",
+          modelId: "usage-model",
+          profileFailureStore: { version: 1, profiles: {} },
+          snapshot: () => ({
+            lastProfileId: undefined,
+            pluginHarnessOwnsTransport: false,
+            agentHarness: { id: "embedded" },
+          }),
+          getApiKeyInfo: () => null,
+          advanceAttemptAuthProfile: async () => false,
+        },
         getSessionId: () => "async-progress",
-        harnessOwnsTransport: () => false,
-        getRuntimeAuthOwnerId: () => "embedded",
-        getApiKeyInfo: () => null,
-        advanceAuthProfile: async () => false,
       });
       const messages: string[] = [];
       try {
@@ -296,11 +304,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       [
         {
           text: "First reply.",
+          responseId: "first-provider-response",
           streamedUsage: makeUsage({ input: 100, output: 12, cost: 0.125, billed: true }),
           usage: makeUsage(),
         },
         {
           text: "Second reply.",
+          turnId: "second-runtime-turn",
           streamedUsage: makeUsage({ input: 200, output: 8, cost: 0.5, billed: true }),
           usage: makeUsage(),
         },
@@ -328,8 +338,11 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         { input: 200, output: 8, totalTokens: 208, cost: { total: 0.5 } },
       ]);
       expect(onModelUsage.mock.calls).toMatchObject([
-        [{ input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }],
-        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }],
+        [
+          { input: 100, output: 12, cacheRead: 0, cacheWrite: 0 },
+          { responseId: "first-provider-response" },
+        ],
+        [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }, { turnId: "second-runtime-turn" }],
       ]);
       expect(subscription.getUsageTotals()).toMatchObject({
         input: 300,

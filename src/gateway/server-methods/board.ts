@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   type BoardSnapshot,
   type GatewayCoreRequestParams,
@@ -23,6 +24,8 @@ import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   resolveBoardWidgetContentKind,
   resolveBoardWidgetContentKindByPluginKind,
@@ -56,7 +59,7 @@ import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
 type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
@@ -98,6 +101,19 @@ function projectBoardSnapshot<T extends BoardSnapshot>(snapshot: T, agentId: str
   return { ...snapshot, sessionKey: sessionObserverScopeKey(snapshot.sessionKey, agentId) };
 }
 
+function broadcastBoardChanged(
+  context: GatewayRequestContext,
+  session: Required<BoardSessionTarget>,
+  { sessionKey, revision }: BoardSnapshot,
+  widget?: string,
+) {
+  context.broadcast(
+    "board.changed",
+    { sessionKey, revision, ...(widget !== undefined ? { widget } : {}) },
+    { sessionKeys: [session.sessionKey], agentId: session.agentId },
+  );
+}
+
 export function createBoardHandlers(
   store: BoardStore,
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
@@ -121,8 +137,7 @@ export function createBoardHandlers(
         await store.getSnapshotWithHtmlViewMetadata(boardSession);
       authority.assertActive();
       let sandboxPort = context.getMcpAppSandboxPort?.();
-      let sandboxOrigin: string | undefined;
-      let sandboxOriginResolved = false;
+      let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
@@ -185,10 +200,9 @@ export function createBoardHandlers(
             ...(resourceOrigins ? { resourceOrigins } : {}),
           });
           widget.sandboxPort = sandboxPort;
-          if (!sandboxOriginResolved) {
+          if (sandboxOrigin === null) {
             const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
             sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
-            sandboxOriginResolved = true;
           }
           if (sandboxOrigin) {
             widget.sandboxOrigin = sandboxOrigin;
@@ -222,14 +236,7 @@ export function createBoardHandlers(
             agentId: boardSession.agentId,
             reason: "board",
           });
-          context.broadcast(
-            "board.changed",
-            {
-              sessionKey: snapshot.sessionKey,
-              revision: snapshot.revision,
-            },
-            { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
-          );
+          broadcastBoardChanged(context, boardSession, snapshot);
         }
         respond(true, snapshot);
       },
@@ -244,6 +251,8 @@ export function createBoardHandlers(
         if (!boardSession) {
           return;
         }
+        const incognito = captureIncognitoSessionOperation(boardSession);
+        const claim = incognito?.actor.sessions.captureCurrent(boardSession.sessionKey);
         const { declared: requestDeclared, ...requestWithoutDeclared } = requestParams;
         let content: BoardWidgetMaterializedPutParams["content"];
         let declared = requestDeclared;
@@ -384,65 +393,111 @@ export function createBoardHandlers(
         const putWidget = () =>
           store.putWidget(boardParams, {
             ...(resolveMcpAppInteraction ? { resolveMcpAppInteraction } : {}),
-            assertCurrent: () => {
-              authority.assertActive();
-              identity?.assertSelected();
-              const cfg = context.getRuntimeConfig();
-              const current = resolveRequestedSessionStoreTarget(
-                cfg,
-                boardSession.sessionKey,
-                boardSession.agentId,
-              );
-              if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
-                throw new BoardValidationError("invalid_operation", "board session changed; retry");
-              }
-            },
+            assertCurrent: composeSessionSourceAssertion(
+              [identity?.assertSelected ?? authority.assertActive],
+              (assertSources) => {
+                assertSources();
+                const cfg = context.getRuntimeConfig();
+                const current = resolveRequestedSessionStoreTarget(
+                  cfg,
+                  boardSession.sessionKey,
+                  boardSession.agentId,
+                );
+                if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
+                  throw new BoardValidationError(
+                    "invalid_operation",
+                    "board session changed; retry",
+                  );
+                }
+              },
+            ),
           });
-        let snapshot = identity ? await identity.start(putWidget) : await putWidget();
-        authority.assertActive();
-        const widget = snapshot.widgets.find(
-          (candidate) => candidate.name === snapshot.resolvedWidgetName,
-        );
-        if (widget?.grantState === "pending") {
-          const decision = await resolveBoardWidgetApproval({
-            cfg: context.getRuntimeConfig(),
-            ...boardSession,
-            name: snapshot.resolvedWidgetName,
-            content: materializedContent,
-            declared: declared ?? {},
-          });
+        const putAndApprove = async () => {
+          claim?.assertCurrent();
+          let snapshot = identity ? await identity.start(putWidget) : await putWidget();
           authority.assertActive();
-          if (decision) {
-            snapshot = {
-              ...(await store.grant(
-                boardSession,
-                snapshot.resolvedWidgetName,
-                decision,
-                widget.revision,
-                widget.instanceId,
-                { assertCurrent: authority.assertActive },
-              )),
-              resolvedWidgetName: snapshot.resolvedWidgetName,
-            };
+          const widget = snapshot.widgets.find(
+            (candidate) => candidate.name === snapshot.resolvedWidgetName,
+          );
+          if (widget?.grantState === "pending") {
+            const source = incognito
+              ? await incognito.actor.sessions.read(
+                  { assertCurrent: authority.assertActive },
+                  { sessionKey: boardSession.sessionKey },
+                  incognito.admissionSignal,
+                )
+              : undefined;
+            claim?.assertCurrent();
+            const decision = await resolveBoardWidgetApproval({
+              cfg: context.getRuntimeConfig(),
+              ...boardSession,
+              name: snapshot.resolvedWidgetName,
+              content: materializedContent,
+              declared: declared ?? {},
+              ...(source ? { incognitoSession: { agentId: boardSession.agentId, ...source } } : {}),
+            });
+            authority.assertActive();
+            claim?.assertCurrent();
+            source?.snapshot.assertCurrent();
+            if (decision) {
+              snapshot = {
+                ...(await store.grant(
+                  boardSession,
+                  snapshot.resolvedWidgetName,
+                  decision,
+                  widget.revision,
+                  widget.instanceId,
+                  {
+                    assertCurrent: composeSessionSourceAssertion(
+                      [authority.assertActive],
+                      (assertSources) => {
+                        assertSources();
+                        claim?.assertCurrent();
+                        if (source && incognito) {
+                          const policy = incognito.actor.sessions.readPolicy(
+                            boardSession.sessionKey,
+                          );
+                          const fields = [
+                            "sandbox",
+                            "sandboxMode",
+                            "createdActor",
+                            "execHost",
+                            "execNode",
+                            "permissionMode",
+                          ] as const;
+                          if (
+                            fields.some(
+                              (field) => !isDeepStrictEqual(policy?.[field], source.entry?.[field]),
+                            )
+                          ) {
+                            throw new BoardValidationError(
+                              "invalid_operation",
+                              "board approval policy changed; retry",
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  },
+                )),
+                resolvedWidgetName: snapshot.resolvedWidgetName,
+              };
+            }
           }
-        }
-        authority.assertActive();
-        snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
-        emitSessionsChanged(context, {
-          sessionKey: boardSession.sessionKey,
-          agentId: boardSession.agentId,
-          reason: "board",
-        });
-        context.broadcast(
-          "board.changed",
-          {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-            widget: snapshot.resolvedWidgetName,
-          },
-          { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
-        );
-        respond(true, snapshot);
+          authority.assertActive();
+          claim?.assertCurrent();
+          snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
+          emitSessionsChanged(context, {
+            sessionKey: boardSession.sessionKey,
+            agentId: boardSession.agentId,
+            reason: "board",
+          });
+          broadcastBoardChanged(context, boardSession, snapshot, snapshot.resolvedWidgetName);
+          respond(true, snapshot);
+        };
+        await (incognito
+          ? incognito.actor.sessions.withSharedState(putAndApprove)
+          : putAndApprove());
       },
     ),
     "board.widget.grant": defineBoardMethod(
@@ -468,14 +523,7 @@ export function createBoardHandlers(
           boardSession.agentId,
         );
         authority.assertActive();
-        context.broadcast(
-          "board.changed",
-          {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-          },
-          { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
-        );
+        broadcastBoardChanged(context, boardSession, snapshot);
         respond(true, snapshot);
       },
     ),

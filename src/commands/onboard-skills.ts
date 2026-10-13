@@ -5,6 +5,7 @@ import { resolveBrewExecutable } from "../infra/brew.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import type { SkillStatusEntry } from "../skills/discovery/status.types.js";
 import {
   installSkill,
   MIN_AUTO_GO_VERSION,
@@ -19,14 +20,8 @@ import type { NodeManagerChoice } from "./onboard-types.js";
 
 const SKIPPED_INSTALL_NAME_LIMIT = 8;
 
-type OnboardInstallSkill = {
-  name: string;
-  description?: string;
-  install: Array<{ kind: string; label: string }>;
-};
-
 type SkippedInstall = {
-  skill: OnboardInstallSkill;
+  skill: Pick<SkillStatusEntry, "name">;
   reason: SkillInstallSkipReason;
   detail?: string;
 };
@@ -40,10 +35,7 @@ function summarizeInstallFailure(message: string): string | undefined {
   return cleaned.length > maxLen ? `${truncateUtf16Safe(cleaned, maxLen - 1)}…` : cleaned;
 }
 
-function formatSkillHint(skill: {
-  description?: string;
-  install: Array<{ label: string }>;
-}): string {
+function formatSkillHint(skill: Pick<SkillStatusEntry, "description" | "install">): string {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
   const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;

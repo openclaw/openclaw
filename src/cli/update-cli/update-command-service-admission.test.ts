@@ -41,6 +41,7 @@ afterEach(() => {
 it.each([
   { platform: "linux", outcome: "unavailable" },
   { platform: "linux", outcome: "conflict" },
+  { platform: "linux", outcome: "masked" },
   { platform: "darwin", outcome: "conflict" },
   { platform: "linux", outcome: "pending" },
   { platform: "darwin", outcome: "redirect" },
@@ -85,7 +86,21 @@ it.each([
           readRuntime: async () =>
             outcome === "unavailable"
               ? { status: "unknown", inspectionReason: "service-manager-unavailable" }
-              : { status: "running", systemd: { managerUid: 2001 } },
+              : {
+                  status: "running",
+                  systemd: {
+                    managerUid: 2001,
+                    ...(outcome === "masked"
+                      ? {
+                          startRefusal: {
+                            reason: "masked" as const,
+                            message:
+                              "Service masked; run `systemctl --user unmask openclaw-gateway.service`, then retry.",
+                          },
+                        }
+                      : {}),
+                  },
+                },
           readCommand: async () => ({
             programArguments: [
               process.execPath,
@@ -105,7 +120,7 @@ it.each([
           }),
         });
         vi.spyOn(service, "resolveGatewayService").mockReturnValue(native);
-        if (outcome === "conflict") {
+        if (outcome === "conflict" || outcome === "masked") {
           await expect(prepareUpdateCommand({ dryRun: true })).rejects.toBeInstanceOf(
             GatewayServiceUpdateOwnershipError,
           );
@@ -114,7 +129,7 @@ it.each([
           vi.spyOn(os, "tmpdir").mockReturnValue(temporaryRoot);
           const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
           vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-          const exit = await updateCommand({ dryRun: true, json: true }).catch(
+          const exit = await updateCommand({ dryRun: outcome !== "masked", json: true }).catch(
             (error: unknown) => error,
           );
           expect(exit).toBeInstanceOf(ExitError);
@@ -128,6 +143,11 @@ it.each([
           );
           const { reportPath } = output.mock.calls[0]![0] as { reportPath: string };
           expect(path.dirname(path.dirname(reportPath))).toBe(temporaryRoot);
+          if (outcome === "masked") {
+            expect(JSON.stringify(output.mock.calls)).toContain(
+              "systemctl --user unmask openclaw-gateway.service",
+            );
+          }
           expect(await fs.readFile(reportPath, "utf8")).toContain("Bounded diagnostic JSON:");
           await expect(fs.stat(callerState)).rejects.toMatchObject({ code: "ENOENT" });
           await expect(fs.stat(serviceState)).rejects.toMatchObject({ code: "ENOENT" });

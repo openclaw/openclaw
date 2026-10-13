@@ -119,6 +119,14 @@ async function inspectUpdateAdmission(
     delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     return await withOwnedManagedUpdateEnv(env, async () => {
       const timeoutMs = context.request.timeoutMs ?? 120_000;
+      const readConfigSnapshot = (coreOnly = false) =>
+        createConfigIO({
+          env: cloneEnvWithPlatformSemantics(env),
+          ...(coreOnly ? { pluginValidation: "core-only" as const } : {}),
+          observe: false,
+          shellEnvFallback: "defer",
+          suppressFutureVersionWarning: true,
+        }).readConfigFileSnapshotForWrite();
       const checks = new Map<
         string,
         Omit<UpdateAdmissionVerdict["facts"]["checks"][number], "name">
@@ -166,13 +174,7 @@ async function inspectUpdateAdmission(
       try {
         assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env });
         // Doctor's existing planner supplies a source-bound projection; it never applies it here.
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: cloneEnvWithPlatformSemantics(env),
-          pluginValidation: "core-only",
-          observe: false,
-          shellEnvFallback: "defer",
-          suppressFutureVersionWarning: true,
-        }).readConfigFileSnapshotForWrite();
+        const { snapshot, writeOptions } = await readConfigSnapshot(true);
         const retired = findRetiredConfigUpgradeRequirement(
           snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
         );
@@ -297,12 +299,7 @@ async function inspectUpdateAdmission(
       }
       // Plugin metadata reads require compatible stores; never let them mask a schema refusal.
       if (databaseContext && schemasAccepted && !databaseContext.legacyConfigPlan) {
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: cloneEnvWithPlatformSemantics(env),
-          observe: false,
-          suppressFutureVersionWarning: true,
-          shellEnvFallback: "defer",
-        }).readConfigFileSnapshotForWrite();
+        const { snapshot, writeOptions } = await readConfigSnapshot();
         try {
           if (!snapshot.valid || snapshot.readError) {
             const legacyConfigPlan = !snapshot.readError

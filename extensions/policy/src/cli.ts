@@ -16,7 +16,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { POLICY_CHECK_IDS } from "./doctor/check-ids.js";
-import { evaluatePolicy } from "./doctor/evaluation.js";
+import { evaluatePolicy, toAttestedFinding } from "./doctor/evaluation.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import {
   buildPolicyConformanceReport,
@@ -42,16 +42,7 @@ interface PolicyCompareOptions {
   readonly json?: boolean;
 }
 
-type PolicyCheckReport = {
-  readonly ok: boolean;
-  readonly attestation?: ReturnType<typeof createPolicyAttestation>;
-  readonly evidence: unknown;
-  readonly checksRun: number;
-  readonly checksSkipped: number;
-  readonly findings: readonly Record<string, unknown>[];
-  readonly expectedAttestationHash?: string;
-  readonly exitCode: 0 | 1;
-};
+type PolicyCheckReport = Awaited<ReturnType<typeof buildPolicyCheckReport>>;
 
 export function registerPolicyCli(program: Command): void {
   const policy = program.command("policy").description("Verify workspace policy conformance");
@@ -133,7 +124,7 @@ async function runPolicyCommand(run: () => Promise<number>): Promise<number> {
 async function buildPolicyCheckReport(
   options: PolicyCheckOptions,
   ownerSurface: "policy check" | "policy watch",
-): Promise<PolicyCheckReport> {
+) {
   const severityMin =
     options.severityMin === undefined ? "info" : parseHealthFindingSeverity(options.severityMin);
   if (severityMin === null) {
@@ -302,12 +293,11 @@ function writePolicyCheckReport(report: PolicyCheckReport, options: PolicyCheckO
   } else {
     process.stdout.write(`policy check: ${report.findings.length} finding(s)\n`);
     for (const finding of report.findings) {
-      const where = typeof finding.path === "string" ? ` ${finding.path}` : "";
-      const line = typeof finding.line === "number" ? `:${finding.line}` : "";
-      const severity = typeof finding.severity === "string" ? finding.severity : "unknown";
-      const checkId = typeof finding.checkId === "string" ? finding.checkId : "unknown";
-      const message = typeof finding.message === "string" ? finding.message : "";
-      process.stdout.write(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
+      const where = finding.path !== undefined ? ` ${finding.path}` : "";
+      const line = finding.line !== undefined ? `:${finding.line}` : "";
+      process.stdout.write(
+        `  [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}\n`,
+      );
     }
   }
 }
@@ -402,29 +392,19 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   return Math.min(raw, MAX_TIMER_TIMEOUT_MS);
 }
 
-function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {
-  return {
-    checkId: finding.checkId,
-    severity: finding.severity,
-    message: finding.message,
-    ...(finding.source !== undefined ? { source: finding.source } : {}),
-    ...(finding.path !== undefined ? { path: finding.path } : {}),
-    ...(finding.line !== undefined ? { line: finding.line } : {}),
-    ...(finding.ocPath !== undefined ? { ocPath: finding.ocPath } : {}),
-    ...(finding.target !== undefined ? { target: finding.target } : {}),
-    ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
-    ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
-  };
+function toAttestedJsonFinding(finding: HealthFinding) {
+  const { column: _column, ...json } = toAttestedFinding(finding);
+  return json;
 }
 
-function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
+function toJsonFinding(finding: HealthFinding) {
   return {
     ...toAttestedJsonFinding(finding),
     ...policyFindingMetadata(finding),
   };
 }
 
-function policyFindingMetadata(finding: HealthFinding): Record<string, unknown> {
+function policyFindingMetadata(finding: HealthFinding) {
   const metadata = POLICY_FIX_METADATA_BY_CHECK_ID.get(
     finding.checkId as (typeof POLICY_CHECK_IDS)[number],
   );

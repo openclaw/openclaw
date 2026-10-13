@@ -19,7 +19,6 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   hasRegisteredSessionPendingInputOwner,
-  projectSessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
@@ -28,6 +27,11 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "./session-actor-storage-binding.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
 import type {
@@ -37,6 +41,7 @@ import type {
   PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -155,6 +160,39 @@ export function createIncognitoPendingInputHistoryReader(params: {
   };
 }
 
+async function readMemoryPendingInputHistory(
+  binding: SessionActorStorageBinding,
+  query: PendingInputHistoryQuery,
+): Promise<PendingInputHistorySnapshot> {
+  const storage = binding.actor.storage!;
+  const snapshot = await storage.read(
+    { type: "session.pendingInput.history", input: query },
+    binding.authority,
+  );
+  const ids = snapshot.rows.filter((row) => row.state === "queued").map((row) => row.input_id);
+  if (!ids.length) {
+    return snapshot;
+  }
+  const outcome = await storage.mutate(
+    {
+      type: "session.pendingInput.interruptHistory",
+      input: { sessionKey: query.sessionKey, sessionId: query.sessionId, ids },
+    },
+    {
+      ...binding.authority,
+      isPendingInputProtected: (candidate, currentSessionId) =>
+        owns(binding.path, candidate, currentSessionId),
+    },
+  );
+  if (outcome.kind === "rolled-back") {
+    throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+  }
+  if (outcome.failure) {
+    throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
+  }
+  return applyReceipt(snapshot, outcome.value);
+}
+
 /** Incognito retains its process-held owner until the separate actor cutover (worker-access P7). */
 async function readIncognito(scope: Scope, query: PendingInputHistoryQuery) {
   const resolved = resolveSqliteScope(scope);
@@ -202,6 +240,14 @@ async function readPendingInputRows(
   scope: Scope,
   options: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId">,
 ): Promise<PendingInputHistorySnapshot> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return readMemoryPendingInputHistory(memory, {
+      ...options,
+      sessionKey: memory.actor.target.sessionKey,
+      sessionId: scope.sessionId,
+    });
+  }
   const captured = {
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
@@ -354,6 +400,20 @@ export async function listSessionPendingInputs(
   scope: Scope,
   options: { limit?: number; before?: number } = {},
 ): Promise<SessionPendingInputPage> {
+  const incognito = getSessionActorStorageBinding(scope)
+    ? undefined
+    : captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).list(options);
+  }
   const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
@@ -366,6 +426,20 @@ export async function readSessionPendingInput(
   scope: Scope,
   id: string,
 ): Promise<SessionPendingInput | undefined> {
+  const incognito = getSessionActorStorageBinding(scope)
+    ? undefined
+    : captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).read(id);
+  }
   const row = (await readPendingInputRows(scope, { id, limit: 1 })).rows[0];
   return row ? projectSessionPendingInput(row) : undefined;
 }

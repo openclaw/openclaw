@@ -28,7 +28,7 @@ type StoredPresence = {
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, StoredPresence>();
-const TTL_MS = 5 * 60 * 1000; // 5 minutes
+const TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
 const uptimeOrigin = os.uptime() * 1000 - performance.now();
@@ -91,13 +91,13 @@ function initSelfPresence() {
   setPresence(SELF_KEY, selfEntry);
 }
 
-function touchSelfPresence() {
-  const existing = entries.get(SELF_KEY)?.presence;
-  if (existing) {
-    setPresence(SELF_KEY, { ...existing, ts: Date.now() });
-  } else {
-    initSelfPresence();
+function touchStoredPresence(key: string | symbol): boolean {
+  const existing = entries.get(key)?.presence;
+  if (!existing) {
+    return false;
   }
+  setPresence(key, { ...existing, ts: Date.now() });
+  return true;
 }
 
 initSelfPresence();
@@ -243,16 +243,13 @@ export function touchPresence(key: string): boolean {
   if (!normalizedKey) {
     return false;
   }
-  const existing = entries.get(normalizedKey)?.presence;
-  if (!existing) {
-    return false;
-  }
-  setPresence(normalizedKey, { ...existing, ts: Date.now() });
-  return true;
+  return touchStoredPresence(normalizedKey);
 }
 
 export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
-  touchSelfPresence();
+  if (!touchStoredPresence(SELF_KEY)) {
+    initSelfPresence();
+  }
   const now = freshnessNow();
   for (const [key, entry] of entries) {
     if (key !== SELF_KEY && now - entry.freshness > TTL_MS) {

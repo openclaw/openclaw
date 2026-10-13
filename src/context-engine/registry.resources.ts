@@ -59,7 +59,9 @@ export class ContextEngineFactoryResources {
   }
 
   run<T>(operation: () => T | Promise<T>): Promise<T> {
-    return this.work.track(() => this.context(() => this.invoke(operation)));
+    return this.work.track(() =>
+      this.context(() => (this.invocations ? this.invocations.run(operation) : operation())),
+    );
   }
 
   runCleanup<T>(operation: () => T): T {
@@ -77,10 +79,6 @@ export class ContextEngineFactoryResources {
 
   beginCleanup(): void {
     this.cleanupInvocations ??= this.invocations?.beginCleanup();
-  }
-
-  private invoke<T>(operation: () => T): T {
-    return this.invocations ? this.invocations.run(operation) : operation();
   }
 
   wrap<T>(value: T): T {

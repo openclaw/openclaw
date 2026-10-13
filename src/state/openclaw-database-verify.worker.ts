@@ -1,7 +1,7 @@
 import { constants, setPriority } from "node:os";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { serializeSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -12,6 +12,7 @@ export type OpenClawDatabaseVerifyTarget = {
   label: string;
   check: "quick" | "full";
   confirm?: true;
+  identity?: string;
 };
 
 export type OpenClawDatabaseVerifyResult = {
@@ -21,17 +22,6 @@ export type OpenClawDatabaseVerifyResult = {
   terminal?: boolean;
   generation?: string;
 };
-
-function isVerifyTarget(target: unknown): target is OpenClawDatabaseVerifyTarget {
-  return (
-    isRecord(target) &&
-    typeof target.path === "string" &&
-    (target.kind === "agent" || target.kind === "state") &&
-    typeof target.label === "string" &&
-    (target.check === "quick" || target.check === "full") &&
-    (target.confirm === undefined || (target.confirm === true && target.check === "full"))
-  );
-}
 
 function formatVerifyError(error: unknown): string {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -72,8 +62,15 @@ async function verifyOpenClawDatabase(
   });
   let result: OpenClawDatabaseVerifyResult = { path: target.path, ok: true };
   try {
+    const assertIdentity = () => {
+      if (target.identity) {
+        assertExistingDatabaseIdentity(target.path, `file:${target.identity}`);
+      }
+    };
+    assertIdentity();
     source.withSqliteSourceReadDatabase(target.path, "source", (reader) => {
       try {
+        assertIdentity();
         reader.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN;`);
         integrity.assertSqliteIntegrity(
           reader,
@@ -81,6 +78,7 @@ async function verifyOpenClawDatabase(
           target.check === "full" ? "integrity_check" : "quick_check",
         );
         reader.exec("ROLLBACK;");
+        assertIdentity();
       } catch (error) {
         // Preserve the check's classification if the source reader also fails to close.
         result = failed(error);
@@ -110,10 +108,10 @@ export async function verifyOpenClawDatabases(
 const sendToParent =
   process.argv[2] === DATABASE_VERIFY_CHILD_ARG ? process.send?.bind(process) : undefined;
 if (sendToParent) {
-  process.once("message", (message: unknown) => {
+  // The bundled parent sends typed targets over this dedicated private channel.
+  process.once("message", (targets: readonly OpenClawDatabaseVerifyTarget[]) => {
     void (async () => {
       try {
-        const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
         if (targets.some((target) => target.check === "full")) {
           try {
             setPriority(process.pid, constants.priority.PRIORITY_LOW);
@@ -138,4 +136,16 @@ if (sendToParent) {
       }
     })();
   });
+}
+
+// Synchronous admission waits for native close without opening a source reader in its process.
+if (process.argv[2] === "--openclaw-database-verify-sync" && process.argv[3]) {
+  const pathname = process.argv[3];
+  void verifyOpenClawDatabases([{ path: pathname, kind: "agent", label: pathname, check: "full" }])
+    .then(([result]) => {
+      process.exitCode = result?.ok ? 0 : 1;
+    })
+    .catch(() => {
+      process.exitCode = 1;
+    });
 }

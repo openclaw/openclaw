@@ -14,7 +14,6 @@ struct ExecApprovalEvaluation {
     let allowAlwaysPatterns: [ExecAllowAlwaysPattern]
     let allowlistMatches: [ExecAllowlistEntry]
     let allowlistAuthorizationSatisfied: Bool
-    let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
     let skillTrust: SkillBinsCache.Snapshot?
     let policySnapshot: ExecApprovalPolicySnapshot
@@ -290,7 +289,6 @@ enum ExecApprovalEvaluator {
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: allowlistMatches,
             allowlistAuthorizationSatisfied: allowlistAuthorizationSatisfied,
-            allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
             skillTrust: skillTrust,
             policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals))

@@ -5,7 +5,10 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { boardStore } from "../gateway/board-store.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
@@ -117,52 +120,62 @@ it("joins an accepted Board consumer and its dependent write before releasing th
   }
 });
 
-it("composes Board writes, grants and reads on the actor with FIFO and zero caller SQL", async () => {
-  const { target, store } = await fixture("board");
+it("composes Gateway Board writes, grants and reads from the shared actor binding with zero caller SQL", async () => {
+  const { target } = await fixture("board");
+  const store = boardStore;
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg, cfg);
   const changes: SessionRowChange[] = [];
   const stop = sessionChanges.subscribe((change) => {
     changes.push(change);
   });
   const sql = observeHostDataSql();
   try {
-    const put = store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "<p>private</p>" },
-      declared: { tools: ["health"] },
+    await withIncognitoSessionActor(actor, async () => {
+      const put = store.putWidget({
+        ...target,
+        name: "status",
+        content: { kind: "html", html: "<p>private</p>" },
+        declared: { tools: ["health"] },
+      });
+      const read = store.getSnapshot(target);
+      const written = await put;
+      expect(await read).toMatchObject({
+        revision: 1,
+        widgets: [{ name: "status", grantState: "pending" }],
+      });
+      const granted = await store.grant(
+        target,
+        "status",
+        "granted",
+        1,
+        written.widgets[0]?.instanceId,
+      );
+      expect(granted).toMatchObject({ revision: 2, widgets: [{ grantState: "granted" }] });
+      expect(await store.useWidgetDocument(target, "status", (document) => document)).toMatchObject(
+        {
+          html: "<p>private</p>",
+          grantState: "granted",
+        },
+      );
+      // Consumer continuation must release the reader's FIFO turn before its next write.
+      expect(
+        await store.useSnapshot(target, () =>
+          store.applyOps(target, [{ kind: "widget_resize", name: "status", sizeW: 8, sizeH: 6 }]),
+        ),
+      ).toMatchObject({ revision: 3 });
+      expect(changes).toEqual(
+        Array.from({ length: 3 }, () => ({ sessionKey: target.sessionKey, storePath: actor.path })),
+      );
+      expect(sql.queries).toEqual([]);
+      expect(existsSync(actor.path)).toBe(false);
     });
-    const read = store.getSnapshot(target);
-    const written = await put;
-    expect(await read).toMatchObject({
-      revision: 1,
-      widgets: [{ name: "status", grantState: "pending" }],
-    });
-    const granted = await store.grant(
-      target,
-      "status",
-      "granted",
-      1,
-      written.widgets[0]?.instanceId,
-    );
-    expect(granted).toMatchObject({ revision: 2, widgets: [{ grantState: "granted" }] });
-    expect(await store.useWidgetDocument(target, "status", (document) => document)).toMatchObject({
-      html: "<p>private</p>",
-      grantState: "granted",
-    });
-    // Consumer continuation must release the reader's FIFO turn before its next write.
-    expect(
-      await store.useSnapshot(target, () =>
-        store.applyOps(target, [{ kind: "widget_resize", name: "status", sizeW: 8, sizeH: 6 }]),
-      ),
-    ).toMatchObject({ revision: 3 });
-    expect(changes).toEqual(
-      Array.from({ length: 3 }, () => ({ sessionKey: target.sessionKey, storePath: actor.path })),
-    );
-    expect(sql.queries).toEqual([]);
-    expect(existsSync(actor.path)).toBe(false);
   } finally {
     sql.restore();
     stop();
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
   }
 });
 

@@ -1,8 +1,3 @@
-/**
- * Subagent run liveness policy.
- *
- * Ages out stale unended runs while keeping recent/composed child links visible.
- */
 import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -61,22 +56,22 @@ export const RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS = 30 * 60 * 1_000;
 const EXPLICIT_TIMEOUT_STALE_GRACE_MS = 60_000;
 const MIN_REALISTIC_RUN_TIMESTAMP_MS = Date.UTC(2020, 0, 1);
 
-/** Return whether a subagent run has a finite execution end timestamp. */
 export function hasSubagentRunEnded<T extends { execution: { endedAt?: number } }>(
   entry: T,
 ): entry is T & { execution: T["execution"] & { endedAt: number } } {
   return typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt);
 }
 
-function resolveStaleCutoffMs(entry: Pick<SubagentRunRecord, "runTimeoutSeconds">): number {
-  const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
-  if (durationMs !== undefined) {
-    return Math.max(STALE_UNENDED_SUBAGENT_RUN_MS, durationMs + EXPLICIT_TIMEOUT_STALE_GRACE_MS);
-  }
-  return STALE_UNENDED_SUBAGENT_RUN_MS;
+export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
+  return (
+    entry.pauseReason === "sessions_yield" &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    entry.suppressAnnounceReason !== "killed" &&
+    entry.endedReason !== "subagent-killed"
+  );
 }
 
-/** Return whether an unended subagent run is stale enough to hide as inactive. */
 export function isStaleUnendedSubagentRun(
   entry: SubagentRunLivenessRecord,
   now = Date.now(),
@@ -93,7 +88,12 @@ export function isStaleUnendedSubagentRun(
   ) {
     return false;
   }
-  return now - startedAt > resolveStaleCutoffMs(entry);
+  const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
+  const cutoffMs =
+    durationMs === undefined
+      ? STALE_UNENDED_SUBAGENT_RUN_MS
+      : Math.max(STALE_UNENDED_SUBAGENT_RUN_MS, durationMs + EXPLICIT_TIMEOUT_STALE_GRACE_MS);
+  return now - startedAt > cutoffMs;
 }
 
 /** Admission/display retention includes current owners and a bounded registration grace.
@@ -111,7 +111,6 @@ export function isRetainedUnendedSubagentRun(
   );
 }
 
-/** Return whether a child-session link should still appear in subagent listings. */
 export function shouldKeepSubagentRunChildLink(
   entry: SubagentRunLivenessRecord & { runId: string },
   options?: {

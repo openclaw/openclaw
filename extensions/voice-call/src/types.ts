@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { CallMode } from "./config.js";
+import type { CallBrief } from "./call-brief-schema.js";
+import type { CallMode, VoiceCallConfig } from "./config.js";
 
 const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
@@ -40,9 +41,9 @@ export type NormalizedEvent = {
   callId: string;
   providerCallId?: string | undefined;
   timestamp: number;
+  answeredBy?: string | undefined;
   // Optional per-turn nonce for speech events (Twilio <Gather> replay hardening).
   turnToken?: string | undefined;
-  // Optional fields for inbound call detection
   direction?: "inbound" | "outbound" | undefined;
   from?: string | undefined;
   to?: string | undefined;
@@ -61,6 +62,7 @@ export type NormalizedEvent = {
     }
   | { type: "call.silence"; durationMs: number }
   | { type: "call.dtmf"; digits: string }
+  | { type: "call.amd"; answeredBy: string }
   | { type: "call.ended"; reason: EndReason }
   | { type: "call.error"; error: string; retryable?: boolean | undefined }
 );
@@ -151,6 +153,7 @@ export type InitiateCallInput = {
   streamUrl?: string;
   /** Per-call auth token the carrier echoes back on the WS upgrade. */
   streamAuthToken?: string;
+  voicemail?: Omit<VoiceCallConfig["voicemail"], "holdOpeningMaxMs">;
 };
 
 export type InitiateCallResult = {
@@ -211,6 +214,8 @@ export type GetCallStatusResult = {
 };
 
 export type OutboundCallOptions = {
+  /** Task, facts and permissions for this call only. */
+  brief?: CallBrief;
   /** Message to speak when call connects */
   message?: string;
   /** Call mode (overrides config default) */

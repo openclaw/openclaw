@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { assertConfiguredWorkspaceStateReady } from "../agents/workspace-state-dirs.js";
@@ -10,9 +10,11 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
+  readWorkspaceStateSnapshot,
 } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as durability from "./directory-durability.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
@@ -565,4 +567,190 @@ describe("legacy workspace Doctor migration", () => {
     expect(await detect({ ...context, cfg })).toEqual({ sources: [], hasLegacy: false });
     expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
   });
+});
+
+describe("legacy workspace Doctor multi-agent migration", () => {
+  const { migrate, setup } = useWorkspaceMigrationTestFixture();
+
+  it("imports setup and attestation state, records receipts, and removes files", async () => {
+    const context = setup();
+    const workspaces = ["alpha", "beta", "gamma"].map((id) => ({
+      id,
+      workspace: path.join(context.homeDir, `workspace-${id}`),
+    }));
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: Object.fromEntries(workspaces.map(({ id, workspace }) => [id, { workspace }])),
+      },
+    };
+    const seededAt = "2026-07-15T10:00:00.000Z";
+    const completedAt = "2026-07-15T10:01:00.000Z";
+    const mtime = new Date("2026-07-15T11:02:03.456Z");
+    const sources: string[] = [];
+    for (const { workspace } of workspaces) {
+      const setupPath = path.join(workspace, "openclaw-workspace-state.json");
+      await write(
+        setupPath,
+        JSON.stringify({
+          version: 1,
+          bootstrapSeededAt: seededAt,
+          setupCompletedAt: completedAt,
+        }),
+      );
+      sources.push(setupPath);
+      const identity = resolveWorkspaceStateIdentity(workspace);
+      const attestationPath = path.join(
+        context.stateDir,
+        "workspace-attestations",
+        `${identity.workspaceKey}.attested`,
+      );
+      await write(
+        attestationPath,
+        `openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\ngenerated:AGENTS.md:${HASH}\n`,
+      );
+      await fsp.utimes(attestationPath, mtime, mtime);
+      sources.push(attestationPath);
+    }
+    const beforeDb = database(context);
+    expect(beforeDb.prepare("SELECT COUNT(*) AS count FROM workspace_setup_state").get()).toEqual({
+      count: 0,
+    });
+    expect(beforeDb.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
+      count: 0,
+    });
+
+    const result = await migrate({ ...context, cfg });
+    const db = database(context);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(sources.length);
+    for (const source of sources) {
+      expect(fs.existsSync(source)).toBe(false);
+      expect(fs.existsSync(`${source}.doctor-importing`)).toBe(false);
+    }
+    for (const { workspace } of workspaces) {
+      const identity = resolveWorkspaceStateIdentity(workspace);
+      expect(
+        db
+          .prepare(
+            "SELECT workspace_path, bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
+          )
+          .get(identity.workspaceKey),
+      ).toEqual({
+        workspace_path: identity.workspacePath,
+        bootstrap_seeded_at: seededAt,
+        setup_completed_at: completedAt,
+      });
+      expect(
+        db
+          .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
+          .get(identity.workspaceKey),
+      ).toEqual({ attested_at_ms: mtime.getTime() });
+      expect(
+        db
+          .prepare(
+            "SELECT filename, sha256 FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?",
+          )
+          .get(identity.workspaceKey),
+      ).toEqual({ filename: "AGENTS.md", sha256: HASH });
+      expect(await readWorkspaceStateSnapshot(workspace)).toMatchObject({
+        identity,
+        setup: { bootstrapSeededAt: seededAt, setupCompletedAt: completedAt },
+        attestation: { attestedAtMs: mtime.getTime() },
+      });
+      expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: workspace })).not.toThrow();
+    }
+    expect(
+      db
+        .prepare(
+          "SELECT COUNT(*) AS count, SUM(removed_source) AS removed FROM migration_sources WHERE migration_kind = ?",
+        )
+        .get("legacy-workspace-setup-files"),
+    ).toEqual({ count: sources.length, removed: sources.length });
+    expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
+  });
+});
+
+describe("workspace migration portable-move recovery", () => {
+  const { detect, migrate, setup } = useWorkspaceMigrationTestFixture();
+  afterEach(() => vi.restoreAllMocks());
+
+  it.skipIf(process.platform === "win32")(
+    "preserves the source until its archive directory can be synchronized",
+    async () => {
+      const context = setup();
+      const source = path.join(context.workspaceDir, "openclaw-workspace-state.json");
+      const completedAt = "2026-07-15T10:01:00.000Z";
+      const raw = `${JSON.stringify({ version: 1, setupCompletedAt: completedAt })}\n`;
+      fs.writeFileSync(source, raw);
+      const pinDirectory = durability.pinDirectory;
+      const pin = vi.spyOn(durability, "pinDirectory").mockImplementation(async (...args) => {
+        const directory = await pinDirectory(...args);
+        vi.spyOn(directory, "sync").mockResolvedValue({ status: "unsupported", code: "EINVAL" });
+        return directory;
+      });
+
+      const refused = await migrate(context);
+
+      expect(refused.warnings).toEqual([
+        expect.stringContaining("Workspace setup archive directory does not support"),
+      ]);
+      expect(fs.readFileSync(source, "utf8")).toBe(raw);
+      expect(fs.existsSync(`${source}.doctor-importing`)).toBe(false);
+      expect(() =>
+        assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+      ).toThrow();
+      pin.mockRestore();
+
+      expect((await migrate(context)).warnings).toEqual([]);
+      expect(fs.existsSync(source)).toBe(false);
+      expect(await readWorkspaceStateSnapshot(context.workspaceDir)).toMatchObject({
+        setup: { setupCompletedAt: completedAt },
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "settles an interrupted source/claim link without replaying state (receipt=%s)",
+    async (receiptExists) => {
+      const context = setup();
+      const source = path.join(context.workspaceDir, "openclaw-workspace-state.json");
+      const claim = `${source}.doctor-importing`;
+      const completedAt = "2026-07-15T10:01:00.000Z";
+      const raw = `${JSON.stringify({ version: 1, setupCompletedAt: completedAt })}\n`;
+      fs.mkdirSync(path.dirname(source), { recursive: true });
+      fs.writeFileSync(source, raw);
+      if (receiptExists) {
+        const first = await migrateLegacyWorkspaceState({
+          detected: await detect(context),
+          env: context.env,
+          stateDir: context.stateDir,
+          removeSource: () => {
+            throw new Error("Interrupted cleanup");
+          },
+        });
+        expect(first.warnings).toHaveLength(1);
+        fs.linkSync(claim, source);
+      } else {
+        fs.linkSync(source, claim);
+      }
+
+      const result = await migrate(context);
+
+      expect(result.warnings).toEqual([]);
+      expect(fs.existsSync(source)).toBe(false);
+      expect(fs.existsSync(claim)).toBe(false);
+      expect(() =>
+        assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+      ).not.toThrow();
+      expect(await readWorkspaceStateSnapshot(context.workspaceDir)).toMatchObject({
+        setup: { setupCompletedAt: completedAt },
+      });
+      const archives = fs.readdirSync(path.dirname(source));
+      expect(archives).toHaveLength(1);
+      expect(archives[0]).toMatch(/^openclaw-workspace-state\.json\.migrated\./);
+      expect(fs.readFileSync(path.join(path.dirname(source), archives[0]!), "utf8")).toBe(raw);
+    },
+  );
 });

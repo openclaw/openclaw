@@ -29,8 +29,6 @@ async function readLineWebhookRequestBody(
   });
 }
 
-type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs: number) => Promise<string>;
-
 /**
  * Answer a body-limit failure through the connection owner.
  *
@@ -77,7 +75,7 @@ function sendLineWebhookJson(
 export function createLineNodeWebhookHandler(params: {
   getTargets: () => readonly LineWebhookTarget[];
   runtime: RuntimeEnv;
-  readBody?: ReadBodyFn;
+  readBody?: typeof readLineWebhookRequestBody;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const readBody = params.readBody ?? readLineWebhookRequestBody;
 

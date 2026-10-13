@@ -1,18 +1,27 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   isRecord,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isFsSafeErrorCode,
+  moveTargetToRecovery,
+  recoverySlotPrefix,
+  removeEmptyRecoverySlot,
+  resolveContainedImportPath,
+  type ChatGptRecoverySlot,
+  type ChatGptRollbackEntryRef,
+  type ChatGptRollbackRoot,
+} from "./chatgpt-import-recovery.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -685,37 +694,8 @@ export async function importChatGptConversations(params: {
   });
 }
 
-type ChatGptImportRunEntry = ChatGptImportRunRecord["createdPaths"][number];
-type ChatGptRollbackEntryRef = {
-  entry: ChatGptImportRunEntry;
-  kind: "created" | "updated";
-  index: number;
-};
-type ChatGptRecoverySlot = {
-  ref: ChatGptRollbackEntryRef;
-  slotRelativePath: string;
-  contentRelativePath: string;
-};
-type ChatGptRollbackRoot = Awaited<ReturnType<typeof fsRoot>>;
-
 function toVaultRelativePath(vaultRoot: string, absolutePath: string): string {
   return path.relative(vaultRoot, absolutePath).replace(/\\/g, "/");
-}
-
-function recoverySlotPrefix(ref: ChatGptRollbackEntryRef): string {
-  return `${ref.kind}-${ref.index}-${createHash("sha256").update(ref.entry.path).digest("hex")}-`;
-}
-
-function resolveContainedImportPath(root: string, relativePath: string, label: string): string {
-  if (!relativePath || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
-    throw new Error(`${label} must be a relative path: ${relativePath}`);
-  }
-  const resolvedRoot = path.resolve(root);
-  const resolvedPath = path.resolve(resolvedRoot, relativePath);
-  if (!isPathInside(resolvedRoot, resolvedPath)) {
-    throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
-  }
-  return resolvedPath;
 }
 
 function buildRollbackEntryRefs(record: ChatGptImportRunRecord): ChatGptRollbackEntryRef[] {
@@ -732,76 +712,6 @@ function listPreservedPaths(record: ChatGptImportRunRecord): ChatGptRollbackPres
       recoveryPath,
     })),
   );
-}
-
-function isFsSafeErrorCode(error: unknown, code: FsSafeError["code"]): boolean {
-  return error instanceof FsSafeError && error.code === code;
-}
-
-async function reserveRecoverySlot(
-  runRoot: ChatGptRollbackRoot,
-  ref: ChatGptRollbackEntryRef,
-): Promise<{ slotRelativePath: string; contentRelativePath: string }> {
-  await runRoot.mkdir("recovered");
-  const slotRelativePath = path.posix.join(
-    "recovered",
-    `${recoverySlotPrefix(ref)}${randomUUID()}`,
-  );
-  await runRoot.mkdir(slotRelativePath);
-  return {
-    slotRelativePath,
-    contentRelativePath: path.posix.join(slotRelativePath, "content"),
-  };
-}
-
-async function removeEmptyRecoverySlot(
-  runRoot: ChatGptRollbackRoot,
-  slotRelativePath: string,
-): Promise<void> {
-  try {
-    if ((await runRoot.list(slotRelativePath)).length > 0) {
-      return;
-    }
-    await runRoot.remove(slotRelativePath);
-  } catch (error) {
-    if (isFsSafeErrorCode(error, "not-found")) {
-      return;
-    }
-    throw error;
-  }
-}
-
-async function moveTargetToRecovery(params: {
-  vaultRoot: ChatGptRollbackRoot;
-  runRoot: ChatGptRollbackRoot;
-  runRelativePath: string;
-  ref: ChatGptRollbackEntryRef;
-}): Promise<ChatGptRecoverySlot | null> {
-  resolveContainedImportPath(
-    params.vaultRoot.rootDir,
-    params.ref.entry.path,
-    "Memory Wiki import page path",
-  );
-  for (;;) {
-    const slot = await reserveRecoverySlot(params.runRoot, params.ref);
-    const recoveryVaultRelativePath = path.posix.join(
-      params.runRelativePath,
-      slot.contentRelativePath,
-    );
-    try {
-      await params.vaultRoot.move(params.ref.entry.path, recoveryVaultRelativePath);
-      return { ref: params.ref, ...slot };
-    } catch (error) {
-      await removeEmptyRecoverySlot(params.runRoot, slot.slotRelativePath);
-      if (isFsSafeErrorCode(error, "not-found")) {
-        return null;
-      }
-      if (isFsSafeErrorCode(error, "already-exists")) {
-        continue;
-      }
-      throw error;
-    }
-  }
 }
 
 async function scanRecoverySlots(params: {

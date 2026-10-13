@@ -5,18 +5,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  consumeRootOptionToken,
-  FLAG_TERMINATOR,
-  getCommandPositionalsWithRootOptions,
-} from "../infra/cli-root-options.js";
+import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type {
-  PluginManifestCommandAliasRecord,
-  PluginManifestToolOwnerRecord,
-} from "../plugins/manifest-command-aliases.js";
+  resolveManifestCommandAliasOwner,
+  resolveManifestCliCommandSurfaceOwner,
+  resolveManifestToolOwner,
+} from "../plugins/manifest-command-aliases.runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isSimpleCommandHelpInvocation } from "./argv.js";
+import { isSimpleCommandHelpInvocation, rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
@@ -58,22 +55,16 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
     if (!arg || arg === "--") {
       return false;
     }
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
     if (!sawGateway) {
-      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
       if (arg !== "gateway") {
         return false;
       }
       sawGateway = true;
-      continue;
-    }
-
-    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
-    if (rootConsumed > 0) {
-      index += rootConsumed - 1;
       continue;
     }
     const consumed = consumeGatewayRunOptionToken(args, index);
@@ -105,35 +96,6 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   return !invocation.hasHelpOrVersion && primary !== undefined && extra === undefined
     ? BARE_PARENT_DEFAULT_HELP_COMMANDS.has(primary)
     : false;
-}
-
-export function rewriteUpdateFlagArgv(argv: string[]): string[] {
-  // Preserve the old root --update spelling by rewriting before Commander registration.
-  // Only rewrite --update while scanning the root-option prefix; once a command
-  // or `--` appears, later --update tokens belong to that command's arguments.
-  const updateIndex = argv.indexOf("--update");
-  if (updateIndex === -1) {
-    return argv;
-  }
-
-  for (let i = 2; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return argv;
-    }
-    if (i === updateIndex) {
-      return argv.toSpliced(updateIndex, 1, "update");
-    }
-    const consumed = consumeRootOptionToken(argv, i);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return argv;
-    }
-  }
-  return argv;
 }
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
@@ -225,18 +187,9 @@ export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
   options?: {
-    resolveCommandAliasOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestCommandAliasRecord | undefined;
-    resolveToolOwner?: (params: {
-      toolName: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestToolOwnerRecord | undefined;
-    resolveCliCommandSurfaceOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => string | undefined;
+    resolveCommandAliasOwner?: typeof resolveManifestCommandAliasOwner;
+    resolveToolOwner?: typeof resolveManifestToolOwner;
+    resolveCliCommandSurfaceOwner?: typeof resolveManifestCliCommandSurfaceOwner;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);

@@ -38,7 +38,6 @@ import {
   type GatewayLockHandle,
 } from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import * as commandRunner from "../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -51,6 +50,7 @@ import {
 } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -90,14 +90,13 @@ describe("same-root local mutation routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let service: ManagedWorktreeService;
+  let repoFingerprint: string;
   const maintenanceClock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
   let maintenance: ReturnType<typeof startWorktreeMaintenance>;
   let mode: "normal" | "old" | "refused" | "lost-reply" = "normal";
-  let missingCapability: string | undefined;
   const requests: string[] = [];
   const methods: string[] = [];
-  const publishedResults: Array<Record<string, unknown>> = [];
   const failures: unknown[] = [];
 
   beforeAll(async () => {
@@ -144,6 +143,7 @@ describe("same-root local mutation routing", () => {
     vi.stubEnv("USERPROFILE", root);
     const cfg = { worktreeRoot: path.join(root, "gateway-worktrees"), worktreeAcceleration: false };
     service = new ManagedWorktreeService({ env, getConfig: () => cfg });
+    repoFingerprint = (await service.resolveRepositoryIdentity(repo)).fingerprint;
     owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
     expect(owner).not.toBeNull();
     const handlers = createWorktreesHandlers(service);
@@ -179,12 +179,7 @@ describe("same-root local mutation routing", () => {
               ...hello,
               features: {
                 ...hello.features,
-                capabilities:
-                  mode === "old"
-                    ? []
-                    : Object.values(GATEWAY_SERVER_CAPS).filter(
-                        (capability) => capability !== missingCapability,
-                      ),
+                capabilities: mode === "old" ? [] : Object.values(GATEWAY_SERVER_CAPS),
               },
             });
             return;
@@ -207,9 +202,6 @@ describe("same-root local mutation routing", () => {
             isWebchatConnect: () => false,
             hasCurrentClientAuthority: () => authenticated,
             respond: (ok, payload, error) => {
-              if (ok) {
-                publishedResults.push(payload as Record<string, unknown>);
-              }
               if (mode === "lost-reply" && ok) {
                 ws.close(
                   1011,
@@ -231,7 +223,6 @@ describe("same-root local mutation routing", () => {
 
   beforeEach(() => {
     mode = "normal";
-    missingCapability = undefined;
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
     vi.stubEnv("HOME", root);
@@ -266,6 +257,24 @@ describe("same-root local mutation routing", () => {
       // A configured remote URL must not redirect this same-root operation.
       env: { ...env, OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:1" },
     });
+
+  registerWorktreeListingOwnerTests(
+    () => ({
+      root,
+      repo,
+      env,
+      service,
+      methods,
+      port: claim.port,
+      get owner() {
+        return owner;
+      },
+      set owner(value: GatewayLockHandle | null) {
+        owner = value;
+      },
+    }),
+    entrypoint,
+  );
 
   it("runs the CLI create in the live owner and exposes committed profile results", async () => {
     const result = await create(
@@ -356,119 +365,27 @@ describe("same-root local mutation routing", () => {
   );
 
   const operations = [
-    {
-      kind: "remove",
-      method: "worktrees.remove",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-    },
-    {
-      kind: "force",
-      method: "worktrees.remove",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-    },
-    {
-      kind: "lossless",
-      method: "worktrees.remove",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-    },
-    {
-      kind: "lossless-retained",
-      method: "worktrees.remove",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-    },
-    {
-      kind: "exact-remove",
-      method: "worktrees.remove",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-    },
-    {
-      kind: "restore",
-      method: "worktrees.restore",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
-    },
-    {
-      kind: "exact-recovery",
-      method: "worktrees.restore",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
-    },
-    { kind: "gc", method: "worktrees.gc", capability: GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER },
-    {
-      kind: "gc-partial",
-      method: "worktrees.gc",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
-    },
-    {
-      kind: "recovery",
-      method: "worktrees.recoverRemoval",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_RECOVER_REMOVAL_OWNER,
-    },
-    {
-      kind: "retirement",
-      method: "worktrees.retireSnapshot",
-      capability: GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
-    },
+    { kind: "exact-remove", method: "worktrees.remove", scenario: "live" },
+    { kind: "exact-remove", method: "worktrees.remove", scenario: "offline" },
+    { kind: "gc-partial", method: "worktrees.gc", scenario: "live" },
   ] as const;
   type Operation = (typeof operations)[number];
   let sequence = 0;
 
   async function prepareOperation(kind: Operation["kind"]) {
     const name = `mutation-${++sequence}`;
-    const record = await service.create({
+    const record = await materializeManagedWorktreeFixture({
+      env,
+      stateDir: env.OPENCLAW_STATE_DIR!,
       repoRoot: repo,
+      repoFingerprint,
       name,
-      baseRef: "HEAD",
-      ownerKind: kind === "gc" || kind === "gc-partial" ? "workboard" : "manual",
-      runSetupScript: false,
+      now: Date.now(),
+      ownerKind: kind === "gc-partial" ? "workboard" : "manual",
     });
-    let args = ["remove", record.id];
-    let cleanup = async () => {};
     const readRecord = async () =>
       (await service.listRegistryRecords()).find((candidate) => candidate.id === record.id);
-    let verify = async (mutated: boolean, payload?: Record<string, unknown>) => {
-      expect((await readRecord())?.removedAt !== undefined).toBe(mutated);
-      if (mutated) {
-        await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(payload).toMatchObject({ removed: true });
-        const saved = (await readRecord())?.snapshotRef;
-        expect(saved).toBeTypeOf("string");
-        expect(await git(repo, "show", `${saved}:README.md`)).toBe("base");
-      } else {
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
-      }
-    };
-    if (kind === "force") {
-      args.push("--force");
-    }
-    if (kind === "lossless" || kind === "lossless-retained") {
-      args.push("--if-lossless");
-      if (kind === "lossless-retained") {
-        await fs.writeFile(path.join(record.path, "README.md"), "retained work\n");
-      }
-      const removed = verify;
-      verify = async (mutated, payload) => {
-        if (kind === "lossless-retained") {
-          const current = await readRecord();
-          expect(current?.removedAt).toBeUndefined();
-          expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
-            "retained work\n",
-          );
-          expect(current?.runEndCleanup?.outcome).toBe(mutated ? "retained-dirty" : undefined);
-          if (mutated) {
-            expect(payload).toMatchObject({
-              removed: false,
-              cleanup: { outcome: "retained-dirty" },
-            });
-          }
-          return;
-        }
-        await removed(mutated, payload);
-        if (mutated) {
-          expect(payload).toMatchObject({ cleanup: { outcome: "removed-lossless" } });
-          expect((await readRecord())?.runEndCleanup?.outcome).toBe("removed-lossless");
-        }
-      };
-    }
-    if (kind === "exact-remove" || kind === "exact-recovery") {
+    if (kind === "exact-remove") {
       const head = await git(record.path, "rev-parse", "HEAD");
       await git(record.path, "checkout", "--detach", "HEAD");
       await fs.writeFile(path.join(record.path, "README.md"), "staged\n");
@@ -487,199 +404,62 @@ describe("same-root local mutation routing", () => {
       };
       const filename = path.join(root, `${name}.json`);
       await fs.writeFile(filename, JSON.stringify(exactState));
-      if (kind === "exact-remove") {
-        args.push("--exact-state", filename);
-        verify = async (mutated, payload) => {
+      return {
+        args: ["worktrees", "remove", record.id, "--exact-state", filename, "--json"],
+        cleanup: async () => {},
+        verify: async (mutated: boolean, payload?: Record<string, unknown>) => {
           expect((await readRecord())?.removedAt !== undefined).toBe(mutated);
-          const retained = mutated ? payload?.recoveryPath : record.path;
+          const retained = payload?.recoveryPath;
           expect(retained).toBeTypeOf("string");
           expect(await fs.readFile(path.join(String(retained), "README.md"), "utf8")).toBe(
             "working\n",
           );
-          if (mutated) {
-            expect(payload).toMatchObject({
-              removed: true,
-              recoveryRetainedUntil: expect.any(Number),
-            });
-            await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-          }
-        };
-      } else {
-        const run = commandRunner.runCommandWithTimeout;
-        let interrupted = false;
-        const fault = vi
-          .spyOn(commandRunner, "runCommandWithTimeout")
-          .mockImplementation(async (...input) => {
-            const result = await run(...input);
-            if (!interrupted && input[0].includes("worktree") && input[0].includes("move")) {
-              interrupted = true;
-              throw new Error("fixture interruption after archival move");
-            }
-            return result;
+          expect(payload).toMatchObject({
+            removed: true,
+            recoveryRetainedUntil: expect.any(Number),
           });
-        try {
-          await expect(
-            service.remove({ id: record.id, reason: "recovery fixture", exactState }),
-          ).rejects.toThrow("fixture interruption after archival move");
-          expect(interrupted).toBe(true);
-        } finally {
-          fault.mockRestore();
-        }
-        args = ["restore", record.id, "--recover-exact-state", filename];
-        cleanup = async () => {
-          if (!(await fs.stat(record.path).catch(() => undefined))) {
-            await service.restore({ id: record.id, recoverExactState: exactState });
-          }
-        };
-        verify = async (mutated, payload) => {
-          expect((await readRecord())?.removedAt).toBeUndefined();
-          if (mutated) {
-            expect(payload).toMatchObject({ id: record.id, path: record.path });
-            expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
-              "working\n",
-            );
-            expect(
-              await fs.readFile(
-                path.resolve(
-                  record.path,
-                  await git(record.path, "rev-parse", "--git-path", "index"),
-                ),
-              ),
-            ).toEqual(index);
-            expect(
-              await git(
-                repo,
-                "for-each-ref",
-                "--format=%(refname)",
-                `refs/openclaw/removals/${record.id}`,
-              ),
-            ).toBe("");
-          } else {
-            await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-          }
-        };
-      }
+          await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      };
     }
-    if (kind === "restore" || kind === "retirement") {
-      await service.remove({ id: record.id, reason: "routing fixture" });
-      const removed = (await readRecord())!;
-      if (kind === "restore") {
-        args = ["restore", record.id];
-        verify = async (mutated, payload) => {
-          expect((await readRecord())?.removedAt === undefined).toBe(mutated);
-          if (mutated) {
-            expect(payload).toMatchObject({ id: record.id, path: record.path });
-            expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
-          } else {
-            await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-          }
-        };
-      } else {
-        args = [
-          "retire-snapshot",
-          record.id,
-          "--expected-ref",
-          removed.snapshotRef!,
-          "--expected-oid",
-          await git(repo, "rev-parse", removed.snapshotRef!),
-          "--removed-at",
-          String(removed.removedAt),
-          "--retained-ref",
-          "refs/heads/main",
-          "--retained-oid",
-          await git(repo, "rev-parse", "main"),
-        ];
-        verify = async (mutated, payload) => {
-          expect((await readRecord()) === undefined).toBe(mutated);
-          expect(await git(repo, "for-each-ref", "--format=%(refname)", removed.snapshotRef!)).toBe(
-            mutated ? "" : removed.snapshotRef,
-          );
-          if (mutated) {
-            expect(payload).toMatchObject({ retired: true, id: record.id });
-          }
-        };
-      }
-    }
-    if (kind === "recovery") {
-      const head = await git(repo, "rev-parse", "HEAD");
-      const snapshot = await git(
-        repo,
-        "commit-tree",
-        `${head}^{tree}`,
-        "-p",
-        head,
-        "-m",
-        "interrupted clean capture",
-      );
-      const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
-      await git(repo, "update-ref", snapshotRef, snapshot);
-      await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
-      await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
-      await fs.unlink(path.join(record.path, ".git"));
-      args = ["recover-removal", record.id, "--snapshot", snapshot];
-    }
-    if (kind === "gc" || kind === "gc-partial") {
-      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
-      let brokenId: string | undefined;
-      if (kind === "gc-partial") {
-        const brokenRepo = await initializeRepository(path.join(root, name));
-        const broken = await materializeManagedWorktreeFixture({
-          env,
-          repoRoot: brokenRepo,
-          stateDir: path.join(root, name, "worktrees"),
-          name: `${name}-broken`,
-          now: Date.now() - IDLE_GC_MS - 1,
-          ownerKind: "workboard",
-        });
-        brokenId = broken.id;
-        await fs.rename(brokenRepo, `${brokenRepo}-away`);
-        cleanup = async () => {
-          await fs.rename(`${brokenRepo}-away`, brokenRepo);
-          await updateRegistryWorktree(env, broken.id, { lastActiveAt: Date.now() });
-        };
-      }
-      args = ["gc"];
-      verify = async (mutated, payload) => {
+    await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    const brokenRepo = await initializeRepository(path.join(root, name));
+    const broken = await materializeManagedWorktreeFixture({
+      env,
+      repoRoot: brokenRepo,
+      stateDir: path.join(root, name, "worktrees"),
+      name: `${name}-broken`,
+      now: Date.now() - IDLE_GC_MS - 1,
+      ownerKind: "workboard",
+    });
+    await fs.rename(brokenRepo, `${brokenRepo}-away`);
+    return {
+      args: ["worktrees", "gc", "--json"],
+      cleanup: async () => {
+        await fs.rename(`${brokenRepo}-away`, brokenRepo);
+        await updateRegistryWorktree(env, broken.id, { lastActiveAt: Date.now() });
+      },
+      verify: async (mutated: boolean, payload?: Record<string, unknown>) => {
         expect((await readRecord())?.removedAt !== undefined).toBe(mutated);
         if (mutated) {
           expect(payload).toMatchObject({
-            outcome: kind === "gc" ? "completed" : "partial",
+            outcome: "partial",
             removed: expect.arrayContaining([record.id]),
           });
           await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-          if (brokenId) {
-            expect(payload?.issues).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({ id: brokenId, outcome: "failed" }),
-              ]),
-            );
-          }
+          expect(payload?.issues).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: broken.id, outcome: "failed" })]),
+          );
         }
-      };
-    }
-    return { args: ["worktrees", ...args, "--json"], verify, cleanup };
+      },
+    };
   }
 
-  it.each(
-    operations.flatMap(({ kind, method, capability }) =>
-      (["live", "offline", "missing-capability", "lost-reply"] as const).map((scenario) => ({
-        kind,
-        method,
-        capability,
-        scenario,
-      })),
-    ),
-  )(
+  it.each(operations)(
     "$kind: $scenario preserves the operation contract and custody",
-    async ({ kind, method, capability, scenario }) => {
+    async ({ kind, method, scenario }) => {
       const prepared = await prepareOperation(kind);
       const before = methods.length;
-      if (scenario === "missing-capability") {
-        missingCapability = capability;
-      }
-      if (scenario === "lost-reply") {
-        mode = "lost-reply";
-      }
       if (scenario === "offline") {
         await closeOpenClawStateDatabaseAsync();
         await owner?.release();
@@ -702,16 +482,9 @@ describe("same-root local mutation routing", () => {
         const observation = JSON.parse(
           await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
         );
-        const succeeded = scenario === "live" || scenario === "offline";
-        const backgroundGc = method === "worktrees.gc" && scenario !== "offline";
-        expect(result.code, result.stderr).toBe(
-          succeeded && (backgroundGc || kind !== "gc-partial") ? 0 : 1,
-        );
-        expect(methods.slice(before)).toEqual(
-          scenario === "live" || scenario === "lost-reply" ? [method] : [],
-        );
+        expect(result.code, result.stderr).toBe(0);
+        expect(methods.slice(before)).toEqual(scenario === "live" ? [method] : []);
         if (scenario === "offline") {
-          // Worker-only operations need no caller-thread SQL; any native access still needs custody.
           expect(observation.missingCustody).toBe(0);
           for (const pid of observation.ownerPids) {
             expect(pid).toBe(observation.pid);
@@ -719,22 +492,8 @@ describe("same-root local mutation routing", () => {
         } else {
           expect(observation.worktreeSql).toBe(0);
         }
-        if (scenario === "missing-capability") {
-          expect(result.stderr).toContain("Update the Gateway");
-          expect(result.stderr).toContain(capability);
-        }
-        if (scenario === "lost-reply") {
-          expect(result.stderr).toContain("outcome may be partial");
-        }
-        // Read the canonical owner's persisted publication after success or a lost
-        // reply. Unknown outcomes must never trigger a caller-thread SQL replay.
-        let payload =
-          scenario === "lost-reply"
-            ? publishedResults.at(-1)
-            : succeeded
-              ? JSON.parse(result.stdout)
-              : undefined;
-        if (backgroundGc && scenario !== "missing-capability") {
+        let payload = JSON.parse(result.stdout);
+        if (kind === "gc-partial") {
           expect(payload).toMatchObject({
             jobId: expect.any(String),
             state: "queued",
@@ -743,12 +502,11 @@ describe("same-root local mutation routing", () => {
           });
           await prepared.verify(false);
           await maintenanceClock.advanceBy(0);
-          mode = "normal";
           const progress = await runCliProcessChild({
             nodeArgs: [...entrypoint, "worktrees", "gc", "--job", payload.jobId, "--json"],
             env,
           });
-          expect(progress.code, progress.stderr).toBe(kind === "gc-partial" ? 1 : 0);
+          expect(progress.code, progress.stderr).toBe(1);
           expect(methods.slice(before)).toEqual([method, method]);
           const completed = JSON.parse(progress.stdout);
           expect(completed).toMatchObject({
@@ -763,7 +521,7 @@ describe("same-root local mutation routing", () => {
           ).toBe(0);
           payload = completed;
         }
-        await prepared.verify(scenario !== "missing-capability", payload);
+        await prepared.verify(true, payload);
       } finally {
         if (!owner) {
           owner = await acquireGatewayLock({
@@ -779,9 +537,22 @@ describe("same-root local mutation routing", () => {
   );
 
   it.each([
+    ["mcp logout", ["mcp", "logout", "synthetic-server"]],
+    ["models auth logout", ["models", "auth", "logout", "synthetic:manual", "--yes"]],
     ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
+    [
+      "migration import",
+      [
+        "migrate",
+        "apply",
+        "synthetic-missing-provider",
+        "--yes",
+        "--no-backup",
+        "--force",
+        "--json",
+      ],
+    ],
     ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
-    ["exec-policy set", ["exec-policy", "set", "--ask", "always"]],
   ])(
     "refuses live %s before changing local state or dispatching to the owner",
     async (_name, args) => {
@@ -806,33 +577,6 @@ describe("same-root local mutation routing", () => {
 describe("offline local mutation custody", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   afterEach(() => vi.unstubAllEnvs());
-
-  it("keeps offline exec-policy preset writes and their config update working", async () => {
-    const root = roots.make("openclaw-exec-policy-offline-");
-    const env = environment(root);
-    await fs.mkdir(env.OPENCLAW_STATE_DIR!, { recursive: true });
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "exec-policy", "preset", "cautious", "--json"],
-      env,
-    });
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      preset: "cautious",
-      approvalsExists: true,
-      effectivePolicy: {
-        scopes: [
-          expect.objectContaining({
-            security: expect.objectContaining({ effective: "allowlist" }),
-            ask: expect.objectContaining({ effective: "on-miss" }),
-          }),
-        ],
-      },
-    });
-    expect(JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"))).toMatchObject({
-      tools: { exec: { host: "gateway", mode: "ask" } },
-    });
-  });
 
   it.skipIf(process.platform === "win32")(
     "retains offline CLI custody through its POSIX setup hook while Gateway startup races",

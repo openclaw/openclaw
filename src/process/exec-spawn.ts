@@ -192,17 +192,17 @@ function retainCommandProcess(
   let startedAt: number | null = null;
   let stopped = false;
   let groupExtinct = false;
-  let bindingFailed = false;
+  let settlementFailed = false;
   let custodySettled = false;
   const settleCustody = () => {
-    if (!reservation || bindingFailed || custodySettled) {
+    if (!reservation || settlementFailed || custodySettled) {
       return;
     }
     try {
       reservation.settled();
       custodySettled = true;
     } catch (error) {
-      bindingFailed = true;
+      settlementFailed = true;
       throw error;
     }
   };
@@ -246,7 +246,6 @@ function retainCommandProcess(
           stop();
         }
       } catch (error) {
-        bindingFailed = true;
         scope.failure ??= { error };
         stop();
         throw error;
@@ -421,7 +420,12 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
-  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
+  // nice execs Git in the same child; retain its family and operation attribution.
+  const diagnosticCommand =
+    argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git"
+      ? "git"
+      : invocation.command;
+  recordChildProcessSpawn(diagnosticCommand, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child, reservation);
   }

@@ -8,8 +8,6 @@ import { containsPotentialSecret } from "./migrate-validation.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import { CLAW_BOOTSTRAP_FILE_NAMES } from "./types.js";
 
-const PROMPT_FILE_NAMES = [...CLAW_BOOTSTRAP_FILE_NAMES];
-
 export async function readSelectedWorkspaceFiles(
   workspace: string,
 ): Promise<CapturedWorkspaceFile[]> {
@@ -20,7 +18,7 @@ export async function readSelectedWorkspaceFiles(
   });
   const captured: CapturedWorkspaceFile[] = [];
   let totalBytes = 0;
-  for (const name of PROMPT_FILE_NAMES) {
+  for (const name of CLAW_BOOTSTRAP_FILE_NAMES) {
     const info = await lstatMigrationPathIfExists(resolve(workspace, name));
     if (!info) {
       continue;

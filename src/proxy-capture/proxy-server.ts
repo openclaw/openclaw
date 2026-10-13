@@ -11,6 +11,8 @@ import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
+import { createDebugProxyChildCaptureReceiver } from "./child-server.js";
+import type { DebugProxyCliStore } from "./cli-contract.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
 import { reportCapturePersistenceFailure } from "./runtime-owner.js";
@@ -43,20 +45,12 @@ function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.
   );
 }
 
-type DebugProxyServerHandle = {
-  proxyUrl: string;
-  stop: () => Promise<void>;
-};
-
 type ProxyCaptureEventInput = Omit<
   CaptureEventRecord,
   "sessionId" | "ts" | "sourceScope" | "sourceProcess"
 >;
 
-function parseConnectTarget(rawTarget: string | undefined): {
-  hostname: string;
-  port: number;
-} {
+function parseConnectTarget(rawTarget: string | undefined) {
   const trimmed = rawTarget?.trim() ?? "";
   if (!trimmed) {
     return { hostname: "127.0.0.1", port: 443 };
@@ -158,15 +152,20 @@ export async function startDebugProxyServer(params: {
   port?: number;
   settings: DebugProxySettings;
   env?: NodeJS.ProcessEnv;
-}): Promise<DebugProxyServerHandle> {
+  captureStore?: DebugProxyCliStore;
+}) {
   const settings = { ...params.settings };
   const env = { ...(params.env ?? process.env) };
   await ensureDebugProxyCa(settings.certDir);
-  const lease = await acquireDebugProxyCaptureStoreAsync({ env });
+  const lease = params.captureStore
+    ? { store: params.captureStore, release: undefined }
+    : await acquireDebugProxyCaptureStoreAsync({ env });
+  const store = lease.store;
+  const childCapture = createDebugProxyChildCaptureReceiver(settings.sessionId, store);
   const pending = new Set<Promise<void>>();
   const errors: unknown[] = [];
   const recordProxyEvent = (event: ProxyCaptureEventInput): Promise<void> => {
-    const operation = lease.store.recordEvent({
+    const operation = store.recordEvent({
       sessionId: settings.sessionId,
       ts: Date.now(),
       sourceScope: "openclaw",
@@ -186,6 +185,18 @@ export async function startDebugProxyServer(params: {
   const host = params.host?.trim() || "127.0.0.1";
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const capture = childCapture.handle(req, res);
+    if (capture) {
+      pending.add(capture);
+      void capture.then(
+        () => pending.delete(capture),
+        (error: unknown) => {
+          pending.delete(capture);
+          reportCapturePersistenceFailure({ errors }, error);
+        },
+      );
+      return;
+    }
     void (async () => {
       const flowId = randomUUID();
       let target: URL;
@@ -454,8 +465,10 @@ export async function startDebugProxyServer(params: {
     let stopping: Promise<void> | undefined;
     return {
       proxyUrl: `http://${host}:${address.port}`,
+      captureEnv: childCapture.captureEnv(`http://${host}:${address.port}`),
       stop: () => {
         stopping ??= (async () => {
+          childCapture.stop();
           try {
             await new Promise<void>((resolve, reject) => {
               server.close((error) => {
@@ -471,7 +484,7 @@ export async function startDebugProxyServer(params: {
           }
           await Promise.allSettled(pending);
           try {
-            await lease.release();
+            await lease.release?.();
           } catch (error) {
             errors.push(error);
           }
@@ -484,7 +497,7 @@ export async function startDebugProxyServer(params: {
     };
   } catch (error) {
     try {
-      await lease.release();
+      await lease.release?.();
     } catch (closeError) {
       throw new AggregateError([error, closeError], "Debug proxy capture startup failed.", {
         cause: closeError,

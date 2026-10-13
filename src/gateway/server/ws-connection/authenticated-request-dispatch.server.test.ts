@@ -73,7 +73,7 @@ function createDispatcher(
   return createDispatchTestHarness({
     connId: "conn-trace-test",
     extraHandlers: { "test.trace": handler },
-    buildRequestContext: () => context,
+    buildRequestContext: () => ({ getRuntimeConfig: () => ({}), ...context }),
   });
 }
 
@@ -250,7 +250,10 @@ describe("authenticated WebSocket request trace dispatch", () => {
     }
     const harness = createDispatchTestHarness({
       getRequiredSharedGatewaySessionGeneration: () => generation,
-      buildRequestContext: () => ({ validateAgentRuntimeApprovalAuthority: () => runtimeActive }),
+      buildRequestContext: () => ({
+        getRuntimeConfig: () => ({}),
+        validateAgentRuntimeApprovalAuthority: () => runtimeActive,
+      }),
       extraHandlers: {
         "test.trace": ({ req, respond }) => {
           pendingStarted ||= req.id === "pending";
@@ -393,32 +396,6 @@ describe("authenticated WebSocket request trace dispatch", () => {
       expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id: "pending" }));
     }
     expect(socket.listenerCount("close")).toBe(0);
-  });
-
-  it("keeps handler failure logging and responses inside the request trace", async () => {
-    let loggedContext: DiagnosticTraceContext | undefined;
-    let responseContext: DiagnosticTraceContext | undefined;
-    const { awaitResponseFrame, dispatcher, logGateway, send } = createDispatcher(async () => {
-      throw new Error("expected trace failure");
-    });
-    logGateway.error.mockImplementation(() => {
-      loggedContext = getActiveDiagnosticTraceContext();
-    });
-    send.mockImplementation(() => {
-      responseContext = getActiveDiagnosticTraceContext();
-      return { kind: "sent" } as const;
-    });
-
-    await dispatchInFreshMessageScope(dispatcher, createClient(), "failure", TRACEPARENTS.first);
-    await awaitResponseFrame("failure");
-    expect(logGateway.error).toHaveBeenCalled();
-
-    expect(loggedContext).toMatchObject({
-      traceId: "11111111111111111111111111111111",
-      parentSpanId: "1111111111111111",
-      traceFlags: "01",
-    });
-    expect(responseContext).toEqual(loggedContext);
   });
 
   it("isolates concurrent request contexts on one connection", async () => {

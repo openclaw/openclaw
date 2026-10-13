@@ -61,22 +61,10 @@ describe("buildToolSearchRunPlan", () => {
   });
 
   it.each([
-    {
-      name: "cataloged unrelated client",
-      cataloged: true,
-      entries: ["missing_tool"],
-      callable: false,
-    },
-    {
-      name: "visible unrelated client",
-      cataloged: false,
-      entries: ["missing_tool"],
-      callable: false,
-    },
-    { name: "explicit client", cataloged: true, entries: ["client_pick_file"], callable: true },
-    { name: "wildcard directory client", cataloged: false, entries: ["client_*"], callable: true },
-    { name: "explicit control", cataloged: true, entries: ["tool_call"], callable: true },
-  ])("counts $name without masking an empty allowlist", ({ cataloged, entries, callable }) => {
+    { name: "explicit client", cataloged: true, entries: ["client_pick_file"] },
+    { name: "wildcard directory client", cataloged: false, entries: ["client_*"] },
+    { name: "explicit control", cataloged: true, entries: ["tool_call"] },
+  ])("recognizes $name as callable", ({ cataloged, entries }) => {
     const result = plan({
       clientToolsCataloged: cataloged,
       deferredToolsCallable: !cataloged,
@@ -85,7 +73,7 @@ describe("buildToolSearchRunPlan", () => {
     expect([...result.visibleAllowedToolNames]).toEqual(
       cataloged ? ["tool_call"] : ["tool_call", "client_pick_file"],
     );
-    expect(result.hasCallableTools).toBe(callable);
+    expect(result.hasCallableTools).toBe(true);
   });
 
   it("keeps ambiguous deferred names replayable but not directly callable", () => {

@@ -1,4 +1,9 @@
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { captureIncognitoSessionTopology } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
@@ -18,6 +23,9 @@ export function createPresenceRecipientProjection(params: {
   projection?: SessionRowProjection;
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
+  const memory = getSessionActorStorageBinding({});
+  const memoryOwners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
+  const topology = memory ? undefined : captureIncognitoSessionTopology();
   const views = new Map<string, SystemPresence[]>();
   let routingConfig: OpenClawConfig | undefined;
   let watches: Array<{ sessionKey: string; key: string; agentId?: string }> = [];
@@ -25,6 +33,23 @@ export function createPresenceRecipientProjection(params: {
   const targets = new Map<string, ReturnType<SessionRowProjection["sharingTarget"]>>();
   const resolveTarget = (sessionKey: string, key: string, agentId: string) => {
     if (isIncognitoSessionKey(key)) {
+      if (memory) {
+        memory.actor.assertReadable();
+        if (!memoryOwners.has(agentId)) {
+          memoryOwners.set(
+            agentId,
+            captureSessionActorStorageOwner({ agentId, sessionActor: memory }),
+          );
+        }
+        const entry = memoryOwners.get(agentId)?.owner?.readSession(key, memory.authority)?.entry;
+        return entry ? { canonicalKey: key, entry } : undefined;
+      }
+      if (topology) {
+        topology.assertCurrent();
+        const actor = topology.entries.find((candidate) => candidate.agentId === agentId);
+        const entry = actor?.facts.readSharing(key)?.entry;
+        return entry ? { canonicalKey: key, entry } : undefined;
+      }
       const database = getOpenIncognitoAgentDatabase(
         agentId,
         resolveIncognitoOpenClawAgentSqlitePath({ agentId }),

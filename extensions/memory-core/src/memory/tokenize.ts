@@ -8,28 +8,19 @@ export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text).normalize("NFC");
   // Keep CJK in its existing bigram/unigram lane; word marks stay attached to a base.
   const words = lower.replace(CJK_RUN_RE, " ").match(/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu) ?? [];
-  if (!CJK_RE.test(lower)) {
-    return new Set(words);
-  }
-
   const tokens = new Set(words);
-  const unigrams: string[] = [];
-  let previousCjk: string | undefined;
-  for (const char of lower) {
-    if (CJK_RE.test(char)) {
-      if (previousCjk !== undefined) {
-        tokens.add(previousCjk + char);
-      }
-      unigrams.push(char);
-      previousCjk = char;
-    } else {
-      previousCjk = undefined;
+  const cjkRuns = lower.match(CJK_RUN_RE) ?? [];
+  for (const run of cjkRuns) {
+    for (let index = 1; index < run.length; index += 1) {
+      tokens.add(run.slice(index - 1, index + 1));
     }
   }
 
   // Preserve insertion order: word tokens, then bigrams, then unigrams.
-  for (const char of unigrams) {
-    tokens.add(char);
+  for (const run of cjkRuns) {
+    for (const char of run) {
+      tokens.add(char);
+    }
   }
   return tokens;
 }
@@ -38,10 +29,6 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
   if (setA.size === 0 && setB.size === 0) {
     return 1;
   }
-  if (setA.size === 0 || setB.size === 0) {
-    return 0;
-  }
-
   let intersectionSize = 0;
   const smaller = setA.size <= setB.size ? setA : setB;
   const larger = setA.size <= setB.size ? setB : setA;
@@ -53,7 +40,7 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
   }
 
   const unionSize = setA.size + setB.size - intersectionSize;
-  return unionSize === 0 ? 0 : intersectionSize / unionSize;
+  return intersectionSize / unionSize;
 }
 
 // Distinct text outside the tokenizer's alphabet must not collapse as two empty sets.

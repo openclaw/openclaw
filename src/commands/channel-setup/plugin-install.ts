@@ -4,37 +4,30 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { WizardPrompter } from "../../wizard/prompts.js";
-import {
-  ensureOnboardingPluginInstalled,
-  type OnboardingPluginInstallStatus,
-} from "../onboarding-plugin-install.js";
+import { ensureOnboardingPluginInstalled } from "../onboarding-plugin-install.js";
 import { getTrustedChannelPluginCatalogEntry } from "./trusted-catalog.js";
 
-type InstallResult = {
-  cfg: OpenClawConfig;
-  installed: boolean;
-  pluginId?: string;
-  status: OnboardingPluginInstallStatus;
-};
+type OnboardingInstallResult = Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>>;
 
 /** Install or reuse the plugin package required by a trusted channel catalog entry. */
-export async function ensureChannelSetupPluginInstalled(params: {
-  cfg: OpenClawConfig;
-  entry: ChannelPluginCatalogEntry;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-  promptInstall?: boolean;
-  autoConfirmSingleSource?: boolean;
-  beforePersistentEffect?: () => Promise<void>;
-}): Promise<InstallResult> {
+export async function ensureChannelSetupPluginInstalled(
+  params: Omit<
+    Parameters<typeof ensureOnboardingPluginInstalled>[0],
+    "entry" | "onCapabilityConsent" | "beforePersistentEffect"
+  > & {
+    entry: ChannelPluginCatalogEntry;
+    beforePersistentEffect?: () => Promise<void>;
+  },
+): Promise<
+  Pick<OnboardingInstallResult, "cfg" | "installed" | "status"> &
+    Partial<Pick<OnboardingInstallResult, "pluginId">>
+> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
     entry: {
@@ -65,14 +58,14 @@ export async function ensureChannelSetupPluginInstalled(params: {
 }
 
 /** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
-export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
+export async function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
   forceSetupOnlyChannelPlugins?: boolean;
-}): PluginRegistry {
+}): Promise<PluginRegistry> {
   let scopedPluginId = params.pluginId?.trim();
   if (!scopedPluginId) {
     scopedPluginId = getTrustedChannelPluginCatalogEntry(params.channel, {
@@ -96,7 +89,7 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
     resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
   const onlyPluginIds = scopedPluginId
     ? [scopedPluginId]
-    : resolveConfiguredChannelPluginIds({
+    : await resolveConfiguredChannelPluginIdsAsync({
         config: resolvedConfig,
         activationSourceConfig: params.cfg,
         workspaceDir,

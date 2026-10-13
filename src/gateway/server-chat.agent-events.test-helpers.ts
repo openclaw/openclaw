@@ -1,10 +1,12 @@
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
 import {
   onAgentRuntimeEvent,
   type AgentEventPayload,
   type AgentEventStream,
 } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -147,11 +149,12 @@ export function createDirectChatContext(
       };
     }),
     logGateway: {
+      ...createSubsystemLogger("test/gateway"),
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    },
+    } satisfies GatewayRequestContext["logGateway"],
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
@@ -170,6 +173,7 @@ export function createDirectChatContext(
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
     recoveryRuntime: {
+      prepareRestartRecovery: () => undefined,
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),
@@ -195,6 +199,32 @@ export function createTextTranscriptEvent(
       ...message,
     },
   };
+}
+
+export function createOversizedReplayTranscriptEvent(options: {
+  id: string;
+  parentId: string;
+  siblingCount: number;
+}): string {
+  return JSON.stringify({
+    type: "message",
+    id: options.id,
+    parentId: options.parentId,
+    message: {
+      role: "assistant",
+      // Replay metadata repeats the text; keep each row below the per-message byte cap.
+      content: Array.from({ length: options.siblingCount }, (_, index) => ({
+        type: "text",
+        text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
+        textSignature: JSON.stringify({
+          v: 1,
+          id: `history-progress-${index}`,
+          phase: "commentary",
+        }),
+      })),
+      timestamp: Date.now() + 1,
+    },
+  });
 }
 
 type ChatConnectionIdentityInput = {
@@ -223,11 +253,26 @@ export function registerChatConnectionIdentityTest(harness: {
       const context = createDirectChatContext();
       const send = async (params: ChatConnectionIdentityInput) => {
         const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
+        const removed = createDeferred<Parameters<GatewayRequestContext["removeChatRun"]>>();
+        vi.mocked(context.removeChatRun).mockImplementationOnce((...args) => {
+          removed.resolve(args);
+          return undefined;
+        });
+        const respond = vi.fn<RespondFn>();
         await harness.sendControlUiChat({
           context,
           ...params,
-          respond: vi.fn() as RespondFn,
+          respond,
         });
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+        expect(await removed.promise).toEqual([
+          params.idempotencyKey,
+          params.idempotencyKey,
+          "agent:main:main",
+        ]);
+        // Removal precedes fallback persistence. Capture this turn's release only
+        // after it reaches cleanup, rather than before pending work acquires custody.
         await harness.waitForSessionWork();
         expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
       };

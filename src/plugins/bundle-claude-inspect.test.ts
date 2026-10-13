@@ -157,7 +157,6 @@ describe("Claude bundle plugin inspect integration", () => {
         bundleFormat: "claude",
       }),
     ).toMatchObject({
-      hasStdioServer: true,
       supportedServerNames: ["typescript-lsp"],
       unsupportedServerNames: [],
       diagnostics: [],

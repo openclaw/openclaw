@@ -1,23 +1,18 @@
-import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../../src/infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../../src/infra/sqlite-integrity.js";
 import {
-  formatReliabilityStderr,
   INDEX_REPAIR_INDEX_NAME,
   INDEX_REPAIR_SCHEMA_SQL,
   type IndexRepairJournalMode,
-  type ReliabilityReport,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
-
-type IndexRepairProof = ReliabilityReport["indexRepairInterruptionProof"]["rollbackJournal"];
+import { waitForReliabilitySidecars } from "./sqlite-reliability-sidecars.js";
 
 type IndexRepairState = {
   rows: number;
@@ -31,17 +26,6 @@ const INDEX_REPAIR_WORKER_PATH = fileURLToPath(
 // before the worker reports its explicit crash point.
 const INDEX_REPAIR_ROWS = 16_384;
 const INDEX_REPAIR_TIMEOUT_MS = 30_000;
-
-function fileSize(filePath: string): number {
-  try {
-    return fs.statSync(filePath).size;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
 
 function readIndexRepairState(database: DatabaseSync): IndexRepairState {
   const hash = createHash("sha256");
@@ -111,32 +95,6 @@ function prepareIndexRepairDatabase(
   }
 }
 
-async function waitForActiveTransaction(params: {
-  child: ChildProcess;
-  databasePath: string;
-  journalMode: IndexRepairJournalMode;
-  readStderr: () => string;
-}): Promise<{ journalBytes: number; walBytes: number }> {
-  const deadline = Date.now() + INDEX_REPAIR_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const journalBytes = fileSize(`${params.databasePath}-journal`);
-    const walBytes = fileSize(`${params.databasePath}-wal`);
-    const activeBytes = params.journalMode === "wal" ? walBytes : journalBytes;
-    if (activeBytes > 0) {
-      return { journalBytes, walBytes };
-    }
-    if (params.child.exitCode !== null || params.child.signalCode !== null) {
-      throw new Error(
-        `SQLite index repair completed before ${params.journalMode} interruption evidence was observed.${formatReliabilityStderr(params.readStderr())}`,
-      );
-    }
-    await delay(2);
-  }
-  throw new Error(
-    `SQLite index repair did not produce active ${params.journalMode} evidence within 30 seconds.`,
-  );
-}
-
 function recoverAndRepair(databasePath: string, expectedState: IndexRepairState): string[] {
   const database = openNodeSqliteDatabase(databasePath);
   try {
@@ -177,7 +135,7 @@ function recoverAndRepair(databasePath: string, expectedState: IndexRepairState)
 async function runJournalModeProof(params: {
   databasePath: string;
   journalMode: IndexRepairJournalMode;
-}): Promise<IndexRepairProof> {
+}) {
   const expectedState = prepareIndexRepairDatabase(params.databasePath, params.journalMode);
   const worker = startReliabilityCrashWorker(
     INDEX_REPAIR_WORKER_PATH,
@@ -193,11 +151,15 @@ async function runJournalModeProof(params: {
     await worker.waitForCrashPoint(undefined, INDEX_REPAIR_TIMEOUT_MS, () =>
       child.send?.({ kind: "start" }),
     );
-    const observed = await waitForActiveTransaction({
+    const observed = await waitForReliabilitySidecars({
       child,
       databasePath: params.databasePath,
-      journalMode: params.journalMode,
       readStderr,
+      ready: ({ journalBytes, walBytes }) =>
+        (params.journalMode === "wal" ? walBytes : journalBytes) > 0,
+      timeoutMs: INDEX_REPAIR_TIMEOUT_MS,
+      exitMessage: `SQLite index repair completed before ${params.journalMode} interruption evidence was observed.`,
+      timeoutMessage: `SQLite index repair did not produce active ${params.journalMode} evidence within 30 seconds.`,
     });
     const exit = await worker.crash();
     const repairedIndexes = recoverAndRepair(params.databasePath, expectedState);
@@ -214,9 +176,7 @@ async function runJournalModeProof(params: {
   }
 }
 
-export async function runIndexRepairInterruptionProof(
-  scratchPath: string,
-): Promise<ReliabilityReport["indexRepairInterruptionProof"]> {
+export async function runIndexRepairInterruptionProof(scratchPath: string) {
   fs.mkdirSync(scratchPath, { recursive: true, mode: 0o700 });
   return {
     rollbackJournal: await runJournalModeProof({

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
@@ -10,6 +15,7 @@ describe("persistAgentSessionPhase", () => {
   it("sandboxes a new synthetic run using its host-minted operator identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("synthetic-sandbox-creator@example.com");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:synthetic-sandbox";
       const runId = "synthetic-sandbox-run";
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
@@ -26,7 +32,9 @@ describe("persistAgentSessionPhase", () => {
         freshness: undefined,
       };
 
+      const sql = observeHostDataSql();
       const committed = vi.fn((entry: { sessionId: string }) => {
+        sql.restore();
         expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
           entry.sessionId,
         );
@@ -62,21 +70,25 @@ describe("persistAgentSessionPhase", () => {
         suppressVisibleSessionEffects: false,
         initialPatchBuild: patchBuild,
         buildSessionPatch: async () => patchBuild,
-        initialSessionPersistedBeforeGatewayAdmission: false,
+        state: {
+          sessionPersistedBeforeGatewayAdmission: false,
+          admittedSessionId: runId,
+          skipAgentInitialSessionTouch: false,
+          isNewSession: true,
+          bestEffortDeliver: false,
+        },
         touchInteraction: false,
-        bestEffortDeliver: false,
         expectedSession: undefined,
         maintenanceConfig: undefined,
         abortForLifecycleRotation: () => false,
         assertGatewayWorkAdmissionAllowed: vi.fn(),
         respondToGatewayAdmissionOutcome: () => false,
-        updateAdmissionState: vi.fn(),
-        getAdmittedSessionId: () => runId,
         setCronContinuationClaim: vi.fn(),
         setMainRestartRecoveryOwnerLease: vi.fn(),
         respond: vi.fn(),
-      });
+      }).finally(sql.restore);
 
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       expect(result?.sessionEntry).toMatchObject({
         createdVia: "run",
         createdActor: { type: "human", id: profile.id },
@@ -97,6 +109,7 @@ describe("persistAgentSessionPhase", () => {
         const sessionKey = "agent:main:role-denied";
         const runId = "role-denied-run";
         const profile = ensureProfileForEmail("role-denied-creator@example.com");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const allowedAgents = revokeDuringPreparation ? ["main"] : [];
         const respond = vi.fn<Parameters<typeof persistAgentSessionPhase>[0]["respond"]>();
         const abortForLifecycleRotation = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
@@ -143,16 +156,19 @@ describe("persistAgentSessionPhase", () => {
               allowedAgents.length = 0;
               return patchBuild;
             },
-            initialSessionPersistedBeforeGatewayAdmission: false,
+            state: {
+              sessionPersistedBeforeGatewayAdmission: false,
+              admittedSessionId: runId,
+              skipAgentInitialSessionTouch: false,
+              isNewSession: true,
+              bestEffortDeliver: false,
+            },
             touchInteraction: false,
-            bestEffortDeliver: false,
             expectedSession: undefined,
             maintenanceConfig: undefined,
             abortForLifecycleRotation,
             assertGatewayWorkAdmissionAllowed: vi.fn(),
             respondToGatewayAdmissionOutcome: () => false,
-            updateAdmissionState: vi.fn(),
-            getAdmittedSessionId: () => runId,
             setCronContinuationClaim: vi.fn(),
             setMainRestartRecoveryOwnerLease: vi.fn(),
             respond,

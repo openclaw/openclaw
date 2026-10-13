@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 
 describe("worker turn execution loading", () => {
@@ -43,12 +44,23 @@ describe("worker turn execution loading", () => {
       const { createAgentRunRestartAbortError } = await import("../../agents/run-termination.js");
       const restart = createAgentRunRestartAbortError();
       let revoked = false;
+      let executionAssertion: (() => void) | undefined;
       const execute = vi.fn(
         async (params: {
           onHandoff: () => void;
           onTerminal?: () => void;
           turnClaim: WorkerSessionTurnClaim;
+          assertRunCurrent: () => void;
         }) => {
+          executionAssertion = params.assertRunCurrent;
+          const sql = observeMainThreadSql();
+          try {
+            params.assertRunCurrent();
+            params.assertRunCurrent();
+            sql.expectIdle();
+          } finally {
+            sql.restore();
+          }
           params.onHandoff();
           params.onTerminal?.();
           await fixture.placements.releaseTurn(params.turnClaim);
@@ -157,6 +169,9 @@ describe("worker turn execution loading", () => {
           expect(execute).toHaveBeenCalledOnce();
           expect(execute.mock.calls[0]?.[0].turnClaim).toEqual(retained);
           expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
+          if (mode === "worker-turn") {
+            expect(executionAssertion).toThrow();
+          }
         } else {
           if (scenario === "cancelled") {
             await expect(run).rejects.toBe(restart);
@@ -246,7 +261,7 @@ describe("worker turn execution loading", () => {
         environments: { ...fixture.unusedEnvironments(), get: vi.fn(() => environment) },
         placements: fixture.placements,
       });
-      const sandbox = provider.resolveSandbox({
+      const sandbox = provider.prepareSandbox({
         sessionId: fixture.SESSION_ID,
         sessionKey: fixture.SESSION_KEY,
         agentId: "main",
@@ -278,13 +293,14 @@ describe("worker turn execution loading", () => {
         }
         releaseLoad.resolve();
         if (scenario === "current") {
-          await expect(sandbox).resolves.toMatchObject({
+          using prepared = await sandbox;
+          expect(prepared.sandbox).toMatchObject({
             backendId: "node",
             placementNodeId: "fixture-node",
           });
           expect(sandboxCalls).toBe(1);
         } else {
-          await expect(sandbox).rejects.toThrow("changed while preparing its sandbox");
+          await expect(sandbox).rejects.toThrow("placement authority changed");
           expect(sandboxCalls).toBe(0);
         }
       } finally {
@@ -311,9 +327,10 @@ describe("worker turn execution loading", () => {
       agentId: "main",
       workspaceDir: fixture.root,
     };
-    await expect(provider.resolveSandbox({ ...request, agentId: "other" })).resolves.toBeNull();
+    using prepared = await provider.prepareSandbox({ ...request, agentId: "other" });
+    expect(prepared.sandbox).toBeNull();
     expect(load).not.toHaveBeenCalled();
-    await expect(provider.resolveSandbox(request)).rejects.toMatchObject({ cause: failure });
+    await expect(provider.prepareSandbox(request)).rejects.toMatchObject({ cause: failure });
     expect(load).toHaveBeenCalledOnce();
   });
 });

@@ -256,6 +256,22 @@ jobs:
           PNPM
           sudo chmod 0755 /usr/local/bin/pnpm
 
+      - &crabbox_prepare_control_ui_e2e_step
+        name: Prepare Control UI E2E environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          # SSH umask 002 leaves lease ancestry writable by the group, which private artifacts reject.
+          directory="$(pwd -P)"
+          while [ "$directory" != / ] && [ ! -L "$directory" ] && [ -O "$directory" ]; do
+            chmod go-w "$directory"
+            directory="$(dirname "$directory")"
+          done
+          mkdir -p .artifacts
+          chmod go-w .artifacts
+          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
+          pnpm --dir ui exec playwright install --with-deps webkit
+
       - &crabbox_ensure_docker_step
         name: Ensure Docker is running
         shell: bash
@@ -385,6 +401,7 @@ jobs:
             for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE XDG_CACHE_HOME COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PATH; do
               write_export "$key"
             done
+            echo 'umask go-w'
           } > "${env_file}.tmp"
           mv "${env_file}.tmp" "$env_file"
           {
@@ -714,6 +731,7 @@ jobs:
           PNPM
           sudo chmod 0755 /usr/local/bin/pnpm
 
+      - *crabbox_prepare_control_ui_e2e_step
       - *crabbox_ensure_docker_step
       - name: Ensure SSH is available
         shell: bash
@@ -807,6 +825,7 @@ jobs:
             for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PATH; do
               write_export "$key"
             done
+            echo 'umask go-w'
           } > "${env_file}.tmp"
           mv "${env_file}.tmp" "$env_file"
           {

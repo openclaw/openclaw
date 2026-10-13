@@ -199,7 +199,7 @@ Discord also has Mantis-only opt-in scenarios for bug reproduction. Use
 reaction timeline, or `--scenario discord-thread-reply-filepath-attachment`
 to create a real Discord thread and verify that `message.thread-reply`
 preserves a `filePath` attachment. These scenarios stay out of the default
-live Discord lane because they are before/after repro probes rather than
+live Discord lane because they are before/after repro checks rather than
 broad smoke coverage. The thread-attachment Mantis workflow can also add a
 logged-in Discord Web witness video when
 `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or

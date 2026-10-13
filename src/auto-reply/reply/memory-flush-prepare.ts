@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
+import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,42 +28,33 @@ const log = createSubsystemLogger("auto-reply/memory-flush");
 // A flush-specific model is exact: it never inherits the source fallback chain.
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
-  model?: string,
-  configOverride: FollowupRun["run"]["config"] = run.config,
+  model: string | undefined,
+  config: FollowupRun["run"]["config"],
 ) {
-  const options = resolveModelFallbackOptions(run, configOverride);
+  const options = resolveModelFallbackOptions(run, config);
   const override = normalizeOptionalString(model);
   if (!override) {
     return options;
   }
   const slashIdx = override.indexOf("/");
-  if (slashIdx > 0) {
-    const overrideProvider = override.slice(0, slashIdx).trim();
-    const overrideModel = override.slice(slashIdx + 1).trim();
-    if (overrideProvider && overrideModel) {
-      return {
-        ...options,
-        provider: overrideProvider,
-        model: overrideModel,
-        requestedRouteResolution: "raw" as const,
-        fallbacksOverride: [],
-      };
-    }
-  }
+  const overrideProvider = override.slice(0, slashIdx).trim();
+  const overrideModel = override.slice(slashIdx + 1).trim();
   return {
     ...options,
-    model: override,
+    ...(slashIdx > 0 && overrideProvider && overrideModel
+      ? { provider: overrideProvider, model: overrideModel }
+      : { model: override }),
     requestedRouteResolution: "raw" as const,
     fallbacksOverride: [],
   };
 }
 
-/** Prepare one detached flush, source delegation, and persistence target before model fallback. */
 export async function prepareMemoryFlushAttempt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
   flushRunId: string;
@@ -110,12 +102,14 @@ export async function prepareMemoryFlushAttempt(params: {
           sessionEntry,
         )
       : undefined;
+  // The source turn's own attempt resolves the same lineage and owns the operator warning.
   if (sourceAudience?.status === "denied") {
     log.debug("memory flush skipped: source turn has no memory audience", {
       event: "memory_flush_no_audience",
       sourceSessionKey: sessionKey,
       sourceSessionId: sessionEntry.sessionId,
       pluginId: resolution.pluginId,
+      kind: sourceAudience.kind,
       reason: sourceAudience.reason,
     });
     return null;
@@ -157,6 +151,18 @@ export async function prepareMemoryFlushAttempt(params: {
       plan.model,
       params.cfg,
     );
+    const sourcePolicySessionKey =
+      params.runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey ?? sessionKey;
+    const maintenanceRun = createSessionMaintenanceFollowup({
+      run: followupRun.run,
+      sessionEntry: { sessionId: memorySession.sessionId, updatedAt: Date.now() },
+      cfg: params.cfg,
+      sessionKey: memorySession.sessionKey,
+      runtimePolicySessionKey: sourcePolicySessionKey,
+      provider: selection.provider,
+      model: selection.model,
+      auth: followupRun.run,
+    }).run;
     // Delegation shares source revocation while binding tool use to the detached session.
     params.assertCurrent();
     delegated = sourceAudience
@@ -197,6 +203,8 @@ export async function prepareMemoryFlushAttempt(params: {
       memorySession,
       memoryAudience: delegated?.audience,
       memoryFlushTools,
+      maintenanceRun,
+      sourcePolicySessionKey,
       release,
     };
   } catch (error) {

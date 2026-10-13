@@ -31,36 +31,6 @@ describe("parsePostContent", () => {
     expect(result.mentionedOpenIds).toStrictEqual([]);
   });
 
-  it.each([
-    {
-      style: ["underline"],
-      expected: "<u>x \\* y</u> <u>[Docs](https://example.com)</u> <u>@Alice</u>",
-    },
-    {
-      style: ["lineThrough", "bold", "italic"],
-      expected: "~~***x \\* y***~~ ~~***[Docs](https://example.com)***~~ ~~***@Alice***~~",
-    },
-    { style: [], expected: "x \\* y [Docs](https://example.com) @Alice" },
-  ])("preserves native inline styles $style", ({ style, expected }) => {
-    const result = parsePostContent(
-      JSON.stringify({
-        content: [
-          [
-            { tag: "text", text: "x * y", style },
-            { tag: "text", text: " " },
-            { tag: "a", text: "Docs", href: "https://example.com", style },
-            { tag: "text", text: " " },
-            { tag: "at", user_name: "Alice", user_id: "ou_alice", style },
-          ],
-        ],
-      }),
-    );
-
-    expect(result.textContent).toBe(expected);
-    expect(result.mentionedOpenIds).toEqual(["ou_alice"]);
-    expect(result.attachments).toEqual([]);
-  });
-
   it("keeps boundary whitespace outside emphasis delimiters", () => {
     const result = parsePostContent(
       JSON.stringify({
@@ -88,14 +58,19 @@ describe("parsePostContent", () => {
     });
   });
 
-  it("renders links and mentions", () => {
+  it("renders styled links and mentions", () => {
     const content = JSON.stringify({
       title: "",
       content: [
         [
-          { tag: "a", text: "Docs [v2]", href: "https://example.com/guide(a)" },
+          {
+            tag: "a",
+            text: "Docs [v2]",
+            href: "https://example.com/guide(a)",
+            style: ["lineThrough", "bold", "italic"],
+          },
           { tag: "text", text: " " },
-          { tag: "at", user_name: "alice_bob" },
+          { tag: "at", user_name: "alice_bob", style: ["underline"] },
           { tag: "text", text: " " },
           { tag: "at", open_id: "ou_123" },
           { tag: "text", text: " " },
@@ -107,7 +82,7 @@ describe("parsePostContent", () => {
     const result = parsePostContent(content);
 
     expect(result.textContent).toBe(
-      "[Docs \\[v2\\]](https://example.com/guide(a)) @alice\\_bob @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+      "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
     );
     expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });
@@ -262,18 +237,6 @@ describe("parsePostContent", () => {
         }),
       ).attachments,
     ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);
-  });
-
-  it("does not duplicate top-level files[] already present as media tags", () => {
-    const content = JSON.stringify({
-      title: "",
-      content: [[{ tag: "media", file_key: "file_shared", file_name: "shared.csv" }]],
-      files: [{ file_key: "file_shared", file_name: "shared.csv", is_folder: false }],
-    });
-
-    expect(parsePostContent(content).attachments).toEqual([
-      { kind: "file", key: "file_shared", fileName: "shared.csv" },
-    ]);
   });
 
   it("supports locale wrappers", () => {

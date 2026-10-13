@@ -1169,14 +1169,19 @@ export function applyModelFallbacksFromSelection(
     const separatorIndex = ref.indexOf("/");
     return separatorIndex <= 0 || isVisibleProvider(ref.slice(0, separatorIndex));
   };
-  const preserveExistingFallback = scopeKeySet
-    ? (fallback: string) => !scopeKeySet.has(fallback)
-    : (fallback: string) => !isVisibleModelRef(fallback);
-  const fallbacks = mergeFallbackSelection({
-    existingFallbacks,
-    selectedFallbacks,
-    preserveExistingFallback,
-  });
+  const selected = new Set(selectedFallbacks);
+  const fallbacks: string[] = [];
+  for (const fallback of existingFallbacks) {
+    const preserve = scopeKeySet ? !scopeKeySet.has(fallback) : !isVisibleModelRef(fallback);
+    if (preserve || selected.delete(fallback)) {
+      fallbacks.push(fallback);
+    }
+  }
+  for (const fallback of selectedFallbacks) {
+    if (selected.has(fallback)) {
+      fallbacks.push(fallback);
+    }
+  }
   const nextModel = {
     ...preservedModelFields,
     ...(normalizedExistingPrimary != null ? { primary: normalizedExistingPrimary } : {}),
@@ -1205,30 +1210,6 @@ export function applyModelFallbacksFromSelection(
       },
     },
   };
-}
-
-function mergeFallbackSelection(params: {
-  existingFallbacks: string[];
-  selectedFallbacks: string[];
-  preserveExistingFallback: (fallback: string) => boolean;
-}): string[] {
-  const selected = new Set(params.selectedFallbacks);
-  const fallbacks: string[] = [];
-  for (const fallback of params.existingFallbacks) {
-    if (params.preserveExistingFallback(fallback)) {
-      fallbacks.push(fallback);
-      continue;
-    }
-    if (selected.delete(fallback)) {
-      fallbacks.push(fallback);
-    }
-  }
-  for (const fallback of params.selectedFallbacks) {
-    if (selected.has(fallback)) {
-      fallbacks.push(fallback);
-    }
-  }
-  return fallbacks;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

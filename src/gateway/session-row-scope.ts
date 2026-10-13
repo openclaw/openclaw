@@ -1,12 +1,13 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { applyGatewaySessionStoreAdmission } from "../config/sessions/combined-store-gateway.js";
+import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store.types.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -17,14 +18,67 @@ import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openc
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
-type SessionRowScopeTarget = {
-  agentId: string;
-  storeTarget: { agentId: string; storePath: string };
-};
+type SessionRowScopeTarget = Pick<records.Row, "agentId" | "storeTarget">;
 type SessionRowScopeQuery = { agentId?: string; storePath?: string };
 type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
   | undefined;
+
+/** Discover current keys in SQLite, then prepare every physical competitor before federation. */
+export async function readSessionRowLookup(
+  selection:
+    | { kind: "session-id-or-key"; sessionIdOrKey: string }
+    | { kind: "label"; label: string },
+  owner: {
+    agentId?: string;
+    env: NodeJS.ProcessEnv;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
+    paths: ReadonlyMap<string, number>;
+    matching: (query: { key: string }) => records.Row[];
+  },
+): Promise<records.Lookup[]> {
+  const stores = [...owner.stores.values()].filter((store) =>
+    owner.paths.has(store.target.storePath),
+  );
+  return withSessionHistoryWorkerDatabases(
+    stores.map((store) => ({ ...store.target, path: store.filename, env: owner.env })),
+    async (readers) => {
+      const keys = new Set<string>();
+      for (const [index, store] of stores.entries()) {
+        if (typeof store.identity !== "string") {
+          throw new Error("Session lookup requires an admitted durable store");
+        }
+        const result = await readers[index]!.readExactEntries({
+          selection,
+          projection: "list",
+          env: owner.env,
+          expectedIdentity: {
+            key: `file:${store.identity}`,
+            canonicalPath: store.filename,
+            birthtime: store.birthtime,
+          },
+        });
+        for (const entry of result.entries) {
+          keys.add(entry.sessionKey);
+        }
+      }
+      for (const reader of readers) {
+        reader.assertCurrent();
+      }
+      return [...keys].flatMap((key) =>
+        owner
+          .matching({ key })
+          .flatMap((row) =>
+            owner.paths.has(row.storeTarget.storePath) &&
+            (!owner.agentId || row.agentId === owner.agentId)
+              ? [{ key, agentId: row.agentId, storePath: row.storeTarget.storePath }]
+              : [],
+          ),
+      );
+    },
+    projectionLane,
+  );
+}
 
 /** Keyed publications select resident identities and admit only their named destination. */
 export function visitSessionRowPublicationTargets(
@@ -94,25 +148,11 @@ export function createSessionRowRegistryRead(owner: {
                       entry.schemaVersion === source.schemaVersion &&
                       (entry.path === source.path || entry.path === source.physicalPath),
                   ) &&
-                  captured.some((store) => {
-                    if (
-                      typeof store.identity !== "string" ||
-                      `file:${store.identity}` !== source.identity ||
-                      store.target.agentId !== source.agentId
-                    ) {
-                      return false;
-                    }
-                    try {
-                      return [...new Set([store.filename, source.path, source.physicalPath])].every(
-                        (filename) => {
-                          const file = readDatabasePathIdentitySync(filename);
-                          return file.key === source.identity && file.birthtime === store.birthtime;
-                        },
-                      );
-                    } catch {
-                      return false;
-                    }
-                  }),
+                  captured.some(
+                    (store) =>
+                      `file:${String(store.identity)}` === source.identity &&
+                      store.target.agentId === source.agentId,
+                  ),
               ),
           );
           const { assertCurrent } = await registry.read();
@@ -208,18 +248,27 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
-  discovery?: GatewaySessionStoreDiscovery,
+  prepared: CombinedSessionStoreScopeTargets,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const aliases = new Map<string, Map<string, string>>();
   const capture = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     try {
-      const resolved = resolveGatewaySessionStoreTargets(cfg, {
-        ...options,
-        discovery,
-        includeIncognito: false,
-      });
+      const key = options.agentId
+        ? `agent:${options.agentId}`
+        : options.configuredAgentsOnly
+          ? "configured"
+          : "all";
+      const captured = prepared.get(key);
+      if (captured instanceof Error) {
+        return captured;
+      }
+      const resolved = applyGatewaySessionStoreAdmission(
+        cfg,
+        { ...options, includeIncognito: false },
+        expectDefined(captured, "prepared scope topology"),
+      );
       for (const [identity, physical] of resolved.physicalTargets) {
         const separator = identity.indexOf("\0");
         const agentId = identity.slice(0, separator);
@@ -378,7 +427,7 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
     : matching(query);
   const pending: records.Lookup[] = [];
   for (const row of candidates) {
-    if (row?.unresolvedDatabaseFacts === "category" && matches(row)) {
+    if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
       pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
       if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
         break;
@@ -393,7 +442,7 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates
-      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+      : candidates.map((row) => (dirty.has(records.identity(row)) ? acquire(row) : row));
   // Each candidate path returns an owned array. Finish all acquisitions before
   // compacting it, since acquiring one dirty row can update another row's facts.
   let selectedCount = 0;

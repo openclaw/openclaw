@@ -102,10 +102,6 @@ wait_for_skills_prompt_or_ready() {
   done
 }
 
-start_gateway() {
-  GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")"
-}
-
 wait_for_gateway() {
   local wait_attempts
   wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS 20)" || return $?
@@ -128,14 +124,10 @@ wait_for_gateway() {
   return 1
 }
 
-stop_gateway() {
-  openclaw_e2e_stop_process "$1"
-}
-
 cleanup_wizard_case() {
   { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
-  stop_gateway "${gw_pid:-}"
+  openclaw_e2e_stop_process "${gw_pid:-}"
   rm -rf "${input_fifo_dir:-}"
 }
 
@@ -153,7 +145,7 @@ run_wizard_cmd() {
   local wizard_status=0
 
   echo "== Wizard case: $case_name =="
-  set_isolated_openclaw_env "$state_ref"
+  openclaw_test_state_create "$state_ref" empty
 
   input_fifo_dir="$(mktemp -d "$ONBOARD_TMP_DIR/${case_name}.fifo.XXXXXX")"
   input_fifo="$input_fifo_dir/stdin.fifo"
@@ -179,7 +171,7 @@ run_wizard_cmd() {
   fi
 
   if [ "$with_gateway" = "true" ]; then
-    start_gateway
+    GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")"
     gw_pid="$GATEWAY_PID"
     if ! wait_for_gateway; then
       cleanup_wizard_case
@@ -218,11 +210,6 @@ assert_onboard_config() {
   shift
   openclaw_e2e_assert_file "$OPENCLAW_CONFIG_PATH"
   node scripts/e2e/lib/onboard/assert-config.mjs "$scenario" "$OPENCLAW_CONFIG_PATH" "$@"
-}
-
-set_isolated_openclaw_env() {
-  local state_ref="$1"
-  openclaw_test_state_create "$state_ref" empty
 }
 
 send_channels_flow() {
@@ -321,7 +308,7 @@ run_case_guided_skip_ui() {
   local mock_port="19091"
   local mock_log="$ONBOARD_TMP_DIR/guided-skip-ui-mock-openai.log"
   local mock_request_log="$ONBOARD_TMP_DIR/guided-skip-ui-mock-requests.jsonl"
-  set_isolated_openclaw_env guided-skip-ui
+  openclaw_test_state_create guided-skip-ui empty
   export OPENAI_API_KEY="sk-openclaw-guided-skip-ui-e2e"
   node scripts/e2e/lib/onboard/write-config.mjs \
     guided-skip-ui \
@@ -365,12 +352,11 @@ run_local_onboard() {
 }
 
 run_case_local_basic() {
-  set_isolated_openclaw_env local-basic
+  openclaw_test_state_create local-basic empty
   run_local_onboard local-basic
 
   validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"
 
-  # Assert config + workspace scaffolding.
   workspace_dir="$OPENCLAW_STATE_DIR/workspace"
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
@@ -384,7 +370,7 @@ run_case_local_basic() {
 }
 
 run_case_local_auth_refs() {
-  set_isolated_openclaw_env local-auth-refs
+  openclaw_test_state_create local-auth-refs empty
   export OPENAI_API_KEY="sk-openclaw-onboard-auth-ref-e2e"
   export OPENCLAW_GATEWAY_TOKEN="openclaw-onboard-gateway-ref-e2e"
 
@@ -402,7 +388,7 @@ run_case_local_auth_refs() {
 }
 
 run_case_local_password() {
-  set_isolated_openclaw_env local-password
+  openclaw_test_state_create local-password empty
 
   run_local_onboard local-password \
     --auth-choice skip \
@@ -414,7 +400,7 @@ run_case_local_password() {
 }
 
 run_case_multi_agent() {
-  set_isolated_openclaw_env multi-agent
+  openclaw_test_state_create multi-agent empty
   node scripts/e2e/lib/onboard/write-config.mjs multi-agent "$OPENCLAW_CONFIG_PATH"
 
   run_local_onboard multi-agent --auth-choice skip
@@ -424,8 +410,7 @@ run_case_multi_agent() {
 }
 
 run_case_remote_non_interactive() {
-  set_isolated_openclaw_env remote-non-interactive
-  # Smoke test non-interactive remote config write.
+  openclaw_test_state_create remote-non-interactive empty
   openclaw_e2e_run_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
     --mode remote \
     --remote-url ws://gateway.local:18789 \
@@ -438,7 +423,7 @@ run_case_remote_non_interactive() {
 }
 
 run_case_reset() {
-  set_isolated_openclaw_env reset-config
+  openclaw_test_state_create reset-config empty
   node scripts/e2e/lib/onboard/write-config.mjs reset "$OPENCLAW_CONFIG_PATH"
 
   run_local_onboard reset-config --reset
@@ -448,7 +433,6 @@ run_case_reset() {
 }
 
 run_case_channels() {
-  # Channels-only configure flow.
   run_wizard_cmd channels channels "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
   assert_onboard_config channels
@@ -456,7 +440,7 @@ run_case_channels() {
 
 run_case_skills() {
   local home_dir
-  set_isolated_openclaw_env skills
+  openclaw_test_state_create skills empty
   home_dir="$HOME"
   node scripts/e2e/lib/onboard/write-config.mjs skills "$OPENCLAW_CONFIG_PATH"
 

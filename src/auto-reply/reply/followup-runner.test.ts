@@ -668,7 +668,7 @@ describe("createFollowupRunner", () => {
       let continuationOpen = true;
       let openAtCleanup: boolean | undefined;
       const adoptionResults: Array<boolean | undefined> = [];
-      const adopt = vi.fn(async () => continuationOpen);
+      const adopt = vi.fn(() => continuationOpen);
       const statusPayload = setReplyPayloadMetadata(
         { text: "The worker is continuing." },
         {
@@ -682,19 +682,13 @@ describe("createFollowupRunner", () => {
         },
       );
       const decision = { kind: "deliver", payloads: [statusPayload] };
-      const receipt = {
-        channel: "discord",
-        to: "user:1",
-        messageId: "existing-card",
-        text: "The worker is continuing.",
-        snapshot: { lines: ["The worker is continuing."] },
-      };
+      const draft = { push: () => undefined, retire: () => undefined };
       turn.queued.queuedFollowupReplyDisposition = {
         kind: "deliver",
         deliver: async (batch) => {
           for (const payload of batch.payloads) {
             adoptionResults.push(
-              await getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(receipt),
+              getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(draft),
             );
           }
           if (outcome === "completion-failed") {
@@ -727,7 +721,7 @@ describe("createFollowupRunner", () => {
         },
       })(turn.queued);
 
-      await expect(adopt()).resolves.toBe(false);
+      expect(adopt()).toBe(false);
       expect(openAtCleanup).toBe(true);
       expect(adoptionResults).toEqual(
         outcome === "delivered" || outcome === "completion-failed" ? [true] : [],

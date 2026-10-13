@@ -83,14 +83,9 @@ export {
 export { buildMediaUnderstandingRegistry as buildProviderRegistry } from "./provider-registry.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type AutoModelSelectionParams = {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
+type AutoModelSelectionParams = Parameters<typeof resolveAutoImageModel>[0] & {
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
-  activeModel?: ActiveMediaModel;
 };
 /**
  * A provider registry, or a memoized factory that builds one on first use.
@@ -192,14 +187,12 @@ function resolveCatalogImageModelId(params: {
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
-async function explicitImageModelVisionStatus(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  providerId: string;
-  model: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<"supported" | "unsupported" | "unknown"> {
+async function explicitImageModelVisionStatus(
+  params: Pick<AutoModelSelectionParams, "cfg" | "agentId" | "agentDir" | "workspaceDir"> & {
+    providerId: string;
+    model: string;
+  },
+): Promise<"supported" | "unsupported" | "unknown"> {
   // Explicit model overrides should survive unknown catalog state, but known
   // text-only models must not be routed into image understanding.
   if (
@@ -226,15 +219,12 @@ async function explicitImageModelVisionStatus(params: {
   return modelSupportsVision(entry) ? "supported" : "unsupported";
 }
 
-async function resolveAutoImageModelId(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  providerId: string;
-  providerRegistry: ProviderRegistry;
-  explicitModel?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<string | undefined> {
+async function resolveAutoImageModelId(
+  params: Omit<AutoModelSelectionParams, "capability" | "activeModel"> & {
+    providerId: string;
+    explicitModel?: string;
+  },
+): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
     const explicitStatus = await explicitImageModelVisionStatus({
@@ -384,13 +374,9 @@ function hasExplicitImageUnderstandingConfig(params: {
   });
 }
 
-async function activeModelSupportsNativeVision(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  activeModel?: ActiveMediaModel;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<boolean> {
+async function activeModelSupportsNativeVision(
+  params: Omit<AutoModelSelectionParams, "capability" | "providerRegistry">,
+): Promise<boolean> {
   const activeProvider = params.activeModel?.provider?.trim();
   if (!activeProvider) {
     return false;
@@ -551,21 +537,17 @@ async function resolveAutoProviderModelEntry(
   };
 }
 
-async function runAttachmentEntries(params: {
-  capability: MediaUnderstandingCapability;
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  attachment: MediaAttachment;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
-  cache: MediaAttachmentCache;
-  entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
-  automaticAudio: boolean;
-  config?: MediaUnderstandingConfig;
-  request?: MediaRequestOverrides;
-}): Promise<{
+async function runAttachmentEntries(
+  params: Omit<
+    Parameters<typeof runProviderEntry>[0],
+    "entry" | "attachmentIndex" | "secretOwnerId"
+  > & {
+    ctx: MsgContext;
+    attachment: MediaAttachment;
+    entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
+    automaticAudio: boolean;
+  },
+): Promise<{
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
   processing: MediaAttachmentProcessing;
@@ -710,7 +692,7 @@ export async function runCapability(params: {
   const resolveNativeVisionFlag = (): Promise<boolean | undefined> => {
     nativeVisionProbe ??= activeModelSupportsNativeVision(params).catch((err: unknown) => {
       if (shouldLogVerbose()) {
-        logVerbose(`native vision support probe failed: ${String(err)}`);
+        logVerbose(`native vision support check failed: ${String(err)}`);
       }
       return undefined;
     });

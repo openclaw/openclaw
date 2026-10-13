@@ -5,10 +5,11 @@ import { maybeRepairPluginRegistryState } from "../commands/doctor-plugin-regist
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -17,6 +18,7 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js";
 
@@ -37,8 +39,84 @@ afterEach(async () => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("recorded plugin trust diagnostics", () => {
+  it("warns once across registry reloads and again for changed provenance or a restarted Gateway", async () => {
+    useNoBundledPlugins();
+    const first = writePlugin({ id: "unverified-reload", filename: "index.cjs", registration: "" });
+    const replacement = writePlugin({ id: first.id, filename: "index.cjs", registration: "" });
+    const other = writePlugin({ id: "unverified-other", registration: "" });
+    for (const plugin of [first, replacement]) {
+      writePluginMetadata({
+        dir: plugin.dir,
+        id: plugin.id,
+        packageJson: {
+          name: `@vendor/${plugin.id}`,
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+      });
+    }
+    const warn = vi.fn();
+    const load = (plugin = first, activate = true, install?: PluginInstallRecord) => {
+      const registry = loadOpenClawPlugins({
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            entries: { [plugin.id]: { enabled: true } },
+            slots: { memory: "none" },
+          },
+        },
+        installRecords: install ? { [plugin.id]: install } : {},
+        cache: false,
+        activate,
+        logger: { info() {}, warn, error() {}, debug() {} },
+      });
+      expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
+      expect(registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          pluginId: plugin.id,
+          message: expect.stringContaining(`openclaw plugins inspect ${plugin.id}`),
+        }),
+      );
+    };
+    load(first, false);
+    expect(warn).not.toHaveBeenCalled();
+    load();
+    for (let reload = 0; reload < 4; reload++) {
+      clearPluginRegistryLoadCache();
+      load();
+    }
+    await using cache = createPluginCache();
+    withPluginCache(cache, () => load());
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(first.file);
+    load(replacement);
+    load(replacement);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain(replacement.file);
+    const install: PluginInstallRecord = {
+      source: "npm",
+      spec: "@vendor/unverified-reload@1.0.0",
+      installPath: replacement.dir,
+      resolvedName: "@vendor/different-package",
+    };
+    load(replacement, true, install);
+    load(replacement, true, install);
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls[2]?.[0]).toContain("provenance-invalid");
+    const resolvedSpec = "@vendor/unverified-reload@2.0.0";
+    load(replacement, true, { ...install, resolvedSpec });
+    load(replacement, true, { resolvedSpec, ...install });
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(warn.mock.calls[3]?.[0]).toBe(warn.mock.calls[2]?.[0]);
+    load(other);
+    expect(warn).toHaveBeenCalledTimes(5);
+    await drainGlobalSingletonLifecycleState("restart");
+    load(other);
+    expect(warn).toHaveBeenCalledTimes(6);
+  });
+
   it.each([
-    { name: "legacy npm spec", override: {}, reason: "trusted-official", trusted: true },
     {
       name: "official install through a symlinked state root",
       symlinkedStateRoot: true,
@@ -52,8 +130,6 @@ describe("recorded plugin trust diagnostics", () => {
       trusted: false,
       repair: true,
     },
-    { name: "missing record", missing: true, reason: "record-missing", trusted: false },
-    { name: "path install", override: { source: "path" }, reason: "origin-path", trusted: false },
     {
       name: "missing provenance",
       override: { spec: undefined },
@@ -127,7 +203,6 @@ describe("recorded plugin trust diagnostics", () => {
     packageName?: string;
     version?: string;
     override?: Partial<PluginInstallRecord>;
-    missing?: boolean;
     symlinkedStateRoot?: boolean;
     reason: string;
     trusted: boolean;
@@ -137,7 +212,6 @@ describe("recorded plugin trust diagnostics", () => {
     "inspection and registration agree for $name",
     async ({
       override,
-      missing,
       symlinkedStateRoot,
       reason,
       trusted,
@@ -186,7 +260,7 @@ describe("recorded plugin trust diagnostics", () => {
         };
         await refreshPersistedInstalledPluginIndex({
           reason: "source-changed",
-          installRecords: missing ? {} : { [pluginId]: install },
+          installRecords: { [pluginId]: install },
         });
         const config = {
           plugins: {

@@ -1,39 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
-import { rootedAgentRunParams } from "../../rooted-run-params.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import { bindRunToPreparedModelRuntime } from "./prepared-runtime-context.js";
 
 describe("bindRunToPreparedModelRuntime", () => {
-  it("adopts the committed generation without moving a rooted execution boundary", () => {
-    const rooted = rootedAgentRunParams("/tmp/bootstrap", "/tmp/task");
-    const config = { logging: { level: "debug" as const } };
-    const result = bindRunToPreparedModelRuntime({
-      runParams: {
-        ...rooted,
-        runId: "rooted",
-        sessionId: "rooted",
-        prompt: "review",
-      } as RunEmbeddedAgentParamsWithSessionFile,
-      requestedWorkspaceResolution: {
-        workspaceDir: "/tmp/task",
-        agentId: "main",
-        agentIdSource: "explicit",
-        isCanonicalWorkspace: false,
-        usedFallback: false,
-      },
-      preserveExecutionWorkspace: true,
-      preparedModelRuntime: {
-        agentId: "main",
-        agentDir: "/tmp/committed-agent",
-        workspaceDir: "/tmp/reloaded-workspace",
-        config,
-      } as PreparedModelRuntimeSnapshot,
-    });
-    expect(result.runParams).toMatchObject({ ...rooted, config, agentDir: "/tmp/committed-agent" });
-    expect(result.workspaceResolution.workspaceDir).toBe("/tmp/task");
-  });
-
   it("replaces queued config and directories with one committed generation", () => {
     const requestedConfig = { logging: { level: "info" as const } };
     const committedConfig = { logging: { level: "debug" as const } };

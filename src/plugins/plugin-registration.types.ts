@@ -400,6 +400,12 @@ export type OpenClawPluginServiceContext = {
   internalDiagnostics?: {
     /** Identity of the hosting process, available only while this service is active. */
     getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
+    /** Current owner-projected work; undefined while the Gateway projection is unavailable. */
+    onGatewayWorkMetrics?: (
+      listener: (
+        snapshot: import("../infra/gateway-work-metrics.js").GatewayWorkMetricsSnapshot | undefined,
+      ) => void,
+    ) => () => void;
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (

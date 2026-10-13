@@ -27,16 +27,6 @@ const BIDI_CONTROL_GLOBAL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
-/** Keep routing/provider/profile details in session state, not the compact footer. */
-function formatModelFooter(params: {
-  model?: string | null;
-  thinkingLevel?: string | null;
-}): string {
-  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
-  const thinkingLevel = params.thinkingLevel?.trim();
-  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
-}
-
 /** Format the compact TUI footer from authoritative session and process state. */
 export function formatTuiFooter(params: {
   agentLabel: string;
@@ -46,6 +36,9 @@ export function formatTuiFooter(params: {
   deliver: boolean;
 }): string {
   const { sessionInfo } = params;
+  // Keep routing/provider/profile details in session state, not the compact footer.
+  const model = splitTrailingAuthProfile(sessionInfo.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
   const fastLabel =
     sessionInfo.fastMode === "auto" || sessionInfo.fastMode === "ultrafast"
       ? `fast:${sessionInfo.fastMode}`
@@ -61,7 +54,7 @@ export function formatTuiFooter(params: {
   const footer = [
     `agent ${params.agentLabel}`,
     `session ${params.sessionLabel}`,
-    formatModelFooter({ model: sessionInfo.model, thinkingLevel: params.thinkingLevel }),
+    thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model,
     formatGoalFooter(sessionInfo.goal),
     fastLabel,
     verbose !== "off" ? `verbose ${verbose}` : null,
@@ -76,9 +69,7 @@ export function formatTuiFooter(params: {
 }
 
 export function sanitizeTerminalControlsAndBinary(text: string): string {
-  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
-  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = withoutAnsi.replace(RENDER_CONTROL_CHARS_RE, "");
+  const withoutControlChars = stripAnsi(text).replace(RENDER_CONTROL_CHARS_RE, "");
   const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
     ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
     : withoutControlChars;
@@ -339,16 +330,6 @@ export function extractContentFromMessage(message: unknown): string {
   return formatAssistantErrorFromRecord(record);
 }
 
-function extractAssistantRenderableContent(record: Record<string, unknown>): string {
-  const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
-  const pairingQr = extractPairingQrTerminalText(record);
-  const content = [visible, pairingQr].filter(Boolean).join("\n\n");
-  if (content) {
-    return content;
-  }
-  return formatAssistantErrorFromRecord(record);
-}
-
 function extractPairingQrTerminalText(record: Record<string, unknown>): string {
   return collectBlockStrings(record.content, "openclaw_pairing_qr", "terminalText")
     .map((text) => sanitizeRenderableText(text).trim())
@@ -413,7 +394,10 @@ export function extractTextFromMessage(
     return "";
   }
   if (record.role === "assistant") {
-    const contentText = extractAssistantRenderableContent(record);
+    const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
+    const pairingQr = extractPairingQrTerminalText(record);
+    const contentText =
+      [visible, pairingQr].filter(Boolean).join("\n\n") || formatAssistantErrorFromRecord(record);
     return composeThinkingAndContent({
       // History is stateless; the stream assembler retains hidden thinking for later toggles.
       thinkingText: opts?.includeThinking ? extractThinkingFromMessage(record) : "",
@@ -452,9 +436,6 @@ export function isCommandMarkedMessage(message: unknown): boolean {
 }
 
 function formatTokens(total?: number | null, context?: number | null) {
-  if (total == null && context == null) {
-    return "tokens ?";
-  }
   const totalLabel = total == null ? "?" : formatTokenCount(total);
   if (context == null) {
     return `tokens ${totalLabel}`;
@@ -466,18 +447,16 @@ function formatTokens(total?: number | null, context?: number | null) {
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
-function formatGoalUsage(goal: SessionGoal): string | null {
-  if (goal.tokenBudget === undefined) {
-    return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
-  }
-  return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-}
-
 function formatGoalFooter(goal?: SessionGoal): string | null {
   if (!goal) {
     return null;
   }
-  const usage = formatGoalUsage(goal);
+  const usage =
+    goal.tokenBudget === undefined
+      ? goal.tokensUsed > 0
+        ? formatTokenCount(goal.tokensUsed)
+        : null
+      : `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
   const suffix = usage ? ` (${usage})` : "";
   switch (goal.status) {
     case "active":
@@ -513,10 +492,7 @@ export function formatContextUsageLine(params: {
 }
 
 export function formatPrimitiveString(value: unknown, fallback = ""): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   return fallback;

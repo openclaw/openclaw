@@ -14,13 +14,6 @@ type MemoryWikiImportRunSummary = Omit<
   samplePaths: string[];
 };
 
-type MemoryWikiImportRunsStatus = {
-  runs: MemoryWikiImportRunSummary[];
-  totalRuns: number;
-  activeRuns: number;
-  rolledBackRuns: number;
-};
-
 function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRunSummary {
   const { version: _version, createdPaths, updatedPaths, ...metadata } = record;
   const pagePaths = uniqueStrings([...createdPaths, ...updatedPaths].map((entry) => entry.path));
@@ -37,7 +30,7 @@ function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRun
 export async function listMemoryWikiImportRuns(
   config: ResolvedMemoryWikiConfig,
   options?: { limit?: number },
-): Promise<MemoryWikiImportRunsStatus> {
+) {
   const limit = Math.max(1, Math.floor(options?.limit ?? 10));
   const runs = (await getMemoryWikiImportRunStateStore().list(config.vault.path))
     .map(toImportRunSummary)

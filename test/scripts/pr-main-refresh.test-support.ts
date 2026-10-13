@@ -283,15 +283,6 @@ export function createMainRefreshFixture(
     requiredCheckRows: undefined as
       | Array<{ name: string; bucket: string; state: string }>
       | undefined,
-    reviewComments: [
-      {
-        id: 1,
-        body: `<!-- clawsweeper-review-version item=42 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
-
-<!-- clawsweeper-review item=42 -->`,
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-      },
-    ],
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
@@ -451,8 +442,11 @@ if (repositoryLocatorRequest) {
   console.log(JSON.stringify({ full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' }));
   process.exit(0);
 }
+const repositoryAuthorityArgs = ['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'];
+const repositoryAuthorityRequests = [repositoryAuthorityArgs,
+  [...repositoryAuthorityArgs, '-H', 'X-GitHub-Api-Version: 2026-03-10']];
 if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
-    JSON.stringify(args.filter(arg => arg !== '--include')) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+    !repositoryAuthorityRequests.some(expected => JSON.stringify(args.filter(arg => arg !== '--include')) === JSON.stringify(expected))) {
   throw new Error('Unexpected authoritative repository request');
 }
 let value;
@@ -610,8 +604,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
     if (args.includes('POST')) {
       value = { html_url: 'https://example.invalid/pr/42#completion' };
     } else {
-      event({ kind: 'review-comments' });
-      value = [control.reviewComments];
+      value = [[]];
     }
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number + '/files?per_page=100') {
     value = [control.metadata.files.map(file => ({
@@ -791,12 +784,12 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
       writeFileSync(join(local, "prep.md"), "Prepared synthetic merge fixture.\n");
     },
     configure(update: Partial<typeof control>) {
-      Object.assign(control, update);
+      const next = { ...JSON.parse(readFileSync(controlFile, "utf8")), ...update };
       env.NODE_OPTIONS =
-        control.hostedCi === "scheduled"
+        next.hostedCi === "scheduled"
           ? privateNodeOptions
           : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
-      writeFileSync(controlFile, JSON.stringify(control));
+      writeFileSync(controlFile, JSON.stringify(next));
     },
     events() {
       return readFileSync(eventsFile, "utf8")

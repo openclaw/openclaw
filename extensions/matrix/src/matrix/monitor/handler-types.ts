@@ -15,6 +15,7 @@ import type {
   resolveMatrixMonitorLiveUserAllowlist,
   MatrixResolvedAllowlistEntry,
 } from "./config.js";
+import type { createDirectRoomTracker } from "./direct.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
 export type MatrixMonitorHandlerParams = {
@@ -50,13 +51,7 @@ export type MatrixMonitorHandlerParams = {
   startupMs: number;
   dropPreStartupMessages: boolean;
   inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
-  directTracker: {
-    isDirectMessage: (params: {
-      roomId: string;
-      senderId: string;
-      selfUserId: string;
-    }) => Promise<boolean>;
-  };
+  directTracker: Pick<ReturnType<typeof createDirectRoomTracker>, "isDirectMessage">;
   getRoomInfo: (
     roomId: string,
     opts?: { includeAliases?: boolean },

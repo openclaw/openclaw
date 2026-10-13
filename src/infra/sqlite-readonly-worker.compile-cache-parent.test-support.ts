@@ -5,15 +5,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
-import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
-import {
-  prepareSqliteReadOnlyLocation,
-  prepareSqliteReadOnlyLocationSync,
-} from "./sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 
-const [root, mode] = process.argv.slice(2);
+const [root] = process.argv.slice(2);
 assert.ok(root, "SQLite compile-cache fixture requires its temporary directory");
-assert.ok(mode === "sync" || mode === "async" || mode === "scoped");
 const installRoot = path.join(root, "installed");
 fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
@@ -54,18 +49,9 @@ try {
   database.close();
 }
 const before = fs.readFileSync(source);
-const prepared =
-  mode === "sync"
-    ? prepareSqliteReadOnlyLocationSync(source)
-    : mode === "scoped"
-      ? await withSqliteReadOnlyWorkerScope(() =>
-          prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
-        )
-      : await prepareSqliteReadOnlyLocation(source);
+const prepared = prepareSqliteReadOnlyLocationSync(source);
 try {
-  if (mode === "sync") {
-    assert.deepEqual(fs.readFileSync(prepared.location), before);
-  }
+  assert.deepEqual(fs.readFileSync(prepared.location), before);
   const snapshot = new DatabaseSync(prepared.location, { readOnly: true });
   try {
     assert.deepEqual(

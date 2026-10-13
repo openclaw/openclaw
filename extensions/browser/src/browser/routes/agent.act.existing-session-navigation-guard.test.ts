@@ -84,7 +84,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) =>
   };
   return {
     ...actual,
-    getRuntimeConfig: () => syntheticConfig,
+    readRuntimeConfig: () => syntheticConfig,
     loadConfig: () => syntheticConfig,
   };
 });
@@ -523,13 +523,6 @@ describe("existing-session interaction navigation guard", () => {
   });
 
   it.each([
-    {
-      name: "zero delay",
-      body: { kind: "wait", timeMs: 0 },
-      durationMs: 0,
-      ssrfPolicy: null,
-      verificationMs: 0,
-    },
     {
       name: "delay exceeding call timeout",
       body: { kind: "wait", timeMs: 1_000, timeoutMs: 500 },

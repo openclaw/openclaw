@@ -22,14 +22,12 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { resolveSystemMainSessionTarget, type SessionEntry } from "../config/sessions.js";
-import {
-  applySessionEntryLifecycleMutation,
-  listSessionEntriesCore,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.lifecycle.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { SessionOrigin } from "../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
@@ -60,7 +58,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerOptions } from "./server.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
-import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
+import { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
@@ -327,7 +325,7 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
-function resetGatewayMutableTestFixtures(): void {
+function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testTailscaleWhois.calls.length = 0;
@@ -346,13 +344,13 @@ function resetGatewayMutableTestFixtures(): void {
   testState.cronTriggersEnabled = undefined;
   testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
-  testState.sessionStorePath = undefined;
+  testState.sessionStorePath = sessionStorePath;
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   testState.bindingsConfig = undefined;
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
-  lastSyncedSessionStorePath = testState.sessionStorePath;
+  lastSyncedSessionStorePath = undefined;
   lastSyncedSessionConfigJson = undefined;
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
@@ -482,7 +480,9 @@ async function resetGatewayTestRuntimeOnly() {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  resetGatewayMutableTestFixtures();
+  // A suite fixture owns this physical store until its explicit disposal.
+  // Publishing a temporary default would revoke its retained execution owner.
+  resetGatewayMutableTestFixtures(testState.sessionStorePath);
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   resetSystemEventsForTest();

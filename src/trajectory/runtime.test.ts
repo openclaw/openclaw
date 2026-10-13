@@ -8,6 +8,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -37,6 +38,15 @@ type TrajectoryRuntimeRecorder = NonNullable<
 >;
 
 const tempDirs = createTempDirTracker();
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "reject_trajectory_append",
+    match: /^insert into trajectory_runtime_events\b/u,
+    sql: `CREATE TEMP TRIGGER reject_trajectory_append BEFORE INSERT ON main.trajectory_runtime_events
+      BEGIN SELECT RAISE(ABORT, 'synthetic SQLite persistence failure'); END;`,
+  },
+]);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -74,7 +84,7 @@ function createCapturedRuntimeRecorder(
 }
 
 describe("trajectory runtime", () => {
-  it("records sanitized runtime events by default", async () => {
+  it("records runtime payloads without credential masking by default", async () => {
     const writes: string[] = [];
     const recorder = await createCapturedRuntimeRecorder(writes, {
       sessionId: "session-1",
@@ -109,10 +119,10 @@ describe("trajectory runtime", () => {
       { name: "a-tool", description: "alpha", parameters: { a: 1 } },
       { name: "z-tool", parameters: { z: 1 } },
     ]);
-    expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
-    expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(JSON.stringify(parsed.data)).toContain("sk-test-secret-token");
+    expect(JSON.stringify(parsed.data)).toContain("sk-other-secret-token");
+    expect(JSON.stringify(parsed.data)).toContain("ya29.fake-access-token");
+    expect(JSON.stringify(parsed.data)).toContain("abcd-efgh-ijkl-mnop");
   });
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
@@ -185,16 +195,12 @@ describe("trajectory runtime", () => {
     recorder.recordEvent("already-persisted");
     await recorder.flush();
     recorder.recordEvent("before-failure");
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(target)));
-    database.db.exec(`
-      CREATE TRIGGER reject_trajectory_append BEFORE INSERT ON trajectory_runtime_events
-      BEGIN SELECT RAISE(ABORT, 'synthetic SQLite persistence failure'); END
-    `);
+    fault.enable();
     try {
       await expect(recorder.flush()).rejects.toThrow("synthetic SQLite persistence failure");
       expect(recorder.describeFlushState()).toContain("pendingRows=1");
     } finally {
-      database.db.exec("DROP TRIGGER reject_trajectory_append");
+      fault.disable();
     }
     recorder.recordEvent("after-failure");
     await recorder.flush();
@@ -726,7 +732,7 @@ describe("trajectory runtime", () => {
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);
   });
 
-  it("redacts secrets before preserving usage in truncated runtime events", async () => {
+  it("preserves usage text in truncated runtime events", async () => {
     const writes: string[] = [];
     const recorder = await createCapturedRuntimeRecorder(writes);
 
@@ -748,10 +754,9 @@ describe("trajectory runtime", () => {
     const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     const preservedUsage = JSON.stringify(parsed.data.usage);
     expect(parsed.data.truncated).toBe(true);
-    expect(preservedUsage).toContain("redacted");
-    expect(preservedUsage).not.toContain("sk-inline-secret-token");
-    expect(preservedUsage).not.toContain("sk-test-secret-token");
-    expect(preservedUsage).not.toContain("sk-other-secret-token");
+    expect(preservedUsage).toContain("sk-inline-secret-token");
+    expect(preservedUsage).toContain("sk-test-secret-token");
+    expect(preservedUsage).toContain("sk-other-secret-token");
   });
 
   it("does not record runtime events when explicitly disabled", async () => {

@@ -229,7 +229,7 @@ describe("firecrawl tools", () => {
     const recovered = await runActualFirecrawlScrape(params);
 
     expect(recovered.status).toBe(200);
-    expect(recovered.cached).toBeUndefined();
+    expect(recovered).not.toHaveProperty("cached");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -328,7 +328,7 @@ describe("firecrawl tools", () => {
           : await runActualFirecrawlScrape(scrapeParams);
       if (operation === "search") {
         expect(retry).toMatchObject({ results: [{ url: "https://fresh.example/result" }] });
-        expect(retry.cached).toBeUndefined();
+        expect(retry).not.toHaveProperty("cached");
       } else {
         expect(retry).toMatchObject({ status: 200 });
         expect(retry.text).toContain("fresh scrape result");
@@ -423,7 +423,7 @@ describe("firecrawl tools", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(String(result.text).length).toBeLessThan(50_200);
+    expect(result.text.length).toBeLessThan(50_200);
     expect(String(result.title).length + String(result.warning).length).toBeLessThan(4_300);
     expect(JSON.stringify(result)).not.toContain("<s>");
   });
@@ -442,7 +442,7 @@ describe("firecrawl tools", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(String(result.text).length).toBeLessThan(1_500);
+    expect(result.text.length).toBeLessThan(1_500);
   });
 
   it("normalizes Firecrawl authorization headers before requests", async () => {

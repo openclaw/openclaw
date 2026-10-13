@@ -100,7 +100,7 @@ openclaw models status --agent mail_reader --check --probe --probe-provider open
 openclaw agent --agent mail_reader --message "Reply exactly MAIL_READER_OK" --json
 ```
 
-Use the matching provider id when you choose a different model. The live probe checks the provider credential; the agent turn proves the selected model, runtime, sandbox, and effective tool policy can complete a real reader run. Do not continue until both succeed.
+Use the matching provider id when you choose a different model. The live check verifies the provider credential; the agent turn proves the selected model, runtime, sandbox, and effective tool policy can complete a real reader run. Do not continue until both succeed.
 
 ### Connect Gmail transport
 

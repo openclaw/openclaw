@@ -353,7 +353,7 @@ it.each(
     expect(starts.at(-1)).toBe("manual");
   },
 );
-it("channel reload uses the attached registry while another Gateway is active", async () => {
+it("channel reload uses the attached registry instead of the process lookup", async () => {
   const monitors: Array<{
     owner: string;
     channelId: ChannelKind;
@@ -388,7 +388,6 @@ it("channel reload uses the attached registry while another Gateway is active", 
   const current = createRegistry("A-current", ownedIds);
   const foreign = createRegistry("B", ["collision", "foreign-only"]);
   const registryOwnerA = createPluginRegistryOwner(attached);
-  const registryOwnerB = createPluginRegistryOwner(foreign);
   const ownerA = createChannelManager({
     scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => ({}),
@@ -465,7 +464,6 @@ it("channel reload uses the attached registry while another Gateway is active", 
       }
     }
     await registryOwnerA.close();
-    await registryOwnerB.close();
     expect(monitors.every(({ abortSignal, joined }) => abortSignal.aborted && joined)).toBe(true);
   }
 });

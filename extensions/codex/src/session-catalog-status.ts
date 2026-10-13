@@ -1,11 +1,11 @@
-import { CodexCatalogField, type CodexCatalogStatus } from "./session-catalog-index-field.js";
+import {
+  CodexCatalogLiveField,
+  type CodexCatalogSourcedValue,
+  type CodexCatalogStatus,
+} from "./session-catalog-index-field.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import type { CodexCatalogSettings } from "./session-catalog-settings.js";
-import {
-  getCodexCatalogSource,
-  hasLiveCodexCatalogSource,
-  type CodexCatalogSource,
-} from "./session-catalog-source.js";
+import { getCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
 export function applyCodexCatalogLiveFields(
@@ -21,17 +21,10 @@ export function applyCodexCatalogLiveFields(
   };
 }
 
-type SourcedStatus = { status: CodexCatalogStatus; sources: Set<CodexCatalogSource> };
 const MAX_STATUS_SOURCE_WITNESSES = 64;
 
 /** Equivalent broadcasts retain at most 64 source witnesses for each bounded resident row. */
-export class CodexCatalogStatusIndex {
-  private readonly values = new CodexCatalogField<SourcedStatus>();
-
-  capture(): number {
-    return this.values.capture();
-  }
-
+export class CodexCatalogStatusIndex extends CodexCatalogLiveField<CodexCatalogStatus> {
   update(threadId: string, status: CodexCatalogStatus, source: CodexCatalogSource): void {
     const next = this.next(threadId, status, source);
     if (next) {
@@ -39,7 +32,7 @@ export class CodexCatalogStatusIndex {
     }
   }
 
-  observe(row: CodexCatalogIndexRow, revision: number): void {
+  observe(row: CodexCatalogIndexRow): void {
     const session = row.page.sessions[0];
     const source = getCodexCatalogSource(row);
     if (session && source) {
@@ -52,36 +45,16 @@ export class CodexCatalogStatusIndex {
         source,
       );
       if (next) {
-        this.values.observe(row.threadId, next, revision);
+        this.values.update(row.threadId, next);
       }
     }
-  }
-
-  get(threadId: string): CodexCatalogStatus | undefined {
-    const current = this.values.get(threadId);
-    return current && hasLiveCodexCatalogSource(current.sources) ? current.status : undefined;
-  }
-
-  delete(threadId: string): void {
-    this.values.delete(threadId);
-  }
-
-  invalidate(source?: CodexCatalogSource): void {
-    if (!source) {
-      this.values.invalidate();
-      return;
-    }
-    this.values.deleteWhere((entry) => {
-      entry.sources.delete(source);
-      return !hasLiveCodexCatalogSource(entry.sources);
-    });
   }
 
   private next(
     threadId: string,
     status: CodexCatalogStatus,
     source: CodexCatalogSource,
-  ): SourcedStatus | undefined {
+  ): CodexCatalogSourcedValue<CodexCatalogStatus> | undefined {
     if (source.closed) {
       return undefined;
     }
@@ -90,27 +63,26 @@ export class CodexCatalogStatusIndex {
     if (
       status.status === "notLoaded" &&
       current &&
-      current.status.status !== "notLoaded" &&
+      current.value.status !== "notLoaded" &&
       sources.size
     ) {
-      // An unobserved source's withdrawal still fences its older pending reads.
       sources.delete(source);
       if (sources.size) {
-        return { status: current.status, sources };
+        return { value: current.value, sources };
       }
     }
     const flags = status.activeFlags ?? [];
-    const previousFlags = current?.status.activeFlags ?? [];
+    const previousFlags = current?.value.activeFlags ?? [];
     if (
-      current?.status.status === status.status &&
+      current?.value.status === status.status &&
       flags.length === previousFlags.length &&
       flags.every((flag, index) => flag === previousFlags[index])
     ) {
       if (sources.size < MAX_STATUS_SOURCE_WITNESSES) {
         sources.add(source);
       }
-      return { status, sources };
+      return { value: status, sources };
     }
-    return { status, sources: new Set([source]) };
+    return { value: status, sources: new Set([source]) };
   }
 }

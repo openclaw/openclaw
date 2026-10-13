@@ -131,7 +131,8 @@ describe("prepared model runtime scoped refresh", () => {
         runtimeId: "openclaw",
         api: "openai-responses",
         baseUrl: "https://synthetic.example/v1",
-        serviceTiers: ["priority"],
+        requestedTier: "ultrafast",
+        responseTier: "priority",
       };
       const recordChanged = accounts.prepareServiceTierObserver({
         selectedCredential: {
@@ -163,21 +164,30 @@ describe("prepared model runtime scoped refresh", () => {
       };
       await refresh(authStore);
       expect(
-        accounts.readServiceTiers({ ...observation, identityKey: "profile:demo:changed" }),
-      ).toEqual(["priority"]);
+        accounts.readServiceTierObservation({
+          ...observation,
+          identityKey: "profile:demo:changed",
+        }),
+      ).toEqual({ requestedTier: "ultrafast", responseTier: "priority" });
       await refresh({
         version: 1,
         profiles: { "demo:changed": { ...credential, key: "synthetic-replacement" } },
       });
       for (const profileId of ["demo:changed", "demo:removed"]) {
         expect(
-          accounts.readServiceTiers({ ...observation, identityKey: `profile:${profileId}` }),
+          accounts.readServiceTierObservation({
+            ...observation,
+            identityKey: `profile:${profileId}`,
+          }),
         ).toBeUndefined();
       }
       for (const profileId of ["other:retained", personalId]) {
         expect(
-          accounts.readServiceTiers({ ...observation, identityKey: `profile:${profileId}` }),
-        ).toEqual(["priority"]);
+          accounts.readServiceTierObservation({
+            ...observation,
+            identityKey: `profile:${profileId}`,
+          }),
+        ).toEqual({ requestedTier: "ultrafast", responseTier: "priority" });
       }
       expect(recordChanged({ ...observation, modelId: "next-model" })).toBe(false);
       expect(owner.isCurrent()).toBe(true);
@@ -441,7 +451,7 @@ describe("prepared model runtime scoped refresh", () => {
     },
   );
 
-  it("carries completed discovery across scoped hot reload without rediscovery", async () => {
+  it("retains compatible discovery and reacquires it after credentials change", async () => {
     mocks.configuredAgentIds = ["pro"];
     const credential = { type: "api_key" as const, key: "discovered-provider-key" };
     mocks.preparedAuthStore = {
@@ -520,11 +530,48 @@ describe("prepared model runtime scoped refresh", () => {
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
     mocks.preparedAuthStore = { version: 1, profiles: {} };
     mocks.authStorage.getAll.mockReturnValue({});
+    serveCatalog(makeCatalog());
     mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+    await gatewayCatalog(currentConfig);
+    await getPreparedModelRuntimeSnapshot(input)!.loadFullModelCatalog!({ changedOnly: true });
     const afterAuth = await gatewayCatalog(currentConfig);
     expect(afterAuth.entries).not.toContainEqual(discovered);
     expect(afterAuth.authModes).not.toHaveProperty("discovered-provider");
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 2);
+  });
+
+  it("acquires full inventory at a cold start and keeps a retained reload scoped", async () => {
+    mocks.configuredAgentIds = ["pro"];
+    mocks.authStorage.getAll.mockReturnValue({
+      demo: { type: "api_key", key: "startup-synthetic-credential" },
+    });
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const learned = { provider: "demo", id: "learned", name: "Learned" };
+    // Discovered by full acquisition only: neither configured nor credentialed.
+    const unrelated = { provider: "unrelated", id: "found", name: "Found" };
+    serveCatalog(makeCatalog([learned, unrelated]));
+    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+
+    await refreshPreparedModelRuntimeSnapshots(config, options);
+    const startup = getPreparedModelRuntimeSnapshot(ownerInput(config))!;
+    await vi.waitFor(() =>
+      expect(startup.readFullModelCatalog!()?.entries).toContainEqual(
+        expect.objectContaining(unrelated),
+      ),
+    );
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
+
+    mocks.authStorage.getAll.mockReturnValue({
+      demo: { type: "api_key", key: "replacement-synthetic-credential" },
+    });
+    await refreshPreparedModelRuntimeSnapshots(config, options);
+    await vi.waitFor(() =>
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenLastCalledWith(["demo"]),
+    );
+    const reloaded = getPreparedModelRuntimeSnapshot(ownerInput(config))!;
+    expect(reloaded.readFullModelCatalog!()?.entries).toContainEqual(
+      expect.objectContaining(unrelated),
+    );
   });
 
   it.each(["endpoint", "plugin", "prepared-credential"] as const)(
@@ -547,8 +594,10 @@ describe("prepared model runtime scoped refresh", () => {
         },
       };
       const learned = { provider: "demo", id: "learned", name: "Learned" };
+      // Discovered by full acquisition only: neither configured nor credentialed.
+      const unrelated = { provider: "unrelated", id: "found", name: "Found" };
       serveCatalog(
-        makeCatalog([...buildConfiguredModelCatalog({ cfg: config }), learned], {
+        makeCatalog([...buildConfiguredModelCatalog({ cfg: config }), learned, unrelated], {
           routeVariants: [learned],
         }),
       );
@@ -583,10 +632,15 @@ describe("prepared model runtime scoped refresh", () => {
           });
         }
         await refreshPreparedModelRuntimeSnapshots(nextConfig, options);
-        expect(
+        const entries =
           getPreparedModelRuntimeSnapshot({ ...input, config: nextConfig })!.readFullModelCatalog!()
-            ?.entries ?? [],
-        ).not.toContainEqual(expect.objectContaining(learned));
+            ?.entries ?? [];
+        expect(entries).not.toContainEqual(expect.objectContaining(learned));
+        if (change === "plugin") {
+          expect(entries).not.toContainEqual(expect.objectContaining(unrelated));
+        } else {
+          expect(entries).toContainEqual(expect.objectContaining(unrelated));
+        }
       } finally {
         mocks.pluginMetadataSnapshot.index = originalIndex;
       }

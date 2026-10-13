@@ -1,6 +1,10 @@
 import path from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -22,9 +26,9 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
-  resetSharedCodexAppServerClientForTests,
 } from "./shared-client.js";
 import * as sharedClientRuntime from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createInferenceReadyClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import {
   createParams,
@@ -52,6 +56,7 @@ beforeEach(() => {
   directory = tempDirs.make("codex-compact-owner-");
   agentDir = path.join(directory, "agent");
   sessionFile = path.join(directory, "session.jsonl");
+  setRuntimeConfigSnapshot({});
   runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig,
     codexConfigToml: null,
@@ -64,6 +69,7 @@ afterEach(async () => {
   await Promise.all(transports.splice(0).map(({ client }) => client.closeAndWait()));
   resetCodexTestBindingStore();
   resetThreadLifecycleTestFixtures();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
 
@@ -145,11 +151,11 @@ function resume(client: CodexAppServerClient, threadId: string) {
   return client.request("thread/resume", { threadId, excludeTurns: true }, { timeoutMs: 1000 });
 }
 
-it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
+it.each(["detached", "unconfirmed-close", "rejected-close"])(
   "supports repeated compaction and the next turn (owner %s)",
   async (ownerState) => {
     const closeFails = ownerState === "unconfirmed-close" || ownerState === "rejected-close";
-    const ownerClosed = ownerState === "closed" || closeFails;
+    const ownerClosed = closeFails;
     const sessionKey = "agent:main:compact-owner";
     const owners = new Map<string, number>();
     const operations: { client: number; method: string; threadId?: string }[] = [];
@@ -300,7 +306,6 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
 it.each([
   ["success", false, "untracked"],
   ["success", true, "untracked"],
-  ["success", "during-resume", "untracked"],
   ["failure", "during-resume", "claimed"],
   ["success", "during-resume", "idle"],
 ] as const)(

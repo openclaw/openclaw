@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAuditCore } from "../security/audit.js";
@@ -80,12 +80,12 @@ export function registerSecurityCli(program: Command) {
           ["openclaw security audit", "Run a local security audit."],
           [
             "openclaw security audit --deep",
-            "Include best-effort live Gateway probes and plugin-owned security audit collectors.",
+            "Include best-effort live Gateway checks and plugin-owned security audit collectors.",
           ],
-          ["openclaw security audit --deep --token <token>", "Use explicit token for deep probe."],
+          ["openclaw security audit --deep --token <token>", "Use explicit token for deep check."],
           [
             "openclaw security audit --deep --password <password>",
-            "Use explicit password for deep probe.",
+            "Use explicit password for deep check.",
           ],
           [
             "openclaw security audit --auth password --password <password>",
@@ -99,13 +99,13 @@ export function registerSecurityCli(program: Command) {
   security
     .command("audit")
     .description("Audit config + local state for common security foot-guns")
-    .option("--deep", "Attempt live Gateway probes and plugin-owned collector checks", false)
+    .option("--deep", "Attempt live Gateway checks and plugin-owned collector checks", false)
     .option(
       "--auth <mode>",
       'Runtime gateway auth mode ("none"|"token"|"password"|"trusted-proxy")',
     )
-    .option("--token <token>", "Use explicit gateway token for deep probe auth")
-    .option("--password <password>", "Use explicit gateway password for deep probe auth")
+    .option("--token <token>", "Use explicit gateway token for deep check auth")
+    .option("--password <password>", "Use explicit gateway password for deep check auth")
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
@@ -119,7 +119,7 @@ export function registerSecurityCli(program: Command) {
       });
       const fixResult = opts.fix ? await fixSecurityFootguns() : null;
 
-      const sourceConfig = getRuntimeConfig();
+      const sourceConfig = await captureRuntimeConfigAsyncReader()();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
         await resolveCommandSecretRefsViaGateway({
           config: sourceConfig,

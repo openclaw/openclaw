@@ -16,11 +16,7 @@ import { hasUsableOAuthCredential } from "./credential-state.js";
 import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import { hasOAuthIdentity, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import { normalizeRawCredentialEntry } from "./persisted-credential.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  removePersonalAuthProfileReferences,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
+import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import {
   inspectAuthProfileJsonCellReadOnly,
   readPersistedAuthProfileStateRaw,
@@ -48,14 +44,6 @@ type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider"
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-function isRetainedUsageStatsId(
-  profileId: string,
-  profiles: AuthProfileStore["profiles"],
-): boolean {
-  return Boolean(profiles[profileId]) || profileId.startsWith(INLINE_API_KEY_USAGE_ID_PREFIX);
-}
 
 function parseCredentialEntry(
   raw: unknown,
@@ -68,16 +56,17 @@ function parseCredentialEntry(
   if (!typed) {
     return { ok: false, reason: "invalid_type" };
   }
-  const provider = typed.provider || fallbackProvider;
-  const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
-  if (!normalizedProvider) {
+  const provider =
+    typed.provider ||
+    (typeof fallbackProvider === "string" ? normalizeProviderId(fallbackProvider) : "");
+  if (!provider) {
     return { ok: false, reason: "missing_provider" };
   }
   return {
     ok: true,
     credential: {
       ...typed,
-      provider: normalizedProvider,
+      provider,
     } as AuthProfileCredential,
   };
 }
@@ -193,17 +182,6 @@ function findOrderEntryKey(
   providerKey: string,
 ): string | undefined {
   return Object.keys(order ?? {}).find((key) => normalizeProviderId(key) === providerKey);
-}
-
-function mergeProfileRecordsWithOverridePrecedence(
-  base: AuthProfileStore["profiles"],
-  override: AuthProfileStore["profiles"],
-): AuthProfileStore["profiles"] {
-  const overrideProfileIds = new Set(Object.keys(override));
-  return Object.fromEntries([
-    ...Object.entries(override),
-    ...Object.entries(base).filter(([profileId]) => !overrideProfileIds.has(profileId)),
-  ]);
 }
 
 function mergeProfileOrderWithOverridePrecedence(params: {
@@ -404,18 +382,10 @@ function replaceMergedProfileReferences(params: {
   const next = {
     ...store,
     profiles,
-    ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
-    ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
-    ...(usageStats && Object.keys(usageStats).length > 0
-      ? { usageStats }
-      : { usageStats: undefined }),
+    order: order && Object.keys(order).length > 0 ? order : undefined,
+    lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
+    usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
   };
-  setRuntimeExternalCliProfileIds(
-    next,
-    getRuntimeExternalCliProfileIds(store).map(
-      (profileId) => replacements.get(profileId) ?? profileId,
-    ),
-  );
   return next;
 }
 
@@ -460,11 +430,11 @@ export function mergeAuthProfileStores(
     !override.usageStats &&
     override.runtimePersistedProfileIds === undefined &&
     override.runtimeLocalProfileIds === undefined &&
+    override.runtimeHasLocalOAuthProfiles === undefined &&
     override.runtimeLocalOrderProviderIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
-    override.runtimeExternalProfileIdsAuthoritative !== true &&
-    getRuntimeExternalCliProfileIds(override).length === 0
+    override.runtimeExternalProfileIdsAuthoritative !== true
   ) {
     return base;
   }
@@ -479,7 +449,10 @@ export function mergeAuthProfileStores(
         )
       : [],
   );
-  const profiles = mergeProfileRecordsWithOverridePrecedence(base.profiles, override.profiles);
+  const profiles = Object.fromEntries([
+    ...Object.entries(override.profiles),
+    ...Object.entries(base.profiles).filter(([profileId]) => !overrideProfileIds.has(profileId)),
+  ]);
   // Authoritative runtime snapshots may remove stale external profiles that are
   // no longer observed, unless the caller is intentionally preserving base ones.
   for (const profileId of removedRuntimeExternalProfileIds) {
@@ -512,8 +485,8 @@ export function mergeAuthProfileStores(
     : undefined;
   const usageStats = mergedState.usageStats
     ? Object.fromEntries(
-        Object.entries(mergedState.usageStats).filter(([profileId]) =>
-          isRetainedUsageStatsId(profileId, profiles),
+        Object.entries(mergedState.usageStats).filter(
+          ([profileId]) => profiles[profileId] || profileId.startsWith("inline-api-key:"),
         ),
       )
     : undefined;
@@ -524,30 +497,24 @@ export function mergeAuthProfileStores(
     lastGood,
     usageStats,
   };
-  const runtimePersistedProfileIds = [
-    ...(base.runtimePersistedProfileIds ?? []).filter(
-      (profileId) => !overrideProfileIds.has(profileId),
-    ),
-    ...(override.runtimePersistedProfileIds ?? []),
-  ]
-    .filter((profileId) => merged.profiles[profileId])
-    .toSorted();
+  const mergeRuntimeProfileIds = (baseIds: string[] = [], overrideIds: string[] = []) =>
+    [...baseIds.filter((profileId) => !overrideProfileIds.has(profileId)), ...overrideIds]
+      .filter((profileId) => merged.profiles[profileId])
+      .toSorted();
+  const runtimePersistedProfileIds = mergeRuntimeProfileIds(
+    base.runtimePersistedProfileIds,
+    override.runtimePersistedProfileIds,
+  );
   const runtimeLocalProfileIds = override.runtimeLocalProfileIds
     ?.filter((profileId) => merged.profiles[profileId])
     .toSorted();
-  const baseRuntimeExternalProfileIds =
+  const runtimeExternalProfileIds = mergeRuntimeProfileIds(
     override.runtimeExternalProfileIdsAuthoritative === true &&
-    options?.preserveBaseRuntimeExternalProfiles !== true
+      options?.preserveBaseRuntimeExternalProfiles !== true
       ? []
-      : (base.runtimeExternalProfileIds ?? []).filter(
-          (profileId) => !overrideProfileIds.has(profileId),
-        );
-  const runtimeExternalProfileIds = [
-    ...baseRuntimeExternalProfileIds,
-    ...(override.runtimeExternalProfileIds ?? []),
-  ]
-    .filter((profileId) => merged.profiles[profileId])
-    .toSorted();
+      : base.runtimeExternalProfileIds,
+    override.runtimeExternalProfileIds,
+  );
   const runtimeExternalProfileIdsAuthoritative =
     base.runtimeExternalProfileIdsAuthoritative === true ||
     override.runtimeExternalProfileIdsAuthoritative === true;
@@ -560,13 +527,6 @@ export function mergeAuthProfileStores(
             : {}),
         }
       : {};
-  const runtimeExternalCliProfileIds = [
-    ...getRuntimeExternalCliProfileIds(base).filter(
-      (profileId) =>
-        !overrideProfileIds.has(profileId) && !removedRuntimeExternalProfileIds.has(profileId),
-    ),
-    ...getRuntimeExternalCliProfileIds(override),
-  ];
   const result = reconcileMainStoreOAuthProfileDrift({
     base,
     override,
@@ -576,6 +536,9 @@ export function mergeAuthProfileStores(
         ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
         : {}),
       ...(runtimeLocalProfileIds ? { runtimeLocalProfileIds } : {}),
+      ...(override.runtimeHasLocalOAuthProfiles !== undefined
+        ? { runtimeHasLocalOAuthProfiles: override.runtimeHasLocalOAuthProfiles }
+        : {}),
       ...(override.runtimeLocalOrderProviderIds !== undefined
         ? { runtimeLocalOrderProviderIds: [...override.runtimeLocalOrderProviderIds] }
         : {}),
@@ -585,7 +548,6 @@ export function mergeAuthProfileStores(
       ...runtimeExternalProfileMetadata,
     },
   }) as RuntimeAuthProfileStore;
-  setRuntimeExternalCliProfileIds(result, runtimeExternalCliProfileIds);
   if (base.runtimeCredentialSources || override.runtimeCredentialSources) {
     // Reconciliation can select main's OAuth row instead of the local override.
     result.runtimeCredentialSources = Object.fromEntries(

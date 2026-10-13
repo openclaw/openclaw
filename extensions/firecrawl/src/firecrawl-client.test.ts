@@ -159,7 +159,7 @@ describe("Firecrawl scrape payloads", () => {
         truncated: true,
       }),
     );
-    expect(String(result.text)).toContain("contentcontentconten");
+    expect(result.text).toContain("contentcontentconten");
     expect(String(result.title)).toContain("tttt");
   });
 

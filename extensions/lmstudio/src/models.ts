@@ -1,6 +1,7 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
@@ -144,10 +145,6 @@ export function resolveLmstudioReasoningCapability(
   return defaultOption !== undefined && defaultOption !== "off";
 }
 
-/**
- * Reads loaded LM Studio instances and returns the largest valid context window.
- * Returns null when no usable loaded context is present.
- */
 export function resolveLoadedContextWindow(
   entry: Pick<LmstudioModelWire, "loaded_instances">,
 ): number | null {
@@ -314,13 +311,11 @@ export function resolveLmstudioServerBase(configuredBaseUrl?: string): string {
   return normalized.length > 0 ? normalized : LMSTUDIO_DEFAULT_BASE_URL;
 }
 
-/** Resolves LM Studio inference base URL and always appends /v1. */
 export function resolveLmstudioInferenceBase(configuredBaseUrl?: string): string {
   const serverBase = resolveLmstudioServerBase(configuredBaseUrl);
   return `${serverBase}/v1`;
 }
 
-/** Canonicalizes persisted LM Studio provider config to the inference base URL form. */
 export function normalizeLmstudioProviderConfig(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
@@ -426,7 +421,6 @@ export function buildLmstudioModelName(model: {
 }
 
 /**
- * Base model fields extracted from a single LM Studio wire entry.
  * Shared by the setup layer (persists simple names to config) and the runtime
  * discovery path (which enriches the name with format/state tags).
  */
@@ -446,14 +440,6 @@ export type LmstudioModelBase = {
   maxTokens: number;
 };
 
-/**
- * Maps a single LM Studio wire entry to its base model fields.
- * Returns null for non-LLM entries or entries with no usable key.
- *
- * Shared by both the setup layer (persists simple names to config) and the
- * runtime discovery path (which enriches the name with format/state tags via
- * buildLmstudioModelName).
- */
 export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBase | null {
   if (entry.type !== "llm") {
     return null;
@@ -536,3 +522,31 @@ export function mapLmstudioWireModels(
     })
     .filter((entry): entry is ModelDefinitionConfig => entry !== null);
 }
+
+export function normalizeLmstudioModelKey(modelId: string): string {
+  const trimmed = modelId.trim();
+  if (trimmed.toLowerCase().startsWith("lmstudio/")) {
+    return trimmed.slice("lmstudio/".length).trim();
+  }
+  return trimmed;
+}
+
+export const getUnlistedLmstudioConfiguredModelIds: NonNullable<
+  NonNullable<ProviderPlugin["catalog"]>["getUnlistedConfiguredModelIds"]
+> = (catalog, configuredModels) => {
+  const modelIds = new Set(catalog.modelIds);
+  const aliases = new Set(catalog.aliases?.map((alias) => alias.toLowerCase()));
+  return configuredModels
+    .filter((model) => {
+      if (
+        model.provider !== "lmstudio" ||
+        (model.baseUrl &&
+          resolveLmstudioServerBase(model.baseUrl) !== resolveLmstudioServerBase(catalog.baseUrl))
+      ) {
+        return false;
+      }
+      const modelKey = normalizeLmstudioModelKey(model.modelId);
+      return !modelIds.has(modelKey) && !aliases.has(modelKey.toLowerCase());
+    })
+    .map((model) => model.modelId);
+};

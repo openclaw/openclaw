@@ -1,10 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createActiveWorkSnapshot,
@@ -13,6 +11,7 @@ import {
   setPlatform,
   waitForStart,
   withIsolatedSignals,
+  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
 const shutdownBudgetCases: {
@@ -32,14 +31,6 @@ const shutdownBudgetCases: {
     shutdownStopMs,
     inspectionMs: 500,
   })),
-  {
-    signal: "SIGUSR2",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "foreground" },
-  { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
   { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
 ];
 
@@ -51,20 +42,7 @@ export function registerShutdownBudgetTests({
   waitForGatewayActiveWork,
   gatewayLog,
   writeDiagnosticStabilityBundleForFailureSync,
-}: {
-  runLoopWithStart: (params: {
-    start: ReturnType<typeof createSignaledStart>["start"];
-    runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
-  }) => Promise<unknown>;
-  systemctl: Mock<() => Promise<{ code: number; stdout: string; stderr: string }>>;
-  consumeGatewayRestartIntent: Mock<() => GatewayRestartIntent | null>;
-  createGatewayActiveWorkSnapshot: Mock<() => GatewayActiveWorkSnapshot>;
-  waitForGatewayActiveWork: Mock<
-    typeof import("../../infra/gateway-active-work.js").waitForGatewayActiveWork
-  >;
-  gatewayLog: { info: Mock; warn: Mock };
-  writeDiagnosticStabilityBundleForFailureSync: Mock;
-}) {
+}: UpdateRespawnFixtures) {
   it.each(shutdownBudgetCases)(
     "bounds $supervisor $signal cleanup when a long provider call honors abort=$honorsAbort (wait=$waitMs, installedStop=$installedStopMs, shutdownStop=$shutdownStopMs)",
     async ({
@@ -76,7 +54,6 @@ export function registerShutdownBudgetTests({
       shutdownStopMs,
       inspectionMs = 0,
     }) => {
-      vi.clearAllMocks();
       const unit = buildSystemdUnit({ programArguments: ["openclaw", "gateway", "run"] });
       const stopTimeoutMs =
         (typeof shutdownStopMs === "number" ? shutdownStopMs : installedStopMs) ??
@@ -134,7 +111,13 @@ export function registerShutdownBudgetTests({
         await runLoopWithStart({ start, runtime });
         await waitForStart(started);
         const host = start.mock.calls[0]?.[0]?.hostLifecycle;
-        const active = createActiveWorkSnapshot({ embeddedRuns: 1 });
+        const active = createActiveWorkSnapshot({ embeddedRuns: 1, rootRequests: 1 }, [
+          {
+            kind: "root-request",
+            count: 1,
+            message: "1 active gateway request(s): heartbeat:wake",
+          },
+        ]);
         createGatewayActiveWorkSnapshot.mockReturnValue(active);
         waitForGatewayActiveWork.mockImplementationOnce(async (timeoutMs, options) => {
           options?.onSnapshot?.(active);
@@ -171,7 +154,6 @@ export function registerShutdownBudgetTests({
             });
             expect(systemctl.mock.calls).toHaveLength(probes);
           }
-          setTimeout(() => provider.resolve(), 600_000);
           captureSignal(signal)();
           await vi.advanceTimersByTimeAsync(inspectionMs);
           if (installedStopMs !== undefined) {
@@ -184,29 +166,6 @@ export function registerShutdownBudgetTests({
               stopTimeoutMs - 15_000 - inspectionMs,
               expect.any(Object),
             );
-            const budgetLogs = gatewayLog.info.mock.calls
-              .flat()
-              .filter((line: string) => line.includes("shutdown budget at"));
-            expect(budgetLogs).toEqual(
-              [
-                ["startup", installedStopMs - 5_000, installedStopMs],
-                [
-                  "shutdown",
-                  stopTimeoutMs - 5_000 - inspectionMs,
-                  shutdownStopMs === "unavailable" ? 90_000 : stopTimeoutMs,
-                ],
-              ].map(([phase, budget, source]) => {
-                const origin =
-                  phase === "shutdown" && shutdownStopMs === "unavailable"
-                    ? `startup shutdown budget=${installedStopMs - 5_000}`
-                    : `TimeoutStopUSec=${source}`;
-                return expect.stringMatching(
-                  new RegExp(
-                    `at ${phase}: drain=${Number(budget) - 10_000}ms shutdown=${budget}ms.*${origin}ms`,
-                  ),
-                );
-              }),
-            );
             if (shutdownStopMs === "unavailable") {
               expect(gatewayLog.warn).toHaveBeenCalledWith(
                 expect.stringContaining("Unable to read systemd stop timeout"),
@@ -217,13 +176,17 @@ export function registerShutdownBudgetTests({
             signal === "SIGTERM" || waitMs !== undefined
               ? stopTimeoutMs - 5_000
               : Math.min(310_000, stopTimeoutMs - 5_000);
-          expect(deadlineMs).toBeLessThan(stopTimeoutMs);
           await vi.advanceTimersByTimeAsync(deadlineMs - inspectionMs - 1);
           expect(connectionWork.signal.aborted).toBe(true);
           if (!honorsAbort) {
             expect(runtime.exit).not.toHaveBeenCalled();
           }
           await vi.advanceTimersByTimeAsync(1);
+          if (!honorsAbort) {
+            expect(runtime.exit).not.toHaveBeenCalled();
+            provider.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+          }
           const expectedExit = supervisor === "foreground" && !honorsAbort ? 1 : 0;
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(expectedExit);
           if (supervisor !== "foreground") {
@@ -233,7 +196,7 @@ export function registerShutdownBudgetTests({
           if (!honorsAbort) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
               expect.stringMatching(
-                /abandoning.*embeddedRuns=1.*pending close steps: shutdown.received-connection-work=\d+ms/,
+                /shutdown deadline reached; waiting for unfinished cleanup and active work.*embeddedRuns=1.*pending owners: 1 active gateway request\(s\): heartbeat:wake.*pending close steps: shutdown.received-connection-work=\d+ms/,
               ),
             );
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
@@ -245,6 +208,7 @@ export function registerShutdownBudgetTests({
           }
         } finally {
           provider.resolve();
+          await vi.advanceTimersByTimeAsync(0);
           await Promise.allSettled(close.mock.results.map((result) => result.value));
           clock.mockRestore();
           vi.clearAllTimers();

@@ -379,6 +379,50 @@ describe("lmstudio-models", () => {
     expect(models[3]?.compat).toEqual({ supportsUsageInStreaming: true });
   });
 
+  it.each([
+    { allowedOptions: ["off", "low", "medium"], expectedMax: "medium" },
+    { allowedOptions: ["medium", "off", "low"], expectedMax: "medium" },
+    { allowedOptions: ["low", "medium"], expectedMax: "medium" },
+    { allowedOptions: ["medium"], expectedMax: "medium" },
+    { allowedOptions: ["low"], expectedMax: "low" },
+    // Transport-vocabulary controls; these are synthetic discovery responses.
+    { allowedOptions: ["minimal"], expectedMax: "minimal" },
+    { allowedOptions: ["minimal", "low"], expectedMax: "low" },
+  ])(
+    "discovers the highest graded effort from $allowedOptions",
+    async ({ allowedOptions, expectedMax }) => {
+      const fetchMock = vi.fn(async () =>
+        Response.json({
+          models: [
+            {
+              type: "llm",
+              key: "synthetic-effort-ceiling",
+              capabilities: { reasoning: { allowed_options: allowedOptions } },
+            },
+          ],
+        }),
+      );
+      const models = await discoverLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        apiKey: "synthetic-no-account",
+        quiet: true,
+        fetchImpl: asFetch(fetchMock),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:1234/api/v1/models",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(models).toHaveLength(1);
+      expect(models[0]?.reasoning).toBe(true);
+      expect(models[0]?.compat?.reasoningEffortMap).toMatchObject({
+        adaptive: expectedMax,
+        max: expectedMax,
+      });
+    },
+  );
+
   it("cancels the response body after a non-ok model discovery response", async () => {
     const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
     const fetchMock = vi.fn(async () => tracked.response);

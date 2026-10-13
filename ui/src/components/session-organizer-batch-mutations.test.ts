@@ -21,6 +21,7 @@ import { showToast } from "../lib/toast.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
+  createModalDialogTestFixture,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
@@ -32,10 +33,13 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
+  archiveSessionTreeWithUndo,
+  createSessionGroup,
   deleteSession,
   deleteSessionGroup,
   deleteSessionsBatch,
   patchSession,
+  runBatchSessionAction,
   stopCloudWorker,
   snoozeSessionWithUndo,
 } from "./session-organizer-operations.runtime.ts";
@@ -117,6 +121,8 @@ function createHarness(
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
+  const finishArchive = vi.fn();
+  const beginArchive = vi.fn(() => finishArchive);
   const patch = vi.fn(async (key: string) => ({ ok: true, key }));
   const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
   const refreshTheme = vi.fn();
@@ -137,6 +143,7 @@ function createHarness(
     },
     gateway: { snapshot },
     sessions: {
+      beginArchive,
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
       patch,
@@ -167,6 +174,8 @@ function createHarness(
     replaceCurrentSession,
   } as unknown as SessionOrganizerControllerHost;
   return {
+    beginArchive,
+    finishArchive,
     deleteMany,
     deleteOne,
     groupsDelete,
@@ -194,6 +203,84 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it.each(["move", "create"])(
+    "preserves mixed group placement and target order for %s",
+    async (action) => {
+      const h = createHarness();
+      const rows = [
+        { ...sessionRow(0), pinnable: true, isChild: false },
+        { ...sessionRow(1), pinnable: false, isChild: false },
+        { ...sessionRow(2), key: "agent:main:subagent:hidden", pinnable: false, isChild: false },
+        { ...sessionRow(3), pinnable: true, sidebarRoot: true, isChild: false },
+      ];
+      if (action === "create") {
+        h.host.knownSessionGroups = () => ["Projects"];
+        await expect(createSessionGroup(h.host, "Projects", rows, h.scope)).resolves.toBe(
+          "completed",
+        );
+      } else {
+        await runBatchSessionAction(
+          h.host,
+          { kind: "move-to-group", category: "Projects" },
+          rows,
+          false,
+          h.scope,
+        );
+      }
+      expect(h.request.mock.calls.map(([, params]) => params)).toEqual([
+        { targets: [sessionTarget(rows[0]!)], patch: { category: "Projects" } },
+        { targets: [sessionTarget(rows[1]!)], patch: { category: "Projects", sidebarRoot: true } },
+        { targets: rows.slice(2).map(sessionTarget), patch: { category: "Projects" } },
+      ]);
+      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
+    const harness = createHarness();
+    const root = { ...sessionRow(0), key: "agent:main:subagent:hidden" };
+    harness.scope.sessions.describe = vi.fn(async () => ({
+      session: {
+        key: root.key,
+        sessionId: root.sessionId,
+        kind: "direct" as const,
+        updatedAt: null,
+      },
+    }));
+    await archiveSessionTreeWithUndo(harness.host, root, harness.scope);
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      expect.objectContaining({ message: t("sessionsView.archiveTreeRootRequired") }),
+    );
+  });
+
+  it("preserves each archive-tree placement expectation and reports only successful targets", async () => {
+    const first = {
+      ...sessionRow(0),
+      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
+    };
+    const moved = {
+      ...sessionRow(1),
+      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
+    };
+    const harness = createHarness({ failedKeys: [moved.key] });
+    expect(
+      await patchSessionRows(harness.host, [first, moved], { archived: true }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).toEqual([first]);
+    expect(harness.request).toHaveBeenCalledWith(
+      "sessions.patchMany",
+      expect.objectContaining({
+        targets: [first, moved].map((row) => Object.assign(sessionTarget(row), row.archiveGuard)),
+        patch: { archived: true },
+      }),
+      expect.anything(),
+    );
+    expect(harness.publishSessionMutationError).toHaveBeenCalled();
+  });
+
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const harness = createHarness();
@@ -207,6 +294,49 @@ describe("patchSessionRows", () => {
       { unread: false },
       { agentId: "main", expectedSessionId: row.sessionId },
     );
+  });
+
+  it("acknowledges hidden runs conditionally with Mark as read but not with Mark as unread", async () => {
+    const run = { ...sessionRow(1), key: "agent:main:subagent:done", isChild: true };
+    const parent: SidebarRecentSession = {
+      ...sessionRow(0),
+      unread: false,
+      subagentSummary: {
+        attention: { kind: "none" },
+        runningChildCount: 0,
+        failedChildCount: 0,
+        unreadHiddenRuns: [run],
+      },
+    };
+    const harness = createHarness();
+
+    await runBatchSessionAction(
+      harness.host,
+      { kind: "toggle-unread" },
+      [parent],
+      true,
+      harness.scope,
+    );
+    await runBatchSessionAction(
+      harness.host,
+      { kind: "toggle-unread" },
+      [parent],
+      false,
+      harness.scope,
+    );
+
+    // Selected rows keep their explicit batch read; folded runs keep manual markers.
+    expect(harness.request.mock.calls.map(([, params]) => params)).toEqual([
+      { targets: [sessionTarget(parent)], patch: { unread: false } },
+      { targets: [sessionTarget(parent)], patch: { unread: true } },
+    ]);
+    expect(harness.patch.mock.calls).toEqual([
+      [
+        run.key,
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
+      ],
+    ]);
   });
 
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
@@ -737,6 +867,69 @@ describe("session organizer destructive confirmations", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(harness.request).not.toHaveBeenCalled();
   });
+});
+
+describe("session organizer batch archive confirmation", () => {
+  it.each([
+    { activity: { hasActiveRun: true }, decision: "cancel" },
+    { activity: { gatewayHasActiveRun: true }, decision: "confirm" },
+    { activity: { hasActiveSubagentRun: true }, decision: "retire" },
+  ] as const)(
+    "waits for $decision before archiving active work",
+    async ({ activity, decision }) => {
+      const modal = createModalDialogTestFixture();
+      const h = createHarness();
+      const rows = [sessionRow(0), { ...sessionRow(1), ...activity }];
+      vi.mocked(showToast).mockClear();
+      try {
+        const pending = modal.track(
+          runBatchSessionAction(h.host, { kind: "toggle-archived" }, rows, false, h.scope),
+        );
+        const actions = await waitForConfirmDialogActions();
+        expect(document.body.textContent).toContain("This selection contains active work.");
+        expect(h.beginArchive).not.toHaveBeenCalled();
+        expect(h.request).not.toHaveBeenCalled();
+        if (decision === "retire") {
+          h.retireScope();
+        } else {
+          answerConfirmDialog(actions, decision);
+        }
+        await pending;
+        if (decision === "confirm") {
+          expect(h.request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+            ["sessions.patchMany", { targets: rows.map(sessionTarget), patch: { archived: true } }],
+          ]);
+          expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
+        } else {
+          expect(h.beginArchive).not.toHaveBeenCalled();
+          expect(h.request).not.toHaveBeenCalled();
+          expect(h.reconcileMutation).not.toHaveBeenCalled();
+          expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
+          expect(showToast).not.toHaveBeenCalled();
+        }
+      } finally {
+        await modal.cleanup();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps idle archive and archived=%s restore immediate",
+    async (archived) => {
+      const h = createHarness();
+      const rows = [sessionRow(0), sessionRow(1)].map((row) =>
+        Object.assign(row, { archived, hasActiveRun: true, gatewayHasActiveRun: false }),
+      );
+      await runBatchSessionAction(h.host, { kind: "toggle-archived" }, rows, false, h.scope);
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(h.request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+        [
+          "sessions.patchMany",
+          { targets: rows.map(sessionTarget), patch: { archived: !archived } },
+        ],
+      ]);
+    },
+  );
 });
 
 describe("session organizer snooze", () => {

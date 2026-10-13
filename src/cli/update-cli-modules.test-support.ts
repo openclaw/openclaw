@@ -57,7 +57,6 @@ const {
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
   devTargetRefusalCases,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectUpdateFailureReport,
   expectDelegatedPluginDoctorInput,
@@ -75,7 +74,6 @@ const { updateFinalizeCommand } = await import("./update-cli/update-command-fina
 const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { resolveGitInstallDir } = updateCliShared;
 const { clearRestartSentinelIfRevision, readRestartSentinel } =
   await import("../infra/restart-sentinel.js");
 
@@ -95,7 +93,6 @@ export {
   doctorCommand,
   ExitError,
   expectDelegatedPluginDoctorInput,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectSelectorTriageFailure,
   expectUpdateFailureReport,
@@ -114,7 +111,6 @@ export {
   replaceConfigFile,
   resolveExtendedStablePackage,
   resolveGatewayInstallEntrypoint,
-  resolveGitInstallDir,
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
   resolveOpenClawPackageRootSync,

@@ -25,6 +25,10 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
@@ -193,20 +197,12 @@ function createStubToolBridge(
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
+type TranscriptAppendParams = Parameters<
+  typeof import("openclaw/plugin-sdk/session-transcript-runtime").appendSessionTranscriptMessageByIdentityStrict
+>[0];
+
 const transcriptRuntimeMock = vi.hoisted(() => ({
-  append: vi.fn(async (params: Record<string, unknown>) => {
-    const prepare = params.prepareMessageAfterIdempotencyCheck as
-      | ((message: unknown) => unknown)
-      | undefined;
-    const message = prepare ? prepare(params.message) : params.message;
-    return message
-      ? {
-          appended: true,
-          message,
-          messageId: (params.eventId as string | undefined) ?? "transcript-message",
-        }
-      : undefined;
-  }),
+  append: vi.fn(appendPreparedTranscriptMessage),
   appendBatch: vi.fn(async (params: { messages: Array<Record<string, unknown>> }) =>
     params.messages.map((message) => ({
       appended: true,
@@ -215,7 +211,7 @@ const transcriptRuntimeMock = vi.hoisted(() => ({
     })),
   ),
   publish: vi.fn(async () => undefined),
-  appendStrict: vi.fn(async (params: Record<string, unknown>) => {
+  appendStrict: vi.fn(async (params: TranscriptAppendParams) => {
     const result = await transcriptRuntimeMock.append(params);
     return result ? { kind: "result" as const, result } : { kind: "suppressed" as const };
   }),
@@ -234,16 +230,14 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
-async function appendPreparedTranscriptMessage(params: Record<string, unknown>) {
-  const prepare = params.prepareMessageAfterIdempotencyCheck as
-    | ((message: unknown) => unknown)
-    | undefined;
-  const message = prepare ? prepare(params.message) : params.message;
+async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
+  const prepare = params.preparation?.prepareMessage;
+  const message = prepare ? await prepare(params.message) : params.message;
   return message
     ? {
         appended: true,
         message,
-        messageId: (params.eventId as string | undefined) ?? "transcript-message",
+        messageId: params.eventId ?? "transcript-message",
       }
     : undefined;
 }
@@ -274,12 +268,7 @@ function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
 }
 
 function flushAsync() {
-  // Pump enough microtasks for the attempt to settle past every
-  // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
-  // BYOK proxy setup, loadCopilotWorkspaceInstructions,
-  // createSession, etc.).
-  // Each chained `then` is one tick; tests rely on this to observe
-  // `sdk.sessions[0]` being populated before they emit deltas.
+  // Drain the in-flight delta and timeout continuations after SDK startup.
   const tick = () => Promise.resolve();
   return tick().then(tick).then(tick).then(tick).then(tick);
 }
@@ -353,6 +342,8 @@ function makeParams(
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
+    authProfileStore: { version: 1, profiles: {} },
+    config: {},
     disableTools: true,
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
@@ -391,8 +382,13 @@ function makeFinalizationParams(
   return params;
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(() => {
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
@@ -551,7 +547,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hands the foreground prompt context to agent-end side effects", async () => {
-    const runAgentEndSideEffects = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffects");
+    const runAgentEnd = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync");
     const params = makeParams({
       memberRoleIds: ["maintainer-role"],
       messageChannel: "discord",
@@ -559,7 +555,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(params, { pool: makeFakePool(makeFakeSdk()) });
 
-    const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+    const ctx = runAgentEnd.mock.calls.at(-1)?.[0]?.ctx;
     expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
     expect(ctx?.foregroundPromptContext?.agentDir).toBe(params.agentDir);
   });
@@ -866,6 +862,7 @@ describe("runCopilotAttempt", () => {
       layout: "state-only",
       prefix: "copilot-offloaded-image-",
     });
+    setRuntimeConfigSnapshot({});
     const inboundDir = openClawState.statePath("media", "inbound");
     const mediaId = "telegram-photo.png";
     await fsp.mkdir(inboundDir, { recursive: true });
@@ -1794,13 +1791,17 @@ describe("runCopilotAttempt", () => {
     // without waiting for them. Round-5 awaits the delta chain inside
     // the timeout branch so the recorded assistantTexts reflect what
     // the model actually streamed.
+    const sendStarted = createDeferred<FakeSession>();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const release = createDeferred<void>();
     const onAssistantDelta = vi.fn(async (_payload: { delta: string }) => {
       await release.promise;
     });
     const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockReturnValue(sendDeferred.promise);
+      session.sendAndWait.mockImplementationOnce(() => {
+        sendStarted.resolve(session);
+        return sendDeferred.promise;
+      });
     });
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(async () => createStubToolBridge());
@@ -1809,8 +1810,7 @@ describe("runCopilotAttempt", () => {
       createToolBridge,
       pool,
     });
-    await flushAsync();
-    const session = requireSession(sdk);
+    const session = await sendStarted.promise;
     session.emit("assistant.message_delta", { deltaContent: "partial-", messageId: "msg-1" });
     await flushAsync();
     // SDK timer fires before the slow delta consumer resolves.

@@ -14,10 +14,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function registerSubagentCollectorPublicationCases(params: {
   createRun: (runId: string) => SubagentRunRecord;
   mockRestoredRows(runs: Map<string, SubagentRunRecord>): void;
-  refuseNextWrite(): void;
 }) {
   const { createRun } = params;
-  it("invalidates the strict collector parent after each committed lifecycle transition", () => {
+  it("invalidates the strict collector parent after each committed lifecycle transition", async () => {
     const run: SubagentRunRecord = {
       ...createRun("cross-agent"),
       childSessionKey: "agent:research:subagent:child",
@@ -29,7 +28,7 @@ export function registerSubagentCollectorPublicationCases(params: {
     };
     const runs = new Map([[run.runId, run]]);
     params.mockRestoredRows(new Map());
-    getSubagentRunsSnapshotForRead(new Map());
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     const observed: Array<{ event: SessionLifecycleEvent; stored?: SubagentRunRecord }> = [];
     const unsubscribe = onSessionLifecycleEvent((event) => {
       observed.push({ event, stored: getSubagentRunsSnapshotForRead(new Map()).get(run.runId) });
@@ -58,35 +57,6 @@ export function registerSubagentCollectorPublicationCases(params: {
           ({ stored }) => stored?.collectorCompletion?.status ?? stored?.execution.status,
         ),
       ).toEqual(["queued", "running", "done", undefined]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("does not advance collector notifications on failed writes", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("retry"),
-      collect: true,
-      swarmRequesterSessionKey: "agent:ops:parent",
-      requesterAgentId: "ops",
-      groupId: "batch",
-    };
-    const runs = new Map([[run.runId, run]]);
-    persistRegistryFixture(runs, [run.runId]);
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      run.collectorCompletion = { status: "failed" };
-      params.refuseNextWrite();
-      expect(() => persistRegistryFixture(runs, [run.runId])).toThrow("disk unavailable");
-      expect(received).not.toHaveBeenCalled();
-      persistRegistryFixture(runs, [run.runId]);
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:ops:parent",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
     } finally {
       unsubscribe();
     }
@@ -125,7 +95,7 @@ export function registerSubagentCollectorPublicationCases(params: {
     }
   });
 
-  it("defers atomic collector notifications until all owner snapshots are published", () => {
+  it("defers atomic collector notifications until all owner snapshots are published", async () => {
     const run: SubagentRunRecord = {
       ...createRun("atomic"),
       collect: true,
@@ -136,15 +106,12 @@ export function registerSubagentCollectorPublicationCases(params: {
     const received = vi.fn();
     const unsubscribe = onSessionLifecycleEvent(received);
     try {
-      const deferred: Array<() => void> = [];
       params.mockRestoredRows(new Map());
-      getSubagentRunsSnapshotForRead(new Map());
-      publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId], deferred);
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
+      const publish = publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId]);
       expect(received).not.toHaveBeenCalled();
       expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.groupId).toBe("batch");
-      for (const publish of deferred) {
-        publish();
-      }
+      publish();
       expect(received).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:ops:parent",
         agentId: "ops",

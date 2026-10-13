@@ -15,7 +15,6 @@ import {
   executeDevicePairingMutation,
 } from "./device-pairing-worker.js";
 
-/** Format a device-pairing authorization failure for CLI/API callers. */
 export function formatDevicePairingForbiddenMessage(result: DevicePairingForbiddenResult): string {
   switch (result.reason) {
     case "caller-scopes-required":

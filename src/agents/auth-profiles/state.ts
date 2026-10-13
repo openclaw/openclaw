@@ -10,60 +10,24 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { coerceProfileUsageStats } from "./profile-usage-stats.js";
 import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sqlite.js";
-import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileState, AuthProfileStateStore } from "./types.js";
 
-function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
+function normalizeAuthProfileEntries<T>(
+  raw: unknown,
+  normalizeKey: (value: string) => string | undefined,
+  normalizeValue: (value: unknown) => T | undefined,
+): Record<string, T> | undefined {
   if (!isRecord(raw)) {
     return undefined;
   }
-  const normalized = Object.entries(raw).reduce<Record<string, string[]>>(
-    (acc, [provider, value]) => {
-      if (!Array.isArray(value)) {
-        return acc;
-      }
-      const providerKey = normalizeProviderId(provider);
-      if (!providerKey) {
-        return acc;
-      }
-      const list = normalizeTrimmedStringList(value);
-      if (list.length > 0) {
-        acc[providerKey] = list;
-      }
-      return acc;
-    },
-    {},
-  );
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function normalizeLastGood(raw: unknown): AuthProfileState["lastGood"] {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const normalized: Record<string, string> = {};
-  for (const [provider, profileId] of Object.entries(raw)) {
-    const providerKey = normalizeProviderId(provider);
-    const normalizedProfileId = normalizeOptionalString(profileId);
-    if (!providerKey || !normalizedProfileId) {
+  const normalized: Record<string, T> = {};
+  for (const [rawKey, rawValue] of Object.entries(raw)) {
+    const key = normalizeKey(rawKey);
+    const value = normalizeValue(rawValue);
+    if (!key || value === undefined) {
       continue;
     }
-    normalized[providerKey] = normalizedProfileId;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function normalizeUsageStats(raw: unknown): AuthProfileState["usageStats"] {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const normalized: Record<string, ProfileUsageStats> = {};
-  for (const [profileId, value] of Object.entries(raw)) {
-    const normalizedProfileId = normalizeOptionalString(profileId);
-    const stats = coerceProfileUsageStats(value);
-    if (!normalizedProfileId || !stats) {
-      continue;
-    }
-    normalized[normalizedProfileId] = stats;
+    normalized[key] = value;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -74,9 +38,20 @@ export function coerceAuthProfileState(raw: unknown): AuthProfileState {
     return {};
   }
   return {
-    order: normalizeAuthProfileOrder(raw.order),
-    lastGood: normalizeLastGood(raw.lastGood),
-    usageStats: normalizeUsageStats(raw.usageStats),
+    order: normalizeAuthProfileEntries(raw.order, normalizeProviderId, (value) => {
+      const ids = Array.isArray(value) ? normalizeTrimmedStringList(value) : [];
+      return ids.length > 0 ? ids : undefined;
+    }),
+    lastGood: normalizeAuthProfileEntries(
+      raw.lastGood,
+      normalizeProviderId,
+      normalizeOptionalString,
+    ),
+    usageStats: normalizeAuthProfileEntries(
+      raw.usageStats,
+      normalizeOptionalString,
+      coerceProfileUsageStats,
+    ),
   };
 }
 

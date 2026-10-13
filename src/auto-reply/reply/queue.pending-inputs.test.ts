@@ -1,25 +1,26 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
@@ -36,8 +37,19 @@ import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
 
+const fault = useSqliteWorkerFault([
+  {
+    name: "fail_second_source",
+    match: /^insert into transcript_events\b/u,
+    sql: `CREATE TEMP TRIGGER fail_second_source BEFORE INSERT ON main.transcript_events
+      WHEN instr(NEW.event_json, 'second:user') > 0
+      BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END;`,
+  },
+]);
+
 describe("followup queue durable input consumption", () => {
   const fixture = useTempSessionsFixture("openclaw-queue-pending-");
+  let config: OpenClawConfig;
   let caseSequence = 0;
   let sessionKey = "";
   const sessionId = "queue-pending-session";
@@ -45,6 +57,8 @@ describe("followup queue durable input consumption", () => {
   const scope = () => ({ agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() });
 
   beforeEach(async () => {
+    config = { session: { store: fixture.storePath() } };
+    setRuntimeConfigSnapshot(config);
     sessionKey = `agent:main:queue-pending-${++caseSequence}`;
     vi.mocked(executeAgentTurn).mockReset();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
@@ -56,6 +70,7 @@ describe("followup queue durable input consumption", () => {
       recorder.finishPendingInput?.("interrupted");
     }
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   const createStagedRun = async (runId: string) => {
@@ -65,7 +80,7 @@ describe("followup queue durable input consumption", () => {
     }));
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: `${runId} private source`, idempotencyKey: `${runId}:user` },
-      target: { ...scope(), sessionEntry: undefined },
+      target: { ...scope(), sessionEntry: undefined, config },
       beforeMessageWrite,
       updateMode: "none",
     });
@@ -83,7 +98,7 @@ describe("followup queue durable input consumption", () => {
         agentId: "main",
         sessionKey,
         sessionId,
-        config: { session: { store: fixture.storePath() } },
+        config,
       },
     };
     return { run, beforeMessageWrite };
@@ -101,14 +116,11 @@ describe("followup queue durable input consumption", () => {
     const first = await createStagedRun("first");
     const second = await createStagedRun("second");
     await persistQueuedRun(first.run);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope()))).db;
-    database.exec(
-      "CREATE TRIGGER fail_second_source BEFORE INSERT ON transcript_events WHEN instr(NEW.event_json, 'second:user') > 0 BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END",
-    );
+    fault.enable();
     try {
       await expect(persistQueuedRun(second.run)).rejects.toThrow("injected second source failure");
     } finally {
-      database.exec("DROP TRIGGER fail_second_source");
+      fault.disable();
     }
     expect(first.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
     expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
@@ -157,7 +169,7 @@ describe("followup queue durable input consumption", () => {
       messageId: "unstaged",
       userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
         input: { text: "unstaged transcript body" },
-        target: { ...scope(), sessionEntry: undefined },
+        target: { ...scope(), sessionEntry: undefined, config: staged.run.run.config },
       }),
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
     };
@@ -177,9 +189,9 @@ describe("followup queue durable input consumption", () => {
     expect(calls[1]?.transcriptPrompt).toContain("unstaged transcript body");
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "binds collected custody before runtime append (cancel during preparation: %s)",
-    async (abortDuringPreparation) => {
+    async (abortDuringPreparation, { signal }) => {
       const first = await createStagedRun("first");
       const second = await createStagedRun("second");
       first.run.prompt = "first private source";
@@ -190,6 +202,7 @@ describe("followup queue durable input consumption", () => {
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
       const pendingTotals: number[] = [];
+      const drainReleased = createDeferred<"settled" | "reset">();
       vi.mocked(executeAgentTurn).mockImplementation(async (params) => {
         const message = await params.followupRun.userTurnTranscriptRecorder?.resolveMessage();
         if (!message) {
@@ -200,6 +213,9 @@ describe("followup queue durable input consumption", () => {
         return { runId: "collected-run", outcome: { kind: "rejected", payload: { text: "done" } } };
       });
       scheduleFollowupDrain(sessionKey, async (run) => {
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        assert(observeRelease, "followup execution must own root admission");
+        observeRelease(drainReleased.resolve);
         calls.push(run);
         const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
         const typing = createTypingController({});
@@ -242,7 +258,8 @@ describe("followup queue durable input consumption", () => {
           typing.cleanup();
         }
       });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+      expect(await withinTest(drainReleased.promise, signal)).toBe("settled");
+      expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
 
       expect(failures).toHaveLength(abortDuringPreparation ? 1 : 0);
       expect(pendingTotals).toEqual(abortDuringPreparation ? [2] : [2, 0]);

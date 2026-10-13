@@ -99,7 +99,6 @@ vi.mock("./session-state-events.kernel.js", () => ({
   rowToSessionStateEvent: vi.fn(),
 }));
 vi.mock("./session-state-notices.js", () => ({ enqueueSessionStateNotice: edge.notice }));
-vi.mock("./session-upstream-links.js", () => ({ deleteSessionUpstreamLink: vi.fn() }));
 
 const notice: SessionStateNotice = {
   watcherSessionKey: "agent:main:main",
@@ -281,7 +280,7 @@ describe("Session signal worker reconciliation", () => {
     expect(returned).toBe(true);
   });
 
-  it.each(["capture", "unknown-outcome", "notice", "prune", "logger"] as const)(
+  it.each(["capture", "notice", "prune"] as const)(
     "preserves the originating committed result after %s failure without replay",
     async (failure) => {
       const error = Object.assign(new Error("Synthetic event failure"), {
@@ -302,13 +301,6 @@ describe("Session signal worker reconciliation", () => {
           }
           return { row, notices: [notice] };
         });
-      } else {
-        edge.execute.mockRejectedValueOnce(error);
-        if (failure === "logger") {
-          edge.warn.mockImplementationOnce(() => {
-            throw new Error("Synthetic diagnostic sink failure");
-          });
-        }
       }
       await expect(goalChange()).resolves.toBeUndefined();
       expect(

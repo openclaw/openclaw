@@ -41,6 +41,8 @@ export type PluginPackageChannel = {
   persistedAuthState?: {
     specifier?: string;
     exportName?: string;
+    /** Awaited checker preferred by runtime discovery; the synchronous export remains for older hosts. */
+    exportNameAsync?: string;
     backingStore?: "plugin-state";
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;

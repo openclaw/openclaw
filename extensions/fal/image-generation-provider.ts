@@ -9,7 +9,7 @@ import {
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
@@ -141,10 +141,7 @@ type FalImageModelSchema = {
   supportsCount: boolean;
   supportsOutputFormat: boolean;
 };
-function parseFalImageGenerationResponse(payload: unknown): {
-  images: Record<string, unknown>[];
-  prompt?: string;
-} {
+function parseFalImageGenerationResponse(payload: unknown) {
   if (!isRecord(payload)) {
     throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
   }
@@ -544,7 +541,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       FAL_KREA_2_LARGE_MODEL,
       ...FAL_GPT_IMAGE_25_MODELS,
     ],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxCount: 4,

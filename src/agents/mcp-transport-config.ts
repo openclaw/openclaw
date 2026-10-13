@@ -17,6 +17,7 @@ import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
   describeStdioMcpServerLaunchConfig,
   resolveStdioMcpServerLaunchConfig,
+  type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
 // Resolves raw MCP server config into the transport shape used by bundle MCP
@@ -29,14 +30,8 @@ type ResolvedBaseMcpTransportConfig = {
   supportsParallelToolCalls: boolean;
 };
 
-type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
-  kind: "stdio";
-  transportType: "stdio";
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-};
+type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig &
+  StdioMcpServerLaunchConfig & { kind: "stdio"; transportType: "stdio" };
 
 type ResolvedMcpOAuthConfig = McpOAuthConfig & {
   identity?: "shared" | "per-requester";
@@ -78,13 +73,6 @@ function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
   );
 }
 
-function getConnectionTimeoutMs(rawServer: unknown): number {
-  return resolvePositiveTimerTimeoutMs(
-    asOptionalObjectRecord(rawServer)?.connectionTimeoutMs,
-    DEFAULT_CONNECTION_TIMEOUT_MS,
-  );
-}
-
 export function resolveMcpRequestTimeoutMs(
   rawServer: unknown,
   fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -95,17 +83,21 @@ export function resolveMcpRequestTimeoutMs(
   );
 }
 
-function getBooleanField(rawServer: unknown, key: string): boolean | undefined {
-  const value = asOptionalObjectRecord(rawServer)?.[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
 /** Resolve one MCP server's launch transport config, or null when unsupported. */
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
   options?: { logWarnings?: boolean },
 ): ResolvedMcpTransportConfig | null {
+  const record = asOptionalObjectRecord(rawServer);
+  const common = () => ({
+    connectionTimeoutMs: resolvePositiveTimerTimeoutMs(
+      record?.connectionTimeoutMs,
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+    ),
+    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls: record?.supportsParallelToolCalls === true,
+  });
   const logWarnings = options?.logWarnings !== false;
   const effectiveTransport = resolveConfiguredMcpTransport(rawServer);
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(
@@ -124,14 +116,9 @@ export function resolveMcpTransportConfig(
     return {
       kind: "stdio",
       transportType: "stdio",
-      command: stdioLaunch.config.command,
-      args: stdioLaunch.config.args,
-      env: stdioLaunch.config.env,
-      cwd: stdioLaunch.config.cwd,
+      ...stdioLaunch.config,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
-      connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-      requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
+      ...common(),
     };
   }
 
@@ -175,9 +162,7 @@ export function resolveMcpTransportConfig(
     }
     return null;
   }
-  const record = asOptionalObjectRecord(rawServer);
   const oauth = record?.oauth;
-  const sslVerify = getBooleanField(rawServer, "sslVerify");
   const clientCert = normalizeOptionalString(record?.clientCert);
   const clientKey = normalizeOptionalString(record?.clientKey);
   return {
@@ -187,12 +172,10 @@ export function resolveMcpTransportConfig(
     headers: launch.config.headers,
     ...(record?.auth === "oauth" ? { auth: "oauth" as const } : {}),
     ...(isRecord(oauth) ? { oauth: oauth as ResolvedMcpOAuthConfig } : {}),
-    ...(sslVerify !== undefined ? { sslVerify } : {}),
+    ...(typeof record?.sslVerify === "boolean" ? { sslVerify: record.sslVerify } : {}),
     ...(clientCert ? { clientCert } : {}),
     ...(clientKey ? { clientKey } : {}),
     description: redactSensitiveUrl(launch.config.url),
-    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
+    ...common(),
   };
 }

@@ -118,7 +118,7 @@ describe("auditGatewayServiceConfig runtime", () => {
   });
 
   it("reports a capable vendor Node as a note without requesting migration", async () => {
-    const note = "Node 24.15.0: unsupported version, capability probe passed.";
+    const note = "Node 24.15.0: unsupported version, capability check passed.";
     resolveNodeRuntimeInfoMock.mockResolvedValue({
       version: "24.15.0",
       sqliteVersion: "3.53.4",
@@ -134,7 +134,7 @@ describe("auditGatewayServiceConfig runtime", () => {
   });
 
   it("preserves Node probe failure and timeout without requesting migration", async () => {
-    const error = new Error("Node runtime probe failed: access denied");
+    const error = new Error("Node runtime check failed: access denied");
     resolveNodeRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
     const result = await audit({ environment: undefined }, { timeoutMs: 1234 });
     expect(resolveNodeRuntimeInfoMock).toHaveBeenCalledWith(

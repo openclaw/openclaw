@@ -185,12 +185,13 @@ final class CLIInstallPrompter {
         let previousPID = restartManagedGateway
             ? await GatewayLaunchAgentManager.runningGatewayPID()
             : nil
-        let installed = await CLIInstaller.install(target: target) { message in
+        let report: @MainActor @Sendable (String) -> Void = { message in
             self.installStatus = message
             if !showCompletionAlert {
                 self.logger.info("managed CLI repair: \(message, privacy: .public)")
             }
         }
+        let installed = await CLIInstaller.install(target: target, statusHandler: report)
         var activated = false
         if installed {
             // A user can change the selected Gateway while the installer is running.
@@ -213,10 +214,7 @@ final class CLIInstallPrompter {
                     return false
                 }
             }
-            self.installStatus = "Starting OpenClaw Gateway…"
-            if !showCompletionAlert {
-                self.logger.info("managed CLI repair: Starting OpenClaw Gateway…")
-            }
+            report("Starting OpenClaw Gateway…")
             let activation = await CLIInstaller.activateLocalGateway()
             if BundledRuntime.isBundledApp { CLIInstaller.completeBundledSetup(after: activation) }
             if case .failed = activation { activated = false } else { activated = true }
@@ -230,11 +228,7 @@ final class CLIInstallPrompter {
                     Self.setPendingManagedRestart()
                 }
             }
-            let message = Self.activationMessage(activation)
-            self.installStatus = message
-            if !showCompletionAlert {
-                self.logger.info("managed CLI repair: \(message, privacy: .public)")
-            }
+            report(Self.activationMessage(activation))
         }
         if showCompletionAlert, let message = self.installStatus {
             let alert = NSAlert()

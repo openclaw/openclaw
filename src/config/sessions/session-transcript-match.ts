@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
@@ -67,8 +68,9 @@ export function findTranscriptEventMatchingInDatabase(
 export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
   match: SessionTranscriptEventMatch,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<{ event: TranscriptEvent } | undefined> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
       type: "session.history.match",

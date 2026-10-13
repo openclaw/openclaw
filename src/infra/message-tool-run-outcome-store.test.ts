@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -17,6 +18,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { recordMessageToolRunOutcome } from "./message-tool-run-outcome-store.js";
 
+const outcomeFault = useSqliteWorkerFault([
+  {
+    name: "refuse_outcome",
+    match: /^insert into message_tool_run_outcomes /,
+    sql: `CREATE TEMP TRIGGER refuse_outcome BEFORE INSERT ON main.message_tool_run_outcomes
+      WHEN NEW.run_id = 'refused' BEGIN SELECT RAISE(ABORT, 'outcome refused'); END;`,
+  },
+]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createEnv(): NodeJS.ProcessEnv {
@@ -91,22 +100,24 @@ describe("message-tool run outcome store", () => {
       });
     }
 
-    const db = openOpenClawAgentDatabase({ agentId: "main", env }).db;
-    db.exec(`CREATE TRIGGER refuse_outcome BEFORE INSERT ON message_tool_run_outcomes
-      WHEN NEW.run_id = 'refused' BEGIN SELECT RAISE(ABORT, 'outcome refused'); END;`);
-    await expect(
-      recordMessageToolRunOutcome({
-        runId: "refused",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        outcome: "mute",
-        runStatus: "errored",
-        occurredAt: 100,
-        env,
-      }),
-    ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 1811 });
+    outcomeFault.enable();
+    try {
+      await expect(
+        recordMessageToolRunOutcome({
+          runId: "refused",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          outcome: "mute",
+          runStatus: "errored",
+          occurredAt: 100,
+          env,
+        }),
+      ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 1811 });
+    } finally {
+      outcomeFault.disable();
+    }
 
     expect(
       openOpenClawAgentDatabase({ agentId: "main", env })

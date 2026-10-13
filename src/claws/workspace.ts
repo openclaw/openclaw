@@ -118,7 +118,7 @@ export async function readClawWorkspaceActionSource(params: {
   action: ClawAddPlanAction;
   packageRoot: string;
   sourceRoot: Root;
-}): Promise<{ content: Buffer; sourcePath: string; sourceRelative: string }> {
+}): Promise<{ content: Buffer; sourceRelative: string }> {
   if (!params.action.source) {
     throw new Error("Workspace file action lacks a source.");
   }
@@ -138,13 +138,13 @@ export async function readClawWorkspaceActionSource(params: {
     );
   }
   if (params.action.sourceKind !== "clawMarkdownBody") {
-    return { content: read.buffer, sourcePath, sourceRelative };
+    return { content: read.buffer, sourceRelative };
   }
   const parsed = parseClawMarkdown(read.buffer, sourcePath);
   if (!parsed.ok) {
     throw new Error(parsed.diagnostics.map((item) => item.message).join("; "));
   }
-  return { content: parsed.body, sourcePath, sourceRelative };
+  return { content: parsed.body, sourceRelative };
 }
 
 function persistWorkspaceFile(

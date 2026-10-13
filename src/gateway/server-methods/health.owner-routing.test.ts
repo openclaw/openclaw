@@ -351,6 +351,7 @@ describe("Gateway status owner routing", () => {
                 workersCreated: 0,
                 activeTasks: 0,
                 pendingTasks: 0,
+                workerFailures: 0,
               },
             },
           }),

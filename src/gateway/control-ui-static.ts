@@ -1,4 +1,3 @@
-// Control UI static-response policy: MIME types, caching, and encoding.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -235,6 +234,8 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
+  staleRedirectPath?: string,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -242,5 +243,23 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    if (!staleRedirectPath) {
+      respondPlainText(res, 403, "Session access changed. Reload the conversation.");
+      return;
+    }
+    // A session entry re-enters through its plain app path, where the normal
+    // auth gate decides access; the prepared entry document is never sent.
+    res.statusCode = 303;
+    res.setHeader("Location", staleRedirectPath);
+    res.setHeader("Cache-Control", "no-store");
+    res.removeHeader("Content-Type");
+    res.removeHeader("Content-Security-Policy");
+    res.end();
+    return;
+  }
+  res.end(encoded);
 }

@@ -5,7 +5,6 @@ import {
   isCronSessionDisplayKey,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
-import type { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import type { materializeSessionRow } from "./session-utils-row.js";
 
 export function readSessionListSelectionFacts(
@@ -50,16 +49,18 @@ export function readSessionListSelectionFacts(
   };
 }
 
-/** Cold rows prepare only the model facts needed by search. */
 export type SessionListTargetLookup = (key: string) =>
   | {
       agentId: string;
       selection: ReturnType<typeof readSessionListSelectionFacts>;
       storeKey?: string;
-      materialized?: Pick<ReturnType<typeof materializeSessionRow>, "source">;
-      getModelFacts?: () => Pick<
-        ReturnType<typeof readSessionRowModelFacts>,
-        "selectedModel" | "rowModelIdentity" | "thinkingProjection"
-      >;
     }
   | undefined;
+
+/** Cold rows prepare only the model facts needed by search. */
+export type SessionListModelFactsLookup = (
+  key: string,
+) => Pick<
+  ReturnType<typeof materializeSessionRow>["source"],
+  "selectedModel" | "rowModelIdentity" | "thinkingProjection"
+>;

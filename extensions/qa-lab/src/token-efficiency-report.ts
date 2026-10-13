@@ -50,10 +50,6 @@ function percentile(values: readonly number[], p: number): number {
   return sorted[index] ?? 0;
 }
 
-function isLiveProviderMode(providerMode: string | undefined) {
-  return providerMode?.startsWith("live-") === true;
-}
-
 function formatPercent(value: number) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
@@ -279,7 +275,7 @@ export function buildTokenEfficiencyReport(params: {
   const providerMode = params.summary.run?.providerMode;
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const thresholdPercent = params.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
-  const liveUsage = isLiveProviderMode(providerMode);
+  const liveUsage = providerMode?.startsWith("live-") === true;
   const usageSource: TokenEfficiencyRow["usageSource"] = liveUsage ? "live-usage" : "mock-estimate";
   const parityResults = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)

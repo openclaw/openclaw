@@ -25,13 +25,7 @@ export async function assertOwnedServicePath(params: {
     allowMissing: true,
   });
   assertPathAtOrInside(params.ownershipRoot, params.targetParent, "Computer Use service parent");
-  await assertNoSymlinkParents({
-    rootDir: params.ownershipRoot,
-    targetPath: params.targetParent,
-    allowMissing: true,
-    requireDirectories: true,
-    messagePrefix: "Computer Use service path",
-  });
+  await assertServicePathParents(params.ownershipRoot, params.targetParent, true);
   await assertNotSymlink(params.targetPath, "Computer Use service target");
 }
 
@@ -58,13 +52,7 @@ export async function prepareOwnedServiceParent(params: {
     params.targetParent,
     "Computer Use service parent",
   );
-  await assertNoSymlinkParents({
-    rootDir: params.ownershipRoot,
-    targetPath: params.targetParent,
-    allowMissing: false,
-    requireDirectories: true,
-    messagePrefix: "Computer Use service path",
-  });
+  await assertServicePathParents(params.ownershipRoot, params.targetParent, false);
   const [rootIdentity, parentIdentity] = await Promise.all([
     readRealDirectoryIdentity(params.ownershipRoot, "Computer Use ownership root"),
     readRealDirectoryIdentity(params.targetParent, "Computer Use service parent"),
@@ -84,10 +72,18 @@ async function assertOwnedCodexHomePath(params: {
 }): Promise<void> {
   await readRealDirectoryIdentity(params.ownershipRoot, "Computer Use ownership root");
   assertPathAtOrInside(params.ownershipRoot, params.codexHome, "isolated Codex home");
-  await assertNoSymlinkParents({
-    rootDir: params.ownershipRoot,
-    targetPath: params.codexHome,
-    allowMissing: params.allowMissing,
+  await assertServicePathParents(params.ownershipRoot, params.codexHome, params.allowMissing);
+}
+
+function assertServicePathParents(
+  rootDir: string,
+  targetPath: string,
+  allowMissing: boolean,
+): Promise<void> {
+  return assertNoSymlinkParents({
+    rootDir,
+    targetPath,
+    allowMissing,
     requireDirectories: true,
     messagePrefix: "Computer Use service path",
   });
@@ -105,10 +101,6 @@ export async function readRealDirectoryIdentity(
   } catch (cause) {
     throw new Error(`${label} must remain a real directory: ${logicalPath}`, { cause });
   }
-}
-
-export async function assertOwnedServiceParentStable(parent: OwnedServiceParent): Promise<void> {
-  await assertDirectoryIdentityStable(parent, "Computer Use service parent");
 }
 
 export async function assertDirectoryIdentityStable(

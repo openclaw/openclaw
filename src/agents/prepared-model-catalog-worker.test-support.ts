@@ -5,10 +5,7 @@ import { expect, vi } from "vitest";
 import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "../gateway/server-methods/models-list-result.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -20,6 +17,7 @@ import {
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -126,6 +124,8 @@ export function writeFixturePlugin(params: {
   asyncSyntheticAuth?: boolean;
   syntheticAuthAvailable?: boolean;
   catalogControl?: boolean;
+  /** Publishes the Codex client version handed to this worker request as a model id. */
+  reportCodexClientVersion?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -231,6 +231,13 @@ module.exports = {
       catalog: {
         run(context) {
           ${catalogControlSource}
+          ${
+            params.reportCodexClientVersion
+              ? `// Same store the Codex client-version SDK facade reads inside a worker request.
+          const handedOff = globalThis[Symbol.for("openclaw.codexClientVersionHandoff")]?.getStore();
+          const codexClientVersion = handedOff ? (handedOff.version ?? "unreported") : "not-handed-off";`
+              : ""
+          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -241,6 +248,7 @@ module.exports = {
             api: "openai-completions",
             models: [
               ${params.catalogControl ? "...legacyModels," : ""}
+              ${params.reportCodexClientVersion ? '{ id: "codex-client-" + codexClientVersion, name: "Codex client version proof" },' : ""}
               { id: "sqlite-model", name: "SQLite model" },
               {
                 id: ${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)},
@@ -372,6 +380,7 @@ export async function createCatalogFixture(
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
     catalogControl?: boolean;
+    reportCodexClientVersion?: boolean;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -504,7 +513,7 @@ async function expectNativeHarnessModelsPublished(params: {
       getRuntimeConfig: () => params.config,
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as GatewayRequestContext;
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: params.config,
       agentId: "main",
       snapshot: catalog,
@@ -515,7 +524,7 @@ async function expectNativeHarnessModelsPublished(params: {
       isCurrent: params.snapshot.isCurrent,
       observationConfig: params.snapshot.observationConfig,
     });
-    const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
+    const hostEvaluation = projector.evaluateEntry(nativeEntry!);
     expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
       availability: true,
     });

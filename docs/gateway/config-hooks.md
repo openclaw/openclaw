@@ -48,6 +48,16 @@ data and restrict the target agent's tools and workspace separately.
 | `gmail`                     | unset                           | Gmail transport and processing defaults; see [Gmail integration](/gateway/config-hooks#gmail-integration).                                                                                                        |
 | `internal`                  | separate subsystem              | Internal event-hook configuration; see [Hooks](/automation/hooks). It does not enable HTTP ingress.                                                                                                               |
 
+If an enabled hook token contains an unresolved authored environment reference,
+Gateway startup continues with external HTTP hooks disabled and logs a warning.
+Supply the referenced secret to the Gateway process and reload or restart to
+enable the endpoints. An unresolved token in a hot reload is rejected; the
+previous valid hooks configuration remains active. Internal event hooks are a
+separate subsystem. `openclaw doctor` reports unresolved hook credentials in its
+current environment and gives recovery guidance; it does not generate a
+replacement secret or overwrite the configured reference. The CLI and Gateway
+service can have different environments.
+
 `hooks.token` should be distinct from active Gateway shared-secret auth
 (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` /
 `OPENCLAW_GATEWAY_PASSWORD`). Startup logs a non-fatal warning on reuse;
@@ -74,11 +84,11 @@ The normal body limit is **256 KiB**, with a **30-second** body-read timeout.
 Gmail-path mappings receive a larger derived allowance described below. Generic
 hooks parse JSON but do not require the JSON content-type header.
 
-| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/config-hooks#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                                       |
-| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/config-hooks#hook-retries-and-fan-out).                                                                                                                                                                                      |
+| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` admits an ordinary session event; the result does not prove execution or delivery completed. |
+| `POST /hooks/agent`  | [Agent payload](/gateway/config-hooks#hook-agent-payload). By default returns `200 { ok: true, runId }` after session/global placement admission. With `waitForCompletion: true`, waits for the admitted run and adds bounded terminal execution/delivery facts in `completion`.                                                                                                                                  |
+| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/config-hooks#hook-retries-and-fan-out).                                                                                                                                                                                                 |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
 those names. `/hooks` itself has no action.

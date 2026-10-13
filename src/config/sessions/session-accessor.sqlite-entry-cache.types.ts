@@ -1,8 +1,12 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionActorHotState } from "./session-actor-state.types.js";
+import type { SessionMembershipFact } from "./session-membership-facts.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -51,6 +55,8 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
         }
       : {}),
     archivedAt: entry.archivedAt,
+    category: entry.category,
+    sidebarRoot: entry.sidebarRoot,
     ...(entry.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
@@ -69,6 +75,8 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
+    permissionMode: entry.permissionMode,
+    toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
   };
 }
 
@@ -76,6 +84,7 @@ export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
 };
@@ -108,24 +117,44 @@ export type SessionEntryPublicationSource = {
   filename: string;
   canonicalPath?: string;
   revision?: number;
+  /** Complete postimages may be reused only at this committing writer's physical revision. */
+  writeToken?: string;
 };
 
 export type PreparedSessionEntryChanges = {
   source: SessionEntryPublicationSource;
   entries: ReadonlyMap<string, SessionEntry>;
+  fullEntries?: ReadonlyMap<string, SessionEntry>;
+  actorPostimages?: ReadonlyMap<string, SessionActorHotState>;
   sharing?: ReadonlyMap<string, SessionSharingEntry>;
+  projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
+};
+
+export type SessionEntryProjectionFacts = {
+  membership: SessionMembershipFact;
+  hasBoard: boolean;
+  activitySummaryWatermark: SessionTranscriptWatermark | undefined;
 };
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  /** Full snapshots belong to bounded entry readers, not resident display rows. */
+  fullEntries?: ReadonlyMap<string, SessionEntry>;
+  /** Closed entry patches preserve the resident actor's unchanged custody and transcript facts. */
+  actorPostimages?: ReadonlyMap<string, SessionActorHotState>;
+  /** Canonical metadata is committed, but these entries lack a valid display projection. */
+  unavailableParticipantKeys?: readonly string[];
   ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
+  projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
   sharingUnchangedKeys: string[];
+  generationUnchangedKeys: string[];
 };
 
 export type CreationDatabase =
@@ -135,7 +164,7 @@ export type CreationDatabase =
       agentId: string | undefined;
     }
   | {
-      kind: "file";
+      kind: "file" | "actor";
       path: string;
       agentId: string;
       databaseIdentity: string;
@@ -148,11 +177,21 @@ export type CreationRecord = {
   active: boolean;
 };
 export type PlaceholderReceipt = {
+  kind: "placeholder";
   creation: CreationRecord | undefined;
   databaseIdentity: DatabaseSync | string;
   sessionKey: string;
   placeholder: SessionEntryPlaceholder;
   committed: boolean;
+};
+
+export type CreatedSessionEntryReceipt = {
+  kind: "entry";
+  creation: CreationRecord;
+  databaseIdentity: string;
+  sessionKey: string;
+  entry: SessionSharingEntry;
+  committed: true;
 };
 
 export type SessionEntryPublicationRecord = {
@@ -164,17 +203,36 @@ export type SessionEntryPublicationRecord = {
   | {
       kind: "metadata";
       sharingChange: "changed" | "unchanged";
+      previous?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
       prepared: PreparedSessionEntryChanges;
+      /** Row delivery rechecks and folds synchronous writes made by earlier listeners. */
+      readCurrent?: (sessionKey: string) =>
+        | {
+            entry?: SessionEntry;
+            fullEntry?: SessionEntry;
+            actorPostimage?: SessionActorHotState;
+            sharing?: SessionSharingEntry;
+            projection?: SessionEntryProjectionFacts;
+          }
+        | undefined;
+      creation?: CreatedSessionEntryReceipt;
     }
   | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt }
 );
 
 export type PendingSessionEntryPublication = {
-  superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
-  metadataSuperseded: Set<string>;
-  ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
+  superseded: Set<string>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
+  entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  /** An undefined value records a participant command with no projection change. */
+  participantProjections?: ReadonlyMap<
+    string,
+    Pick<InternalSessionEntry, "participants" | "participantCount"> | undefined
+  >;
+  /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
+  generationUnchanged: Set<string>;
   settled: boolean;
   completion: Promise<void>;
 };
@@ -183,4 +241,53 @@ export function readSessionEntryCreationIdentity(creation: CreationRecord): Data
   return creation.source.kind === "native"
     ? creation.source.database.db
     : creation.source.databaseIdentity;
+}
+
+export function assertSessionEntryCreationCurrent(
+  creation: CreationRecord | undefined,
+): asserts creation is CreationRecord {
+  if (!creation?.active) {
+    throw new Error("Session creation publication owner is no longer current");
+  }
+  const source = creation.source;
+  if (source.kind !== "native") {
+    source.assertCurrent();
+  } else if (!source.database.db.isOpen || source.database.agentId !== source.agentId) {
+    throw new Error("Session creation publication owner is no longer current");
+  }
+}
+
+export type SessionEntryCreationTarget = {
+  agentId: string;
+  sessionKey: string;
+  paths: ReadonlySet<string>;
+  databaseIdentity?: string;
+};
+
+export function assertSessionEntryCreationTarget(
+  creation: CreationRecord | undefined,
+  target: SessionEntryCreationTarget,
+): void {
+  assertSessionEntryCreationCurrent(creation);
+  const sourcePath =
+    creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
+  const sourceIdentity =
+    creation.source.kind === "native"
+      ? findOpenClawAgentDatabaseIdentity(creation.source.database)?.identity
+      : creation.source.databaseIdentity;
+  const matchesDatabaseIdentity =
+    typeof sourceIdentity === "string" &&
+    target.databaseIdentity ===
+      (creation.source.kind === "actor" ? sourceIdentity : `file:${sourceIdentity}`);
+  const matchesTarget =
+    target.databaseIdentity !== undefined
+      ? matchesDatabaseIdentity
+      : target.paths.has(path.resolve(sourcePath));
+  if (
+    creation.agentId !== target.agentId ||
+    creation.sessionKey !== target.sessionKey ||
+    !matchesTarget
+  ) {
+    throw new Error("Session creation publication owner is no longer current");
+  }
 }

@@ -4,7 +4,14 @@ import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
-import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import type { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
+import {
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageAuthority } from "../config/sessions/session-actor-storage-contract.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
@@ -28,7 +35,7 @@ type IncognitoSessionDeadline = {
   agentId: string;
   sessionId: string;
   expiresAt: number;
-  source: { identity: string | symbol; assertCurrent(): void; assertSettlingCurrent?(): void };
+  source: { identity: string | symbol; assertCurrent(): void };
 };
 
 type DeleteIncognitoSession = (
@@ -46,22 +53,16 @@ function createIncognitoSessionDeadlineOwner(params: {
   const scheduler = params.scheduler.scope();
   const restartSignal = getGatewayRestartDrainSignal();
   const deadlines = new Map<string, Deadline>();
-  const current = (deadline: Deadline, accepted = false) => {
-    const registered = deadlines.get(deadline.sessionKey);
-    const retaining = accepted && deadline.source.assertSettlingCurrent !== undefined;
+  const current = (deadline: Deadline) => {
     if (
-      (!retaining && (scheduler.signal.aborted || restartSignal.aborted)) ||
-      (registered !== deadline && (!retaining || registered !== undefined))
+      scheduler.signal.aborted ||
+      restartSignal.aborted ||
+      deadlines.get(deadline.sessionKey) !== deadline
     ) {
       return false;
     }
     try {
-      // An acknowledged deletion may remove its own row and deadline before cleanup settles.
-      if (accepted && deadline.source.assertSettlingCurrent) {
-        deadline.source.assertSettlingCurrent();
-      } else {
-        deadline.source.assertCurrent();
-      }
+      deadline.source.assertCurrent();
       return true;
     } catch {
       return false;
@@ -87,7 +88,7 @@ function createIncognitoSessionDeadlineOwner(params: {
         let accepted = true;
         try {
           await params.deleteSession(deadline, () => {
-            if (!accepted || !current(deadline, true)) {
+            if (!accepted || !current(deadline)) {
               throw new Error("Incognito expiry no longer owns this session.");
             }
           });
@@ -141,12 +142,28 @@ function createIncognitoSessionDeadlineOwner(params: {
   };
 }
 
-/** Production acquisition remains native until every incognito caller moves together. */
-export function startIncognitoSessionLifetime(params: {
+type IncognitoSessionLifetimeParams = {
   context: GatewayRequestContext;
   logWarning: (message: string) => void;
   scheduler: GatewayScheduler;
-}): GatewayPostReadySidecarHandle {
+};
+
+/** Observe existing owners only; production acquisition remains native until cutover. */
+export function startIncognitoSessionLifetime(
+  params: IncognitoSessionLifetimeParams,
+): GatewayPostReadySidecarHandle {
+  const native = startNativeIncognitoSessionLifetime(params);
+  const memory = startIncognitoActorsSessionLifetime(params);
+  return {
+    async stop() {
+      await Promise.all([native.stop(), memory.stop()]);
+    },
+  };
+}
+
+function startNativeIncognitoSessionLifetime(
+  params: IncognitoSessionLifetimeParams,
+): GatewayPostReadySidecarHandle {
   const owner = createIncognitoSessionDeadlineOwner({
     ...params,
     async deleteSession(deadline, assertCurrent) {
@@ -237,55 +254,184 @@ export function startIncognitoSessionLifetime(params: {
   };
 }
 
-/**
- * Inactive: activation supplies its captured actor and the bound Gateway deletion owner.
- * @internal Knip production exception; atomic activation installs this sidecar.
- */
-export function startIncognitoActorSessionLifetime(params: {
-  actor: IncognitoSessionActor;
+type MemoryOwner = ReturnType<typeof createMemorySessionActorOwner>;
+type MemoryDeadline = Omit<IncognitoSessionDeadline, "source">;
+
+function startIncognitoActorSessionLifetime(params: {
+  owner: MemoryOwner;
   scheduler: GatewayScheduler;
   logWarning: (message: string) => void;
-  deleteSession: DeleteIncognitoSession;
+  deleteSession: (deadline: MemoryDeadline, binding: SessionActorStorageBinding) => Promise<void>;
 }): GatewayPostReadySidecarHandle {
-  const { actor } = params;
-  actor.assertCurrent();
-  const owner = createIncognitoSessionDeadlineOwner({
-    ...params,
-    deleteSession: (deadline, assertCurrent) =>
-      actor.sessions.withSharedState(() => params.deleteSession(deadline, assertCurrent)),
-  });
-  const runInOwner = AsyncLocalStorage.snapshot();
+  const { owner } = params;
+  const scheduler = params.scheduler.scope();
+  const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize() {} };
+  const deadlines = new Map<string, MemoryDeadline & { job?: GatewayScheduledJob }>();
   let active = true;
+  const forget = (sessionKey: string) => {
+    deadlines.get(sessionKey)?.job?.cancel();
+    deadlines.delete(sessionKey);
+  };
+  const schedule = (deadline: MemoryDeadline, delayMs?: number) => {
+    const retained: MemoryDeadline & { job?: GatewayScheduledJob } = { ...deadline };
+    deadlines.set(deadline.sessionKey, retained);
+    retained.job = scheduler.schedule({
+      id: `incognito-expiry:${deadline.sessionKey}`,
+      ...(delayMs === undefined ? { atMs: deadline.expiresAt } : { delayMs }),
+      run: async () => {
+        let actor: SessionActorStorageBinding["actor"] | undefined;
+        try {
+          actor = await owner.acquireExisting(deadline.sessionKey, {
+            assertCurrent() {},
+            assertReadable() {},
+          });
+          if (!actor) {
+            if (deadlines.get(deadline.sessionKey) === retained) {
+              forget(deadline.sessionKey);
+            }
+            return;
+          }
+          const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
+          // Deletion checks expectedSessionId at its effect; metadata edits do not renew expiry.
+          await runWithSessionActorStorage(binding, () => params.deleteSession(deadline, binding));
+          if (deadlines.get(deadline.sessionKey) === retained) {
+            forget(deadline.sessionKey);
+          }
+        } catch {
+          let entry: SessionEntry | undefined;
+          try {
+            entry = owner.readSession(deadline.sessionKey, authority)?.entry;
+          } catch {
+            // Closing the memory owner already discarded these sessions.
+          }
+          if (deadlines.get(deadline.sessionKey) !== retained) {
+            return;
+          }
+          if (active && entry?.sessionId === deadline.sessionId) {
+            params.logWarning("Incognito session expiry could not finish cleanup; will retry.");
+            schedule(deadline, CLEANUP_RETRY_MS);
+          } else {
+            forget(deadline.sessionKey);
+          }
+        } finally {
+          await actor?.release();
+        }
+      },
+    });
+  };
+  const observeSession = (sessionKey: string, entry: SessionEntry | undefined) => {
+    const expiresAt = entry && resolveIncognitoSessionExpiresAt(entry);
+    if (!entry || expiresAt === undefined) {
+      forget(sessionKey);
+      return;
+    }
+    if (deadlines.get(sessionKey)?.sessionId === entry.sessionId) {
+      return;
+    }
+    forget(sessionKey);
+    schedule({ sessionKey, sessionId: entry.sessionId, agentId: owner.agentId, expiresAt });
+  };
   const observe = (change?: SessionRowChange) => {
     if (!active) {
       return;
     }
-    if (change && (!("sessionKey" in change) || change.storePath !== actor.path)) {
+    if (change && "sessionKey" in change) {
+      if (change.agentId === owner.agentId && change.storePath === owner.path) {
+        observeSession(change.sessionKey, owner.readSession(change.sessionKey, authority)?.entry);
+      }
       return;
     }
-    const facts = actor.sessions.deadlines();
-    for (const fact of facts) {
-      if (!change || ("sessionKey" in change && change.sessionKey === fact.sessionKey)) {
-        owner.observe({ ...fact, agentId: actor.agentId });
+    const current = owner.listSessions(authority);
+    const keys = new Set(current.map((state) => state.target.sessionKey));
+    for (const key of deadlines.keys()) {
+      if (!keys.has(key)) {
+        forget(key);
       }
     }
-    if (
-      change &&
-      "sessionKey" in change &&
-      !facts.some((fact) => fact.sessionKey === change.sessionKey)
-    ) {
-      owner.forget(change.sessionKey);
+    for (const state of current) {
+      observeSession(state.target.sessionKey, state.entry);
     }
   };
-  observe();
+  const runInOwner = AsyncLocalStorage.snapshot();
   const unsubscribe = sessionChanges.subscribeProjection((change) =>
     runInOwner(() => observe(change)),
   );
+  observe();
   return {
     async stop() {
       active = false;
       unsubscribe();
-      await owner.stop();
+      scheduler.beginClose();
+      await scheduler.stop();
+      deadlines.clear();
+    },
+  };
+}
+
+function startIncognitoActorsSessionLifetime(
+  params: IncognitoSessionLifetimeParams,
+): GatewayPostReadySidecarHandle {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
+  const retained = new Map<MemoryOwner, GatewayPostReadySidecarHandle>();
+  const stopping = new Set<Promise<void>>();
+  const retire = (owner: MemoryOwner, sidecar: GatewayPostReadySidecarHandle) => {
+    retained.delete(owner);
+    const stopped = Promise.resolve(sidecar.stop()).catch(() => {
+      params.logWarning("Incognito expiry could not finish stopping its memory owner.");
+    });
+    stopping.add(stopped);
+    void stopped.finally(() => stopping.delete(stopped));
+  };
+  const observe = () => {
+    const owners = memorySessionActorOwners
+      .list()
+      .filter(
+        (owner) =>
+          owner.path === resolveIncognitoOpenClawAgentSqlitePath({ agentId: owner.agentId, env }),
+      );
+    for (const [owner, sidecar] of retained) {
+      if (!owners.includes(owner)) {
+        retire(owner, sidecar);
+      }
+    }
+    for (const owner of owners) {
+      if (retained.has(owner)) {
+        continue;
+      }
+      retained.set(
+        owner,
+        startIncognitoActorSessionLifetime({
+          ...params,
+          owner,
+          async deleteSession(deadline) {
+            const { deleteGatewaySession } = await import("./server-methods/sessions-delete.js");
+            const result = await deleteGatewaySession({
+              params: {
+                key: deadline.sessionKey,
+                agentId: deadline.agentId,
+                expectedSessionId: deadline.sessionId,
+              },
+              client: null,
+              context: params.context,
+            });
+            if (!result.ok) {
+              throw new Error(result.error.message);
+            }
+          },
+        }),
+      );
+    }
+  };
+  const runInOwner = AsyncLocalStorage.snapshot();
+  const unsubscribe = sessionChanges.subscribeProjection(() => runInOwner(observe));
+  observe();
+  return {
+    async stop() {
+      unsubscribe();
+      for (const [owner, sidecar] of retained) {
+        retire(owner, sidecar);
+      }
+      await Promise.all(stopping);
     },
   };
 }

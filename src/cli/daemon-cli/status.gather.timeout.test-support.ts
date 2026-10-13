@@ -95,7 +95,7 @@ export function registerStatusTimeoutTests(params: {
               inspectionFailure: {
                 code: "service-runtime-inspection-failed",
                 timeoutMs: 10_000,
-                detail: "Scheduled Task probe timed out after 10000 ms (ETIMEDOUT).",
+                detail: "Scheduled Task check timed out after 10000 ms (ETIMEDOUT).",
               },
             });
           } else {

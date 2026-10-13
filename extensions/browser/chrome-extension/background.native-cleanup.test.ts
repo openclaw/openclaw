@@ -132,45 +132,14 @@ describe("native debugger cleanup debt", () => {
     expect.soft(f.clients.has(oldA)).toBe(false);
   });
 
-  it("retries settled cleanup on explicit acquire without adopting the old client", async () => {
+  it("retains the native client after NoTab and cleans by owned target identity", async () => {
     const f = await fixture();
     const old = await f.attach(7);
-    f.h.debuggerDetach.mockRejectedValueOnce(new Error("native cleanup refused"));
-    expect(await f.command("detach", 7)).toMatchObject({ type: "error" });
+    f.tabs.delete(7);
     expect(f.clients.has(old)).toBe(true);
-    expect.soft(await f.command("attach", 7)).toMatchObject({ type: "result" });
-    expect.soft(f.clients.has(old)).toBe(false);
-    expect.soft(f.tabs.get(7)).not.toBe(old);
-  });
-
-  it.each(["NoTab", "removal", "replacement"])(
-    "retains the actual native client after %s and cleans by owned target identity",
-    async (ending) => {
-      const f = await fixture();
-      const old = await f.attach(7);
-      f.tabs.delete(7);
-      expect(f.clients.has(old)).toBe(true);
-      if (ending === "removal") {
-        f.h.tabsRemovedListener?.(7);
-      } else if (ending === "replacement") {
-        f.h.tabsReplacedListener(10, 7);
-      } else {
-        expect(await f.command("detach", 7)).toMatchObject({ type: "result" });
-      }
-      await vi.waitFor(() => expect(f.clients.has(old)).toBe(false));
-      expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: old });
-    },
-  );
-
-  it("does not invent cleanup debt for never-owned removed or replaced tabs", async () => {
-    const f = await fixture();
-    f.h.tabsRemovedListener?.(50);
-    f.h.tabsReplacedListener(52, 51);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(f.h.debuggerDetach).not.toHaveBeenCalled();
-    await f.attach(7);
+    expect(await f.command("detach", 7)).toMatchObject({ type: "result" });
+    await vi.waitFor(() => expect(f.clients.has(old)).toBe(false));
+    expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: old });
   });
 
   it("drains an in-flight detach after authoritative native closure before a successor", async () => {

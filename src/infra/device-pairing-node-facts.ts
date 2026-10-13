@@ -19,7 +19,7 @@ export async function updatePairedNodeBins(
       onAuthorityRefused: () => false,
       assertCurrent: () => {
         if (isProbeCurrent?.() === false) {
-          throw new DevicePairingAuthorityRefusedError("node bin probe ownership changed");
+          throw new DevicePairingAuthorityRefusedError("node bin check ownership changed");
         }
       },
     },

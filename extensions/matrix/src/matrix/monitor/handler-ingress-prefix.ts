@@ -1,5 +1,6 @@
 import type { LocationMessageEventContent } from "../sdk.js";
 import { RelationType } from "../send/types.js";
+import type { createDirectRoomTracker } from "./direct.js";
 import { hasBundledMatrixReplacementRelation } from "./handler-helpers.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
@@ -22,13 +23,7 @@ type MatrixIngressPrefixConfig = {
   inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
   roomId: string;
   logVerboseMessage: (message: string) => void;
-  directTracker: {
-    isDirectMessage: (params: {
-      roomId: string;
-      senderId: string;
-      selfUserId: string;
-    }) => Promise<boolean>;
-  };
+  directTracker: Pick<ReturnType<typeof createDirectRoomTracker>, "isDirectMessage">;
   claimInboundReplay: (handle: ReplayClaimHandle) => void;
 };
 

@@ -38,7 +38,7 @@ it.each(["existing", "admitted new"] as const)(
         ctx.media[0].path = "media/inbound/private.txt";
         return { staged: new Map([[0, "media/inbound/private.txt"]]) };
       });
-      const request = normalizeChatSendRequest({
+      const request = await normalizeChatSendRequest({
         client: null,
         params: {
           sessionKey: "agent:main:private",

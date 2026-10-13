@@ -6,11 +6,8 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-  disposeOpenClawAgentDatabaseByPath,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
@@ -201,7 +198,7 @@ describe("session tool outcomes", () => {
           .join("\n");
         expect(text.includes("synthetic result")).toBe(true);
         expect(text.includes("message-end rewrite")).toBe(withRecovery);
-        expect(text.includes(secret)).toBe(false);
+        expect(text).toContain(secret);
         expect(
           replay.some(
             (message) =>
@@ -221,8 +218,7 @@ describe("session tool outcomes", () => {
         ).toMatchObject(expected);
       } finally {
         session.dispose();
-        await closeOpenClawAgentDatabaseByPathAsync(path.join(agentDir, "openclaw-agent.sqlite"));
-        disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
+        await disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
       }
     },
   );

@@ -24,12 +24,6 @@ type OpenAIQuicksilverTerminalEvent =
   | { kind: "error"; error: Error }
   | { kind: "close"; code: number; reason: string };
 
-type OpenAIQuicksilverConnectedSideband = {
-  socket: OpenAIQuicksilverSocket;
-  bufferedFrames: OpenAIQuicksilverBufferedFrame[];
-  detachBuffer: () => OpenAIQuicksilverTerminalEvent | undefined;
-};
-
 function rawDataByteLength(data: RawData): number {
   if (Array.isArray(data)) {
     return data.reduce((total, chunk) => total + chunk.byteLength, 0);
@@ -117,7 +111,7 @@ export async function connectOpenAIQuicksilverSideband(
     url: string;
   },
   runtime: OpenAIRealtimeHost,
-): Promise<OpenAIQuicksilverConnectedSideband> {
+) {
   let lastError: unknown = new Error("GPT-Live sideband connection failed");
   for (let attempt = 0; attempt < SIDEBAND_CONNECT_ATTEMPTS; attempt += 1) {
     if (params.signal.aborted) {

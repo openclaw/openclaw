@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixRuntimeClientOptions } from "../client-bootstrap.js";
@@ -19,8 +18,7 @@ export function resolveMediaMaxBytes(
       "Matrix media limits requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
-  const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
+  const matrixCfg = resolveMatrixAccountConfig({ cfg, accountId });
   const mediaMaxMb = matrixCfg.mediaMaxMb;
   // Only a positive value is a cap, matching CommonMediaMaxMbSchema. `0` or a negative
   // number would become a literal 0-byte limit that rejects every outbound media send;

@@ -86,7 +86,7 @@ export const A2aTaskRequestParamsSchema = z.object({
 
 type A2aCanonicalMethod = "SendMessage" | "GetTask";
 
-// Hermes-generation A2A 0.3 peers use dotted RPC names; only these three
+// Hermes-generation A2A 0.3 peers use dotted RPC names; only these
 // explicitly supported interoperability aliases are accepted.
 const A2A_METHOD_ALIASES: Readonly<Record<string, A2aCanonicalMethod>> = {
   SendMessage: "SendMessage",

@@ -18,7 +18,7 @@ export function registerStorageCommand(program: Command): void {
 
   storage
     .command("list")
-    .description("List storage locations and probe their availability")
+    .description("List storage locations and check their availability")
     .option("--json", "Output JSON", false)
     .action(async (opts: { json?: boolean }, command: Command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -35,7 +35,7 @@ export function registerStorageCommand(program: Command): void {
       "Initialize a new location or verify its existing marker and encryption key",
       "storageInitCommand",
     ],
-    ["test", "Write, read, verify, and delete a temporary probe object", "storageTestCommand"],
+    ["test", "Write, read, verify, and delete a temporary check object", "storageTestCommand"],
   ] as const) {
     storage
       .command(`${operation} <name>`)

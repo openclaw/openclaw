@@ -212,7 +212,7 @@ export function buildStatusSecurityAuditLines(params: {
     }
   }
   lines.push(theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`));
-  lines.push(theme.muted(`Deep probe: ${formatCliCommand("openclaw security audit --deep")}`));
+  lines.push(theme.muted(`Deep check: ${formatCliCommand("openclaw security audit --deep")}`));
   return lines;
 }
 

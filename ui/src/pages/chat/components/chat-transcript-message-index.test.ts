@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
 import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
@@ -323,7 +324,7 @@ describe("completed reply frame ownership", () => {
     },
   );
 
-  it("does not pull pre-steer work across the intervening user message", () => {
+  it("keeps resumed work with its final answer after the steer", () => {
     const messages = replyHistory(["run-u", "run-1"]);
     const steer = {
       role: "user",
@@ -333,18 +334,21 @@ describe("completed reply frame ownership", () => {
     };
     messages.splice(2, 0, steer);
     const chain = project(messages);
-    const [before, after] = frames(chain);
+    const [before, frame] = frames(chain);
     expect(chain.transcriptItems).toEqual([
       expect.objectContaining({ role: "user" }),
       before,
       expect.objectContaining({ role: "user" }),
-      after,
+      frame,
     ]);
     expect(messagesIn([before!])).toEqual([messages[1]]);
-    expect(before?.runId).toBe("run-u");
-    expect(messagesIn([after!])).toEqual(messages.slice(3));
-    expect(before?.parts[0]?.kind).toBe("work-group");
-    expect(after?.parts[0]?.kind).toBe("work-group");
+    expect(frame?.runId).toBe("run-1");
+    expect(messagesIn([frame!])).toEqual(messages.slice(3));
+    expect(frame?.parts[0]?.kind).toBe("work-group");
+    expect(frame?.outcome).toMatchObject({
+      kind: "completed",
+      actionOwner: { message: messages.at(-1) },
+    });
     expect(new Set(chain.transcriptItems.map((item) => item.key)).size).toBe(
       chain.transcriptItems.length,
     );
@@ -419,7 +423,7 @@ describe("transcript structure cache", () => {
     expect(projectTranscriptChain(items, { ...chainOptions, searchActive: true })).not.toBe(chain);
     const streamed = projectTranscriptChain(items, chainOptions);
     // Message-less terminals record their outcome beside published history.
-    rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+    rememberLiveTerminalRun(partial, "run-1", "error");
     expect(projectTranscriptChain(items, chainOptions)).not.toBe(streamed);
 
     const settled = projectTranscriptChain(items, chainOptions);
@@ -679,5 +683,231 @@ describe("incremental stream projection", () => {
     for (const { chain, index, snapshot } of retained) {
       expect({ chain, index }).toEqual(snapshot);
     }
+  });
+});
+
+describe("subagent handoff", () => {
+  const prose = {
+    role: "assistant",
+    content: "Starting three subagents.",
+    timestamp: 20,
+    __openclaw: { id: "prose", seq: 2, runId: "run-1" },
+  };
+  const readRow = (id: string, runId: string, seq: number) => ({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "read",
+    content: "ok",
+    timestamp: 20 + seq,
+    __openclaw: { id, seq, runId },
+  });
+  const waiting = [
+    history[0],
+    prose,
+    readRow("read-1", "run-1", 3),
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
+      timestamp: 30,
+      __openclaw: { id: "yield-call", seq: 4, runId: "run-1" },
+    },
+    {
+      role: "toolResult",
+      toolCallId: "yield",
+      toolName: "sessions_yield",
+      content: [{ type: "text", text: '{"status":"yielded"}' }],
+      timestamp: 31,
+      __openclaw: { id: "yield-result", seq: 5, runId: "run-1" },
+    },
+  ];
+  const frameShows = (
+    frame: ReturnType<typeof projectTranscriptChain>["transcriptItems"][number] | undefined,
+    message: unknown,
+  ) =>
+    frame?.kind === "agent-run-frame" &&
+    frame.parts.some(
+      (part) => part.kind === "group" && part.messages.some((source) => source.message === message),
+    );
+
+  const answer = {
+    role: "assistant",
+    content: "All three finished.",
+    stopReason: "stop",
+    timestamp: 50,
+    __openclaw: { id: "answer", seq: 8, runId: "announce:resume" },
+  };
+  const framesOf = (chain: ReturnType<typeof projectTranscriptChain>) =>
+    chain.transcriptItems.filter((item) => item.kind === "agent-run-frame");
+  const waitingChain = () =>
+    projectTranscriptChain(
+      chatItems({ messages: waiting, subagentWait: { startedAt: 32, runId: "run-1" } }),
+      chainOptions,
+    );
+
+  it("keeps the wait inside the handed-off run's block", () => {
+    const chain = waitingChain();
+    const frames = framesOf(chain);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ runId: "run-1", outcome: { kind: "active" } });
+    expect(frameShows(frames[0], prose)).toBe(true);
+    expect(
+      frames[0]?.parts.flatMap((part) => (part.kind === "stream-run" ? part.parts : [])),
+    ).toEqual([expect.objectContaining({ kind: "reading-indicator", waitingOn: "subagents" })]);
+    expect(chain.transcriptItems.some((item) => item.kind === "stream-run")).toBe(false);
+  });
+
+  it("leaves that block as it was between the wait ending and the resume", () => {
+    const waitingKey = framesOf(waitingChain())[0]?.key;
+    // The last subagent finished; the handed-off run has not been resumed yet.
+    const chain = projectTranscriptChain(chatItems({ messages: waiting }), chainOptions);
+    const frames = framesOf(chain);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ key: waitingKey, runId: "run-1" });
+    expect(frameShows(frames[0], prose)).toBe(true);
+    // Its operations are not rolled up under the handoff sentence in the meantime,
+    // and they stay below that sentence.
+    expect(frames[0]?.parts.some((part) => part.kind === "work-group")).toBe(false);
+    expect(frames[0]?.parts.at(-1)).toMatchObject({ kind: "group", role: "tool" });
+    expect(chain.transcriptItems.some((item) => item.kind === "notice")).toBe(false);
+  });
+
+  it("keeps the resumed run's status in that block before its run id is known", () => {
+    const waitingKey = framesOf(waitingChain())[0]?.key;
+    resetWorkingProgress();
+    const chain = projectTranscriptChain(
+      chatItems({ messages: waiting, runWorking: true, runActive: true }),
+      { ...chainOptions, runWorking: true },
+    );
+    const frames = framesOf(chain);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ key: waitingKey, outcome: { kind: "active" } });
+    const status = frames[0]?.parts.flatMap((part) =>
+      part.kind === "stream-run" ? part.parts : [],
+    );
+    expect(status).toEqual([expect.objectContaining({ kind: "reading-indicator", startedAt: 10 })]);
+    expect(status?.[0]).not.toHaveProperty("runId");
+    expect(chain.transcriptItems.some((item) => item.kind === "stream-run")).toBe(false);
+  });
+
+  it("continues that block when the run resumes, with its work in place and one answer", () => {
+    const waitingKey = framesOf(waitingChain())[0]?.key;
+    const chain = projectTranscriptChain(
+      chatItems({ messages: [...waiting, readRow("read-2", "announce:resume", 7), answer] }),
+      {
+        ...chainOptions,
+        session: {
+          key: sessionKey,
+          lastRunId: "announce:resume",
+          status: "done",
+          runtimeMs: 4_000,
+        },
+      },
+    );
+    expect(chain.transcriptItems.some((item) => item.kind === "notice")).toBe(false);
+    const frames = framesOf(chain);
+    expect(frames).toHaveLength(1);
+    // The row the reader was already looking at, now closed by the run that answered.
+    expect(frames[0]).toMatchObject({
+      key: waitingKey,
+      runId: "announce:resume",
+      outcome: { kind: "completed", actionOwner: { message: answer } },
+    });
+    expect(frameShows(frames[0], prose)).toBe(true);
+    expect(frameShows(frames[0], answer)).toBe(true);
+    // No rollup: the closing line reports the request, and both runs' operations stay visible.
+    expect(frames[0]?.parts.some((part) => part.kind === "work-group")).toBe(false);
+    expect(new Set(chatItemGroups(frames[0]!).map((group) => group.runId))).toEqual(
+      new Set(["run-1", "announce:resume"]),
+    );
+  });
+
+  it("keeps operations on either side of a handoff in one row unless the agent spoke between", () => {
+    const logsOf = (messages: unknown[]) =>
+      framesOf(projectTranscriptChain(chatItems({ messages }), chainOptions)).flatMap((frame) =>
+        frame.parts.filter((part) => part.kind === "activity-run"),
+      );
+    const waitingRow = framesOf(waitingChain())[0]?.parts.find(
+      (part) => part.kind === "group" && part.messages.every((source) => source.message !== prose),
+    );
+    const resumedRow = readRow("read-2", "announce:resume", 7);
+    const logs = logsOf([...waiting, resumedRow, answer]);
+    expect(logs).toHaveLength(1);
+    // The row the reader may have opened while waiting keeps its identity.
+    expect(logs[0]).toMatchObject({ key: `activity:${waitingRow?.key}` });
+    expect(logs[0]?.groups.map((group) => group.runId)).toEqual(["run-1", "announce:resume"]);
+    const spoke = {
+      role: "assistant",
+      content: "Two finished; checking the third.",
+      timestamp: 45,
+      __openclaw: { id: "spoke", seq: 6, runId: "announce:resume" },
+    };
+    expect(logsOf([...waiting, spoke, resumedRow, answer])).toEqual([]);
+  });
+
+  it("moves work recorded after the resumed answer up to the operations before it", () => {
+    const partsOf = (trailing: unknown, key = sessionKey) => {
+      const frames = framesOf(
+        projectTranscriptChain(
+          chatItems({
+            sessionKey: key,
+            messages: [...waiting, readRow("read-2", "announce:resume", 7), answer, trailing],
+          }),
+          {
+            ...chainOptions,
+            sessionKey: key,
+            session: { key, lastRunId: "announce:resume", status: "done" },
+          },
+        ),
+      );
+      // Whatever follows the answer, the request stays one block.
+      expect(frames).toHaveLength(1);
+      return frames[0]!.parts;
+    };
+    const endsWithAnswer = (parts: ReturnType<typeof partsOf>) => {
+      const last = parts.at(-1);
+      return last?.kind === "group" && last.messages.some((source) => source.message === answer);
+    };
+    const logSizes = (parts: ReturnType<typeof partsOf>) =>
+      parts.flatMap((part) => (part.kind === "activity-run" ? [part.groups.length] : []));
+    // The step that sent the answer is recorded after it; nothing follows the answer.
+    const folded = partsOf(readRow("wrapper", "announce:resume", 9));
+    expect(endsWithAnswer(folded)).toBe(true);
+    expect(logSizes(folded)).toEqual([3]);
+    // A step that failed there stays where it happened.
+    const failed = partsOf({ ...readRow("wrapper", "announce:resume", 9), isError: true });
+    expect(endsWithAnswer(failed)).toBe(false);
+    expect(logSizes(failed)).toEqual([2]);
+    // So does the message of a run that stopped in error after answering.
+    const stopped = partsOf({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "late", name: "read", arguments: {} }],
+      stopReason: "error",
+      timestamp: 60,
+      __openclaw: { id: "stopped", seq: 9, runId: "announce:resume" },
+    });
+    expect(endsWithAnswer(stopped)).toBe(false);
+    // A session that never rolls completed work up keeps its transcript order.
+    const channel = partsOf(readRow("wrapper", "announce:resume", 9), "agent:main:main");
+    expect(endsWithAnswer(channel)).toBe(false);
+    expect(logSizes(channel)).toEqual([2]);
+  });
+
+  it("keeps a later request apart from the block that handed off", () => {
+    const chain = projectTranscriptChain(
+      chatItems({
+        messages: [
+          ...waiting,
+          {
+            role: "user",
+            content: "Also check the docs.",
+            timestamp: 40,
+            __openclaw: { id: "next", seq: 6, runId: "run-2" },
+          },
+          { ...answer, __openclaw: { id: "answer", seq: 7, runId: "run-2" } },
+        ],
+      }),
+      chainOptions,
+    );
+    expect(framesOf(chain).map((frame) => frame.runId)).toEqual(["run-1", "run-2"]);
   });
 });

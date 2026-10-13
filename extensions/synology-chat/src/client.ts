@@ -61,7 +61,6 @@ function isProvenPreConnectFailure(error: unknown): boolean {
   return foundPreConnectLeaf;
 }
 
-// --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
 //   - Outgoing webhook user_id: per-integration sequential ID (e.g. 1)
 //   - Chat API user_id: global internal ID (e.g. 4)
@@ -112,7 +111,7 @@ const ChatUserListResponseSchema = z.object({
 
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export async function sendMessage(
   incomingUrl: string,
@@ -208,13 +207,7 @@ export async function sendHostedFileUrl(
   }
 }
 
-/**
- * Fetch the list of Chat users visible to this bot via the user_list API.
- * Results are cached for CACHE_TTL_MS to avoid excessive API calls.
- *
- * The user_list endpoint uses the same base URL as the chatbot API but
- * with method=user_list instead of method=chatbot.
- */
+// Cache user lists for CACHE_TTL_MS to avoid excessive API calls.
 async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
@@ -352,8 +345,6 @@ function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
  * Synology Chat outgoing webhooks send a user_id that may NOT match the
  * Chat-internal user_id needed by the chatbot API (method=chatbot).
  * The webhook's "username" field corresponds to the Chat user's "nickname".
- *
- * @returns The correct Chat user_id, or undefined if not found
  */
 export async function resolveLegacyWebhookNameToChatUserId(params: {
   incomingUrl: string;

@@ -1,7 +1,7 @@
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
-  openOpenClawStateDatabase,
+  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -34,12 +34,21 @@ describe("openSlackPresenceCooldownStore", () => {
           (entry) => entry.key === "default:T123:U123",
         )!;
         expect(persisted.expiresAt! - persisted.createdAt).toBe(8 * 60 * 60 * 1_000);
-        // The actor's clock is independent; expire the persisted row before the read.
-        openOpenClawStateDatabase()
-          .db.prepare(
-            "UPDATE plugin_state_entries SET expires_at = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-          )
-          .run(Date.now() - 1, "slack", "presence-greeting-cooldowns", "default:T123:U123");
+        const options = openKeyedStore.mock.calls[0]?.[0];
+        if (!options) {
+          throw new Error("expected the cooldown store options");
+        }
+        // Publish a backdated row through the native owner, not an unobserved SQL update.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(1);
+        try {
+          createPluginStateSyncKeyedStoreForTests<number>("slack", options).register(
+            "default:T123:U123",
+            now,
+            { ttlMs: 1 },
+          );
+        } finally {
+          clock.mockRestore();
+        }
         expect(await reopened.lookup("default:T123:U123")).toBeUndefined();
         expect(await reopened.registerIfAbsent("default:T123:U123", now + 1)).toBe(true);
         expect(await reopened.deleteIfEqual?.("default:T123:U123", now)).toBe(false);

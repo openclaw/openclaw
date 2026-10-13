@@ -34,11 +34,9 @@ export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): vo
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  if (opts.run) {
-    const current = loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
-    if (current) {
-      throw new UpdateRecoveryRequiredError(current);
-    }
+  const current = opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
+  if (current) {
+    throw new UpdateRecoveryRequiredError(current);
   }
 }
 
@@ -48,14 +46,7 @@ export async function assertUpdateCommandPackageFinalization(
 ): Promise<void> {
   const run = params.opts.run;
   const executor = run?.executorFence;
-  const assertCurrent = () => {
-    if (params.opts.run !== run || run?.executorFence !== executor) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Package finalization lost its original executor.",
-      );
-    }
-    executor?.assertCurrent();
-  };
+  const assertCurrent = () => executor?.assertCurrent();
   try {
     assertCurrent();
     if (params.opts.recovery) {
@@ -87,9 +78,6 @@ export function createUpdateCommandFinalizationFence(
   const executor = originalRun?.executorFence;
   return () => {
     try {
-      if (params.opts.run !== originalRun || originalRun?.executorFence !== executor) {
-        throw new Error("Package finalization lost its original executor.");
-      }
       executor?.assertCurrent();
     } catch (cause) {
       throw new UpdateCommandPendingRecoveryFailure(params.result, formatErrorMessage(cause), {

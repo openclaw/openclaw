@@ -75,17 +75,22 @@ export function resolveTypefaces(
 
 // Load faces only when selected or previewed; retain them so switching slots
 // or reopening specimens never replaces an already loaded stylesheet.
-function loadTypefaceStylesheet(face: TypefaceId): void {
+export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | undefined {
   const id = `openclaw-typeface-${face}`;
   const asset = TYPEFACES[face].asset;
-  if (!asset || document.getElementById(id)) {
-    return;
+  if (!asset) {
+    return undefined;
+  }
+  const existing = document.getElementById(id);
+  if (existing instanceof HTMLLinkElement) {
+    return existing;
   }
   const link = document.createElement("link");
   link.id = id;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
   document.head.append(link);
+  return link;
 }
 
 export function syncTypefaceStylesheets(faces: TypefacePair): void {

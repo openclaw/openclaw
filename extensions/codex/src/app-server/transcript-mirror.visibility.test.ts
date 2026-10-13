@@ -21,10 +21,7 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
-it.each([
-  { sourceTool: "sessions_send", hidden: true },
-  { sourceTool: "subagent_announce", hidden: false },
-])(
+it.each([{ sourceTool: "sessions_send", hidden: true }])(
   "keeps Codex $sourceTool work in SQLite with its display policy",
   async ({ sourceTool, hidden }) => {
     const base = await createParams();

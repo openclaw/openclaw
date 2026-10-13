@@ -8,7 +8,7 @@ import { readTranscriptDisplayPosition } from "../../chat/transcript-display-pos
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import type { InFlightRunSnapshot } from "../chat-abort.js";
+import type { InFlightRunSnapshot } from "../chat-inflight-snapshot.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -100,7 +100,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   };
 }
 
-function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const entry = asOptionalRecord(message) ?? {};
   const role = typeof entry.role === "string" ? entry.role : "assistant";
   const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();

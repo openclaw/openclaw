@@ -4,24 +4,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 
 const tempDirs = createTempDirTracker();
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -55,11 +56,21 @@ describe("doctor reserved incognito session key repair", () => {
         systemPromptReport: { source: "run", generatedAt: 1, sessionKey: oldKey },
         pluginExtensions: { test: { label: oldKey } },
       });
+      const predicates = deriveSessionPredicateColumns(entryJson);
       database.db
         .prepare(
-          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key) VALUES (?, ?, ?, 1, ?, ?, ?)",
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key, session_started_at, has_optional_references) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
         )
-        .run(oldKey, "session-old", entryJson, oldKey, oldKey, oldKey);
+        .run(
+          oldKey,
+          "session-old",
+          entryJson,
+          oldKey,
+          oldKey,
+          oldKey,
+          predicates.session_started_at,
+          predicates.has_optional_references,
+        );
       database.db
         .prepare(
           "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', ?)",
@@ -261,7 +272,8 @@ describe("doctor reserved incognito session key repair", () => {
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
           .get("agent:work:dashboard:regular"),
       ).toEqual({ entry_valid: 1 });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
+      closeOpenClawAgentDatabasesForTest(stateDir);
       expect(listSessionEntriesCore({ agentId: "main", env })).toMatchObject([
         { sessionKey: newKey, entry: { sessionId: "session-old", updatedAt: 1 } },
       ]);
@@ -281,8 +293,40 @@ describe("doctor reserved incognito session key repair", () => {
           .get(),
       ).toBeUndefined();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
+      closeOpenClawAgentDatabasesForTest(stateDir);
     }
+  });
+
+  it("settles readers before returning a repair of a previously closed database", async () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-incognito-closed-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const oldKey = "agent:main:dashboard:incognito-closed";
+    const newKey = "agent:main:dashboard:legacy-incognito-closed";
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'closed-session', ?, 1)",
+      )
+      .run(oldKey, JSON.stringify({ sessionId: "closed-session", updatedAt: 1 }));
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run(oldKey);
+    database.db
+      .prepare(
+        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('closed-session', ?, 'conversation', 1, 1)",
+      )
+      .run(oldKey);
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawAgentDatabasesForTest(stateDir);
+
+    expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+    });
+    expect(listSessionEntriesCore({ agentId: "main", env })).toMatchObject([
+      { sessionKey: newKey, entry: { sessionId: "closed-session", updatedAt: 1 } },
+    ]);
   });
 
   it.each([false, true])(

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -90,7 +91,7 @@ export function setupSessionHistoryFixtures() {
 
 export function settledFixture() {
   const upstreamPrompt = "Native context\nSend the synthetic update.";
-  const settledMessages = [
+  const settledMessages: AgentMessage[] = [
     attachUpstreamUserText(
       attachCodexMirrorIdentity(
         { role: "user", content: "Send the synthetic update.", timestamp: 206 },
@@ -102,8 +103,20 @@ export function settledFixture() {
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "sent", name: "message", arguments: {} }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "synthetic",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
         timestamp: 207,
-      } as AgentMessage,
+      } satisfies AssistantMessage,
       "settled:tool:sent:call",
     ),
     attachCodexMirrorIdentity(

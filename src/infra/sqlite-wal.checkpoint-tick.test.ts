@@ -3,9 +3,11 @@ import path from "node:path";
 import { setImmediate as realImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   cancelSqliteWalWriteAdmission,
   registerSqliteWalWorkerMaintenance,
@@ -20,7 +22,7 @@ describe("sqlite WAL checkpoint tick", () => {
     vi.useRealTimers();
   });
 
-  it("delegates checkpoints while worker maintenance is registered and restores the inline fallback", async () => {
+  it("keeps checkpoints delegated when worker maintenance is cancelled", async () => {
     vi.useFakeTimers();
     const sqlite = requireNodeSqlite();
     const dir = tempDirs.make("openclaw-sqlite-wal-worker-writer-");
@@ -59,10 +61,20 @@ describe("sqlite WAL checkpoint tick", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(requests).toEqual([512]);
 
-      // Without its worker the writer falls back to the bounded inline valve.
-      void cancelSqliteWalWriteAdmission(db);
-      expect(cancelled).toBe(1);
-      expect(autocheckpoint()).toBe(16 * 1024);
+      const prepare = vi.spyOn(db, "prepare");
+      const exec = vi.spyOn(db, "exec");
+      try {
+        await cancelSqliteWalWriteAdmission(db);
+        expect(cancelled).toBe(1);
+        await maintenance.stop();
+        expect(maintenance.close()).toBe(false);
+        expect(prepare).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+        exec.mockRestore();
+      }
+      expect(autocheckpoint()).toBe(0);
     } finally {
       maintenance?.close();
       db.close();
@@ -131,6 +143,7 @@ describe("sqlite WAL checkpoint tick", () => {
     try {
       configureSqlitePreSchemaPragmas(db);
       maintenance = configureSqliteWalMaintenance(db, {
+        busyTimeoutMs: 1_000,
         checkpointIntervalMs: 60_000,
         databaseLabel: "wal-tick",
         databasePath: dbPath,
@@ -148,8 +161,20 @@ describe("sqlite WAL checkpoint tick", () => {
       expect(maintenance.health).toBeUndefined();
 
       // Ticks checkpoint without vacuuming.
-      await vi.advanceTimersByTimeAsync(10_000);
-      await settle();
+      const reads = trackSqliteStatementExecutions(db, ["timeout"], (sql) =>
+        /\bbusy_timeout\b/iu.test(sql) ? "timeout" : null,
+      );
+      const exec = vi.spyOn(db, "exec");
+      try {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await settle();
+        expect(reads.counts.timeout).toBe(0);
+        expect(exec.mock.calls.some(([sql]) => /\bbusy_timeout\b/iu.test(sql))).toBe(false);
+      } finally {
+        reads.restore();
+        exec.mockRestore();
+      }
+      expect(readSqliteBusyTimeout(db)).toBe(1_000);
 
       const ticked = expectDefined(maintenance.health, "WAL tick health");
       expect(ticked.state).toBe("complete");

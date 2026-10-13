@@ -15,6 +15,8 @@ title: "iOS app"
 
 Availability: The official iPhone app is available on the [App Store](https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132). Local development builds can also run from source.
 
+The app requires iOS 26.2 or iPadOS 26.2 or later.
+
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
@@ -25,7 +27,7 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Sessions has **Active**, **Snoozed**, and **Archived** scopes. Snoozed sessions stay out of the active sidebar and Overview until they wake.
-- Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response with a single top-aligned agent avatar. Completed chat turns fold earlier work into a **Worked for …** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
+- Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response. Compact-width layouts hide the assistant avatar to leave more room for text; regular-width layouts keep a single top-aligned avatar. Completed standalone bubbles use sender-side tails where the avatar is hidden, and accessible reply containers retain the assistant’s name. Completed chat turns fold earlier work into a **Worked for …** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
 - Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; oversized drafts stay in the composer when you try to send. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
 - Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
@@ -118,6 +120,46 @@ soon as the roster arrives. Resolved identities update each choice without
 delaying selection; configured names keep precedence and the Gateway's default
 identity is **Assistant**. The catalog refreshes when the picker opens and stays
 bound to the selected Gateway.
+
+## Cloudflare Access sign-in
+
+When a Gateway URL or setup code reaches a Cloudflare Access sign-in challenge,
+tap **Connect** to sign in to the Gateway website in the system browser inside
+OpenClaw. Complete the Access sign-in, then tap **Done**. Choose **Continue** to
+authorize the app connection and finish any Access approval. The app starts its
+encrypted session transfer only after you choose Continue. The browser closes
+after the app verifies the returned session, then normal Gateway pairing
+continues. Existing Gateway credentials,
+service headers, and WARP connections continue to work without an extra prompt
+when the connection check already succeeds.
+
+This browser has its own app session. Signing in with Safari does not guarantee
+that you are already signed in here. Website sign-in alone does not authorize
+the native connection. Tap **Cancel** to stop; use **Sign in** in the
+native Gateway settings to try again. Returning from the background never starts
+a browser automatically.
+
+If Access expires or is revoked, connections pause and Gateway settings asks you
+to sign in again. Your Gateway pairing and device keys remain saved. Signing out
+of Access removes the shared grant for that host and closes connections using
+that Access session. The sign-out control follows the focused saved Gateway,
+not the manual credential editor. **Access Host** above the button shows the full,
+selectable origin for the shared session it will remove. Access status and sign-in
+guidance also follow the focused profile, so another profile’s sign-out message
+does not appear beside its valid session. Gateways using their own service headers stay connected.
+The browser may retain your identity-provider session; this does not sign you
+out of that provider. **Forget Gateway** removes
+one profile and its active work. Other profiles on the same host keep their
+Access session; forgetting the last profile also removes that grant. If a setup code
+expires while you are signing in, scan a fresh code. An
+invalid or used setup code is a Gateway pairing error and does not require a new
+Access login.
+
+Native pairing, chat, and authenticated media use the Access session. Embedded
+Dashboard pages and widgets display an explanation with native Gateway settings
+available; browser-session support for those surfaces is separate. The share
+extension asks you to send from OpenClaw for an Access-protected Gateway. Access
+credentials are not exported to Apple Watch or cloud workers.
 
 ## Sessions
 
@@ -468,7 +510,7 @@ an audio interruption, or an unrecoverable failure ends the call.
 
 Physical-Watch microphone/speaker routing, wrist-down operation, Wi-Fi/cellular
 handoff, battery use, and multi-hour reliability still need device validation.
-Simulator tests and native macOS provider-audio probes do not establish those
+Simulator tests and native macOS provider-audio checks do not establish those
 behaviors. This is not an arbitrary always-on Gateway connection: watchOS
 low-level networking depends on an active audio session. UDP must be reachable;
 the Watch transport does not configure a TURN relay or TCP/WebSocket media fallback.

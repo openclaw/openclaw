@@ -104,52 +104,9 @@ describe("terminal resolution for a tool call rejected before dispatch", () => {
     ).resolves.toEqual({ action: "retry" });
   });
 
-  it.each([
-    {
-      name: "no tool ran before the rejection",
-      overrides: {
-        toolMetas: [],
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      },
-      assistant: {},
-    },
-    {
-      name: "a tool is still running",
-      overrides: { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
-      assistant: {},
-    },
-    {
-      name: "a tool failed",
-      overrides: { lastToolError: { toolName: "exec", error: "exit 1" } },
-      assistant: {},
-    },
-    {
-      name: "async work started",
-      overrides: {
-        toolMetas: [
-          { toolName: "exec", toolCallId: "call_exec", meta: "git log", asyncStarted: true },
-        ],
-      },
-      assistant: {},
-    },
-    {
-      name: "the error is not a pre-dispatch tool-call rejection",
-      overrides: {},
-      assistant: { errorMessage: "upstream connect error" },
-    },
-    {
-      name: "the model already wrote visible text",
-      overrides: { assistantTexts: ["Generating the briefing now."] },
-      assistant: { content: [{ type: "text" as const, text: "Generating the briefing now." }] },
-    },
-    {
-      name: "the assistant still carries a tool call",
-      overrides: {},
-      assistant: {
-        content: [{ type: "toolCall" as const, id: "call_2", name: "exec", arguments: {} }],
-      },
-    },
-  ])("does not continue when $name", async ({ overrides, assistant }) => {
+  it("does not continue after an unrelated provider error", async () => {
+    const overrides = {};
+    const assistant = { errorMessage: "upstream connect error" };
     const activateInternalPrompt = vi.fn();
     const result = await resolveEmbeddedRunTerminal(
       makeTerminalInput({

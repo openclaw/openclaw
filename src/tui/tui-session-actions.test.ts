@@ -2263,9 +2263,9 @@ describe("tui session actions", () => {
     const result = await runLoadHistory();
 
     expect(chatLog.clearAll).toHaveBeenCalledWith();
-    expect(chatLog.addUser).toHaveBeenCalledWith("persisted");
+    expect(chatLog.addUser).toHaveBeenCalledWith("persisted", { images: [] });
     expect(chatLog.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("reply");
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("reply", undefined, []);
     expect(result).toEqual({
       loaded: true,
       runOutcome: { state: "completed" },

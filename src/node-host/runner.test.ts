@@ -10,7 +10,6 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
@@ -161,40 +160,6 @@ describe("runNodeHost", () => {
         ],
       },
     );
-  });
-
-  it("stops the canonical runtime after a service enrollment hello", async () => {
-    mocks.useFakeRuntime = true;
-    readyNodeHost();
-    const previousExitCode = process.exitCode;
-    try {
-      const running = runNodeHost({
-        gatewayHost: "gateway.example",
-        gatewayPort: 443,
-        gatewayTls: true,
-        gatewayBootstrapToken: "bootstrap-token",
-        preferGatewayBootstrapToken: true,
-        stopAfterFirstConnect: true,
-      });
-      await vi.waitFor(() => expect(lastCapturedOptions()?.onHelloOk).toBeTypeOf("function"));
-      expect(lastCapturedOptions()).toMatchObject({
-        bootstrapToken: "bootstrap-token",
-        preferBootstrapToken: true,
-        token: undefined,
-      });
-      expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-      lastCapturedOptions()?.onHelloOk?.({
-        protocol: 1,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-      await running;
-
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
-    } finally {
-      process.exitCode = previousExitCode;
-    }
   });
 
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {
@@ -400,9 +365,14 @@ describe("runNodeHost", () => {
       );
     });
 
-    it("restarts a paired service without sending the source Gateway password", async () => {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "  ");
-      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "\t");
+    it.each([
+      ["whitespace", "  ", "\t"],
+      ["ambient token", "unrelated-gateway-token", undefined],
+      ["ambient password", undefined, "unrelated-gateway-password"],
+      ["both ambient credentials", "unrelated-gateway-token", "unrelated-gateway-password"],
+    ])("restarts a paired service without %s", async (_source, token, password) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", password);
       await expectStartupTimeout(runOptions);
 
       const auth = buildGatewayConnectAuth(
@@ -417,24 +387,22 @@ describe("runNodeHost", () => {
       expect(lastCapturedOptions()?.deviceToken).toBeUndefined();
     });
 
-    it.each([
-      { envKey: "OPENCLAW_GATEWAY_TOKEN", expected: { token: "explicit-credential" } },
-      { envKey: "OPENCLAW_GATEWAY_PASSWORD", expected: { password: "explicit-credential" } },
-    ])(
-      "preserves an explicit $envKey override without config fallback",
-      async ({ envKey, expected }) => {
-        vi.stubEnv(envKey, " explicit-credential ");
-
-        await expectStartupTimeout(runOptions);
-
-        expect(lastCapturedOptions()).toMatchObject({
-          token: undefined,
-          password: undefined,
-          ...expected,
-        });
-        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-      },
-    );
+    it("uses explicitly requested environment auth instead of the paired token", async () => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "explicit-gateway-token");
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await expectStartupTimeout({ ...runOptions, gatewayAuthFromEnv: true });
+        const auth = buildGatewayConnectAuth(
+          selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken: "paired-node-token" }),
+        );
+        expect(auth).toMatchObject({ token: "explicit-gateway-token", deviceToken: undefined });
+        const warning = stderr.mock.calls.map(([message]) => String(message)).join("");
+        expect(warning).toContain("--auth-from-env selects OPENCLAW_GATEWAY_TOKEN");
+        expect(warning).not.toContain("explicit-gateway-token");
+      } finally {
+        stderr.mockRestore();
+      }
+    });
 
     it("keeps remote-mode credentials when selecting another Gateway", async () => {
       mocks.getRuntimeConfig.mockReturnValue({

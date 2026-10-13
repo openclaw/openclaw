@@ -9,7 +9,6 @@ import {
   createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
-  findProviderBucketId,
   findProviderBucketLocation,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
@@ -794,7 +793,7 @@ describe("Discord model picker rendering", () => {
     );
     const data = createModelsProviderData({ ...providerEntries, vllm: models });
     const providerBucket = requireValue(
-      findProviderBucketId(data, "vllm"),
+      findProviderBucketLocation(data, "vllm")?.bucket,
       "test data should bucket the selected provider",
     );
 

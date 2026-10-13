@@ -74,7 +74,7 @@ describe("collectInstallPolicyHealthLines", () => {
       deep: true,
     });
 
-    expect(lines.join("\n")).toContain("Deep probe allowed the synthetic install request");
+    expect(lines.join("\n")).toContain("Deep check allowed the synthetic install request");
   });
 
   it.each(["warn", "block"] as const)(
@@ -98,7 +98,7 @@ describe("collectInstallPolicyHealthLines", () => {
       expect(lines.join("\n")).toContain(String.raw`review probe\n- ERROR: forged`);
       expect(lines.join("\n")).not.toContain("\u001b");
       if (decision === "warn") {
-        expect(lines.join("\n")).toContain("Deep probe returned a warning: review probe");
+        expect(lines.join("\n")).toContain("Deep check returned a warning: review probe");
         expect(lines.join("\n")).toContain("require explicit acknowledgement");
       }
     },
@@ -114,7 +114,7 @@ describe("collectInstallPolicyHealthLines", () => {
     });
 
     expect(lines.join("\n")).toContain("security.installPolicy.exec is not configured");
-    expect(lines.join("\n")).toContain("will fail closed");
+    expect(lines.join("\n")).toContain("will be blocked");
   });
 
   it("keeps static validation errors on one terminal line", async () => {

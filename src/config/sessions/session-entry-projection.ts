@@ -17,6 +17,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  restartRecoveryOperatorSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   sessionDiffBaselineCapture: undefined,
@@ -32,6 +33,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "restartRecoveryOperatorSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "sessionDiffBaselineCapture",
@@ -86,9 +88,8 @@ export function projectCompactionAccountingPatch(
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
     tokensAfter?: number;
-    transcriptByteCompactionLatch?: NonNullable<
-      InternalSessionEntry["transcriptByteCompactionLatch"]
-    >;
+    /** Omission preserves host suppression; null clears it across the worker boundary. */
+    transcriptByteCompactionLatch?: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
   },
 ): Partial<InternalSessionEntry> {
   const incrementBy = Math.max(0, params.amount ?? 1);
@@ -100,8 +101,10 @@ export function projectCompactionAccountingPatch(
       : undefined;
   const patch: Partial<InternalSessionEntry> = {
     compactionCount: (current.compactionCount ?? 0) + incrementBy,
-    transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
     updatedAt: params.now ?? Date.now(),
+    ...(params.transcriptByteCompactionLatch !== undefined
+      ? { transcriptByteCompactionLatch: params.transcriptByteCompactionLatch ?? undefined }
+      : {}),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };

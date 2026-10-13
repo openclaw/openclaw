@@ -288,10 +288,7 @@ export async function syncWorkspaceSkills(params: {
     const usedDirNames = new Set<string>();
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const entry of entries) {
-      const identity = resolveSyncedSkillIdentity(
-        resolveSkillKey(entry.skill, entry),
-        entry.skill.name,
-      );
+      const identity = resolveSyncedSkillIdentity(resolveSkillKey(entry), entry.skill.name);
       if (entry.skill.filePath.startsWith("node://")) {
         plans.push({ entry, identity });
         continue;

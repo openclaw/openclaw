@@ -228,6 +228,33 @@ describe("resolveTurnRecap", () => {
     ).toEqual({ runId: nextRunId, runtimeMs: 14_000, outputTokens: 0 });
   });
 
+  describe("for a run that resumed a handoff", () => {
+    const resumed = { runId, request: { askedAt: 1_000, runIds: ["handoff-run"] } };
+
+    it("reports the whole request: the wait and every run's tokens", () => {
+      const usageByRun = new Map([
+        ["handoff-run", { outputTokens: 4_100, seq: 1 }],
+        [runId, { outputTokens: 256, seq: 2 }],
+      ]);
+      resolve({ indicator: resumed });
+      // 97s from the request to the end, though the last run alone took 14s.
+      expect(resolve({ row: { ...doneRow, endedAt: 98_000 }, usageByRun })).toEqual({
+        runId,
+        runtimeMs: 97_000,
+        outputTokens: 4_356,
+      });
+    });
+
+    it("never reports a partial token total, or less time than its last run", () => {
+      resolve({ indicator: resumed });
+      expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual({
+        runId,
+        runtimeMs: 14_000,
+        outputTokens: null,
+      });
+    });
+  });
+
   it("stays quiet for a watched failed run", () => {
     watch();
     expect(resolve({ row: { ...doneRow, status: "failed" }, usageByRun: usage(695) })).toBeNull();

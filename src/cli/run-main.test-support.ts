@@ -5,6 +5,7 @@ import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
@@ -336,7 +337,8 @@ vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
   tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
 }));
 
-vi.mock("./program.js", () => ({ buildProgram: buildProgramMock }));
+// mock-isolation: Exercise dispatch without constructing the real Commander program.
+vi.mock("./program/build-program.js", () => ({ buildProgram: buildProgramMock }));
 
 vi.mock("./program/program-context.js", () => ({ getProgramContext: getProgramContextMock }));
 
@@ -418,13 +420,12 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 async function withCliExitSpies(
   run: (
     errorSpy: MockInstance<typeof console.error>,
-    exitSpy: MockInstance<typeof process.exit>,
+    exitSpy: MockInstance<RuntimeEnv["exit"]>,
   ) => Promise<void>,
 ): Promise<void> {
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
-    throw new Error(`exit:${String(code)}`);
-  });
+  const { defaultRuntime } = await import("../runtime.js");
+  const exitSpy = vi.spyOn(defaultRuntime, "exit");
   try {
     await run(errorSpy, exitSpy);
   } finally {
@@ -493,7 +494,6 @@ export {
   runTuiMock,
   runTuiCliActionMock,
   probeGatewayConfiguredModelMock,
-  readActiveGatewayLockPortMock,
   inspectGatewayTlsCertificateMock,
   resolveControlUiLinksMock,
   commanderParseAsyncMock,

@@ -59,12 +59,12 @@ const schemaMigrationDescriptions = {
   "creator-namespace-v14": "cron creators -> explicit principal namespaces",
   "conversation-binding-targets-v15":
     "conversation bindings -> exact target keys without agent/session projections",
-  "skill-workshop-directory-ownership-v16":
-    "Skill Workshop proposals -> per-agent Workshop directory ownership",
   "prepared-worker-ownership-v17":
     "prepared workers -> one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts -> original requesting authority",
+  "predicate-columns-v21":
+    "meeting transcripts and delivery retention -> derived predicate columns",
   "worker-placement-execution-mode-v8": "cloud worker placements -> execution-mode claims",
   "operator-approvals-system-agent": "operator approvals -> OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors -> provenance column",

@@ -35,7 +35,7 @@ describe("X public reply delivery", () => {
       text: "界".repeat(145),
       replyToId: "x:90",
       signature: "— signed 🦞",
-      visibleWorkSessions: [{ sessionKey: "work", url }],
+      visibleWorkSessions: [{ sessionKey: "work", url, publicRead: true }],
     });
     expect(result.postIds).toEqual(["101", "102"]);
     expect(sent.map((post) => post.reply.in_reply_to_tweet_id)).toEqual(["90", "101"]);
@@ -95,6 +95,26 @@ describe("X public reply delivery", () => {
       sent.length = 0;
       await sendXReply({ api, text: `${prefix}a ${value}`, replyToId: "90", signature: "" });
       expect(sent.map((post) => post.text)).toEqual([`${prefix}a`, output]);
+    },
+  );
+
+  it.each([true, false, undefined])(
+    "uses the same canonical work-session URL with publicRead=%s",
+    async (publicRead) => {
+      const { api, sent } = createReplyFixture();
+      const url = "https://example.test/chat/maintainer/work";
+      await sendXReply({
+        api,
+        text: "Working on it.",
+        replyToId: "90",
+        signature: "",
+        visibleWorkSessions: [{ sessionKey: "work", url, publicRead }],
+      });
+      expect(sent.map((post) => post.text)).toEqual([
+        publicRead === true
+          ? `Working on it.\n${url}`
+          : `Working on it.\nWork session (sign-in required): ${url}`,
+      ]);
     },
   );
 

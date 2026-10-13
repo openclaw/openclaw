@@ -7,8 +7,8 @@ import {
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
-import { XAllowlistChangedError } from "./allowlist.js";
-import { parseXPost, parseXPostEnvelope, type XPostEnvelope } from "./api.js";
+import { openXAllowlist, XAllowlistChangedError } from "./allowlist.js";
+import { parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, waitForXBudgetReset, type XCursorState, type XEventStatus } from "./events.js";
 import {
@@ -19,12 +19,14 @@ import {
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
 import { resolveXIngress, xMentionFacts } from "./ingress.js";
+import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
 import type { XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
 import { sendXDelivery } from "./send.js";
 import { XBudgetExceededError } from "./spend.js";
 import { assembleXThread } from "./thread.js";
+import { openXWorkOrigins } from "./work-origin.js";
 
 const InvalidXEvent = createChannelIngressError("InvalidXEvent");
 type IngressPayload = { version: number; rawEvent: string };
@@ -93,12 +95,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
   }
   const ingress = createChannelIngressMonitor<XPostEnvelope, string, IngressPayload>({
     queue,
-    inspect: ({ post }) => {
-      if (!parseXPost(post)) {
-        throw new InvalidXEvent("Invalid X mention envelope");
-      }
-      return { eventId: post.id, laneKey: post.conversation_id };
-    },
+    inspect: ({ post }) => ({ eventId: post.id, laneKey: post.conversation_id }),
     payload: {
       storage: "raw-event",
       version: 1,
@@ -249,12 +246,45 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         initialAuthorization.tier === "guest"
           ? `${route.sessionKey}:guest:${post.id}`
           : route.sessionKey;
-      const authorization = await resolveXIngress(account.accountId, post, cfg, {
-        agentId: route.agentId,
-        sessionKey,
-        messageId: post.id,
-        inboundEventKind: "user_request",
-      });
+      // Guests may start hidden helpers, never public visible work sessions.
+      const publicationSnapshot =
+        initialAuthorization.tier === "maintainer" &&
+        resolveXAccount(cfg, account.accountId).config.autoPublishWorkSessions === true
+          ? await openXAllowlist(core).readSnapshot(
+              account.accountId,
+              resolveXAccount(cfg, account.accountId).config.verifiedFromGitHub,
+            )
+          : undefined;
+      const publicThread =
+        publicationSnapshot &&
+        (await verifyPublicXThread(api, thread.posts, lifecycle.abortSignal, post.conversation_id));
+      const publication =
+        publicationSnapshot && publicThread
+          ? {
+              audience: "public" as const,
+              assertCurrent: () => {
+                lifecycle.abortSignal.throwIfAborted();
+                assertCurrent();
+                publicationSnapshot.assertCurrent();
+                // Any config publication retires the captured routing/access decision.
+                if (readConfig() !== cfg) {
+                  throw new Error("X work-session publication policy changed; send a new mention.");
+                }
+              },
+            }
+          : undefined;
+      const authorization = await resolveXIngress(
+        account.accountId,
+        post,
+        cfg,
+        {
+          agentId: route.agentId,
+          sessionKey,
+          messageId: post.id,
+          inboundEventKind: "user_request",
+        },
+        publication,
+      );
       const assertAdmissionCurrent = () => {
         assertCurrent();
         lifecycle.abortSignal.throwIfAborted();
@@ -281,8 +311,8 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       if (guest && !(await admitGuest(authorization, cfg))) {
         return;
       }
-      const handle =
-        thread.users.find((user) => user.id === post.author_id)?.username ?? post.author_id;
+      const author = thread.users.find((user) => user.id === post.author_id);
+      const handle = author?.username ?? post.author_id;
       const ctxPayload = core.channel.inbound.buildContext({
         channelIngress,
         access: {
@@ -301,7 +331,6 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
           kind: "group",
           id: post.conversation_id,
           label: thread.label,
-          link: { url: `https://x.com/${handle}/status/${post.id}`, label: "View on X" },
         },
         route: {
           agentId: route.agentId,
@@ -317,6 +346,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
             authorization.tier,
             post.author_id,
             thread.users.find((user) => user.id === post.author_id),
+            authorization.github,
           )}\n${thread.bodyForAgent}`,
         },
       });
@@ -331,9 +361,32 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         ctxPayload,
         ...bindIngressLifecycleToReplyOptions(lifecycle),
         replyOptions: {
-          onVisibleWorkSessions: (visible) => {
+          onVisibleWorkSessions: async (visible, creation) => {
             if (!guest) {
-              sessions.push(...visible);
+              if (!author?.username) {
+                throw new Error(
+                  "X work-session origin requires the author's handle; retry the mention.",
+                );
+              }
+              const childKeys = new Set(visible.map((session) => session.sessionKey));
+              if (creation) {
+                childKeys.add(creation.createdSessionKey);
+              }
+              for (const childKey of childKeys) {
+                await openXWorkOrigins(core).registerIfAbsent(childKey, {
+                  accountId: account.accountId,
+                  postId: post.id,
+                  postUrl: `https://x.com/${handle}/status/${post.id}`,
+                  authorHandle: handle,
+                  conversationId: post.conversation_id,
+                  senderTier: authorization.tier,
+                });
+              }
+              for (const session of visible) {
+                if (!sessions.some((existing) => existing.sessionKey === session.sessionKey)) {
+                  sessions.push(session);
+                }
+              }
             }
           },
         },

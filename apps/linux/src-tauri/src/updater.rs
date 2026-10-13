@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_opener::OpenerExt;
@@ -15,13 +15,16 @@ pub(crate) const READY_EVENT: &str = "updater://ready";
 pub(crate) const ERROR_EVENT: &str = "updater://error";
 
 const RELEASE_URL: &str = "https://github.com/openclaw/openclaw/releases/latest";
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 // Test desktop builds need a channel that Linux-only releases never replace.
 const DESKTOP_TEST_UPDATE_ENDPOINT: &str =
     "https://github.com/openclaw/openclaw/releases/download/desktop-test/latest-desktop-test.json";
+#[cfg(target_os = "windows")]
+const WINDOWS_UPDATE_ENDPOINT: &str =
+    "https://github.com/openclaw/openclaw/releases/download/windows-stable/latest-windows.json";
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(3);
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn calendar_release_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     // Keep recognition and safe integer bounds aligned with scripts/lib/release-version.mjs.
     const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -58,7 +61,7 @@ fn calendar_release_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     Some((year, month, patch, rank, sequence))
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn release_is_newer<T: Ord + std::fmt::Display>(current: &T, candidate: &T) -> bool {
     match (
         calendar_release_key(&current.to_string()),
@@ -122,6 +125,14 @@ pub struct UpdaterState {
     // silent startup auto-check is running still surfaces a result instead of
     // being coalesced away into silence.
     manual_pending: Arc<AtomicBool>,
+}
+
+impl UpdaterState {
+    fn lifecycle(&self) -> MutexGuard<'_, UpdateLifecycle> {
+        self.lifecycle
+            .lock()
+            .expect("updater lifecycle lock poisoned")
+    }
 }
 
 #[derive(Debug)]
@@ -197,16 +208,17 @@ impl<T> UpdateLifecycle<T> {
         if self.operation_in_progress {
             return ClaimedAction::None;
         }
-        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+        if relaunch || self.ready.is_some() {
             self.operation_in_progress = true;
             return match self.ready.take() {
                 Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
                 Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
             };
         }
-        match self.action() {
-            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
-            _ => ClaimedAction::None,
+        if self.download_available {
+            ClaimedAction::OpenDownloadPage
+        } else {
+            ClaimedAction::None
         }
     }
 
@@ -256,8 +268,8 @@ struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManualUpdateInfo {
-    version: String,
-    notes: Option<String>,
+    #[serde(flatten)]
+    update: UpdateInfo,
     release_url: &'static str,
 }
 
@@ -320,9 +332,7 @@ pub(crate) fn perform_action(app: &AppHandle) {
 fn activate(app: &AppHandle, relaunch: bool) {
     let action = app
         .state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .claim_action(relaunch);
     refresh_action(app);
     match action {
@@ -340,9 +350,7 @@ fn activate(app: &AppHandle, relaunch: bool) {
                 Ok(()) => app.restart(),
                 Err(error) => {
                     app.state::<UpdaterState>()
-                        .lifecycle
-                        .lock()
-                        .expect("updater lifecycle lock poisoned")
+                        .lifecycle()
                         .restore_failed_install(deferred);
                     deliver_error(&app, true, TerminalResultKind::RelaunchFailed, error);
                 }
@@ -372,26 +380,22 @@ async fn run_check(app: AppHandle, manual: bool) {
         .updater_builder()
         .version_comparator(|current, candidate| release_is_newer(&current, &candidate.version))
         .build();
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let updater = app
         .updater_builder()
         .endpoints(vec![DESKTOP_TEST_UPDATE_ENDPOINT
             .parse()
             .expect("desktop test updater endpoint is valid")])
         .and_then(|builder| builder.build());
-    let updater = match updater {
-        Ok(updater) => updater,
-        Err(error) => {
-            deliver_error(
-                &app,
-                manual_requested(),
-                TerminalResultKind::CheckFailed,
-                error,
-            );
-            return;
-        }
-    };
-    let update = match updater.check().await {
+    #[cfg(target_os = "windows")]
+    let updater = app
+        .updater_builder()
+        .version_comparator(|current, candidate| release_is_newer(&current, &candidate.version))
+        .endpoints(vec![WINDOWS_UPDATE_ENDPOINT
+            .parse()
+            .expect("Windows updater endpoint is valid")])
+        .and_then(|builder| builder.build());
+    let update = match async { updater?.check().await }.await {
         Ok(Some(update)) => update,
         Ok(None) => {
             deliver_result(
@@ -419,24 +423,18 @@ async fn run_check(app: AppHandle, manual: bool) {
         notes: update.body.clone(),
     };
 
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .download_started();
+    app.state::<UpdaterState>().lifecycle().download_started();
     refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
-        let version = info.version.clone();
-        let notification_body = manual_notification_body(&version);
+        let notification_body = manual_notification_body(&info.version);
         deliver_result(
             &app,
             manual_requested(),
             TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
-                version: info.version,
-                notes: info.notes,
+                update: info,
                 release_url: RELEASE_URL,
             },
             &notification_body,
@@ -445,15 +443,9 @@ async fn run_check(app: AppHandle, manual: bool) {
     }
 
     emit(&app, AVAILABLE_EVENT, info.clone());
-    let result = update.download(progress_callback(app.clone()), || {}).await;
-    let result = match result {
+    let result = match update.download(progress_callback(app.clone()), || {}).await {
         Ok(bytes) if install_kind == InstallKind::SelfInstall => {
-            let admitted = app
-                .state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
-                .begin_self_install();
+            let admitted = app.state::<UpdaterState>().lifecycle().begin_self_install();
             if !admitted {
                 // A relaunch already owns the process; do not replace files beneath it.
                 return;
@@ -461,17 +453,13 @@ async fn run_check(app: AppHandle, manual: bool) {
             refresh_action(&app);
             let result = update.install(&bytes);
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .finish_self_install(result.is_ok());
             result
         }
         Ok(bytes) => {
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .replace_ready(ReadyUpdate::Deferred(DeferredUpdate { update, bytes }));
             Ok(())
         }
@@ -479,8 +467,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     match result {
         Ok(()) => {
-            let version = info.version.clone();
-            let notification_body = ready_notification_body(&version);
+            let notification_body = ready_notification_body(&info.version);
             deliver_result(
                 &app,
                 manual_requested(),
@@ -528,11 +515,7 @@ fn result_delivery(
 }
 
 pub(crate) fn current_action(app: &AppHandle) -> UpdateAction {
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .action()
+    app.state::<UpdaterState>().lifecycle().action()
 }
 
 fn refresh_action(app: &AppHandle) {
@@ -614,9 +597,7 @@ fn deliver_result<S: Serialize + Clone>(
     notification_body: &str,
 ) {
     app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .record_result(result);
     refresh_action(app);
     let window = app.get_webview("main");

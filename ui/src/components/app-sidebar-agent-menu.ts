@@ -2,11 +2,13 @@ import { html, nothing } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
 import { icons, type IconName } from "./icons.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
 import {
   AGENT_VALUE_PREFIX,
   renderSidebarAgentMenuSwitcher,
@@ -225,6 +227,9 @@ function renderIdentityMenuHelpSubmenu() {
 }
 
 export function renderSidebarHelpMenu() {
+  if (!currentThemeBranding().communityLinks) {
+    return nothing;
+  }
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-identity-menu__help"
@@ -343,7 +348,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      ${renderSidebarMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
+      ${renderMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
       ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>` : nothing}
       ${
         params.agents.length > 6
