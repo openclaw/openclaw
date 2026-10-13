@@ -35,7 +35,6 @@ import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
-import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -135,15 +134,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       sourceFilterList[0] === "sessions";
     const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
     const database = this.publishedDatabase;
-    const databasePath = resolveUserPath(this.settings.store.databasePath);
-    const fileIdentity = fuseRecallMetadata ? readMemoryShadowIdentity(databasePath) : undefined;
     const assertReadOwner = () => {
       opts?.signal?.throwIfAborted();
       if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
         throw new Error("Memory retrieval changed its captured database owner");
-      }
-      if (fileIdentity) {
-        assertMemoryShadowIdentity(databasePath, fileIdentity);
       }
     };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;

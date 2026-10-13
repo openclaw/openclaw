@@ -672,18 +672,7 @@ async function recordSessionOwner(
       ? `its session is owned by agent harness ${observedForeignHarness}`
       : "its session owner changed before Codex ownership could be recorded";
   }
-  if (
-    updated.sessionId.trim() !== owner.sessionId ||
-    updated.lifecycleRevision !== owner.lifecycleRevision
-  ) {
-    return "its session owner changed before Codex ownership could be recorded";
-  }
-  const harnessId = updated.agentHarnessId?.trim();
-  return harnessId === CODEX_AGENT_HARNESS_ID
-    ? undefined
-    : harnessId
-      ? `its session is owned by agent harness ${harnessId}`
-      : "Codex harness ownership could not be recorded on its session";
+  return undefined;
 }
 
 async function readDirectoryEntries(directory: string) {

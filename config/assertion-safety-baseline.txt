@@ -960,7 +960,6 @@ extensions/whatsapp/src/session-errors.ts	15
 extensions/whatsapp/src/session.ts	1
 extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	1
-extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/src/cli.ts	1
 extensions/workboard/src/command.ts	1

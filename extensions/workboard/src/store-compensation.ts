@@ -1,19 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function canonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalValue);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .map(([key, entry]) => [key, canonicalValue(entry)]),
-  );
+function canonicalValue(value: object): unknown {
+  // Compare persisted JSON facts, including omitted optional fields.
+  return JSON.parse(JSON.stringify(value));
 }
 
 export function sameWorkboardCardState(left: WorkboardCard, right: WorkboardCard): boolean {

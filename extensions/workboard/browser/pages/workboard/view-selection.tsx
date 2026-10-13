@@ -35,6 +35,7 @@ import {
   formatPriorityLabel,
   workboardErrorMessage,
   workboardMutationContext,
+  workboardViewState,
   renderPriorityIcon,
   formatStatusLabel,
   type WorkboardProps,
@@ -255,10 +256,7 @@ function agentOptions(workboard: WorkboardProps) {
   );
 }
 export function SelectionActions(input: { workboard: WorkboardProps }) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+  const state = workboardViewState(() => input.workboard);
   const cardIds = createMemo(() =>
     state()
       .cards.filter((card) => state().selectedCardIds.has(card.id))
@@ -467,10 +465,7 @@ function SelectionLabelsInput(props: {
   );
 }
 function SelectionDialogContent(props: { workboard: WorkboardProps; draft: WorkboardBulkDialog }) {
-  const state = () => {
-    void props.workboard.revision;
-    return getWorkboardState(props.workboard.host);
-  };
+  const state = workboardViewState(() => props.workboard);
   const draft = () => {
     void props.workboard.revision;
     return props.draft;
