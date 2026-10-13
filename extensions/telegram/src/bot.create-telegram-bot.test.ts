@@ -1589,10 +1589,16 @@ describe("createTelegramBot", () => {
     vi.setSystemTime(1_736_382_000_000);
     try {
       await createTelegramBot({ token: "tok" });
-      const ctx = makeGenericCallbackContext({ id: "cbq-generic-time-1", updateId: 780 });
+      const callbackContext = makeGenericCallbackContext({ id: "cbq-generic-time-1" });
+      const ctx = {
+        ...callbackContext,
+        update: { update_id: 780, callback_query: callbackContext.callbackQuery },
+      };
+      const rawUpdate = JSON.stringify(ctx.update);
       if (durableReceivedAtMs !== undefined) {
         recordTelegramUpdateReceivedAt(ctx.update, durableReceivedAtMs);
       }
+      expect(JSON.stringify(ctx.update)).toBe(rawUpdate);
       await getOnHandler("callback_query")(ctx);
       const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
       const expectedMs = durableReceivedAtMs ?? 1_736_382_000_000;
@@ -1655,23 +1661,52 @@ describe("createTelegramBot", () => {
     async ({ id, data, buttons, text, clearsButtons }) => {
       await createTelegramBot({ token: "tok" });
       const callbackHandler = getCallbackHandler();
-      await callbackHandler(
-        makeCallbackRetryContext({
-          id,
-          data,
-          messageId: 10,
-          message: { reply_markup: { inline_keyboard: buttons } },
-        }),
-      );
+      const callbackContext = makeCallbackRetryContext({
+        id,
+        data,
+        messageId: 10,
+        message: { date: 1_736_380_800, reply_markup: { inline_keyboard: buttons } },
+      });
+      const ctx = {
+        ...callbackContext,
+        update: { update_id: 781, callback_query: callbackContext.callbackQuery },
+      };
+      recordTelegramUpdateReceivedAt(ctx.update, 1_736_382_000_000);
+      await callbackHandler(ctx);
       if (clearsButtons) {
         expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
           reply_markup: { inline_keyboard: [] },
         });
       }
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(requireValue(replySpy.mock.calls.at(0), "replySpy call")[0].Body).toContain(text);
+      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+      expect(payload.Body).toContain(text);
+      expect(payload.ProviderMessageTimestamp).toBe(1_736_382_000_000);
     },
   );
+
+  it("uses callback receipt time for plugin text submissions", async () => {
+    registerPluginInteractiveHandler("timestamp-test", {
+      channel: "telegram",
+      namespace: "timestamp",
+      handler: async () => ({ handled: true, submitText: "Plugin submission" }),
+    });
+    await createTelegramBot({ token: "tok" });
+    const callbackContext = makeCallbackRetryContext({
+      id: "plugin-submit-time",
+      data: buildTelegramOpaqueCallbackData("timestamp:submit"),
+      messageId: 10,
+    });
+    const ctx = {
+      ...callbackContext,
+      update: { update_id: 782, callback_query: callbackContext.callbackQuery },
+    };
+    recordTelegramUpdateReceivedAt(ctx.update, 1_736_382_000_000);
+    await getCallbackHandler()(ctx);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("Plugin submission");
+    expect(payload.ProviderMessageTimestamp).toBe(1_736_382_000_000);
+  });
 
   it.each([
     { data: "tgcmd:/login codex", namespace: "tgcmd" },

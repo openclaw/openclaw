@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
   runWithTelegramUpdateProcessingFrame,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
@@ -253,7 +254,7 @@ describe("createTelegramIngressMonitor", () => {
       const payload: TelegramSpooledUpdatePayload = {
         version: 1,
         updateId: update.update_id,
-        receivedAt: Date.now(),
+        receivedAt: 1_736_382_000_123,
         update,
       };
       await createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions).enqueue(
@@ -266,7 +267,8 @@ describe("createTelegramIngressMonitor", () => {
 
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
       const controlLaneKey = `telegram:${testCase.chat.id}:control`;
-      const dispatch = vi.fn(async () => {
+      const dispatch = vi.fn(async (dispatchedUpdate: unknown) => {
+        expect(resolveTelegramUpdateReceivedAtSeconds(dispatchedUpdate)).toBe(1_736_382_000);
         expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
         return { kind: "completed" as const };
       });
