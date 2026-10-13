@@ -79,18 +79,47 @@ describe("composer voice readiness", () => {
     expect(readCatalog).toHaveBeenCalledTimes(4);
   });
 
-  it("admits configured split Talk without a realtime provider", async () => {
+  it.each([
+    { name: "configured Talk output", talkProvider: "openai", talkReady: true, ready: true },
+    { name: "unconfigured Talk output", talkProvider: "openai", talkReady: false, ready: false },
+    { name: "configured TTS output", ttsReady: true, ready: true },
+    { name: "configured TTS fallback", fallbackReady: true, ready: true },
+    { name: "no speech output", ready: false },
+  ])("admits split Talk only with $name", async (scenario) => {
     const loaded = createDeferred();
-    const request = vi.fn(async (method: string) =>
-      method === "talk.config"
-        ? { config: { talk: { realtime: { mode: "stt-tts" } } } }
-        : { realtime: { ready: false }, transcription: { ready: true } },
-    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return {
+          config: { talk: { provider: scenario.talkProvider, realtime: { mode: "stt-tts" } } },
+        };
+      }
+      if (method === "tts.status") {
+        return {
+          provider: "openai",
+          providerStates: [{ id: "openai", configured: scenario.ttsReady === true }],
+          fallbackProviders: scenario.fallbackReady ? ["kokoro"] : [],
+        };
+      }
+      return {
+        realtime: { ready: false },
+        transcription: { ready: true },
+        speech: {
+          activeProvider: scenario.talkProvider,
+          providers: [
+            { id: "openai", configured: scenario.talkReady === true },
+            { id: "other", configured: true },
+          ],
+        },
+      };
+    });
     picker = new ComposerMicrophonePicker(() => loaded.resolve());
     picker.syncCatalog({ request } as unknown as GatewayBrowserClient, true);
     await loaded.promise;
-    expect(picker.realtimeStatus).toBe("ready");
+    expect(picker.realtimeStatus).toBe(scenario.ready ? "ready" : "unavailable");
     expect(picker.dictationStatus).toBe("ready");
+    expect(request.mock.calls.some(([method]) => method === "tts.status")).toBe(
+      !scenario.talkProvider,
+    );
   });
 });
 

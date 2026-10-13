@@ -202,6 +202,7 @@ export async function buildTalkTranscriptionConfig(
   config: OpenClawConfig,
   requestedProvider?: string,
   requestedModel?: string,
+  agentId?: string,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -219,7 +220,7 @@ export async function buildTalkTranscriptionConfig(
     !voiceModelDefault &&
     !normalizeOptionalString(requestedModel) &&
     Object.keys(providerConfigs).length === 0
-      ? await resolveTalkFileTranscriptionConfig(config)
+      ? await resolveTalkFileTranscriptionConfig(config, agentId)
       : undefined;
   return {
     provider: provider ?? voiceModelDefault?.provider,

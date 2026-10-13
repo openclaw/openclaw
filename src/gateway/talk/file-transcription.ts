@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { RealtimeTranscriptionSessionCallbacks } from "../../realtime-transcription/provider-types.js";
+import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { mulawToPcm } from "../../talk/audio-codec.js";
 
 export type TalkFileTranscriptionConfig = {
   cfg: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
   maxBytes: number;
   ready: boolean;
   provider?: string;
@@ -16,6 +21,7 @@ export type TalkFileTranscriptionConfig = {
 /** Explicit file models use the same selection and input budget as uploaded voice notes. */
 export async function resolveTalkFileTranscriptionConfig(
   cfg: OpenClawConfig,
+  agentId?: string,
 ): Promise<TalkFileTranscriptionConfig | undefined> {
   if (!cfg.tools?.media?.models?.length || cfg.tools.media.audio?.enabled === false) {
     return undefined;
@@ -35,6 +41,12 @@ export async function resolveTalkFileTranscriptionConfig(
   if (entries.length === 0) {
     return undefined;
   }
+  const resolvedAgentId = agentId ?? resolveTalkSessionAgentId(cfg);
+  const scope = {
+    agentId: resolvedAgentId,
+    agentDir: resolveAgentDir(cfg, resolvedAgentId),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolvedAgentId),
+  };
   const { isAudioModelEntryAvailable } =
     await import("../../media-understanding/provider-execution.js");
   const providers = new Map<string, { models: string[]; configured: boolean }>();
@@ -44,6 +56,7 @@ export async function resolveTalkFileTranscriptionConfig(
   for (const { entry, secretOwnerId } of entries) {
     const configured = await isAudioModelEntryAvailable({
       cfg,
+      ...scope,
       entry,
       secretOwnerId,
       providerRegistry: registry,
@@ -68,6 +81,7 @@ export async function resolveTalkFileTranscriptionConfig(
   return budget.enabled
     ? {
         cfg,
+        ...scope,
         maxBytes: budget.maxBytes,
         ready,
         provider: selectedProvider,
@@ -139,7 +153,14 @@ export function createTalkFileTranscriptionSession(
         }
         assertCurrent();
         const result = await transcribeAudioFile(
-          { cfg: config.cfg, filePath, mime: "audio/wav" },
+          {
+            cfg: config.cfg,
+            agentId: config.agentId,
+            agentDir: config.agentDir,
+            workspaceDir: config.workspaceDir,
+            filePath,
+            mime: "audio/wav",
+          },
           { signal: cancellation.signal, assertCurrent },
         );
         if (!cancellation.signal.aborted) {

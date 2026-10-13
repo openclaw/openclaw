@@ -1,6 +1,7 @@
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createTalkFileTranscriptionSession } from "../gateway/talk/file-transcription.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -80,6 +81,9 @@ async function withCapture(
       const session = createTalkFileTranscriptionSession(
         {
           cfg,
+          agentId: "main",
+          agentDir: resolveAgentDir(cfg, "main"),
+          workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
           maxBytes: 8192,
           ready: true,
           provider: "synthetic-audio",

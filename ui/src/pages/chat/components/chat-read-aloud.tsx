@@ -7,7 +7,7 @@ import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
 
 export function ReadAloud(props: { text: string }) {
   const context = useOptionalApplication();
@@ -64,7 +64,14 @@ export function ReadAloud(props: { text: string }) {
     setPlaying(true);
     setError("");
     try {
-      await playback.speak(client, props.text, "tts.speak", isCurrent);
+      const snapshot = context.runtimeConfig.state.configSnapshot;
+      await playback.speak(
+        client,
+        props.text,
+        "tts.speak",
+        isCurrent,
+        resolveSpeechTextLimit(snapshot?.runtimeConfig ?? snapshot?.config),
+      );
     } catch (cause) {
       if (isCurrent()) {
         setError(formatUiError(cause));

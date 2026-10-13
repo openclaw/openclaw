@@ -519,6 +519,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     : undefined;
   const dictationOptions = {
     client: props.gatewayClient ?? null,
+    sessionKey: props.sessionKey,
     connected: props.connected,
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",

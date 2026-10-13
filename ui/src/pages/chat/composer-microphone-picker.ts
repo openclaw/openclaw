@@ -131,17 +131,36 @@ export class ComposerMicrophonePicker {
       client.request<TalkCatalogResult>("talk.catalog", {}),
       client.request<TalkConfigResult>("talk.config", {}),
     ])
-      .then(([catalog, config]) => {
+      .then(async ([catalog, config]) => {
         if (request !== this.catalogRequest) {
           return;
         }
         this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
-        this.realtimeStatus =
-          config.config?.talk?.realtime?.mode === "stt-tts"
-            ? this.dictationStatus
-            : catalog.realtime?.ready === true
-              ? "ready"
-              : "unavailable";
+        const talk = config.config?.talk;
+        if (talk?.realtime?.mode !== "stt-tts") {
+          this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
+          return;
+        }
+        let speechReady: boolean;
+        if (talk.provider || talk.resolved?.provider) {
+          speechReady = catalog.speech.providers.some(
+            (provider) => provider.id === catalog.speech.activeProvider && provider.configured,
+          );
+        } else {
+          const status = await client.request<{
+            provider: string;
+            providerStates: Array<{ id: string; configured: boolean }>;
+            fallbackProviders: string[];
+          }>("tts.status", {});
+          speechReady =
+            status.providerStates.some(
+              (provider) => provider.id === status.provider && provider.configured,
+            ) || status.fallbackProviders.length > 0;
+        }
+        if (request === this.catalogRequest) {
+          this.realtimeStatus =
+            this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
+        }
       })
       .catch(() => {
         if (request !== this.catalogRequest) {

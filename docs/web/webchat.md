@@ -89,8 +89,9 @@ Normal agent-run final answers should be durable because the embedded runtime wr
 
 When `tts` is configured, assistant messages offer **Read aloud**. Audio is
 synthesized by the Gateway using the configured TTS provider, voice, and endpoint.
-**Stop reading** cancels browser playback. The control does not use browser speech
-synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
+**Stop reading** cancels browser playback. Long replies play in ordered chunks
+within `tts.maxTextLength`. Starting another Read aloud or Talk action stops the
+previous playback. The control does not use browser speech synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
 
 Hold the microphone button for dictation. Explicit audio models in
 `tools.media.models` use the same transcription owner as uploaded voice notes,
@@ -108,7 +109,10 @@ each utterance, the current chat session's agent answers it, and the browser pla
 the Gateway's generated speech. This uses the configured agent model, including
 local models. Output uses `talk.provider` when set, otherwise `tts`.
 The browser pauses capture while generating and playing the answer. Stop ends
-capture and playback and cancels that call's active chat run.
+capture and playback and cancels that call's active chat run. Split Talk requires
+both transcription and speech output to be configured. Dictation in an existing
+conversation uses that conversation's agent credentials; the catalog remains an
+advisory view of the configured Talk agent.
 
 Without these settings, the existing realtime Talk and transcription-provider
 selection remain unchanged. Browser microphone capture requires a secure context

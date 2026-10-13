@@ -15,6 +15,7 @@ export type SplitTalkOptions = {
   speechMethod: "talk.speak" | "tts.speak";
   sendMessage: (message: string, runId: string) => Promise<ChatSendAck>;
   playback: GatewaySpeechPlayback;
+  maxTextLength?: number;
 };
 
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
@@ -65,7 +66,11 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         onTranscriptChange: () => undefined,
         onSilence: () => void this.completeTurn(capture),
       },
-      { inputDeviceId: this.inputDeviceId, silenceTimeoutMs: this.options.silenceTimeoutMs },
+      {
+        sessionKey: this.sessionKey,
+        inputDeviceId: this.inputDeviceId,
+        silenceTimeoutMs: this.options.silenceTimeoutMs,
+      },
     );
     this.capture = capture;
     await capture.start();
@@ -93,6 +98,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
             answer,
             this.options.speechMethod,
             () => !this.closed,
+            this.options.maxTextLength,
           );
         }
       }

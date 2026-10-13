@@ -60,7 +60,11 @@ import {
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
 } from "../session-registry.js";
-import { requirePreparedTalkSessionTarget } from "../session-target.js";
+import {
+  assertTalkSessionStorageTarget,
+  prepareTalkSessionTarget,
+  requirePreparedTalkSessionTarget,
+} from "../session-target.js";
 import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
@@ -391,10 +395,26 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const runtimeConfig = context.getRuntimeConfig();
+        const sessionKey = normalizeOptionalString(params.sessionKey);
+        const target =
+          sessionMutationAuthorization?.talkSessionTarget ??
+          (sessionKey && hasGatewayAdminScope(client)
+            ? await prepareTalkSessionTarget(runtimeConfig, sessionKey)
+            : undefined);
+        if (sessionKey) {
+          requirePreparedTalkSessionTarget(target);
+        }
+        const assertCurrent = () => {
+          requester.assertCurrent();
+          if (target) {
+            assertTalkSessionStorageTarget(context.getRuntimeConfig(), target);
+          }
+        };
         const transcriptionConfig = await buildTalkTranscriptionConfig(
           runtimeConfig,
           params.provider,
           params.model,
+          target?.agentId,
         );
         if (transcriptionConfig.file && !transcriptionConfig.file.ready) {
           throw new Error(
@@ -402,7 +422,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
         }
         const resolution = transcriptionConfig.file
-          ? { file: transcriptionConfig.file, assertCurrent: requester.assertCurrent }
+          ? { file: transcriptionConfig.file, assertCurrent }
           : await resolveConfiguredRealtimeTranscriptionProvider({
               config: runtimeConfig,
               configuredProviderId: transcriptionConfig.provider,
@@ -410,7 +430,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               requestedModel: normalizeOptionalString(params.model),
               defaultModel: transcriptionConfig.model,
             });
-        requester.assertCurrent();
+        sessionMutationAuthorization?.assertCurrent();
+        assertCurrent();
         const session = createTalkTranscriptionRelaySession({
           context,
           connId,

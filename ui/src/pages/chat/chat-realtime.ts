@@ -109,6 +109,7 @@ export function attachChatRealtimeActions(
   state: ChatRealtimeState,
   canStart: () => boolean = () => true,
   sendMessage?: SplitTalkOptions["sendMessage"],
+  maxSpeechTextLength?: () => number | Promise<number>,
 ) {
   let conversationGeneration = 0;
   const talkStatusIsError = () => state.realtimeTalkStatus === "error";
@@ -265,8 +266,16 @@ export function attachChatRealtimeActions(
     if (!voiceChange) {
       const playback = new GatewaySpeechPlayback();
       try {
-        playback.prepare();
-        const result = await client.request<TalkConfigResult>("talk.config", {});
+        playback.prepare(client, () => {
+          if (state.realtimeTalkVoiceController === voiceController) {
+            stopChatRealtimeTalk(state);
+            state.requestUpdate();
+          }
+        });
+        const [result, maxTextLength] = await Promise.all([
+          client.request<TalkConfigResult>("talk.config", {}),
+          maxSpeechTextLength?.(),
+        ]);
         if (
           state.realtimeTalkVoiceController !== voiceController ||
           state.client !== client ||
@@ -290,6 +299,7 @@ export function attachChatRealtimeActions(
             speechMethod: talk.provider || talk.resolved?.provider ? "talk.speak" : "tts.speak",
             sendMessage,
             playback,
+            maxTextLength,
           };
         }
       } catch (error) {

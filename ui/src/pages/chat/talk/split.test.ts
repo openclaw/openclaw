@@ -2,23 +2,20 @@
 
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
-import { loadSettings } from "../../../app/settings.ts";
+import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import { sessionsResult } from "../../../lib/sessions/session-capability.test-support.ts";
+import { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
-import {
-  attachChatRealtimeActions,
-  createInitialChatRealtimeState,
-  stopChatRealtimeTalk,
-  type ChatRealtimeState,
-} from "../chat-realtime.ts";
-import { requestChatSend } from "../chat-send-request.ts";
-import type { ChatState } from "../chat-state-contract.ts";
+import { createChatPageStateContext } from "../chat-page.test-support.ts";
+import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
+import { createPageState } from "../chat-state-page.ts";
 
 type AudioProcessor = {
   onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
@@ -109,7 +106,6 @@ function harness(provider?: string) {
   const nextCapture = createDeferred();
   let captureCount = 0;
   let runId = "";
-  let permitted = true;
   const emit = (event: string, payload: unknown) => {
     for (const listener of listeners) {
       listener({ event, payload } as GatewayEventFrame);
@@ -163,38 +159,20 @@ function harness(provider?: string) {
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  const state: ChatRealtimeState & ChatState = {
-    client,
-    connected: true,
-    sessionKey: "agent:local:main",
-    settings: loadSettings(),
-    connectionEpoch: 0,
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessages: [],
-    chatThinkingLevel: null,
-    chatVerboseLevel: null,
-    chatSending: false,
-    chatMessage: "",
-    chatAttachments: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    lastError: null,
-    hello: null,
-    ...createInitialChatRealtimeState(),
-    requestUpdate: vi.fn(),
-    resetRealtimeTalkConversation: vi.fn(),
-    toggleRealtimeTalk: vi.fn(),
-    toggleRealtimeTalkCamera: vi.fn(),
-    switchRealtimeTalkCamera: vi.fn(),
-  };
-  attachChatRealtimeActions(
-    state,
-    () => permitted,
-    (message, requestedRunId) => requestChatSend(state, { message, runId: requestedRunId }),
+  const context = createChatPageStateContext();
+  context.runtimeConfig = createRuntimeConfigCapability(context.gateway);
+  onTestFinished(() => context.runtimeConfig.dispose());
+  const state = createPageState(
+    context,
+    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    {
+      sessionKey: "agent:local:main",
+      dispatchEvent: () => true,
+      querySelector: () => null,
+    },
   );
+  state.client = client;
+  state.connected = true;
   states.push(state);
   const utterance = () => {
     const processor = processors.at(-1)!;
@@ -214,10 +192,53 @@ function harness(provider?: string) {
     nextCapture,
     getRunId: () => runId,
     requireReview: () => {
-      permitted = false;
+      state.sessionsResult = sessionsResult([
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          providerReview: {
+            id: "review-one",
+            runId: "reviewed-run",
+            explanation: "Review is required.",
+            continuationMessage: "Continue after review.",
+            canContinue: true,
+          },
+        },
+      ]);
     },
   };
 }
+
+it.each(["displayed-leaf", null])(
+  "preserves the displayed branch when admitting a split voice turn (%s)",
+  async (leaf) => {
+    const h = harness();
+    h.state.chatDisplayedLeafEntryId = leaf;
+    const sent = createDeferred();
+    const implementation = expectDefined(h.request.getMockImplementation(), "Gateway fixture");
+    h.request.mockImplementation(async (method, params) => {
+      const result = await implementation(method, params);
+      if (method === "chat.send") {
+        sent.resolve();
+      }
+      return result;
+    });
+    await h.state.toggleRealtimeTalk();
+    h.utterance();
+    await sent.promise;
+    expect(h.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:local:main",
+        message: "Tell me something local",
+        expectedLeafEntryId: leaf,
+      }),
+      { timeoutMs: 30_000 },
+    );
+    await h.state.toggleRealtimeTalk();
+  },
+);
 
 it.each(["openai", undefined])(
   "routes configured split Talk through STT, chat and Gateway speech (provider: %s)",
@@ -225,6 +246,12 @@ it.each(["openai", undefined])(
     const h = harness(provider);
     await h.state.toggleRealtimeTalk();
     expect(h.state.realtimeTalkStatus).toBe("listening");
+    expect(h.request).toHaveBeenCalledWith("talk.session.create", {
+      sessionKey: "agent:local:main",
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+    });
     const sent = createDeferred();
     const impl = h.request.getMockImplementation()!;
     h.request.mockImplementation(async (method, params) => {
@@ -471,6 +498,45 @@ it.each(["stop", "provider review"])(
     expect(h.state.realtimeTalkStatus).toBe("idle");
   },
 );
+
+it("lets Read aloud supersede Talk while its configuration is pending", async () => {
+  const h = harness();
+  const configuration = createDeferred<Awaited<ReturnType<typeof h.request>>>();
+  const configurationRequested = createDeferred();
+  const implementation = expectDefined(h.request.getMockImplementation(), "Gateway fixture");
+  h.request.mockImplementation(async (method, params) => {
+    if (method === "talk.config") {
+      configurationRequested.resolve();
+      return configuration.promise;
+    }
+    return implementation(method, params);
+  });
+  const starting = h.state.toggleRealtimeTalk();
+  await configurationRequested.promise;
+  const playback = new GatewaySpeechPlayback();
+  const reading = playback.speak(
+    expectDefined(h.state.client, "current Gateway client"),
+    "Newer Read aloud",
+  );
+  try {
+    await speechStarted.promise;
+    expect(h.state.realtimeTalkStatus).toBe("idle");
+    configuration.resolve({ config: { talk: { realtime: { mode: "stt-tts" } } } });
+    await starting;
+    expect(h.request.mock.calls.some(([method]) => method === "talk.session.create")).toBe(false);
+    expect(tracks).toHaveLength(0);
+    const newerAudio = expectDefined(audios[1], "newer Read aloud clip");
+    expect(newerAudio.pause).toHaveBeenCalledOnce();
+    newerAudio.dispatchEvent(new Event("ended"));
+    await reading;
+  } finally {
+    configuration.resolve({ config: { talk: { realtime: { mode: "stt-tts" } } } });
+    await starting;
+    playback.stop();
+    stopChatRealtimeTalk(h.state);
+    await reading;
+  }
+});
 
 it("surfaces a rejected chat admission instead of waiting forever for a model reply", async () => {
   const h = harness();

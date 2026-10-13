@@ -87,6 +87,7 @@ function pointer(type: string, pointerId = 7, x = 50, y = 50): Event {
 
 function createHarness(
   overrides: {
+    sessionKey?: string;
     enabled?: boolean;
     realtimeTalkActive?: boolean;
     dictationAvailable?: boolean;
@@ -99,6 +100,7 @@ function createHarness(
   const onDictationUnavailable = vi.fn();
   const options = {
     client: createClient(),
+    sessionKey: overrides.sessionKey,
     connected: true,
     enabled: overrides.enabled ?? true,
     dictationAvailable: overrides.dictationAvailable,
@@ -177,6 +179,18 @@ async function startHold(target: HTMLElement): Promise<void> {
     expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
   );
 }
+
+it("binds microphone transcription to the displayed agent session", async () => {
+  const { controller, target } = createHarness({ sessionKey: "agent:researcher:conversation" });
+  await startHold(target);
+  expect(request).toHaveBeenCalledWith("talk.session.create", {
+    sessionKey: "agent:researcher:conversation",
+    mode: "transcription",
+    transport: "gateway-relay",
+    brain: "none",
+  });
+  controller.dispose();
+});
 
 async function releaseLatched(target: HTMLElement): Promise<void> {
   document.dispatchEvent(pointer("pointerup"));

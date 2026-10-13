@@ -82,7 +82,11 @@ export class ComposerDictationSession {
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly callbacks: ComposerDictationSessionCallbacks,
-    private readonly options?: { inputDeviceId?: string; silenceTimeoutMs?: number },
+    private readonly options?: {
+      sessionKey?: string;
+      inputDeviceId?: string;
+      silenceTimeoutMs?: number;
+    },
   ) {}
 
   start(): Promise<void> {
@@ -91,9 +95,10 @@ export class ComposerDictationSession {
   }
 
   private async startInternal(): Promise<void> {
-    const inputDeviceId = this.options
-      ? this.options.inputDeviceId
-      : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
+    const inputDeviceId =
+      this.options && "inputDeviceId" in this.options
+        ? this.options.inputDeviceId
+        : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
     const media = await this.input.open(inputDeviceId);
     if (this.stopped) {
       return;
@@ -116,6 +121,7 @@ export class ComposerDictationSession {
       mode: "transcription",
       transport: "gateway-relay",
       brain: "none",
+      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
     });
     this.sessionId = result.sessionId;
     this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;

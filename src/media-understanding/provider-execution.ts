@@ -157,6 +157,8 @@ export function executeProviderRequest<T>(
 /** Availability uses the same hooks, secrets, and credential owner as execution. */
 export async function isAudioModelEntryAvailable(params: {
   cfg: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
   entry: MediaUnderstandingModelConfig;
   secretOwnerId?: string;
   providerRegistry: ProviderRegistry;
@@ -179,6 +181,8 @@ export async function isAudioModelEntryAvailable(params: {
     if (provider.isAudioConfigured) {
       return await provider.isAudioConfigured({
         cfg: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         profile: entry.profile,
         preferredProfile: entry.preferredProfile,
         model: entry.model,

@@ -1,6 +1,16 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { chunkText } from "../../../packages/markdown-core/src/chunk-text.js";
+import { DEFAULT_MAX_TEXT_LENGTH } from "../../../src/tts/tts-limits.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { base64ToBytes } from "./bytes-base64.ts";
+
+const activePlayback = new WeakMap<GatewayBrowserClient, GatewaySpeechPlayback>();
+
+export function resolveSpeechTextLimit(config: unknown): number {
+  const limit = asOptionalRecord(asOptionalRecord(config)?.tts)?.maxTextLength;
+  return typeof limit === "number" ? limit : DEFAULT_MAX_TEXT_LENGTH;
+}
 
 /** Browser playback only; the Gateway owns provider selection and synthesis. */
 export class GatewaySpeechPlayback {
@@ -8,8 +18,24 @@ export class GatewaySpeechPlayback {
   private finish: (() => void) | undefined;
   private audio: HTMLAudioElement | undefined;
   private ready: Promise<void> | undefined;
+  private client: GatewayBrowserClient | undefined;
+  private superseded: (() => void) | undefined;
+  private cancel: (() => void) | undefined;
 
-  prepare(): HTMLAudioElement {
+  prepare(client?: GatewayBrowserClient, superseded?: () => void): HTMLAudioElement {
+    if (client) {
+      const previous = activePlayback.get(client);
+      if (previous !== this) {
+        const onSuperseded = previous?.superseded;
+        previous?.stop();
+        onSuperseded?.();
+        activePlayback.set(client, this);
+      }
+      this.client = client;
+    }
+    if (superseded) {
+      this.superseded = superseded;
+    }
     if (this.audio) {
       return this.audio;
     }
@@ -26,7 +52,17 @@ export class GatewaySpeechPlayback {
   }
 
   stop(): void {
+    this.cancelPlayback();
+    if (this.client && activePlayback.get(this.client) === this) {
+      activePlayback.delete(this.client);
+    }
+    this.superseded = undefined;
+  }
+
+  private cancelPlayback(): void {
     this.generation += 1;
+    this.cancel?.();
+    this.cancel = undefined;
     this.finish?.();
   }
 
@@ -35,15 +71,42 @@ export class GatewaySpeechPlayback {
     text: string,
     method: "tts.speak" | "talk.speak" = "tts.speak",
     isCurrent: () => boolean = () => true,
+    maxTextLength = DEFAULT_MAX_TEXT_LENGTH,
   ): Promise<void> {
-    this.stop();
-    const audio = this.prepare();
+    this.cancelPlayback();
+    const audio = this.prepare(client);
     const generation = this.generation;
-    const result = await client.request<TtsSpeakResult>(method, { text });
-    await this.ready;
-    if (generation !== this.generation || !isCurrent()) {
-      return;
+    const cancelled = new Promise<undefined>((resolve) => {
+      this.cancel = () => resolve(undefined);
+    });
+    try {
+      for (const textChunk of chunkText(text, maxTextLength)) {
+        if (generation !== this.generation || !isCurrent()) {
+          return;
+        }
+        const response = await Promise.race([
+          client
+            .request<TtsSpeakResult>(method, { text: textChunk })
+            .then((result) => ({ result })),
+          cancelled,
+        ]);
+        if (!response) {
+          return;
+        }
+        await Promise.race([this.ready, cancelled]);
+        if (generation !== this.generation || !isCurrent()) {
+          return;
+        }
+        await this.play(audio, response.result);
+      }
+    } finally {
+      if (generation === this.generation) {
+        this.cancel = undefined;
+      }
     }
+  }
+
+  private async play(audio: HTMLAudioElement, result: TtsSpeakResult): Promise<void> {
     const url = URL.createObjectURL(
       new Blob([base64ToBytes(result.audioBase64)], { type: result.mimeType }),
     );

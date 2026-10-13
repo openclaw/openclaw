@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { acquireStateDatabaseSchemaLease } from "../../../infra/gateway-state-owner.js";
 import type {
   AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
@@ -10,6 +11,9 @@ import type { RealtimeTranscriptionProviderPlugin } from "../../../plugins/capab
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
 import { talkHandlers } from "./index.js";
@@ -92,6 +96,91 @@ describe("configured file transcription through Talk RPCs", () => {
     vi.useRealTimers();
     cleanupTalkConnection("conn-1", { warn: vi.fn() });
   });
+
+  it.each([false, true])(
+    "uses the selected conversation's audio credentials (default credentials: %s)",
+    async (defaultHasCredentials) => {
+      await withOpenClawTestState({ label: "talk-selected-audio-auth" }, async (state) => {
+        const config: OpenClawConfig = {
+          ...cfg,
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: {},
+              researcher: { workspace: state.workspaceDir },
+            },
+          },
+          talk: { agentId: "main" },
+          models: {
+            providers: {
+              "local-stt": { baseUrl: "https://unused.invalid", models: [] },
+            },
+          },
+        };
+        await state.writeConfig(config);
+        const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(state.env));
+        const maintenance = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: lease.assertCurrent,
+          assertDatabaseAccess: lease.assertDatabaseAccess,
+        });
+        try {
+          await maintenance.run(async () => {
+            for (const agentId of ["main", "researcher"]) {
+              await state.writeAuthProfiles(
+                {
+                  version: 1,
+                  profiles:
+                    agentId === "researcher" || defaultHasCredentials
+                      ? {
+                          "local-stt:audio": {
+                            type: "api_key",
+                            provider: "local-stt",
+                            key: `synthetic-${agentId}-key`,
+                          },
+                        }
+                      : {},
+                },
+                agentId,
+              );
+            }
+          });
+        } finally {
+          await maintenance.close().finally(() => lease.release());
+        }
+        await withFileProvider(async (requests) => {
+          const call = createTalkHandlerCaller(talkSessionHandlers);
+          const context = {
+            getRuntimeConfig: () => config,
+            broadcastToConnIds: vi.fn(),
+            logGateway: { warn: vi.fn() },
+          };
+          const created = vi.fn();
+          await call("talk.session.create", {
+            params: { mode: "transcription", sessionKey: "agent:researcher:main" },
+            client: {
+              connId: "conn-1",
+              connect: { scopes: defaultHasCredentials ? ["operator.admin"] : [] },
+            },
+            context,
+            respond: created,
+          });
+          expect(created.mock.calls[0]?.[2]).toBeUndefined();
+          const sessionId = (expectRespondOk(created) as { sessionId: string }).sessionId;
+          await call("talk.session.appendAudio", {
+            params: { sessionId, audioBase64: Buffer.alloc(1600, 0xff).toString("base64") },
+            context,
+            respond: vi.fn(),
+          });
+          const closed = vi.fn();
+          await call("talk.session.close", { params: { sessionId }, context, respond: closed });
+          expectRespondOk(closed);
+          expect(requests).toHaveLength(1);
+          expect(requests[0]?.apiKey).toBe("synthetic-researcher-key");
+        });
+      });
+    },
+  );
 
   it.each([
     { configured: false, withHook: true },
@@ -516,12 +605,23 @@ describe("configured file transcription through Talk RPCs", () => {
     { name: "explicit model", params: { model: "streaming-model" }, streaming: false },
     { name: "configured streaming", params: {}, streaming: true },
     { name: "no configured audio models", params: {}, streaming: false, unconfigured: true },
+    { name: "image-only media models", params: {}, streaming: false, imageOnly: true },
   ])(
     "preserves $name selection instead of falling back to file audio",
-    async ({ params, streaming, unconfigured }) => {
+    async ({ params, streaming, unconfigured, imageOnly }) => {
       await withFileProvider(async (requests) => {
         const config: OpenClawConfig = {
           ...(unconfigured ? {} : cfg),
+          ...(imageOnly
+            ? {
+                agents: { ownership: "explicit", entries: { first: {}, second: {} } },
+                tools: {
+                  media: {
+                    models: [{ provider: "local-stt", model: "vision", capabilities: ["image"] }],
+                  },
+                },
+              }
+            : {}),
           ...(streaming
             ? {
                 plugins: {
