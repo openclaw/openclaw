@@ -51,6 +51,8 @@ export type MenuProps = {
   dir?: "ltr" | "rtl";
   open?: boolean;
   disabled?: boolean;
+  /** Override the destination when Tab exits the menu; dismissal stays owned here. */
+  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onSelect?: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
   onOpenChange?(open: boolean): void;
   onBeforeShow?(event: Event): void;
@@ -219,7 +221,15 @@ export function Menu(props: BranchProps): JSX.Element {
         event.preventDefault();
         next.focus();
       } else {
-        menuRoot.request(false, "return");
+        const destination = untrack(() => props.tabFocusTarget?.(event.shiftKey));
+        if (destination) {
+          event.preventDefault();
+          if (menuRoot.request(false, "none")) {
+            destination.focus({ preventScroll: true });
+          }
+        } else {
+          menuRoot.request(false, "return");
+        }
       }
     };
     overlay.surface.addEventListener("overlay-show", beforeShow);
@@ -348,6 +358,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         parent={overlay}
                         root={menuRoot}
                         parentBinding={binding}
+                        tabFocusTarget={props.tabFocusTarget}
                         dir={direction()}
                         disabled={item().disabled}
                         triggerClass={item().class}

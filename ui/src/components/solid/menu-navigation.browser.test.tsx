@@ -17,6 +17,43 @@ import { Menu, type MenuItem } from "./menu.tsx";
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
+  it("owns Tab dismissal with caller-selected focus destinations", async () => {
+    let credential!: HTMLInputElement;
+    let veto = true;
+    render(() => (
+      <>
+        <button>Before picker</button>
+        <Menu
+          id="provider"
+          label="Provider"
+          items={[{ id: "beta", label: "Beta" }]}
+          tabFocusTarget={(backward) => (backward ? trigger("provider") : credential)}
+          onBeforeHide={(event) => {
+            if (veto) {
+              event.preventDefault();
+            }
+          }}
+        />
+        <input ref={(node) => (credential = node)} aria-label="Credential" />
+      </>
+    ));
+    flush();
+    credential.value = "synthetic-key";
+    await openMenu("provider");
+    await userEvent.tab();
+    expect(surface("provider").matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(item("Beta", "provider"));
+    veto = false;
+    await userEvent.tab();
+    await phase(surface("provider"), "hidden");
+    expect(document.activeElement).toBe(credential);
+    expect(credential.value).toBe("synthetic-key");
+    await openMenu("provider");
+    await userEvent.tab({ shift: true });
+    await phase(surface("provider"), "hidden");
+    expect(document.activeElement).toBe(trigger("provider"));
+  });
+
   it("reopens at the selected item with a custom root trigger and preserves navigation", async () => {
     const [selected, setSelected] = createSignal("alpha");
     const choices = [
@@ -30,7 +67,8 @@ describe("Solid menu navigation", () => {
       },
       get items() {
         return choices.map<MenuItem>((choice) => ({
-          ...choice,
+          id: choice.id,
+          label: choice.label,
           type: "radio",
           checked: choice.id === selected(),
           attributes: { "data-initial-focus": choice.id === selected() ? "" : undefined },
