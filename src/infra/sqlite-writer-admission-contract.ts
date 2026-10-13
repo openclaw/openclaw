@@ -1,11 +1,11 @@
-import type {
-  ProfileAuthorityDescriptor,
-  ProfileAuthorityStatus,
-} from "../state/user-profile-authority.js";
+import type { ProfileAuthorityStatus } from "../state/user-profile-authority.js";
+import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
-/** Profile checks alone do not grant a native write or replace the final host COMMIT guard. */
-export type SqliteProfileAdmissionRequest = {
-  kind: "assert-bound-revision" | "read-current-settled-facts";
-  authority: ProfileAuthorityDescriptor;
+export type SqliteWriterAdmissionResult =
+  | ProfileAuthorityStatus
+  | { kind: "connected"; lifetime: Int32Array<SharedArrayBuffer> };
+
+export type SqliteBrokerAdmissionRequest = {
+  custody: SqliteWorkerRequestCustodyDescriptor;
+  decision: Int32Array<SharedArrayBuffer>;
 };
-export type SqliteProfileAdmissionResult = ProfileAuthorityStatus;

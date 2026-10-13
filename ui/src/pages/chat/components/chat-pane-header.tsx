@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -223,6 +223,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
 }
 
 function ProjectCrumb(props: ChatPaneHeaderProps) {
+  const [opened, setOpened] = createSignal(false);
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   return (
     <wa-dropdown
@@ -234,7 +235,10 @@ function ProjectCrumb(props: ChatPaneHeaderProps) {
           props.onMenuAction(value);
         }
       }}
-      onWa-show={() => props.onMenuOpenChange(true)}
+      onWa-show={() => {
+        setOpened(true);
+        props.onMenuOpenChange(true);
+      }}
       onWa-hide={() => props.onMenuOpenChange(false)}
     >
       <button
@@ -266,26 +270,28 @@ function ProjectCrumb(props: ChatPaneHeaderProps) {
         </Show>
         <span>{copied() ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span>
       </button>
-      <Show when={props.canReveal && props.workspaceRoot}>
-        <wa-dropdown-item value="reveal">{revealLabel(props.platform)}</wa-dropdown-item>
-      </Show>
-      <Show when={props.workspaceRoot}>
-        <wa-dropdown-item value="copy-path">
-          {t(
-            props.copiedAction === "copy-path"
-              ? "chat.sessionHeader.copied"
-              : "chat.sessionHeader.copyPath",
-          )}
-        </wa-dropdown-item>
-      </Show>
-      <Show when={props.branch}>
-        <wa-dropdown-item value="copy-branch">
-          {t(
-            props.copiedAction === "copy-branch"
-              ? "chat.sessionHeader.copied"
-              : "chat.sessionHeader.copyBranch",
-          )}
-        </wa-dropdown-item>
+      <Show when={opened()}>
+        <Show when={props.canReveal && props.workspaceRoot}>
+          <wa-dropdown-item value="reveal">{revealLabel(props.platform)}</wa-dropdown-item>
+        </Show>
+        <Show when={props.workspaceRoot}>
+          <wa-dropdown-item value="copy-path">
+            {t(
+              props.copiedAction === "copy-path"
+                ? "chat.sessionHeader.copied"
+                : "chat.sessionHeader.copyPath",
+            )}
+          </wa-dropdown-item>
+        </Show>
+        <Show when={props.branch}>
+          <wa-dropdown-item value="copy-branch">
+            {t(
+              props.copiedAction === "copy-branch"
+                ? "chat.sessionHeader.copied"
+                : "chat.sessionHeader.copyBranch",
+            )}
+          </wa-dropdown-item>
+        </Show>
       </Show>
     </wa-dropdown>
   );

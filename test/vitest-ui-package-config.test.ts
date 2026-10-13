@@ -239,6 +239,84 @@ describe("ui package vitest config", () => {
       }
     }));
 
+  it("cleans Solid roots per test when a second file reuses the cached mount helper", ({
+    signal,
+  }) =>
+    fixture.run(async () => {
+      const artifactRoot = path.join(process.cwd(), ".artifacts");
+      mkdirSync(artifactRoot, { recursive: true });
+      const root = fixture.createTempDir("ui-solid-cleanup-", artifactRoot);
+      const mountPath = JSON.stringify(
+        path.join(process.cwd(), "ui/src/test-helpers/mount-solid.ts"),
+      );
+      writeFileSync(
+        path.join(root, "first.test.ts"),
+        `
+import { it } from "vitest";
+import { mountSolid } from ${mountPath};
+it("loads the reusable mount helper", () => { globalThis.cachedMount = mountSolid; });
+`,
+      );
+      writeFileSync(
+        path.join(root, "second.test.ts"),
+        `
+import { expect, it } from "vitest";
+import { onCleanup } from "solid-js";
+import { mountSolid } from ${mountPath};
+let disposed = false;
+let container;
+it("uses the same helper for a later file", () => {
+  expect(mountSolid).toBe(globalThis.cachedMount);
+  container = mountSolid(() => {
+    onCleanup(() => { disposed = true; });
+    return document.createElement("output");
+  }).container;
+  expect(container.isConnected).toBe(true);
+});
+it("disposes its effects and owned DOM before the next test", () => {
+  expect(disposed).toBe(true);
+  expect(container.isConnected).toBe(false);
+});
+`,
+      );
+      // The native runner keeps helpers cached; the repository's file cleanup would mask this bug.
+      const configPath = path.join(root, "vitest.config.mjs");
+      writeFileSync(
+        configPath,
+        `
+import { BaseSequencer } from "vitest/node";
+import { controlUiSolidPlugin } from ${JSON.stringify(path.join(process.cwd(), "ui/config/control-ui-solid.ts"))};
+export default {
+  plugins: [controlUiSolidPlugin()],
+  test: {
+    root: ${JSON.stringify(root)},
+    include: ["*.test.ts"],
+    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/lit-warnings.setup.ts"))}],
+    environment: "jsdom", isolate: false, pool: "threads", maxWorkers: 1,
+    sequence: { sequencer: class extends BaseSequencer {
+      sort(files) { return files.toSorted((a, b) => a.moduleId.localeCompare(b.moduleId)); }
+    } },
+  },
+};
+`,
+      );
+      const result = await runVitestShutdownCommand({
+        args: [
+          path.join(process.cwd(), "node_modules/vitest/vitest.mjs"),
+          "run",
+          "--config",
+          configPath,
+          "--configLoader",
+          "runner",
+        ],
+        signal,
+        timeoutMs: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+        env: { PATH: process.env.PATH, CI: "1" },
+      });
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("3 passed");
+    }));
+
   it("gives module-mock fixtures the same isolated ownership in both entry points", async () => {
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
     vi.resetModules();

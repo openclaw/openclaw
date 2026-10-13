@@ -5911,6 +5911,11 @@ describe("ci workflow guards", () => {
     expect(shared.outputs.shared_sdk_declarations).toBe("true");
     const previousRows = JSON.parse(previous.outputs.check_additional_matrix!).include;
     const sharedRows = JSON.parse(shared.outputs.check_additional_matrix!).include;
+    expect(previousRows).toContainEqual({
+      check_name: "check-additional-extension-package-boundary",
+      group: "extension-package-boundary",
+      runner: "blacksmith-16vcpu-ubuntu-2404",
+    });
     expect(sharedRows).toEqual(
       previousRows.filter((row: { group: string }) => row.group !== "extension-package-boundary"),
     );
@@ -5961,7 +5966,7 @@ describe("ci workflow guards", () => {
             runnerBackend: "hybrid",
             runAttempt,
           }),
-        ).toBe(runAttempt === 1 ? "blacksmith-32vcpu-ubuntu-2404" : "ubuntu-24.04");
+        ).toBe(runAttempt === 1 ? "blacksmith-16vcpu-ubuntu-2404" : "ubuntu-24.04");
       }
     }
     expect(producer.needs).toEqual(["preflight"]);
@@ -6012,7 +6017,13 @@ describe("ci workflow guards", () => {
       expect(full.status, full.output).toBe(0);
       expect(full.outputs.shared_sdk_declarations).toBe("false");
       expect(JSON.parse(full.outputs.check_additional_matrix!).include).toContainEqual(
-        expect.objectContaining({ group: "extension-package-boundary" }),
+        expect.objectContaining({
+          group: "extension-package-boundary",
+          runner:
+            eventName === "workflow_dispatch"
+              ? "blacksmith-32vcpu-ubuntu-2404"
+              : "blacksmith-16vcpu-ubuntu-2404",
+        }),
       );
     }
   });
@@ -6024,7 +6035,7 @@ describe("ci workflow guards", () => {
     const checkShardJob = workflow.jobs["check-shard"];
     const hostedCoreJob = workflow.jobs["check-lint-hosted-core-shard"];
 
-    // Cold SDK preparation and plugin compilation need CPU and memory headroom.
+    // Frozen targets retain the runner used with their historical compiler policy.
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
@@ -6415,6 +6426,12 @@ describe("ci workflow guards", () => {
             check_name: "report-plugin-sdk-api-diff",
             group: "plugin-sdk-api-diff",
             runner: "blacksmith-32vcpu-ubuntu-2404",
+          });
+        } else if (row.group === "extension-package-boundary") {
+          expect(row).toEqual({
+            check_name: "check-additional-extension-package-boundary",
+            group: "extension-package-boundary",
+            runner: frozen ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
           });
         } else {
           expect(readFrozenAdditionalCheckRows()).toContainEqual(row);

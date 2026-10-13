@@ -112,6 +112,9 @@ admission, SKU restrictions, and a hard spending stop require provider controls.
 
 ### CI runner routing
 
+Current extension package boundary checks use the 16-class. Frozen targets keep
+their historical 32-class runner and compiler policy.
+
 Hosted Node 24 setup honors the workflow's existing `NODE_VERSION` pin when the
 setup input is `24.x`. This prevents runner-image refreshes from silently choosing
 a different patch version. Explicit compatibility versions retain their own

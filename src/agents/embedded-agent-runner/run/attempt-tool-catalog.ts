@@ -65,7 +65,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
-    // tool hidden behind tool_call/exec is gated too; the catalog controls stay
+    // tool hidden behind dispatch_action/exec is gated too; the catalog controls stay
     // callable because they only dispatch into the gated tools.
     let effectiveTools = attempt.toolExecutionAllow
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)

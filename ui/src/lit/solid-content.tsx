@@ -19,6 +19,11 @@ import {
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
 
+/** Render opaque plugin SDK templates with their event receiver. */
+export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
+  renderLit(template, target, { host });
+}
+
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
 export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
 
