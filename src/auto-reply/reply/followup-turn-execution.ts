@@ -20,7 +20,6 @@ import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { captureReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { prepareSessionVerboseLevelReader } from "./session-verbose-level.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -88,33 +87,9 @@ export async function executeFollowupTurn(params: {
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
-  const assertProgressCurrent = () => {
-    turn.operation.abortSignal.throwIfAborted();
-    turn.queued.operatorAuthority?.assertCurrent();
-    if (turn.operation.result) {
-      throw new Error("Follow-up progress owner has settled");
-    }
-  };
-  const readVerboseLevel = await prepareSessionVerboseLevelReader({
-    scope:
-      turn.session.kind === "session" &&
-      turn.session.storePath &&
-      turn.queued.run.verboseLevelOverride === undefined
-        ? {
-            storePath: turn.session.storePath,
-            sessionKey: turn.session.key,
-          }
-        : undefined,
-    initialLevel:
-      turn.session.kind === "session" && turn.session.storePath
-        ? turn.session.current()?.verboseLevel
-        : undefined,
-    assertCurrent: assertProgressCurrent,
-  });
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
-      readVerboseLevel() ??
       turn.session.current()?.verboseLevel ??
       turn.queued.run.verboseLevel;
     return level === "on" || level === "full" ? level : "off";
@@ -141,7 +116,8 @@ export async function executeFollowupTurn(params: {
       options: sourceOpts,
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
       resolveVerboseProgressVisibilityAsync: async () => {
-        assertProgressCurrent();
+        turn.operation.abortSignal.throwIfAborted();
+        turn.queued.operatorAuthority?.assertCurrent();
         return progressAllowed() && shouldEmitVerboseToolResult();
       },
     });
@@ -232,6 +208,7 @@ export async function executeFollowupTurn(params: {
     onModelSelected: turn.queued.runObservers?.onModelSelected,
     prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
     resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+    resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
     onDeliberateSilentTerminalReply: turn.queued.runObservers?.onDeliberateSilentTerminalReply,
     commentaryPayloadsEnabled,
     runId: turn.runId,

@@ -7,6 +7,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../../agents/timeout.js";
 import { buildProviderLoginRecovery } from "../../auto-reply/provider-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
@@ -288,7 +289,7 @@ function startFailureAlertCycle(job: CronJob, incident: FailureAlertSignal, now:
     ...incident,
     scope: current?.scope === "run" ? "run" : incident.scope,
     // An alert after the repair request is its fallback; the marker lasts until success.
-    ...(current?.repair ? { repair: { atMs: current.repair.atMs, alerted: true } } : {}),
+    ...(current?.repair ? { repair: { ...current.repair, alerted: true } } : {}),
   };
 }
 
@@ -371,7 +372,7 @@ function maybeEmitFailureAlert(
     error?: string;
     errorReason?: FailoverReason;
     failureNotificationDetail?: CronFailureNotificationDetail;
-    runAtMs?: number;
+    runAtMs: number;
     consecutiveCount: number;
     terminalOneShot?: boolean;
     deferredNotifications: DeferredCronNotifications;
@@ -404,8 +405,16 @@ function maybeEmitFailureAlert(
   const incident = failureIncident({ ...params, route: alertConfig });
   const now = state.deps.nowMs();
   const repair = params.job.state.failureAlertIncident?.repair;
-  // The repair request took this streak's alert and cooldown slot; if the job still
-  // fails, the user gets that alert once.
+  // Older stored incidents have no deadline and retain request-based escalation.
+  // A run admitted before settlement cannot verify the repair, even if it fails later.
+  if (
+    repair?.deadlineAtMs !== undefined &&
+    (repair.settledAtMs !== undefined && repair.settledAtMs < repair.deadlineAtMs
+      ? params.runAtMs <= repair.settledAtMs
+      : now < repair.deadlineAtMs)
+  ) {
+    return "suppressed";
+  }
   if (repair && !repair.alerted) {
     startFailureAlertCycle(params.job, incident, now);
   } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
@@ -438,7 +447,13 @@ function maybeEmitFailureAlert(
     (terminalOneShot || isJobEnabled(params.job))
   ) {
     const opened = params.job.state.failureAlertIncident ?? incident;
-    params.job.state.failureAlertIncident = { ...opened, repair: { atMs: now } };
+    params.job.state.failureAlertIncident = {
+      ...opened,
+      repair: {
+        atMs: now,
+        deadlineAtMs: now + (state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS),
+      },
+    };
     // A terminal job keeps its alert cycle open for fallback delivery if repair cannot start.
     params.job.state.lastFailureNotificationDeliveryStatus = terminalOneShot
       ? "unknown"

@@ -3,14 +3,13 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import {
   runUserProfileWriteTransaction,
@@ -21,32 +20,7 @@ import type { UserProfilesDatabase, UserProfileOwnerErrorCode } from "./user-pro
 // Canonical additive schema for durable user profiles. Kept feature-local so
 // ordinary shared-state opens do not create identity tables until they are used.
 const ensureUserProfileTables = createSqliteSchemaEnsurer(
-  () => `
-CREATE TABLE IF NOT EXISTS user_profiles (
-  id TEXT NOT NULL PRIMARY KEY,
-  display_name TEXT,
-  primary_github_account_id INTEGER,
-  avatar BLOB,
-  avatar_mime TEXT,
-  avatar_sha256 TEXT,
-  merged_into TEXT,
-  role TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS user_profile_emails (
-  email TEXT NOT NULL PRIMARY KEY,
-  profile_id TEXT NOT NULL,
-  binding_id TEXT,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_user_profile_emails_profile_id
-  ON user_profile_emails(profile_id);
-
-${extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities")}
-`,
+  () => getOpenClawStateFeatureSchemaSql("user_profiles"),
   {
     tables: ["user_profiles", "user_profile_emails", "user_profile_identities"],
     indexes: ["idx_user_profile_emails_profile_id"],
@@ -55,7 +29,7 @@ ${extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities")
 
 const ensureUserProfileIdentityIndexes = createSqliteSchemaEnsurer(
   () =>
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities", {
+    getOpenClawStateFeatureSchemaSql("user_profile_identities", {
       endMarker: "ON user_profile_identities(authorization_id);",
     }),
   {

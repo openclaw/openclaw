@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -14,7 +16,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("keeps one composer wait line with child activity and restores the parent's working indicator", async () => {
+  it("keeps child activity without a duplicate composer line and restores the parent's working indicator", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
       ? createControlUiE2eArtifactDir("chat-subagent-waiting", artifactParent)
@@ -157,8 +159,10 @@ suite.define(() => {
         };
         const childHistoryReads = () =>
           gateway.getRequests("chat.history", { sessionKey: child.key });
-        // The auto-opened panel loads child metrics. Once closed, inline observer
+        // Only an explicit open loads child metrics. Once closed, inline observer
         // updates must render from the roster without fetching another transcript.
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
         await gateway.waitForRequest("chat.history", { match: { sessionKey: child.key } });
         await closePanel();
@@ -188,7 +192,7 @@ suite.define(() => {
         });
         const panelTabHasFocus = () =>
           activePane
-            .locator('[data-region-header="side"] wa-tab[active]')
+            .locator('[data-region-header="side"] .tabstrip-tab[active]')
             .first()
             .evaluate((element) => element.matches(":focus"));
         const countHasFocus = () => runningCount.evaluate((element) => element.matches(":focus"));
@@ -281,6 +285,7 @@ suite.define(() => {
           ...delegatingParent,
           hasActiveRun: false,
           activeRunIds: [],
+          endedAt: now + 2,
           updatedAt: now + 2,
           snapshotAt: now + 2,
         };
@@ -320,19 +325,39 @@ suite.define(() => {
             document.documentElement.style.colorScheme = themeMode;
           }, mode);
           if (artifactDir) {
-            await page.screenshot({
-              path: path.join(artifactDir, `waiting-${mode}-${width}.png`),
-              animations: "disabled",
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              activePane,
+              [activityRow, turnTimer, activePane.locator(".agent-chat__composer-combobox")],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(artifactDir, `waiting-${mode}-${width}.png`), frame.png);
+            const rightInset = await turnTimer.evaluate((element) => {
+              const column = element.closest(".chat-group-messages");
+              if (!column) {
+                throw new Error("Missing assistant message column");
+              }
+              return Math.abs(
+                column.getBoundingClientRect().right - element.getBoundingClientRect().right,
+              );
             });
+            expect(rightInset).toBeLessThanOrEqual(1);
           }
         };
         const childLink = activityRow.getByRole("button");
         await childLink.waitFor();
         expect(await indicator.count()).toBe(0);
         expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(
-          1,
+          0,
         );
-        // Individual activity stays in the handed-off reply; the single wait line is in the composer.
+        const turnTimer = activePane.locator(".chat-subagent-activity__elapsed");
+        await expect
+          .poll(async () =>
+            (await turnTimer.locator("openclaw-elapsed-time").textContent())?.trim(),
+          )
+          .toBe("1m 13s");
+        expect(await turnTimer.count()).toBe(1);
+        // Child activity stays in the handed-off reply, not in a duplicate composer line.
         expect(
           await activePane
             .locator(".chat-group.assistant", { hasText: "Backend work is now delegated." })
@@ -381,9 +406,9 @@ suite.define(() => {
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
-        await waitLine.waitFor();
-        expect(await waitLine.textContent()).toContain("Waiting on subagents");
-        expect(await indicator.count()).toBe(1);
+        await indicator.waitFor();
+        await expect.poll(workingTokens).toBe("4.1k output tokens");
+        expect(await waitLine.count()).toBe(0);
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
@@ -402,6 +427,11 @@ suite.define(() => {
         );
         await activityRow.getByText("Backend implementation refreshed", { exact: true }).waitFor();
         expect(await indicator.count()).toBe(0);
+        await expect
+          .poll(async () =>
+            (await turnTimer.locator("openclaw-elapsed-time").textContent())?.trim(),
+          )
+          .toBe("1m 13s");
 
         const settledChild: GatewaySessionRow = {
           ...runningChild,
@@ -449,10 +479,12 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        // The next batch reopens its panel, but the parent reflects the event
-        // while that panel's independent roster hydration is still pending.
+        // A later batch updates inline activity without reopening the panel.
+        // An explicit open still hydrates its independent roster.
         await activityRow.waitFor();
         expect(await indicator.count()).toBe(0);
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         await gateway.waitForRequest("sessions.list", {
           after: childReads,
           match: childRosterQuery,
@@ -507,10 +539,13 @@ suite.define(() => {
         expect(await indicator.textContent()).not.toContain("Waiting on");
         expect(await activePane.locator(".chat-notice").count()).toBe(0);
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "resumed-dark-1280.png"),
-            animations: "disabled",
-          });
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            activePane,
+            [indicator, activePane.locator(".agent-chat__composer-combobox")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "resumed-dark-1280.png"), frame.png);
         }
         // Still one assistant row once it answers, on the same clock, and both
         // runs' tokens count on its line.

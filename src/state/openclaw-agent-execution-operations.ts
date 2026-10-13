@@ -388,7 +388,7 @@ export async function loadAgentTrajectoryOperations() {
       kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
-          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+          deferSqliteWorkerCommitReceipt(current.db, result.receipt);
           admit("commit");
           return result;
         }),
@@ -630,12 +630,7 @@ export async function loadConversationRegistryOperations() {
 
 export async function loadUsageCacheOperations() {
   const [
-    {
-      acquireSessionCostUsageRefreshLockInDatabase,
-      deleteSessionCostUsageRefreshLockInDatabase,
-      pruneSessionCostUsageRollupsInDatabase,
-      writeSessionCostUsageRollupInDatabase,
-    },
+    { pruneSessionCostUsageRollupsInDatabase, writeSessionCostUsageRollupInDatabase },
     { withSqliteDatabaseWriteScope },
   ] = await Promise.all([
     import("../infra/session-cost-usage-cache.kernel.js"),
@@ -661,24 +656,6 @@ export async function loadUsageCacheOperations() {
       writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
         withSqliteDatabaseWriteScope(db, [], () =>
           pruneSessionCostUsageRollupsInDatabase(db, input),
-        );
-        admit("commit");
-      }),
-    "usageCache.acquireLock": (
-      input: Parameters<typeof acquireSessionCostUsageRefreshLockInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.refresh-lock.acquire", "Usage cache", ({ db }) => {
-        const result = withSqliteDatabaseWriteScope(db, [], () =>
-          acquireSessionCostUsageRefreshLockInDatabase(db, input),
-        );
-        admit("commit");
-        return result;
-      }),
-    "usageCache.releaseLock": (input: string, { writeTransaction, admit }) =>
-      writeTransaction("session-cost-usage.refresh-lock.delete", "Usage cache", ({ db }) => {
-        withSqliteDatabaseWriteScope(db, [], () =>
-          deleteSessionCostUsageRefreshLockInDatabase(db, input),
         );
         admit("commit");
       }),

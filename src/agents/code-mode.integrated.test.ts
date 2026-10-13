@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as worker from "./code-mode-executor.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -80,7 +80,7 @@ describe("Code Mode guest execution", () => {
       pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
       pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
     ];
-    const { tools: codeModeTools, compacted } = createGuestHarness([...targets]);
+    const { tools: codeModeTools, ctx, catalogRef } = createGuestHarness([...targets]);
 
     const details = await run(
       codeModeTools,
@@ -114,9 +114,10 @@ describe("Code Mode guest execution", () => {
         expect.stringMatching(/^tool___openclawResult_[a-f0-9]{8}$/u),
       ]),
     );
+    const catalogPrompt = buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
     for (const name of value.names) {
       expect(name.startsWith("__openclaw")).toBe(false);
-      expect(compacted.tools[0]?.description).toContain(`- ${name} `);
+      expect(catalogPrompt).toContain(`- ${name} `);
     }
     expect(details).toMatchObject({ value: { encoding: "still works" } });
     expect(value.results).toEqual(

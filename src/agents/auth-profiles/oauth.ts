@@ -51,6 +51,7 @@ import {
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
 import {
   loadAuthProfileStoreForRuntimeAsync,
+  prepareAuthProfileCredentialRead,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -81,19 +82,22 @@ type ResolveApiKeyForProfileResult = {
   profileId: string;
   profileType: AuthProfileCredential["type"];
   credential?: AuthProfileCredential;
+  /** Retained credential authority; null denotes a runtime-only credential. */
+  readCurrentCredential: (() => AuthProfileCredential | undefined) | null;
 };
 
 function buildApiKeyProfileResult(
-  params: ResolveApiKeyForProfileResult,
+  params: Omit<ResolveApiKeyForProfileResult, "readCurrentCredential"> &
+    Partial<Pick<ResolveApiKeyForProfileResult, "readCurrentCredential">>,
 ): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
     email: params.email,
   };
-  for (const key of ["profileId", "profileType", "credential"] as const) {
+  for (const key of ["profileId", "profileType", "credential", "readCurrentCredential"] as const) {
     Object.defineProperty(result, key, {
-      value: params[key],
+      value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
       enumerable: false,
     });
   }
@@ -203,6 +207,10 @@ async function resolveOAuthProfileAccess(
   credential: OAuthCredential,
   personalStore?: PersonalAuthProfileStore,
 ): Promise<ResolveApiKeyForProfileResult | null> {
+  const readCurrentCredential =
+    !personalStore && credential.authFlow === "chatgpt-token-sharing"
+      ? await prepareAuthProfileCredentialRead(params)
+      : null;
   const resolved = await oauthManager.resolveOAuthAccess({
     personalStore,
     store: params.store,
@@ -222,6 +230,7 @@ async function resolveOAuthProfileAccess(
         profileId: params.profileId,
         profileType: credential.type,
         credential: resolved.credential,
+        readCurrentCredential: personalStore?.readCurrentCredential ?? readCurrentCredential,
       })
     : null;
 }
@@ -411,6 +420,7 @@ async function resolveApiKeyForProfileOwned(
       email: cred.email,
       profileId,
       profileType: cred.type,
+      readCurrentCredential: personalStore?.readCurrentCredential,
     });
   }
 

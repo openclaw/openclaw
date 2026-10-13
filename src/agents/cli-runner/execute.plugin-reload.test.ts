@@ -79,7 +79,6 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
     // A hot reload retires the previous plugin instance while the CLI turn is
     // still running; the finished reply and the turn's cleanup must still go
     // through instead of failing once the bounded call drain expires (#144809).
-    vi.useFakeTimers();
     const owner = new PluginInstance("anthropic");
     const finish = createDeferred();
     const started = createDeferred();
@@ -117,6 +116,7 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
         signal,
       );
 
+      vi.useFakeTimers({ shouldClearNativeTimers: true });
       disposal = owner.dispose();
       await vi.advanceTimersByTimeAsync(5_001);
       const timeout = (await disposal).errors[0];

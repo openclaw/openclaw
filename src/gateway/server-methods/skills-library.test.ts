@@ -15,6 +15,7 @@ import {
   loadSessionEntry,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import {
   addSessionMemberInWorker,
   removeSessionMemberInWorker,
@@ -32,6 +33,7 @@ import {
 } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -39,12 +41,16 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const temps = useSessionStoreTempDirs(afterAll, "library-session-projection-");
 let currentStateDir: string | undefined;
 afterEach(async () => {
-  if (currentStateDir) {
-    await cleanupSessionStateForTest({ stateDir: currentStateDir });
-    currentStateDir = undefined;
+  try {
+    assertNoRetainedSessionSharingReads();
+  } finally {
+    if (currentStateDir) {
+      await cleanupSessionStateForTest({ stateDir: currentStateDir });
+      currentStateDir = undefined;
+    }
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
   }
-  clearRuntimeConfigSnapshot();
-  vi.unstubAllEnvs();
 });
 const content =
   "---\nname: shared-session\ndescription: Session-pinned private procedure\n---\n# Session procedure\n";
@@ -354,7 +360,61 @@ describe("skill library retained support files", () => {
   });
 });
 
-describe("read-only session skill library projection", () => {
+describe("session skill library projection and activation", () => {
+  it.each(["success", "missing session", "invalid selection"])(
+    "releases activation authorization after %s",
+    async (outcome) => {
+      const { alice, cfg } = retainedFilesHarness();
+      setRuntimeConfigSnapshot(cfg);
+      const key = "agent:main:library-activation";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { sessionId: "library-activation", updatedAt: 1 },
+      );
+      const params = {
+        sessionKey: outcome === "missing session" ? "agent:main:missing" : key,
+        action: "detach",
+        ...(outcome === "invalid selection"
+          ? {}
+          : { skillId: "00000000-0000-0000-0000-000000000000" }),
+      };
+      const resolve = sessionAuthorization.resolveSessionMutationAuthorizationAsync;
+      const release = vi.fn<() => void>();
+      using resolved = vi
+        .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+        .mockImplementation(async (request) => {
+          const result = await resolve(request);
+          if (!result.authorization?.release) {
+            throw new Error("Expected a retained activation authorization");
+          }
+          release.mockImplementation(result.authorization.release);
+          return { ...result, authorization: { ...result.authorization, release } };
+        });
+      try {
+        const respond = vi.fn();
+        await skillsLibraryHandlers["skills.library.activate"]!({
+          params,
+          req: { type: "req", id: "activation", method: "skills.library.activate", params },
+          client: {
+            authenticatedUserProfile: { profileId: alice.id },
+            connect: { scopes: ["operator.read", "operator.write"] },
+          },
+          context: { getRuntimeConfig: () => cfg },
+          respond,
+        } as unknown as GatewayRequestHandlerOptions);
+        expect(respond).toHaveBeenCalledWith(
+          outcome === "success",
+          outcome === "success" ? expect.objectContaining({ selections: [] }) : undefined,
+          outcome === "success" ? undefined : expect.any(Object),
+        );
+        expect(resolved).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        release();
+      }
+    },
+  );
+
   it("exposes exact private pins only while session access remains current", async () => {
     const root = temps.make();
     currentStateDir = root;

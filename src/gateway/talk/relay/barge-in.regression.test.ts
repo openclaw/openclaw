@@ -50,7 +50,7 @@ async function captureBridgeRequest(params: {
     capabilities,
     instructions: "be brief",
     tools: [],
-    sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+    sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
     forceAgentConsultOnFinalTranscript: params.forceAgentConsultOnFinalTranscript,
   });
   return { request, relaySessionId: session.relaySessionId };

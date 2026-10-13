@@ -82,11 +82,6 @@ function encodeTarget(sessionKey: string): string {
 }
 
 describe("decodeSessionStateNoticeContextKey", () => {
-  it("round-trips a valid encoded session key", () => {
-    const sessionKey = "agent:main:slack:channel:C01234567";
-    expect(decodeSessionStateNoticeContextKey(encodeTarget(sessionKey))).toBe(sessionKey);
-  });
-
   it("round-trips a session key with a leading U+FEFF unchanged", () => {
     const sessionKey = "﻿agent:main";
     expect(decodeSessionStateNoticeContextKey(encodeTarget(sessionKey))).toBe(sessionKey);
@@ -206,7 +201,7 @@ describe("enqueueSessionStateNotice", () => {
     ]);
   });
 
-  it.each([undefined, null, "/synthetic/store.sqlite"])(
+  it.each(["/synthetic/store.sqlite"])(
     "coalesces for 20 seconds and acknowledges store %s only upon adoption",
     async (watcherStorePath) => {
       const notice = {

@@ -1,4 +1,4 @@
-// Withhold this run's terminal notifications and delay terminal descriptors until Stop recovers from the Gateway's no-active-run answer.
+// Withhold this run's terminal observations until Stop recovers from the Gateway's no-active-run answer.
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -54,6 +54,7 @@ type Frame = {
   type: string;
   id?: string;
   ok?: boolean;
+  error?: { code?: string; message?: string };
   method?: string;
   params?: Record<string, unknown>;
   event?: string;
@@ -202,6 +203,7 @@ suite.define(() => {
         let dropped = 0;
         let delayTerminalDescriptors = true;
         let delayedTerminalDescriptors = 0;
+        let delayedTerminalHistories = 0;
         const deferredDescriptors: Array<() => void> = [];
         let stage = "create session";
         const call = async (method: string, params: Record<string, unknown>) => {
@@ -325,6 +327,17 @@ suite.define(() => {
                       socket.send(message);
                     };
                     const session = frame.payload?.session;
+                    const historySession = frame.payload?.sessionInfo;
+                    const abortIndex = sent.findIndex((entry) => entry.method === "chat.abort");
+                    const hasPreStopTerminalHistory =
+                      request !== undefined &&
+                      ["chat.startup", "chat.history"].includes(request.method ?? "") &&
+                      request.params?.sessionKey === sessionKey &&
+                      historySession?.key === sessionKey &&
+                      historySession.lastRunId === runId &&
+                      historySession.hasActiveRun === false &&
+                      historySession.status === "done" &&
+                      (abortIndex < 0 || sent.indexOf(request) < abortIndex);
                     const hasTerminalDescriptor =
                       (request?.method === "sessions.describe" &&
                         request.params?.key === sessionKey &&
@@ -342,11 +355,14 @@ suite.define(() => {
                       runId &&
                       frame.type === "res" &&
                       frame.ok === true &&
-                      hasTerminalDescriptor
+                      (hasTerminalDescriptor || hasPreStopTerminalHistory)
                     ) {
-                      // Shared descriptor observations can settle ownership before Stop.
-                      // Delay this exact terminal fact, then deliver the real reply unchanged.
+                      // Pre-Stop history also settles ownership. Keep its real reply held
+                      // until recovery; only history requested after Stop can prove recovery.
                       delayedTerminalDescriptors += 1;
+                      if (hasPreStopTerminalHistory) {
+                        delayedTerminalHistories += 1;
+                      }
                       deferredDescriptors.push(deliver);
                     } else {
                       deliver();
@@ -384,15 +400,7 @@ suite.define(() => {
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
                 await stop.waitFor({ state: "visible" });
-                stage = "qualify active ownership before releasing provider";
-                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
-                  sessionKey,
-                  runId: expect.any(String),
-                  sending: false,
-                  loading: false,
-                });
-                expect((await browserState()).runId).toBe(runId);
-                await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
+                stage = "qualify accepted send before active ownership";
                 const send = sent.find((frame) => frame.method === "chat.send");
                 const sessionId = send?.params?.sessionId;
                 if (!send || !runId || typeof sessionId !== "string") {
@@ -403,6 +411,15 @@ suite.define(() => {
                 await expect
                   .poll(() => received.find((frame) => frame.id === send.id), { timeout: 15_000 })
                   .toMatchObject({ ok: true, payload: { runId, status: "started" } });
+                await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(1);
+                stage = "qualify active ownership before releasing provider";
+                await expect.poll(browserState, { timeout: 15_000 }).toMatchObject({
+                  sessionKey,
+                  runId: expect.any(String),
+                  sending: false,
+                  loading: false,
+                });
+                expect((await browserState()).runId).toBe(runId);
                 await expect.poll(sessionRow, { timeout: 15_000 }).toMatchObject({
                   key: sessionKey,
                   sessionId,
@@ -573,11 +590,22 @@ suite.define(() => {
                 proof.restoredDraftPreserved = (await composer.inputValue()) === "Next draft";
                 expect(await composer.inputValue()).toBe("Next draft");
               } finally {
+                const send = sent.find((frame) => frame.method === "chat.send");
+                const response = send && received.find((frame) => frame.id === send.id);
+                proof.sendAckObserved = response !== undefined;
+                proof.sendAckOk = response?.ok === true;
+                proof.sendAckStarted = response?.payload?.status === "started";
+                proof.sendAckUnavailable = response?.error?.code === "UNAVAILABLE";
+                proof.sendAckSchemaPublicationRefused =
+                  response?.error?.message?.includes(
+                    "Agent schema admission changed before publication",
+                  ) ?? false;
                 proof.stage = stage;
                 proof.browserSockets = sockets;
                 proof.connectRequests = sent.filter((frame) => frame.method === "connect").length;
                 proof.droppedTerminalNotifications = dropped;
                 proof.delayedTerminalDescriptors = delayedTerminalDescriptors;
+                proof.delayedTerminalHistories = delayedTerminalHistories;
                 proof.pendingTerminalDescriptors = deferredDescriptors.length;
                 proof.abortRequests = sent.filter((frame) => frame.method === "chat.abort").length;
                 proof.pendingBrowserRequests = pending.size;

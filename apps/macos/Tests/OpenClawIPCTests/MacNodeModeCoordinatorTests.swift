@@ -805,9 +805,6 @@ struct MacNodeModeCoordinatorTests {
 extension MacNodeModeCoordinatorTests {
     @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .remote)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
@@ -838,9 +835,6 @@ extension MacNodeModeCoordinatorTests {
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
@@ -850,9 +844,6 @@ extension MacNodeModeCoordinatorTests {
 
     @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .local,
             codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -864,9 +855,6 @@ extension MacNodeModeCoordinatorTests {
 
     @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .remote,
             codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -1108,45 +1096,21 @@ extension MacNodeModeCoordinatorTests {
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
-    @Test func `computer control cap gates the computer.act command`() {
-        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: true,
-            locationMode: .off,
+    @Test func `computer control remains discoverable before consent`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local)
-        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
-        #expect(enabledCaps.contains(OpenClawCapability.computer.rawValue))
-        #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
-
-        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
-            connectionMode: .local)
-        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
-        #expect(!disabledCaps.contains(OpenClawCapability.computer.rawValue))
-        #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+        #expect(caps.contains(OpenClawCapability.computer.rawValue))
+        #expect(commands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
-    @Test func `camera cap gates capture and PTZ commands`() {
-        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: true,
-            computerControlEnabled: false,
-            locationMode: .off,
+    @Test func `camera remains discoverable before consent`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local)
-        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
-        #expect(enabledCommands.contains(OpenClawCameraCommand.list.rawValue))
-        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
-        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
-
-        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
-            connectionMode: .local)
-        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
-        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
-        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+        #expect(commands.contains(OpenClawCameraCommand.list.rawValue))
+        #expect(commands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(commands.contains(OpenClawCameraCommand.ptzControl.rawValue))
     }
 
     @Test func `tls pin store key uses default wss port`() throws {

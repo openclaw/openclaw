@@ -7,8 +7,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { bindDeviceWorkerAvailability } from "./worker-environments/device-provider.js";
 import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
 
@@ -54,122 +57,132 @@ describe("worker placement move destination owner", () => {
       barrierCalls: 1,
     },
   ])("$name", async ({ target, supported, expectedError, barrierCalls }) => {
-    const source = Object.freeze({
-      sessionId: "session-move-source",
-      state: "active",
-      generation: 4,
-      environmentId: "environment-source",
-      activeOwnerEpoch: 2,
-      executionMode: "remote-exec",
-    });
-    const sourceBefore = JSON.stringify(source);
-    const entry = { sessionId: source.sessionId, worktree: { id: "worktree-recovery" } };
-    const config = {
-      cloudWorkers: {
-        profiles: {
-          compatible: { provider: "multimode-cloud" },
-          incompatible: { provider: "worker-only" },
-        },
-      },
-      gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } },
-    };
-    setRuntimeConfigSnapshot(config);
-    const supportsExecutionMode = vi.fn((profileId: string) => profileId === "compatible");
-    const environments = { supportsExecutionMode };
-    bindDeviceWorkerAvailability(environments, async (deviceId) => ({
-      available: true,
-      node: {
-        nodeId: deviceId,
-        connId: `conn-${deviceId}`,
-        pairingIdentity: `identity-${deviceId}`,
-        pairingGeneration: `generation-${deviceId}`,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 0 } },
-        commands: [CODEX_COMMAND],
-      },
-    }));
-    const resolveDestination = vi.fn(
-      createGatewayWorkerPlacementMoveDestinationResolver({
-        environments: environments as never,
-        getConfig: () => config,
-        loadSessionRuntime: async () =>
-          ({
-            managedWorktrees: {
-              findLiveByOwner: async () => ({
-                id: "worktree-recovery",
-                ownerId: SESSION_KEY,
-                path: "/gateway/workspace",
-              }),
-            },
-            resolveGatewaySessionStoreTargetWithStore: () => ({
-              agentId: "main",
-              canonicalKey: SESSION_KEY,
-              storePath: "/gateway/session.sqlite",
-              storeKeys: [SESSION_KEY],
-              store: { [SESSION_KEY]: entry },
-            }),
-            resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-            resolveWorkerPlacementSessionRuntimeAsync: async () => "codex",
-            resolveWorkerPlacementCapabilities: () => ({
-              executionMode: "remote-exec",
-              ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),
-            }),
-          }) as never,
-      }),
-    );
-    const runMoveBarrier = vi.fn(async () => {
-      throw new Error("source placement barrier started");
-    });
-    const reclaimSource = vi.fn();
-    const dispatch = vi.fn();
-    const beginPlacementMove = vi.fn();
-    const destroy = vi.fn();
-    const moves = createWorkerPlacementMoveService({
-      placements: {
-        getAsync: async () => source,
-        getPlacementMoveAsync: async () => undefined,
-        beginPlacementMove,
-      } as never,
-      environments: { get: () => undefined, destroy } as never,
-      runMoveBarrier,
-      dispatch,
-      reclaimSource,
-      validateAbandonSource: vi.fn(),
-      abandonSource: vi.fn(),
-      resolveDestination,
-    });
-
-    await expect(
-      moves.move({
-        sessionId: source.sessionId,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        source: {
-          generation: source.generation,
-          environmentId: source.environmentId,
-          ownerEpoch: source.activeOwnerEpoch,
-        },
-        target,
-      }),
-    ).rejects.toThrow(expectedError);
-
-    expect(runMoveBarrier).toHaveBeenCalledTimes(barrierCalls);
-    expect(beginPlacementMove).not.toHaveBeenCalled();
-    expect(reclaimSource).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
-    expect(JSON.stringify(source)).toBe(sourceBefore);
-    if (supported) {
-      await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const source = Object.freeze({
+        sessionId: "session-move-source",
+        state: "active",
+        generation: 4,
+        environmentId: "environment-source",
+        activeOwnerEpoch: 2,
         executionMode: "remote-exec",
-        devicePlacement: DEVICE_REQUIREMENT,
-        ...(target.kind === "profile" ? { machineClass: target.machineClass, os: target.os } : {}),
       });
-    }
-    if (target.kind === "profile") {
-      expect(supportsExecutionMode).toHaveBeenCalledWith(target.profileId, "remote-exec");
-    }
+      const sourceBefore = JSON.stringify(source);
+      const entry = {
+        sessionId: source.sessionId,
+        worktree: {
+          id: "worktree-recovery",
+          branch: "recovery",
+          repoRoot: "/gateway/workspace",
+        },
+      };
+      const config = {
+        session: { store: state.path("sessions.sqlite") },
+        cloudWorkers: {
+          profiles: {
+            compatible: { provider: "multimode-cloud" },
+            incompatible: { provider: "worker-only" },
+          },
+        },
+        gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } },
+      };
+      setRuntimeConfigSnapshot(config);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY, storePath: config.session.store },
+        entry,
+      );
+      const supportsExecutionMode = vi.fn((profileId: string) => profileId === "compatible");
+      const environments = { supportsExecutionMode };
+      bindDeviceWorkerAvailability(environments, async (deviceId) => ({
+        available: true,
+        node: {
+          nodeId: deviceId,
+          connId: `conn-${deviceId}`,
+          pairingIdentity: `identity-${deviceId}`,
+          pairingGeneration: `generation-${deviceId}`,
+          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+          clientMode: GATEWAY_CLIENT_MODES.NODE,
+          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+          workerHost: { enabled: true, capacity: { total: 2, available: 0 } },
+          commands: [CODEX_COMMAND],
+        },
+      }));
+      const resolveDestination = vi.fn(
+        createGatewayWorkerPlacementMoveDestinationResolver({
+          environments: environments as never,
+          getConfig: () => config,
+          loadSessionRuntime: async () =>
+            ({
+              managedWorktrees: {
+                findLiveByOwner: async () => ({
+                  id: "worktree-recovery",
+                  ownerId: SESSION_KEY,
+                  path: "/gateway/workspace",
+                }),
+              },
+              resolveGatewaySessionStoreTargetInWorker,
+              resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+              resolveWorkerPlacementSessionRuntimeAsync: async () => "codex",
+              resolveWorkerPlacementCapabilities: () => ({
+                executionMode: "remote-exec",
+                ...(supported ? { devicePlacement: DEVICE_REQUIREMENT } : {}),
+              }),
+            }) as never,
+        }),
+      );
+      const runMoveBarrier = vi.fn(async () => {
+        throw new Error("source placement barrier started");
+      });
+      const reclaimSource = vi.fn();
+      const dispatch = vi.fn();
+      const beginPlacementMove = vi.fn();
+      const destroy = vi.fn();
+      const moves = createWorkerPlacementMoveService({
+        placements: {
+          getAsync: async () => source,
+          getPlacementMoveAsync: async () => undefined,
+          beginPlacementMove,
+        } as never,
+        environments: { get: () => undefined, destroy } as never,
+        runMoveBarrier,
+        dispatch,
+        reclaimSource,
+        validateAbandonSource: vi.fn(),
+        abandonSource: vi.fn(),
+        resolveDestination,
+      });
+
+      await expect(
+        moves.move({
+          sessionId: source.sessionId,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          source: {
+            generation: source.generation,
+            environmentId: source.environmentId,
+            ownerEpoch: source.activeOwnerEpoch,
+          },
+          target,
+        }),
+      ).rejects.toThrow(expectedError);
+
+      expect(runMoveBarrier).toHaveBeenCalledTimes(barrierCalls);
+      expect(beginPlacementMove).not.toHaveBeenCalled();
+      expect(reclaimSource).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+      expect(JSON.stringify(source)).toBe(sourceBefore);
+      if (supported) {
+        await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({
+          executionMode: "remote-exec",
+          devicePlacement: DEVICE_REQUIREMENT,
+          ...(target.kind === "profile"
+            ? { machineClass: target.machineClass, os: target.os }
+            : {}),
+        });
+      }
+      if (target.kind === "profile") {
+        expect(supportsExecutionMode).toHaveBeenCalledWith(target.profileId, "remote-exec");
+      }
+    });
   });
 });

@@ -87,6 +87,7 @@ function fixture() {
   });
   return {
     store,
+    sessions,
     subscribe() {
       const detach = store.subscribe(() => {});
       cleanup.push(detach);
@@ -101,7 +102,7 @@ function fixture() {
         payload: { agentId: "main", key: "agent:main:new" },
       });
     },
-    respond(index: number, preview: string, hasMore = false) {
+    respond(index: number, preview: string, hasMore = false, keys = ["agent:main:main"]) {
       const request = requests[index];
       if (!request) {
         throw new Error(`Missing roster request ${index}`);
@@ -110,7 +111,11 @@ function fixture() {
         type: "res",
         id: request.id,
         ok: true,
-        payload: snapshot(preview, hasMore),
+        payload: {
+          ...snapshot(preview, hasMore),
+          count: keys.length,
+          sessions: keys.map((key) => ({ key, kind: "direct", lastMessagePreview: preview })),
+        },
       });
     },
   };
@@ -167,6 +172,54 @@ it.each(["pending", "settled"] as const)(
   },
 );
 
+it.each([
+  { issued: "before", settled: false },
+  { issued: "before", settled: true },
+  { issued: "after", settled: false },
+  { issued: "after", settled: true },
+] as const)(
+  "reconciles metadata issued $issued the roster read (settled: $settled) without losing membership changes",
+  async ({ issued, settled }) => {
+    const f = fixture();
+    let reconcile = issued === "before" ? f.sessions.captureReconcile() : undefined;
+    f.subscribe();
+    await vi.advanceTimersByTimeAsync(0);
+    reconcile ??= f.sessions.captureReconcile();
+    if (settled) {
+      f.respond(0, "Listed membership");
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    reconcile({
+      ...snapshot("Selected session metadata").sessions[0]!,
+      sessionId: "main-session",
+      updatedAt: 1,
+    });
+    if (!settled) {
+      f.respond(0, "Listed membership");
+    }
+    await vi.advanceTimersByTimeAsync(15_000);
+    if (issued === "after") {
+      expect(f.requests).toHaveLength(2);
+      f.respond(1, "Listed membership");
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    const reads = issued === "before" ? 1 : 2;
+    expect(f.requests).toHaveLength(reads);
+    expect(f.store.snapshot.membershipReady).toBe(true);
+    expect(f.store.snapshot.result?.sessions.map(({ key }) => key)).toEqual(["agent:main:main"]);
+
+    f.invalidate();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(f.requests).toHaveLength(reads + 1);
+    f.respond(reads, "New membership", false, ["agent:main:main", "agent:main:new"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.snapshot.result?.sessions.map(({ key }) => key)).toEqual([
+      "agent:main:main",
+      "agent:main:new",
+    ]);
+  },
+);
+
 it("coalesces repeated invalidations behind one correlated roster request", async () => {
   const f = fixture();
   f.subscribe();
@@ -213,16 +266,12 @@ it("keeps concurrent filter windows separate through out-of-order replies", asyn
   }
   expect(f.requests).toHaveLength(2);
   expect(f.requests[1]?.params).toMatchObject({ involvingMe: true, limit: 100, archived: "all" });
-  f.respond(1, "Superseded involvement window");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.requests).toHaveLength(3);
-  expect(f.requests[2]?.params).toMatchObject({ involvingMe: true, limit: 100, archived: "all" });
-  f.respond(2, "Current filter");
+  f.respond(1, "Current filter");
   await vi.advanceTimersByTimeAsync(0);
   f.respond(0, "Old filter", true);
   await vi.advanceTimersByTimeAsync(0);
   expect(f.store.snapshot.cards[0]?.preview).toBe("Current filter");
-  expect(f.requests).toHaveLength(3);
+  expect(f.requests).toHaveLength(2);
 });
 
 it.each([false, true])(
@@ -242,10 +291,14 @@ it.each([false, true])(
     await vi.advanceTimersByTimeAsync(0);
     expect(f.requests).toHaveLength(reattach ? 2 : 1);
     if (reattach) {
-      expect(f.requests[1]?.params.offset).toBeUndefined();
-      f.respond(1, "Remounted window");
+      expect(f.requests[1]?.params.offset).toBe(1);
+      f.respond(1, "Remounted page", false, ["agent:main:next"]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(f.store.snapshot.cards[0]?.preview).toBe("Remounted window");
+      expect(f.store.snapshot.result?.sessions.map(({ key }) => key)).toEqual([
+        "agent:main:main",
+        "agent:main:next",
+      ]);
+      expect(f.store.snapshot.cards[0]?.preview).toBe("Retired page");
     } else {
       expect(f.store.snapshot.cards).toEqual([]);
     }

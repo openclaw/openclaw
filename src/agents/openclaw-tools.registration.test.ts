@@ -6,7 +6,7 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import * as userProfileList from "../state/user-profile-list.js";
+import * as userProfileList from "../state/user-profile-list.native.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
@@ -21,6 +21,7 @@ import {
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
@@ -117,10 +118,32 @@ describe("openclaw-tools progress_card gating", () => {
   });
 
   it.each([false, true])(
+    "keeps progress-card policy with the admitted sandbox owner (allowed: %s)",
+    async (allowed) => {
+      const available = await withPreparedSessionCapabilityRead(() =>
+        shouldIncludeProgressCardToolForOpenClawTools({
+          config: {
+            agents: {
+              entries: {
+                main: { tools: { deny: allowed ? [] : ["progress_card"] } },
+                work: { tools: { deny: allowed ? ["progress_card"] : [] } },
+              },
+            },
+          },
+          agentId: "work",
+          sandboxAgentId: "main",
+          agentSessionKey: "agent:main:policy",
+        }),
+      );
+      expect(available).toBe(allowed);
+    },
+  );
+
+  it.each([false, true])(
     "gates personal instructions on multiple people (%s) without general filesystem access",
     (multipleProfiles) => {
       const identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentitiesNative")
         .mockReturnValue(multipleProfiles);
       const tools = createOpenClawCodingTools({
         sessionKey: "agent:main:dashboard:project",
@@ -146,7 +169,7 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
-  it("keeps human-question tools on permitted primary sessions", () => {
+  it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
         shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
@@ -171,9 +194,11 @@ describe("openclaw-tools progress_card gating", () => {
     setEmbeddedMode(true);
 
     expect(
-      createFastToolNames({
-        agentSessionKey: "agent:main:subagent:worker",
-      }),
+      await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({
+          agentSessionKey: "agent:main:subagent:worker",
+        }),
+      ),
     ).not.toContain("ask_user");
     expect(
       createFastToolNames({

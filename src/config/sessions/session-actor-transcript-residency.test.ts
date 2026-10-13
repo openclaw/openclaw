@@ -1,6 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { readActivitySummaryBatchFromReplica } from "../../gateway/session-activity-summary-replica.js";
+import { readActivitySummarySource } from "../../gateway/session-activity-summary-source.js";
+import { readActivitySummaryBatch } from "../../gateway/session-activity-summary-source.worker.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   deleteSessionEntryRows,
@@ -16,6 +20,7 @@ import {
 import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
 import {
   createSessionActorReplica,
+  readSessionActorTranscriptAnchorsFromReplica,
   readSessionActorTranscriptReplica,
   retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
@@ -30,6 +35,7 @@ import {
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 
 // mock-isolation: The fixture owns its database and transcript maintenance lifetime.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -115,6 +121,15 @@ function contextFixture(f: Fixture) {
   return {
     replica,
     seed,
+    anchors() {
+      return readSessionActorTranscriptAnchorsFromReplica(
+        { ...f.scope, path: f.database.path },
+        { entryIds: ["question", "answer"], includeWatermark: true },
+      );
+    },
+    summary() {
+      return readActivitySummaryBatchFromReplica({ scope: f.scope });
+    },
     read() {
       const hot = replica.read();
       return (
@@ -204,19 +219,113 @@ it("advances retained context through native actor appends and preserves it thro
         ),
       ).toBe(true);
       expect(context.read()?.snapshot.events).toHaveLength(5);
+      expect(context.anchors()?.watermark).toEqual(context.replica.read()!.transcript.watermark);
+      expect(context.summary()?.page.events).toHaveLength(4);
+      expect(context.summary()?.page.events.at(-1)?.event).toMatchObject({
+        id: "next-answer",
+        message: { content: "Next answer" },
+      });
     } finally {
       context.replica.close();
     }
   });
 });
 
-it("invalidates retained context for every nonactor transcript writer class", async () => {
+it("settles a resident correlation rewrite once and leaves rollback payloads unchanged", async () => {
   await withActor((f) => {
+    replace(f);
+    const context = contextFixture(f);
+    const publications: unknown[] = [];
+    const stop = sessionChanges.subscribeFacts((change) => {
+      const fact = readPreparedSessionTranscriptChange(change);
+      if (fact?.kind === "postimage" && fact.value.sessionKey === f.scope.sessionKey) {
+        publications.push(fact.value);
+      }
+    });
+    try {
+      context.seed();
+      const row = readTranscriptEventRows(f.database, f.scope.sessionId)[1]!;
+      const rewritten = {
+        ...question,
+        message: { ...question.message, __openclaw: { steerTargetRunId: "next-run" } },
+      };
+      const rewrite = () =>
+        rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+          { seq: row.seq, expectedEventJson: row.eventJson, event: rewritten },
+        ]);
+      expect(() =>
+        runSqliteImmediateTransactionSync(f.database.db, () => {
+          rewrite();
+          expect(publications).toEqual([]);
+          throw new Error("Synthetic rewrite rollback");
+        }),
+      ).toThrow("Synthetic rewrite rollback");
+      expect(publications).toEqual([]);
+      expect(context.read()).toBeUndefined();
+      expect(context.anchors()).toBeUndefined();
+      expect(context.summary()).toBeUndefined();
+      expect(readSessionTranscriptBoundedActiveContextCore(f.scope, limits).events).toEqual(
+        transcript(f),
+      );
+      const before = context.seed();
+      expect(context.read()?.snapshot.events).toEqual(transcript(f));
+
+      runSqliteImmediateTransactionSync(f.database.db, rewrite);
+      expect(publications).toHaveLength(1);
+      expect(context.read()?.snapshot.events).toEqual([transcript(f)[0], rewritten, answer]);
+      expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
+        "question",
+        "answer",
+      ]);
+      expect(context.summary()?.page.events.map(({ event }) => event)).toEqual([rewritten, answer]);
+      expect(f.read().version).toEqual({
+        ...before.version,
+        sequence: before.version.sequence + 1,
+      });
+      expect(readTranscriptEventRows(f.database, f.scope.sessionId)[1]?.eventJson).toBe(
+        JSON.stringify(rewritten),
+      );
+
+      const intermediate = {
+        ...question,
+        message: { ...question.message, __openclaw: { steerTargetRunId: "intermediate" } },
+      };
+      const final = {
+        ...question,
+        message: { ...question.message, __openclaw: { steerTargetRunId: "final" } },
+      };
+      publications.length = 0;
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+          { seq: row.seq, expectedEventJson: JSON.stringify(rewritten), event: intermediate },
+        ]);
+        rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+          { seq: row.seq, expectedEventJson: JSON.stringify(intermediate), event: final },
+        ]);
+      });
+      expect(publications).toHaveLength(2);
+      expect(context.read()).toBeUndefined();
+      expect(context.anchors()).toBeUndefined();
+      expect(context.summary()).toBeUndefined();
+      const reloaded = f.read();
+      const canonical = readSessionTranscriptBoundedActiveContextCore(f.scope, limits);
+      expect(reloaded.transcript.version).toEqual(canonical.version);
+      expect(reloaded.version.epoch).not.toBe(before.version.epoch);
+      context.seed();
+      expect(context.read()?.snapshot.events).toEqual([transcript(f)[0], final, answer]);
+    } finally {
+      stop();
+      context.replica.close();
+    }
+  });
+});
+
+it("invalidates retained context for nonactor content and topology writer classes", async () => {
+  await withActor(async (f) => {
     const context = contextFixture(f);
     try {
       for (const change of [
         "append",
-        "correlation",
         "rewrite",
         "replacement",
         "suffix-trim",
@@ -228,12 +337,20 @@ it("invalidates retained context for every nonactor transcript writer class", as
         replace(f);
         const before = context.seed();
         expect(context.read()?.snapshot.events).toEqual(transcript(f));
+        expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
+          "question",
+          "answer",
+        ]);
+        expect(context.summary()?.page.events.map(({ event }) => event)).toEqual([
+          question,
+          answer,
+        ]);
         runSqliteImmediateTransactionSync(f.database.db, () => {
           if (change === "append") {
             appendTranscriptEventsInTransaction(f.database, f.scope, [
               { ...answer, id: "new-answer", parentId: "answer" },
             ]);
-          } else if (change === "correlation" || change === "rewrite") {
+          } else if (change === "rewrite") {
             const row = readTranscriptEventRows(f.database, f.scope.sessionId)[1]!;
             rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
               {
@@ -241,15 +358,7 @@ it("invalidates retained context for every nonactor transcript writer class", as
                 expectedEventJson: row.eventJson,
                 event: {
                   ...question,
-                  message:
-                    change === "correlation"
-                      ? {
-                          ...question.message,
-                          __openclaw: {
-                            modelPromptProjection: { version: 1, text: "Original question" },
-                          },
-                        }
-                      : { ...question.message, content: "Rewritten question" },
+                  message: { ...question.message, content: "Rewritten question" },
                 },
               },
             ]);
@@ -293,13 +402,10 @@ it("invalidates retained context for every nonactor transcript writer class", as
           }
         });
         expect(context.read(), change).toBeUndefined();
+        expect(context.anchors(), change).toBeUndefined();
+        expect(context.summary(), change).toBeUndefined();
         const after = f.read();
-        if (change === "correlation") {
-          expect(after.transcript.version.generation).toBe(before.transcript.version.generation);
-          expect(readTranscriptEventRows(f.database, f.scope.sessionId)[1]?.eventJson).toContain(
-            "modelPromptProjection",
-          );
-        } else if (change === "rewrite") {
+        if (change === "rewrite") {
           expect(readTranscriptEventRows(f.database, f.scope.sessionId)[1]?.eventJson).toContain(
             "Rewritten question",
           );
@@ -314,6 +420,38 @@ it("invalidates retained context for every nonactor transcript writer class", as
         }
         expect(context.replica.beginRead().install(after), change).toBe(true);
         expect(context.read(), change).toBeUndefined();
+        if (change === "rewrite" || change === "rewind" || change === "compaction") {
+          const scope = { ...f.scope, sessionId: after.entry!.sessionId };
+          const source = await readActivitySummarySource({ scope, assertCurrent() {} });
+          const canonical = readActivitySummaryBatch({ scope });
+          if (!source || !canonical) {
+            throw new Error(`Expected a summary source after ${change}`);
+          }
+          expect(source, change).toMatchObject({
+            previous: canonical.previous,
+            watermark: canonical.watermark,
+            covered: canonical.covered,
+            omitted: canonical.omitted,
+            snapshot: {
+              totalMessages: canonical.snapshot.totalMessages,
+              activeLeafEntryId: canonical.snapshot.activeLeafEntryId,
+              snapshot: { generation: canonical.snapshot.snapshot.generation },
+            },
+            page: { scannedMessages: canonical.page.scannedMessages },
+          });
+          expect(
+            source.page.events.map(({ event }) => event),
+            change,
+          ).toEqual(canonical.page.events.map(({ event }) => event));
+          expect(source.notes, change).toEqual(
+            change === "rewind"
+              ? []
+              : [
+                  `user: ${change === "rewrite" ? "Rewritten" : "Original"} question`,
+                  "assistant: Original answer",
+                ],
+          );
+        }
       }
     } finally {
       context.replica.close();
@@ -355,6 +493,8 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
         ),
       ).toMatchObject({ archivedTranscripts: 1 });
       expect(context.read()).toBeUndefined();
+      expect(context.anchors()).toBeUndefined();
+      expect(context.summary()).toBeUndefined();
       const plan = {
         kind: "cold-restore" as const,
         databaseOptions,
@@ -366,8 +506,15 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
         restored: true,
       });
       expect(context.read()).toBeUndefined();
+      expect(context.anchors()).toBeUndefined();
+      expect(context.summary()).toBeUndefined();
       context.seed();
       expect(context.read()?.snapshot.events).toEqual(transcript(f));
+      expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
+        "question",
+        "answer",
+      ]);
+      expect(context.summary()?.page.events.map(({ event }) => event)).toEqual([question, answer]);
     } finally {
       context.replica.close();
     }

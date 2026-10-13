@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import {
   createExternalAuthRuntime,
   syncPersistedExternalCliAuthProfiles,
@@ -11,7 +14,9 @@ import {
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
-import { ensureAuthProfileStore } from "./store-runtime.js";
+import { runAuthProfileWriteTransaction } from "./sqlite.js";
+import { withAgentDirEnv } from "./sqlite.test-support.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
 const readMiniMax = vi.hoisted(() => vi.fn<() => OAuthCredential | null>(() => null));
@@ -38,7 +43,7 @@ afterEach(() => {
 describe("external auth owner", () => {
   it.each(["expired", "matching-refresh", "matching-access"])(
     "preserves MiniMax provenance with %s credentials",
-    (kind) => {
+    async (kind) => {
       const profileId = "minimax-portal:minimax-cli";
       const stored = credential({
         provider: "minimax-portal",
@@ -80,6 +85,43 @@ describe("external auth owner", () => {
       expect(readMiniMax).toHaveBeenCalledOnce();
       const overlaid = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store);
       expect(overlaid.profiles[profileId]).toEqual(synced.profiles[profileId]);
+      if (kind === "expired") {
+        await withAgentDirEnv("external-cli-authority-", async (agentDir) => {
+          saveAuthProfileStore(store, agentDir, {
+            filterExternalAuthProfiles: false,
+            syncExternalCli: false,
+          });
+          const database = runAuthProfileWriteTransaction(agentDir, (owner) => owner);
+          const source = readDatabasePathIdentitySync(database.path);
+          const authority = captureAuthProfileCredentialAuthority(
+            captureOpenClawStateWorkerContext(),
+            { identity: `${source.key}:${source.birthtime ?? ""}`, databasePath: database.path },
+            profileId,
+          );
+          authority.observe(stored);
+          const exec = database.db.exec.bind(database.db);
+          const commit = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+            if (sql === "COMMIT") {
+              expect(() => authority.readCurrentCredential()).toThrow("authority is unavailable");
+            }
+            return exec(sql);
+          });
+          try {
+            ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+          } finally {
+            commit.mockRestore();
+          }
+          expect(authority.readCurrentCredential()).toEqual({
+            ...imported,
+            authFlow: "external-cli",
+          });
+          expect(
+            ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles[
+              profileId
+            ],
+          ).toEqual(authority.readCurrentCredential());
+        });
+      }
     },
   );
 

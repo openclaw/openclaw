@@ -144,6 +144,15 @@ describe("gateway telemetry maintenance", () => {
         cleanupStarted.resolve();
       };
       const state = createGatewayMaintenanceStateForTest();
+      if (owner === "health") {
+        state.clients.add({
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "test", version: "test", platform: "test", mode: "test" },
+          },
+        });
+      }
       devicePairCleanupMock.mockImplementation(async () => {
         if (owner === "device-pair") {
           await run();

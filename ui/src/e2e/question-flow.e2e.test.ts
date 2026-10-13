@@ -236,7 +236,7 @@ suite.define(() => {
     const row = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
     const shell = page.locator(".shell");
     const attention = row.locator('[data-session-attention="question"]');
-    const tooltip = row.locator("openclaw-tooltip wa-tooltip[open]");
+    const tooltip = row.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open");
     const route = page.url();
 
     await attention.tap();
@@ -468,13 +468,19 @@ suite.define(() => {
     await page
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .hover();
-    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(1);
     await page.mouse.move(400, 50);
-    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     await page
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .focus();
-    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(1);
     await expect
       .poll(() => page.locator('.session-progress-hovercard[data-open="true"]').count())
       .toBe(0);

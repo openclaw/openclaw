@@ -360,6 +360,30 @@ describe("anthropic cli migration", () => {
     );
   });
 
+  it.each(["interactive", "non-interactive"])(
+    "registered %s cli auth reports a timeout with a retry step, not a logout",
+    async (mode) => {
+      const actual =
+        await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+      probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+      runUtf8CommandWithTimeout.mockResolvedValue({
+        code: null,
+        termination: "timeout",
+        stdout: JSON.stringify({ loggedIn: true }),
+      });
+      const method = await resolveAnthropicCliAuthMethod();
+      const result =
+        mode === "interactive"
+          ? method.run(createProviderAuthContext())
+          : method.runNonInteractive!(createProviderAuthMethodNonInteractiveContext());
+
+      await expect(result).rejects.toThrow(
+        "Could not verify the installed Claude CLI login within 10 s.\n" +
+          "Run claude auth status --json, then retry this setup.",
+      );
+    },
+  );
+
   it.each(["string", "legacy-collision"] as const)(
     "registered CLI setup preserves authored primary and fallback aliases (%s model)",
     async (shape) => {
@@ -535,26 +559,33 @@ describe("anthropic cli migration", () => {
 
     await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
       [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        "Run claude auth login first.",
+        "Claude CLI is not authenticated on this host.",
+        "Run claude auth login first, then re-run this setup.",
       ].join("\n"),
     );
     expect(ctx.runtime.error).not.toHaveBeenCalled();
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("registered non-interactive cli auth reports stored credentials that need interaction", async () => {
-    probeClaudeCliAuthStatus.mockReturnValue({ status: "unreadable" });
-    const method = await resolveAnthropicCliAuthMethod();
-    const ctx = createProviderAuthMethodNonInteractiveContext();
+  it.each(["interactive", "non-interactive"])(
+    "registered %s cli auth reports an unreadable probe",
+    async (mode) => {
+      probeClaudeCliAuthStatus.mockReturnValue({ status: "unreadable" });
+      const method = await resolveAnthropicCliAuthMethod();
+      const ctx = createProviderAuthMethodNonInteractiveContext();
 
-    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
-      [
-        'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
-        "Run claude auth status, then retry.",
-      ].join("\n"),
-    );
-    expect(ctx.runtime.error).not.toHaveBeenCalled();
-    expect(ctx.runtime.exit).not.toHaveBeenCalled();
-  });
+      const result =
+        mode === "interactive"
+          ? method.run(createProviderAuthContext())
+          : method.runNonInteractive!(ctx);
+      await expect(result).rejects.toThrow(
+        [
+          "Could not verify the installed Claude CLI login.",
+          "Run claude auth status --json, then retry this setup.",
+        ].join("\n"),
+      );
+      expect(ctx.runtime.error).not.toHaveBeenCalled();
+      expect(ctx.runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 });

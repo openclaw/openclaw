@@ -9,7 +9,6 @@ import type {
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { WorkerTaskError, type WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
@@ -194,7 +193,7 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
   return rotation;
 }
 
-// Missing reads can leave an idle worker without retaining any database custody.
+// Retire idle isolates independently of the longer SQLite handle retention window.
 export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
   historyClearTimeout(lane.idleTimer);
   refreshDatabaseWorkerPressureSubscription();
@@ -206,7 +205,7 @@ export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane)
       void rotateDatabaseWorkers(lane).catch((error: unknown) => {
         process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
       });
-    }, SQLITE_IDLE_HANDLE_TTL_MS),
+    }, 5 * 60_000),
   );
   lane.idleTimer.unref();
 }
@@ -529,7 +528,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       const runRead = async (
         input: Extract<
           SessionHistoryWorkerInput,
-          { kind: "session-store-target" | "session-target-inventory" }
+          { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
         >,
         inputBytes: number,
       ) => {
@@ -587,25 +586,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             },
             candidates: capturedCandidates,
           };
-          const reply = await runWithSqliteDatabaseAdmissionTurn(
-            admissionPaths,
-            () =>
-              lane.pool.run(
-                () => {
-                  assertCurrent();
-                  dispatched = true;
-                  lane.nativeSequence++;
-                  return { kind: "combined-store-topology", request: preparedRequest };
-                },
-                {
-                  inputBytes: JSON.stringify(preparedRequest).length * 2,
-                  timeoutMs: 60_000,
-                },
-              ),
-            admissionFamilies,
+          const result = await runRead(
+            { kind: "combined-store-topology", request: preparedRequest },
+            JSON.stringify(preparedRequest).length * 2,
           );
-          const result =
-            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||

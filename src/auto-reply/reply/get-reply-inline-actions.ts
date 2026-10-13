@@ -325,7 +325,7 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies = await import("../../agents/openclaw-tools.js");
+      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
@@ -373,7 +373,7 @@ export async function handleInlineActions(
             toolName: dispatch.toolName,
           },
         },
-        dependencies,
+        { createOpenClawToolsAsync },
       );
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);

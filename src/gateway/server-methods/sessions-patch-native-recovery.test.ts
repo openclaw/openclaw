@@ -1,9 +1,22 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareSessionPatchRuntimeSelection } from "./sessions-patch-model-selection.js";
+import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
+
+const releaseSelections: Array<() => void> = [];
+afterEach(() => releaseSelections.splice(0).forEach((release) => release()));
+
+async function prepareSessionPatchRuntimeSelection(
+  params: Parameters<typeof prepareRuntimeSelection>[0],
+) {
+  const result = await prepareRuntimeSelection(params);
+  if (result.ok && result.release) {
+    releaseSelections.push(result.release);
+  }
+  return result;
+}
 
 const preparation = vi.hoisted(() => {
   const validate = vi.fn((): string | undefined => undefined);

@@ -13,6 +13,7 @@ import {
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
+import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
 import {
   readConfigCliSnapshotWithMetadata,
   type ConfigCliSnapshotReader,
@@ -117,8 +118,10 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
 }));
 
-vi.mock("../config/runtime-schema.js", () => ({
-  readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
+vi.mock("../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/runtime-schema.js")>()),
+  readBestEffortRuntimeConfigSchema: (...args: unknown[]) =>
+    mockReadBestEffortRuntimeConfigSchema(...args),
 }));
 
 vi.mock("./config-model-validation.js", () => ({
@@ -416,6 +419,16 @@ describe("config cli", () => {
     mockCheckTouchedTextModelRefs.mockResolvedValue({ refsChecked: 0, refsTotal: 0, errors: [] });
   });
 
+  registerConfigMutationSchemaTests({
+    runConfigCommand,
+    runConfigSet,
+    setSnapshot,
+    firstWrittenConfig,
+    writeTempJson5File,
+    mockReadBestEffortRuntimeConfigSchema,
+    mockWriteConfigFile,
+  });
+
   describe("config mutations", () => {
     it.each([
       {
@@ -646,7 +659,7 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "get", "gateway.port", "--json"])).rejects.toThrow(
         ExitError,
       );
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockReadConfigFileSnapshot.mock.calls.at(-1)?.[0]?.observe).toBe(false);
       expect(mockWriteStdout).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toMatchObject({
@@ -1443,34 +1456,6 @@ describe("config cli", () => {
       expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
       expectErrorIncludes(message);
     });
-
-    it("canonicalizes schema-backed numeric agent list indexes before writing", async () => {
-      mockReadBestEffortRuntimeConfigSchema.mockResolvedValueOnce({
-        schema: {
-          type: "object",
-          properties: {
-            agents: {
-              type: "object",
-              properties: {
-                list: {
-                  type: "array",
-                  items: { type: "object", properties: { id: { type: "string" } } },
-                },
-              },
-            },
-          },
-        },
-      });
-      const resolved: OpenClawConfig = {};
-      setSnapshot(resolved, resolved);
-
-      await runConfigSet("agents.list.0.id", '"tech"', "--strict-json");
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = firstWrittenConfig();
-      expect(written.agents?.entries).toEqual({ tech: {} });
-      expect(written.agents).not.toHaveProperty("list");
-    });
   });
 
   describe("path hardening", () => {
@@ -1643,7 +1628,7 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       // The real writer's roster-loss guard is exercised by config-cli.integration.test.ts.
       expect(written.agents?.entries).toEqual({ "agent-a": {}, "agent-c": {} });
-      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
+      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli", observe: false });
     });
   });
 

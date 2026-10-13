@@ -453,10 +453,12 @@ describe("Crabbox idle image maintenance", () => {
   it.each([20_000, 60_000])(
     "shares the maintenance deadline after an absent command consumes %i ms",
     async (elapsed) => {
-      let now = Date.now();
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      let monotonicMs = 0;
+      const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+      const now = Date.now();
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
       const { provider, calls, warn } = createWarmProvider(() => {
-        now += elapsed;
+        monotonicMs += elapsed;
         return commandResult({ stdout: "checkpoint absent id=chk_expired\n" });
       });
       const store = openWarmImageStore();
@@ -467,7 +469,12 @@ describe("Crabbox idle image maintenance", () => {
         captureUnsupported: captureUnsupported(now - REFRESH_MS),
       });
 
-      await provider.maintain!(mixedContext());
+      try {
+        await provider.maintain!(mixedContext());
+      } finally {
+        performanceNowSpy.mockRestore();
+        dateNowSpy.mockRestore();
+      }
 
       expect(calls.map(({ argv, options }) => [argv[0], options.timeoutMs])).toEqual(
         elapsed < 60_000
@@ -502,6 +509,53 @@ describe("Crabbox idle image maintenance", () => {
 
     expect(calls.map(({ argv }) => argv)).toEqual([
       ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+    ]);
+    expect(store.lookup("expired")).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the maintenance deadline monotonic when the wall clock rewinds", async () => {
+    let monotonicMs = 0;
+    let wallClockReads = 0;
+    const { provider, calls, warn } = createWarmProvider(() => {
+      monotonicMs += 20_000;
+      return commandResult({ stdout: "checkpoint absent id=chk_expired\n" });
+    });
+    // Register data after createWarmProvider (so the state dir is shared). The
+    // image lastDemandAtMs is null so expiry is decided without the wall clock;
+    // the deadline seed/read below are what the rewind must not distort.
+    const store = openWarmImageStore();
+    store.register("expired", {
+      version: 3,
+      allocations: {},
+      image: {
+        checkpointId: "chk_expired",
+        kind: "aws-ebs-snapshot",
+        state: "available",
+        createdAtMs: 0,
+        preparationKey: null,
+        cacheKey: null,
+        purpose: null,
+        lastDemandAtMs: null,
+      },
+    });
+    const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    // The wall clock rewinds 90s on every read; the deadline is seeded and read
+    // on the monotonic clock, so the rewind must not inflate the command timeout.
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      wallClockReads += 1;
+      return wallClockReads === 1 ? 0 : -90_000;
+    });
+
+    try {
+      await provider.maintain!(mixedContext());
+    } finally {
+      performanceNowSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+    expect(calls.map(({ argv, options }) => [argv[0], options.timeoutMs])).toEqual([
+      ["/opt/a/crabbox", 60_000],
+      ["/opt/b/crabbox", 40_000],
     ]);
     expect(store.lookup("expired")).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();

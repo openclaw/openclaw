@@ -123,7 +123,9 @@ vi.mock("../config/config.js", () => ({
     async () =>
       mocks.config(...args),
 }));
+// mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: () => ["main"],
   resolveAgentIdByWorkspacePath: mocks.inferredAgent,
   resolveConfiguredAgentId: mocks.explicitAgent,
   resolveDefaultAgentId: mocks.defaultAgent,
@@ -304,6 +306,7 @@ describe("skills cli commands", () => {
 
   it("installs a versioned ClawHub skill globally with interactive confirmation", async () => {
     setTty(true);
+    mocks.gateway.mockResolvedValue(mocks.report);
     mocks.install.mockResolvedValue({
       ok: true,
       slug: "calendar",
@@ -328,6 +331,14 @@ describe("skills cli commands", () => {
     expect(mocks.runtime.log).toHaveBeenCalledWith(
       "Installed calendar@1.2.3 -> /tmp/openclaw-config/skills/calendar",
     );
+    expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith({
+      config: {},
+      method: "skills.status",
+      params: { agentId: "main", refresh: true },
+      timeoutMs: 120_000,
+      clientName: "cli",
+      mode: "cli",
+    });
   });
   it.each([
     {
@@ -405,6 +416,24 @@ describe("skills cli commands", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.runtime.log).toHaveBeenCalledWith(
       "Installed tools from git -> /tmp/workspace/skills/tools",
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Skill files changed, but local Gateway refresh failed:"),
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+  it("keeps a local install from refreshing a configured remote Gateway", async () => {
+    mocks.config.mockReturnValue({ gateway: { mode: "remote" } });
+    mocks.install.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+    await runCommand(["install", "calendar"]);
+    expect(mocks.gateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      "Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar",
     );
   });
   it("prints a blocked install failure when no trust warning was emitted", async () => {

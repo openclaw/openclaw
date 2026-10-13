@@ -80,6 +80,7 @@ class SessionProgressHovercardController {
   private animateNextOpen = true;
   private skipDelayTimer: number | null = null;
   private lastProgressCard: ProgressCard | null = null;
+  private renderedRevision: string | null = null;
   private readonly hovercard = new PortaledHovercardController(
     () => this.close(true),
     CLOSE_DELAY_MS,
@@ -297,6 +298,7 @@ class SessionProgressHovercardController {
     ) {
       if (trigger !== this.activeTrigger) {
         this.hovercard.reset();
+        this.renderedRevision = null;
         this.activeTrigger = trigger;
         this.hovercard.markTrigger(trigger);
         if (this.open) {
@@ -432,9 +434,12 @@ class SessionProgressHovercardController {
           }
         : null,
     });
-    if (this.hovercard.card?.dataset.revision === revision) {
+    // Empty renders retire their portal; retain the revision so our trigger mutation
+    // cannot remount the same empty input in a MutationObserver loop.
+    if (this.renderedRevision === revision) {
       return;
     }
+    this.renderedRevision = revision;
     const mountedCard = this.hovercard.card;
     const focusedCardElement =
       mountedCard?.contains(document.activeElement) && document.activeElement instanceof HTMLElement
@@ -460,7 +465,6 @@ class SessionProgressHovercardController {
         card.dataset.instant = "true";
       }
     }
-    card.dataset.revision = revision;
     card.setAttribute("aria-label", t("sessionHovercard.ariaLabel"));
     const input: SessionHovercardInput = {
       row: sidebarRow,
@@ -574,6 +578,7 @@ class SessionProgressHovercardController {
     this.open = false;
     this.animateNextOpen = true;
     this.lastProgressCard = null;
+    this.renderedRevision = null;
     this.activeTargetObserver.disconnect();
     this.progressCards?.unwatch(this);
     this.releasePullRequestStore();

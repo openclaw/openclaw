@@ -5,6 +5,7 @@ import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
 } from "../../infra/sqlite-worker-contract.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerOperationAdmission,
   SqliteWorkerAdmissionRequest,
@@ -42,15 +43,14 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import {
-  retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
-} from "./session-transcript-authority.js";
+import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function patchSessionEntryInWorker(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
+  expectedCreationIdentity?: DatabasePathIdentity;
   retainedExecution?: OpenClawAgentDatabaseExecution;
   agentId: string;
   selection: SessionEntryPatchSelection;
@@ -222,6 +222,7 @@ export async function runSessionEntryWorkerOperation<
 >(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
+  expectedCreationIdentity?: DatabasePathIdentity;
   agentId: string;
   assertCurrent: () => void;
   assertPrepared?: () => void;
@@ -424,6 +425,11 @@ export async function runSessionEntryWorkerOperation<
           receipt.sharingUnchangedKeys,
           receipt.generationUnchangedKeys,
           receipt.transcriptPublication,
+          new Map(
+            [...receipt.current].filter(
+              ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
+            ),
+          ),
         );
       }
     },
@@ -454,5 +460,7 @@ export async function runSessionEntryWorkerOperation<
     },
     params.nativeSettlement?.onAdmission,
     params.releaseSource,
+    "write",
+    params.expectedCreationIdentity,
   );
 }

@@ -5,16 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { subscribeBootRecordChanges } from "./boot-record.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   createGatewayStoreTestStore,
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
-import { createApplicationUpdateOverlays } from "./overlays-updates.ts";
 import { loadSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
-import "./app-host.ts";
 
 vi.hoisted(() => {
   // Build identity is captured on import, including imports from an earlier shared test.
@@ -31,14 +30,14 @@ vi.hoisted(() => {
   });
 });
 
-type RefreshShell = HTMLElement & {
+type RefreshShell = {
   runtime: ApplicationRuntime;
   refreshControlUi: () => Promise<boolean>;
 };
 
 function createRefreshShell(gateway: ApplicationRuntime["context"]["gateway"]) {
   const snapshot = { controlUiRefreshRequired: true };
-  const shell = document.createElement("openclaw-app-shell") as RefreshShell;
+  const shell = createShellOwner() as RefreshShell;
   shell.runtime = {
     context: { overlays: { snapshot }, gateway },
   } as unknown as ApplicationRuntime;
@@ -163,48 +162,11 @@ describe("OpenClaw shell Control UI refresh", () => {
     expect(resumed.pendingBootstrapToken).toBe("synthetic-owner-bootstrap");
     expect(resumed.pendingBootstrapProfile).toBe("owner");
     expect(resumed.location.hash).toBe("");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(replace).toHaveBeenCalledOnce();
   });
-
-  it.each(["browser", "native"] as const)(
-    "preserves the producer-offered cross-origin manual Refresh for %s",
-    async (surface) => {
-      store.gateway.stop();
-      store = createGatewayStoreTestStore({
-        clientOptions:
-          surface === "native" ? { clientName: "openclaw-ios", mode: "ui" } : undefined,
-      });
-      const updates = createApplicationUpdateOverlays(store.gateway, vi.fn());
-      const unsubscribe = store.gateway.subscribe(updates.synchronizeGateway);
-      try {
-        store.gateway.connect({ gatewayUrl: "wss://remote-gateway.example" });
-        store.current().opts.onHello?.({
-          type: "hello-ok",
-          protocol: 1,
-          auth: { role: "operator", scopes: ["operator.read"] },
-          server: { version: "1.0.0", buildId: "remote-build", connId: "remote-connection" },
-        });
-        expect(store.gateway.snapshot.phase).toBe("connected");
-        expect(store.gateway.connection.bootstrapToken).toBe("");
-        expect(updates.snapshot.controlUiRefreshRequired).toBe(true);
-        const { shell } = createRefreshShell(store.gateway);
-        shell.runtime = {
-          context: { gateway: store.gateway, overlays: updates },
-        } as unknown as ApplicationRuntime;
-        const refresh = shell.refreshControlUi();
-        probe.resolve(new Response(null, { status: 200 }));
-
-        await expect(refresh).resolves.toBe(true);
-        expect(fetchMock).toHaveBeenCalledOnce();
-        expect(replace).toHaveBeenCalledOnce();
-        const destination = new URL(replace.mock.calls[0]![0]);
-        expect(destination.origin).toBe("http://127.0.0.1:18789");
-        expect(destination.hash).toBe("");
-      } finally {
-        unsubscribe();
-        updates.dispose();
-      }
-    },
-  );
 
   it("keeps a pending remote handoff out of the serving document on manual Refresh", async () => {
     store.gateway.connect({

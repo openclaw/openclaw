@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -743,7 +743,6 @@ describe("gateway session utils", () => {
         cfg,
         key: "agent:main:cron:job1",
         lightweightListRow: true,
-        skipTranscriptUsageFallback: true,
       });
       expect(bound.hasAutomation).toBe(true);
       expect(buildGatewaySessionSnapshot({ sessionRow: bound }).hasAutomation).toBe(true);
@@ -752,7 +751,6 @@ describe("gateway session utils", () => {
         cfg,
         key: "agent:main:other",
         lightweightListRow: true,
-        skipTranscriptUsageFallback: true,
       });
       expect(plain.hasAutomation).toBeUndefined();
       expect(buildGatewaySessionSnapshot({ sessionRow: plain }).hasAutomation).toBe(false);
@@ -965,7 +963,6 @@ describe("gateway session utils", () => {
           entry: store[key],
           rowContext,
           lightweightListRow,
-          skipTranscriptUsageFallback: true,
         });
       const nativeRow = readRow(nativeKey);
       expect(nativeRow).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
@@ -1667,8 +1664,11 @@ describe("gateway session utils", () => {
         const key = "agent:main:dashboard:incognito-retired-owner";
         seedSessionEntries(storePath, {
           "agent:main:main": { sessionId: "durable-main", updatedAt: 1 },
-          [key]: { sessionId: "incognito-owner", updatedAt: 1, incognito: true },
         });
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "incognito-owner", updatedAt: 1, incognito: true },
+        );
         const cfg = {
           session: {
             store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
@@ -1817,7 +1817,7 @@ describe("gateway session utils", () => {
         expect(agent).toHaveProperty("defaultPermissionMode", expected);
       }
       for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
-        const resolved = resolveExecDefaults({ cfg, agentId: "main", sessionKey });
+        const resolved = await resolveExecDefaultsAsync({ cfg, agentId: "main", sessionKey });
         expect([undefined, SESSION_PERMISSION_BY_EXEC_MODE[resolved.mode]]).toContain(
           agent?.defaultPermissionMode,
         );

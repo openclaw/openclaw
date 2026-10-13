@@ -12,21 +12,29 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { authorizeSessionSharingTarget } from "../session-sharing.js";
+import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "../session-sharing-read.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { dispatchUiCommandToRequester } from "./ui-command.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 /** Binds machine effects to the authenticated conversation and its current incarnation. */
-export function resolveSessionEnvironmentCaller(
+export async function resolveSessionEnvironmentCaller(
   options: GatewayRequestHandlerOptions,
   requested: { sessionKey?: string; agentId?: string } = {},
-): { identity: WorkerEnvironmentSessionIdentity; assertCurrent: () => void; signal?: AbortSignal } {
+): Promise<{
+  identity: WorkerEnvironmentSessionIdentity;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+  release: () => void;
+}> {
   const { context, client } = options;
   const tool = client?.internal?.agentToolCaller;
   const runtime = client?.internal?.agentRuntimeIdentity;
@@ -71,78 +79,80 @@ export function resolveSessionEnvironmentCaller(
   ) {
     throw new Error("A persistent conversation is required for an attached environment");
   }
-  const readTarget = () =>
-    loadAccessorSessionEntryForGatewayTarget({
-      cfg: context.getRuntimeConfig(),
-      key: sessionKey,
-      agentId: selected.agentId,
-    });
-  const target = readTarget();
-  if (!target.entry || target.entry.incognito === true) {
-    throw new Error("A persistent conversation is required for an attached environment");
-  }
-  const identity = {
-    sessionId: target.entry.sessionId,
-    sessionKey: target.canonicalKey,
+  const profiles = await prepareSessionSharingProfiles(client);
+  const read = await prepareSessionMutationFacts({
+    cfg: context.getRuntimeConfig(),
+    sessionKey,
     agentId: selected.agentId,
-    ...(target.entry.lifecycleRevision
-      ? { sessionLifecycleRevision: target.entry.lifecycleRevision }
-      : {}),
-  };
-  const signals = [
-    options.signal,
-    client.connectionSignal,
-    ...(ambient?.approvalSignals ?? []),
-  ].filter((signal): signal is AbortSignal => signal !== undefined);
-  const signal = signals.length ? AbortSignal.any(signals) : undefined;
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    options.sessionMutationCommitGuard?.();
-    options.sessionMutationAuthorization?.assertCurrent();
-    if (client.invalidated || options.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Conversation environment requester is no longer active");
+  });
+  try {
+    const target = read.readCurrent(context.getRuntimeConfig()).target;
+    if (!target || target.entry.incognito === true) {
+      throw new Error("A persistent conversation is required for an attached environment");
     }
-    tool?.assertCurrent?.();
-    if (ambient) {
+    const identity = {
+      sessionId: target.entry.sessionId,
+      sessionKey: target.canonicalKey,
+      agentId: selected.agentId,
+      ...(target.entry.lifecycleRevision
+        ? { sessionLifecycleRevision: target.entry.lifecycleRevision }
+        : {}),
+    };
+    const signals = [
+      options.signal,
+      client.connectionSignal,
+      ...(ambient?.approvalSignals ?? []),
+    ].filter((signal): signal is AbortSignal => signal !== undefined);
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      options.sessionMutationCommitGuard?.();
+      options.sessionMutationAuthorization?.assertCurrent();
+      if (client.invalidated || options.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Conversation environment requester is no longer active");
+      }
+      tool?.assertCurrent?.();
+      if (ambient) {
+        if (
+          !assertAmbient ||
+          (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== context)
+        ) {
+          throw new Error(
+            "Conversation environment tool belongs to a different or retired Gateway",
+          );
+        }
+        assertAmbient();
+      }
+      if (runtime && context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
+        throw new Error("Conversation environment agent run is no longer active");
+      }
+      const cfg = context.getRuntimeConfig();
+      const facts = read.readCurrent(cfg);
       if (
-        !assertAmbient ||
-        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== context)
+        facts.target?.entry.sessionId !== identity.sessionId ||
+        facts.target.entry.lifecycleRevision !== identity.sessionLifecycleRevision
       ) {
-        throw new Error("Conversation environment tool belongs to a different or retired Gateway");
+        throw new Error("Conversation identity changed before the environment operation");
       }
-      assertAmbient();
-    }
-    if (runtime && context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
-      throw new Error("Conversation environment agent run is no longer active");
-    }
-    const current = readTarget();
-    if (
-      current.entry?.sessionId !== identity.sessionId ||
-      current.canonicalKey !== identity.sessionKey ||
-      current.entry.lifecycleRevision !== identity.sessionLifecycleRevision
-    ) {
-      throw new Error("Conversation identity changed before the environment operation");
-    }
-    if (!owner) {
-      const denied = authorizeSessionSharingTarget({
-        cfg: context.getRuntimeConfig(),
-        client,
-        target: {
-          agentId: identity.agentId,
-          canonicalKey: current.canonicalKey,
-          entry: current.entry,
-          storeKey: current.sessionStoreKey,
-          storeKeys: current.target.storeKeys,
-          storePath: current.storePath,
-        },
-      });
-      if (denied) {
-        throw new Error(denied.message);
+      if (!owner) {
+        const sharing = prepareProjectedSessionSharing({
+          cfg,
+          client,
+          profiles,
+          isMember: (_target, id) => facts.membership.has(id),
+        });
+        const denied = facts.target && sharing.authorizeTarget(facts.target);
+        if (denied) {
+          throw new Error(denied.message);
+        }
       }
-    }
-  };
-  assertCurrent();
-  return { identity, assertCurrent, signal };
+    };
+    assertCurrent();
+    return { identity, assertCurrent, signal, release: read.release };
+  } catch (error) {
+    read.release();
+    throw error;
+  }
 }
 
 function failure(error: unknown) {
@@ -158,83 +168,91 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionCreateParams,
     async (options) => {
       const { params, respond, context } = options;
-      const caller = resolveSessionEnvironmentCaller(options, params);
-      const { presentation, ...request } = params;
-      if (presentation) {
-        try {
-          resolveGatewayPersonalToolParticipant(options.client?.internal?.agentRuntimeIdentity);
-        } catch (error) {
-          throw new Error(
-            `${error instanceof Error ? error.message : String(error)} Create the environment without presentation, then show it with screen (desktop_show or portal_show with environmentId) and user set to the requester's requester_profile.id.`,
-            { cause: error },
-          );
+      const caller = await resolveSessionEnvironmentCaller(options, params);
+      try {
+        const { presentation, ...request } = params;
+        if (presentation) {
+          try {
+            resolveGatewayPersonalToolParticipant(options.client?.internal?.agentRuntimeIdentity);
+          } catch (error) {
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)} Create the environment without presentation, then show it with screen (desktop_show or portal_show with environmentId) and user set to the requester's requester_profile.id.`,
+              { cause: error },
+            );
+          }
         }
-      }
-      const assertAllowed = presentation
-        ? captureSessionEnvironmentToolPolicy(options, caller, "screen").assertAllowed
-        : caller.assertCurrent;
-      assertAllowed();
-      const service = context.workerEnvironmentService;
-      if (!service) {
-        throw new Error("Cloud worker environments are not configured");
-      }
-      const result = await service.createSessionAttachment(
-        { ...request, ...caller.identity },
-        assertAllowed,
-        caller.signal,
-        presentation
-          ? async ({ environmentId }) => {
-              assertAllowed();
-              const dispatched = dispatchUiCommandToRequester({
-                client: options.client,
-                context,
-                params: {
-                  sessionKey: caller.identity.sessionKey,
-                  agentId: caller.identity.agentId,
-                  command: {
-                    kind: "panel",
-                    panel: presentation === "desktop" ? "desktop" : "portal",
-                    environmentId,
-                    open: true,
-                    dock: "right",
+        const assertAllowed = presentation
+          ? captureSessionEnvironmentToolPolicy(options, caller, "screen").assertAllowed
+          : caller.assertCurrent;
+        assertAllowed();
+        const service = context.workerEnvironmentService;
+        if (!service) {
+          throw new Error("Cloud worker environments are not configured");
+        }
+        const result = await service.createSessionAttachment(
+          { ...request, ...caller.identity },
+          assertAllowed,
+          caller.signal,
+          presentation
+            ? async ({ environmentId }) => {
+                assertAllowed();
+                const dispatched = dispatchUiCommandToRequester({
+                  client: options.client,
+                  context,
+                  params: {
+                    sessionKey: caller.identity.sessionKey,
+                    agentId: caller.identity.agentId,
+                    command: {
+                      kind: "panel",
+                      panel: presentation === "desktop" ? "desktop" : "portal",
+                      environmentId,
+                      open: true,
+                      dock: "right",
+                    },
                   },
-                },
-              });
-              if (!dispatched.ok) {
-                throw new Error(dispatched.error.message);
+                });
+                if (!dispatched.ok) {
+                  throw new Error(dispatched.error.message);
+                }
+                assertAllowed();
               }
-              assertAllowed();
-            }
-          : undefined,
-      );
-      assertAllowed();
-      respond(true, { ...result, environment: summarizeWorkerEnvironment(result.environment) });
+            : undefined,
+        );
+        assertAllowed();
+        respond(true, { ...result, environment: summarizeWorkerEnvironment(result.environment) });
+      } finally {
+        caller.release();
+      }
     },
     failure,
   ),
   "environments.session.status": defineValidatedGatewayMethod(
     "environments.session.status",
     validateEnvironmentsSessionStatusParams,
-    (options) => {
+    async (options) => {
       const { params, respond, context } = options;
-      const caller = resolveSessionEnvironmentCaller(options, params);
-      const result = context.workerEnvironmentService?.getSessionAttachmentStatus(
-        caller.identity.sessionId,
-      );
-      if (params.environmentId && result?.attachment.environmentId !== params.environmentId) {
-        throw new Error("Conversation environment target changed");
+      const caller = await resolveSessionEnvironmentCaller(options, params);
+      try {
+        const result = context.workerEnvironmentService?.getSessionAttachmentStatus(
+          caller.identity.sessionId,
+        );
+        if (params.environmentId && result?.attachment.environmentId !== params.environmentId) {
+          throw new Error("Conversation environment target changed");
+        }
+        caller.assertCurrent();
+        respond(
+          true,
+          result
+            ? {
+                attachment: result.attachment,
+                closed: result.attachment.closedAtMs !== null,
+                environment: summarizeWorkerEnvironment(result.environment),
+              }
+            : { attachment: null },
+        );
+      } finally {
+        caller.release();
       }
-      caller.assertCurrent();
-      respond(
-        true,
-        result
-          ? {
-              attachment: result.attachment,
-              closed: result.attachment.closedAtMs !== null,
-              environment: summarizeWorkerEnvironment(result.environment),
-            }
-          : { attachment: null },
-      );
     },
     failure,
   ),
@@ -243,20 +261,24 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionDestroyParams,
     async (options) => {
       const { params, respond, context } = options;
-      const caller = resolveSessionEnvironmentCaller(options, params);
-      const service = context.workerEnvironmentService;
-      if (!service) {
-        throw new Error("Cloud worker environments are not configured");
+      const caller = await resolveSessionEnvironmentCaller(options, params);
+      try {
+        const service = context.workerEnvironmentService;
+        if (!service) {
+          throw new Error("Cloud worker environments are not configured");
+        }
+        const result = await service.destroySessionAttachment(
+          { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
+          caller.assertCurrent,
+        );
+        caller.assertCurrent();
+        respond(true, {
+          stopped: true,
+          ...(result ? { environment: summarizeWorkerEnvironment(result) } : {}),
+        });
+      } finally {
+        caller.release();
       }
-      const result = await service.destroySessionAttachment(
-        { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
-        caller.assertCurrent,
-      );
-      caller.assertCurrent();
-      respond(true, {
-        stopped: true,
-        ...(result ? { environment: summarizeWorkerEnvironment(result) } : {}),
-      });
     },
     failure,
   ),

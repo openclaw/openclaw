@@ -209,6 +209,23 @@ it("negotiates extension capabilities and preserves rich request metadata over t
       "openai/deepLink": { url: "/parts?q=bolt" },
       "openai/modelContext": null,
     });
+    for (const block of [
+      { type: "text", text: 1 },
+      { type: "image", data: 1, mimeType: "image/png" },
+      { type: "resource_link", uri: 1, name: "Part" },
+      { type: "resource_link", uri: "parts://bolt", name: 1 },
+      { type: "resource", resource: { uri: 1, text: "Part" } },
+      { type: "resource", resource: { uri: "parts://bolt", text: 1 } },
+      { type: "resource", resource: { uri: "parts://bolt", blob: 1 } },
+    ]) {
+      await expect(
+        app.request(
+          { method: "ui/message", params: { role: "user", content: [block] } },
+          z.object({ isError: z.boolean().optional() }),
+        ),
+      ).rejects.toThrow("Invalid params for ui/message");
+    }
+    expect(received).not.toHaveBeenCalled();
     const content = [
       {
         type: "text" as const,

@@ -388,6 +388,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
@@ -686,6 +687,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const postCompactionAbortError = input.getPostCompactionAbortError();
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
+  }
+  if (pluginWorkspace?.sandboxRuntime) {
+    rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },

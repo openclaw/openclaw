@@ -78,7 +78,7 @@ it.each(["replacement", "database-close"] as const)(
     };
     const admit = createGatewayWorkerDispatchAdmission(async () => ({
       managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
+      resolveGatewaySessionStoreTargetInWorker: async () => target,
       resolveCanonicalSessionEntryFromStoreKeys: () => entry,
     }));
     const entered = createDeferredCore<AbortSignal>();

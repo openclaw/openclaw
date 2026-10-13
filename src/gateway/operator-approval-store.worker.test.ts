@@ -10,11 +10,13 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import * as boot from "./operator-approval-store.boot.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.worker.js";
 import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
-import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
+import {
+  getOperatorApprovalResolutionKey,
+  OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
+} from "./operator-approval-store.rows.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.worker.js";
 import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 
@@ -155,23 +157,78 @@ it("publishes exact native postimages only after the outer commit and retention 
     ]);
     native.getOperatorApprovalDetailedInDatabase({ id: "first", nowMs: 10_000, databaseOptions });
     expect(facts.get("first")?.status).toBe("expired");
-    boot.closeOrphanedOperatorApprovals({
-      runtimeEpoch: "next-runtime",
-      nowMs: 10_000,
+    runOpenClawStateWriteTransaction(
+      (database) =>
+        nativeTransitions.recoverOperatorApprovalsInDatabase({
+          runtimeEpoch: "next-runtime",
+          nowMs: 10_000,
+          database,
+        }),
       databaseOptions,
-    });
+    );
     expect(facts.get("second")?.status).toBe("cancelled");
     expect(
-      boot.pruneTerminalOperatorApprovals({
-        nowMs: 10_001,
-        retentionMs: 0,
+      runOpenClawStateWriteTransaction(
+        (database) =>
+          nativeTransitions.recoverOperatorApprovalsInDatabase({
+            runtimeEpoch: "next-runtime",
+            nowMs: OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 10_001,
+            database,
+          }).pruned,
         databaseOptions,
-      }),
+      ),
     ).toBe(2);
     expect(facts.size).toBe(0);
   } finally {
     releaseFacts();
     releaseObserver();
+  }
+});
+
+it("runs startup recovery, lookup, expiry and history without host SQLite calls through close", async () => {
+  const databaseOptions = options();
+  await store.insertOperatorApproval({ approval: approval("off-thread"), databaseOptions });
+  await store.insertOperatorApproval({
+    approval: { ...approval("old-runtime"), runtimeEpoch: "old-epoch" },
+    databaseOptions,
+  });
+  requireNodeSqlite();
+  const counters = observeMainThreadSql();
+  try {
+    counters.calibrate();
+    expect(
+      await store.recoverOperatorApprovalsOnStartup({
+        runtimeEpoch: "synthetic-epoch",
+        nowMs: 2000,
+        databaseOptions,
+      }),
+    ).toMatchObject({ affected: 1, pruned: 0 });
+    expect(
+      await store.getOperatorApprovalDetailed({ id: "old-runtime", nowMs: 2000, databaseOptions }),
+    ).toMatchObject({
+      outcome: "found",
+      record: { status: "cancelled", terminalReason: "gateway-restart" },
+    });
+    const pending = await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions });
+    expect(pending.map((record) => record.id)).toEqual(["off-thread"]);
+    expect(
+      (await store.expireDueOperatorApprovals({ nowMs: 10_000, databaseOptions })).affected,
+    ).toBe(1);
+    expect(
+      await store.getOperatorApprovalDetailed({ id: "off-thread", nowMs: 10_001, databaseOptions }),
+    ).toMatchObject({ outcome: "found", record: { status: "expired" } });
+    expect(
+      await store.listTerminalOperatorApprovals({ nowMs: 10_002, databaseOptions }),
+    ).toMatchObject({
+      records: [
+        { id: "off-thread", status: "expired" },
+        { id: "old-runtime", status: "cancelled" },
+      ],
+    });
+    await closeOpenClawStateDatabaseAsync();
+    counters.expectIdle();
+  } finally {
+    counters.restore();
   }
 });
 

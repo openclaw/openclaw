@@ -1,10 +1,15 @@
-import { copyFileSync, renameSync } from "node:fs";
+import { copyFileSync, renameSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseIntegrityVerification,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -18,6 +23,7 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
@@ -31,6 +37,34 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+it("preserves full verification across a disposable startup checkpoint write", async () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkpoint-clean-close-") };
+  const state = openOpenClawStateDatabase({ env });
+  const verified = readSqliteDatabaseIntegrityVerification(state.db);
+  expect(verified).toBeDefined();
+  await closeOpenClawStateDatabaseAsync();
+  const observed = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        db.prepare(
+          `INSERT INTO state_leases(scope, lease_key, owner, created_at, updated_at)
+           VALUES('checkpoint-proof', 'global', 'startup', 1, 1)`,
+        ).run();
+      },
+      { env, atomic: true },
+    );
+    expect(readSqliteDatabaseCleanClose(state.path)).toBe(true);
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(readSqliteDatabaseIntegrityVerification(reopened.db)).toEqual(verified);
+    expect(
+      observed.queries.filter((sql) => /PRAGMA (?:integrity|foreign_key)_check/iu.test(sql)),
+    ).toEqual([]);
+  } finally {
+    observed.restore();
+  }
+});
+
 function validationStatements(queries: string[]): string[] {
   return queries.filter((sql) =>
     /(?:sqlite_(?:schema|master)|pragma_(?:table|index|foreign_key)|\bPRAGMA\s+(?:user_version|schema_version|integrity_check|quick_check|foreign_key_check|table_info|table_xinfo|index_list|index_info|index_xinfo)\b|\bFROM\s+"?schema_meta\b|state\.schema\.contentVersion|^select "value_json" from "config_machine_state")/iu.test(
@@ -38,6 +72,70 @@ function validationStatements(queries: string[]): string[] {
     ),
   );
 }
+
+it("admits a restarted current schema before repeated version and migration probes", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-restart-") };
+  const first = openOpenClawStateDatabase({ env });
+  first.db
+    .prepare(
+      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+    )
+    .run("restart.fixture", '"retained"', 1);
+  closeOpenClawStateDatabaseForTest();
+  // Exercise cold admission rather than restoring this orderly close's seal.
+  revokeSqliteDatabaseAdmissionsForPath(first.path);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    const restarted = openOpenClawStateDatabase({ env });
+    expect(observation.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
+      1,
+    );
+    expect(
+      observation.queries.filter((sql) =>
+        /select "value_json" from "config_machine_state"/iu.test(sql),
+      ),
+    ).toHaveLength(1);
+    expect(
+      observation.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)),
+    ).toHaveLength(1);
+    expect(
+      restarted.db
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("restart.fixture"),
+    ).toEqual({ value_json: '"retained"' });
+    restarted.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    expect(() => assertSupportedStateSchemaVersion(restarted.db, restarted.path)).toThrow(
+      /newer schema version/iu,
+    );
+  } finally {
+    observation.restore();
+  }
+});
+
+it("refuses corrupt current-version state on restart without a clean integrity receipt", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-unclean-") };
+  const pathname = openOpenClawStateDatabase({ env }).path;
+  closeOpenClawStateDatabaseForTest();
+  // Persisted invalid bytes model an earlier process that never published clean-close proof.
+  const replacement = `${pathname}.unclean`;
+  copyFileSync(pathname, replacement);
+  {
+    using database = new DatabaseSync(replacement);
+    database.exec(`PRAGMA foreign_keys = OFF;
+      INSERT INTO acp_replay_events
+        (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
+        VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0)`);
+  }
+  renameSync(replacement, pathname);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(/foreign_key_check/iu);
+    expect(observation.queries.some((sql) => /^PRAGMA integrity_check\b/iu.test(sql))).toBe(true);
+    expect(observation.queries.some((sql) => /^PRAGMA foreign_key_check\b/iu.test(sql))).toBe(true);
+  } finally {
+    observation.restore();
+  }
+});
 
 it("checks integrity once before index repair and once after rebuilding the index", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-repair-") };
@@ -66,6 +164,7 @@ it("checks integrity once before index repair and once after rebuilding the inde
       2,
     );
     closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
     observation.queries.length = 0;
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
@@ -80,7 +179,7 @@ it("checks integrity once before index repair and once after rebuilding the inde
   }
 });
 
-it("reuses live shared-state admission and revalidates after the final reader and writer close", () => {
+it("reuses live admission and revalidates after the final handles close without a seal", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -97,6 +196,7 @@ it("reuses live shared-state admission and revalidates after the final reader an
     expect(validationStatements(observation.queries)).toEqual([]);
     survivingReader.close();
     closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
     const reopened = openOpenClawStateDatabase({ env });
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
@@ -198,7 +298,7 @@ it.each(["required definition", "newer header"] as const)(
   },
 );
 
-it.each(["missing table", "newer header"] as const)(
+it.each(["missing table", "missing index", "newer header"] as const)(
   "readmits startup checkpoint storage after a tracked %s change",
   (change) => {
     const root = directories.make("state-checkonce-checkpoint-");
@@ -232,12 +332,17 @@ it.each(["missing table", "newer header"] as const)(
     peer.exec(
       change === "missing table"
         ? "DROP TABLE state_leases"
-        : `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+        : change === "missing index"
+          ? "DROP INDEX idx_state_leases_expiry"
+          : `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
     );
     callback.mockClear();
-    if (change === "missing table") {
+    if (change !== "newer header") {
       expect(read()).toBe(0);
       expect(callback).toHaveBeenCalledOnce();
+      expect(
+        peer.prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_state_leases_expiry'").get(),
+      ).toEqual({ name: "idx_state_leases_expiry" });
     } else {
       expect(read).toThrow(/newer schema version/iu);
       expect(callback).not.toHaveBeenCalled();

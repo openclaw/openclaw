@@ -286,8 +286,7 @@ suite.define(() => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
-      const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
+      const sidebarToggle = page.locator('[data-navigation-view="sessions"]');
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
         .first();
@@ -305,9 +304,9 @@ suite.define(() => {
       const expectDesktopCollapsed = async () => {
         await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
         await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
-        await expect.poll(() => expandButton.isVisible()).toBe(true);
+        await expect.poll(() => sidebarToggle.isVisible()).toBe(true);
         await expect
-          .poll(() => expandButton.evaluate((element) => element === document.activeElement))
+          .poll(() => sidebarToggle.evaluate((element) => element === document.activeElement))
           .toBe(true);
       };
       const expectDrawerClosed = async () => {
@@ -352,15 +351,15 @@ suite.define(() => {
       await expect.poll(() => sessionMenu.count()).toBe(0);
       await expectHiddenShortcutsInert(beforeKeyboardCollapse);
 
-      await expandButton.click();
+      await sidebarToggle.click();
       await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(true);
 
       // The visible desktop control follows the same focus handoff contract.
       await openSessionMenu();
-      await collapseButton.click();
+      await sidebarToggle.click();
       await expectDesktopCollapsed();
       await expect.poll(() => sessionMenu.count()).toBe(0);
-      await expandButton.click();
+      await sidebarToggle.click();
       await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(true);
 
       // Crossing into drawer layout hides the desktop sidebar without toggling

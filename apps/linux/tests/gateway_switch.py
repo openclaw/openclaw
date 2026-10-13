@@ -1,11 +1,12 @@
 """Native Gateway selection with real WebKit, menus and an isolated Secret Service.
 
-first_run.py owns the private HOME and DBus session. The synthetic dashboard
-consumes the same native Gateway contract as the shared Control UI.
+first_run.py owns the private HOME and DBus session. Switching uses a synthetic
+dashboard; onboarding renders the production setup card with fixed Gateway data.
 """
 
 import hashlib
 import json
+import mimetypes
 from pathlib import Path
 import shutil
 import subprocess
@@ -465,51 +466,59 @@ class GatewaySwitchFixture(GatewayFixture):
             }, indent=2) + "\n")
 
 
-ONBOARDING_CONTROLS = """<nav style="margin:0 38px">
-<button id="chat">Open chat</button><button id="reload">Reload chat</button>
-<button id="outside">Open sibling path</button><button id="manage">Manage Gateways</button>
-</nav><script>
-function showRoute() {
-  document.querySelector('h1').textContent = location.pathname.includes('model-setup')
-    ? 'Local model setup' : location.pathname.startsWith('/fixture/') ? 'Custodian chat' : 'Sibling path';
-}
-function navigate(path) { history.pushState({}, '', path); showRoute(); void report(); }
-document.getElementById('chat').onclick = () => navigate('/fixture/chat/custodian');
-document.getElementById('outside').onclick = () => navigate('/fixture-sibling/chat');
-document.getElementById('reload').onclick = () => location.reload();
-document.getElementById('manage').onclick = () => send({type:'open-settings'});
-showRoute();
-</script>"""
-
-
 class OnboardingHandler(SwitchHandler):
     def do_GET(self):
         parsed = urlsplit(self.path)
-        if not self.headers.get("Upgrade") and parsed.path in (
-            "/fixture/", "/fixture/settings/model-setup", "/fixture/chat/custodian",
+        if not self.headers.get("Upgrade") and parsed.path == "/fixture/setup":
+            unavailable = "unavailable" in parse_qs(parsed.query)
+            self.server.setup_requests.append({"method": "openclaw.setup.auto", "unavailable": unavailable})
+            payload = {
+                "status": "unavailable" if unavailable else "configured",
+                "alternatives": [], "attempts": [], "installedPlugins": [],
+            }
+            if not unavailable:
+                payload["selected"] = {
+                    "kind": "fixture", "label": "Synthetic provider",
+                    "detail": "Local fixture data", "modelRef": "fixture/model",
+                }
+            self.reply(200, json.dumps(payload).encode(), "application/json")
+        elif not self.headers.get("Upgrade") and parsed.path.startswith("/fixture/assets/"):
+            asset = (self.server.card_assets / parsed.path.removeprefix("/fixture/")).resolve()
+            if not asset.is_relative_to(self.server.card_assets) or not asset.is_file():
+                self.reply(404)
+                return
+            self.reply(200, asset.read_bytes(), mimetypes.guess_type(asset.name)[0] or "application/octet-stream")
+        elif not self.headers.get("Upgrade") and parsed.path in (
+            "/fixture/", "/fixture/custodian", "/fixture/settings/model-setup",
+            "/fixture/settings/device/permissions", "/fixture/chat/custodian",
         ):
             self.server.document_requests.append({"path": parsed.path, "query": parse_qs(parsed.query)})
             self.server.loads["primary"] += 1
-            body = DASHBOARD.replace("__NAME__", "Local model setup").replace("__PAGE__", '"primary"')
-            body = body.replace("</body>", ONBOARDING_CONTROLS + "</body>")
-            self.reply(200, body.encode(), "text/html; charset=utf-8")
+            self.reply(200, (self.server.card_assets / "onboarding-card.html").read_bytes(), "text/html; charset=utf-8")
         else:
             super().do_GET()
 
 
 class GatewayOnboardingFixture(GatewaySwitchFixture):
-    def __init__(self, artifacts_dir):
+    def __init__(self, artifacts_dir, *, install_error=None):
         super().__init__(artifacts_dir)
         self.RequestHandlerClass = OnboardingHandler
         self.document_requests = []
+        self.setup_requests = []
+        self.card_assets = (Path(__file__).parent / "fixtures/dist").resolve()
         self.binary_sha256 = None
+        self.install_error = install_error
 
     def start(self):
+        if not self.install_error and not (self.card_assets / "onboarding-card.html").is_file():
+            raise RuntimeError("Build the native setup-card fixture with vite.onboarding.config.ts before this proof")
         super().start()
         # The app must enter its real missing-CLI installation flow.
         (Path.home() / ".openclaw/bin/openclaw").rename(Path.home() / "fixture-cli.py")
         (Path.home() / ".openclaw/openclaw.json").unlink()
         self.config_hash = None
+        if self.install_error:
+            Path("fixture-install-failure").write_text(self.install_error)
 
     def stage_binary(self, binary):
         # Tauri's documented Cargo resource layout is target/<profile> with
@@ -558,61 +567,104 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
             self.chrome.command("import", "-window", "root", str(self.artifacts_dir / f"gateway-onboarding-{name}.png"))
 
     def exercise(self, app, _binary, wait, Atspi, _restart):
-        def click(label, *, prefix=False):
-            node = wait(label, ("button", "push button", "toggle button"), prefix=prefix)
+        def click(label, *, prefix=False, role=("button", "push button", "toggle button")):
+            node = wait(label, role, prefix=prefix)
             component = node.get_component_iface()
             component.scroll_to(Atspi.ScrollType.ANYWHERE)
             bounds = component.get_extents(Atspi.CoordType.SCREEN)
             self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
                                 str(bounds.y + bounds.height // 2), "click", "1")
 
-        wait("Welcome to OpenClaw", "heading")
-        click("Get started")
-        wait("Where should your assistant live?", "heading")
-        click("On this computer", prefix=True)
-        click("Continue")
-        wait("Choose a release channel", "heading")
-        click("Install OpenClaw")
-        wait("Local model setup", "heading")
+        if self.install_error:
+            def expect_install_error():
+                node = wait("Bundled runtime activation failed:", prefix=True)
+                text = Atspi.Text.get_text(node.get_text_iface(), 0, -1)
+                if self.install_error not in text:
+                    raise RuntimeError(f"Missing installation failure detail: {text!r}")
+
+            wait("Where should your assistant live?", "heading")
+            expect_install_error()
+            self.capture("fallback")
+            click("On another computer", prefix=True)
+            wait("Gateway URL", "entry")
+            click("On this computer", prefix=True)
+            click("Continue")
+            wait("Choose a release channel", "heading")
+            click("Install OpenClaw")
+            wait("OpenClaw needs attention", "heading")
+            expect_install_error()
+            attempts = Path("fixture-runtime-install-attempts").read_text().splitlines()
+            if len(attempts) != 2:
+                raise RuntimeError(f"Expected automatic and manual installation attempts: {attempts!r}")
+            self.chrome.record("automatic startup failure offers visible manual Gateway choices and retry", True)
+            self.capture("failed-retry")
+            self.passed = True
+            print("PASS: automatic startup falls back with its error and manual installation remains retryable", flush=True)
+            return
+
+        wait("Custodian chat", "heading")
+        wait("Using Synthetic provider (fixture/model) on This computer", "heading")
+        self.chrome.until(lambda: any(r.get("capabilityAtBoot") and r.get("currentGateway") == {
+            "name": "This computer", "kind": "local",
+        } for r in self.reports.values()), "shell setup capability installed before the real card boots")
         if not Path("fixture-installer-called").is_file() or not Path("fixture-runtime-installed.json").is_file():
             raise RuntimeError("The native installation/bundled-runtime entrypoint did not run")
         if not self.document_requests or self.document_requests[0] != {
-            "path": "/fixture/settings/model-setup", "query": {"firstRun": ["explicit"]},
+            "path": "/fixture/custodian", "query": {"onboarding": ["1"]},
         }:
             raise RuntimeError(f"Native onboarding did not preserve the canonical base: {self.document_requests!r}")
         self.config_hash = self.primary_hash()
         main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "onboarding window")
-        self.capture("model-setup")
-        click("Open chat")
+        self.chrome.record("fresh launch installs locally and opens custodian without setup input", True)
+        self.capture("automatic-first-run")
+        click("Review permissions")
+        wait("Native permissions", "heading")
+        if self.document_requests[-1]["path"] != "/fixture/settings/device/permissions":
+            raise RuntimeError("Native permissions left the selected Gateway base path")
+        self.capture("card-permissions")
+        click("Open chat", role="link")
         wait("Custodian chat", "heading")
+        click("Show unavailable provider", role="link")
+        wait("Your AI needs a little help", "heading")
+        self.capture("card-unavailable")
+        click("Open AI setup")
+        wait("Local model setup", "heading")
+        if self.document_requests[-1]["path"] != "/fixture/settings/model-setup":
+            raise RuntimeError("Native AI setup left the selected Gateway base path")
+        self.chrome.record("landed setup card opens permissions and AI setup on the selected Gateway", True)
+        click("Open chat", role="link")
+        wait("Custodian chat", "heading")
+        wait("Using Synthetic provider (fixture/model) on This computer", "heading")
         click("Maximize window")
         self.chrome.until(lambda: "_NET_WM_STATE_MAXIMIZED_HORZ" in self.chrome.state(main),
                           "native maximize after onboarding leaves model setup")
         click("Restore window")
         self.chrome.until(lambda: "_NET_WM_STATE_MAXIMIZED_HORZ" not in self.chrome.state(main), "native restore")
         self.chrome.record("window controls survive onboarding to chat under the canonical base", True)
-        click("Manage Gateways")
+        click("Use a different Gateway")
         wait("Manage Gateways", "heading")
         manager = self.chrome.until(lambda: next((w for w in self.windows(app) if w != main), None), "Gateway manager")
         self.chrome.close_window(manager)
-        self.chrome.record("Gateway bridge works after leaving model setup", True)
+        self.chrome.record("landed setup card opens Gateway management after leaving model setup", True)
         self.capture("chat-controls")
+        before_reload = len(self.document_requests)
         click("Reload chat")
-        self.chrome.until(lambda: any(r["path"] == "/fixture/chat/custodian" for r in self.document_requests), "chat document reload")
-        wait("Custodian chat", "heading")
-        click("Manage Gateways")
+        self.chrome.until(lambda: len(self.document_requests) > before_reload and
+                          self.document_requests[-1]["path"] == "/fixture/chat/custodian", "chat document reload")
+        wait("Using Synthetic provider (fixture/model) on This computer", "heading")
+        click("Use a different Gateway")
         wait("Manage Gateways", "heading")
         manager = self.chrome.until(lambda: next((w for w in self.windows(app) if w != main), None), "manager after reload")
         self.chrome.close_window(manager)
         click("Open sibling path")
         wait("Sibling path", "heading")
-        click("Manage Gateways")
-        wait("Gateway action failed:", prefix=True)
+        click("Use a different Gateway")
+        wait("Desktop setup action failed:", prefix=True)
         click("Maximize window")
         wait("Window action failed:", prefix=True)
         if len(self.windows(app)) != 1 or "_NET_WM_STATE_MAXIMIZED_HORZ" in self.chrome.state(main):
             raise RuntimeError("A sibling path controlled the native window or opened Gateway management")
-        self.chrome.record("retained bridge commands are denied outside the canonical base", True)
+        self.chrome.record("retained card actions are denied outside the canonical base", True)
         self.capture("sibling-denied")
         if self.primary_hash() != self.config_hash:
             raise RuntimeError("Dashboard navigation changed the installed Primary config")
@@ -624,6 +676,7 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         if self.artifacts_dir:
             result = self.artifacts_dir / "gateway-switch-results.json"
             data = json.loads(result.read_text())
-            data.update(binarySha256=self.binary_sha256, documentRequests=self.document_requests, syntheticInstaller=True)
+            data.update(binarySha256=self.binary_sha256, documentRequests=self.document_requests,
+                        setupRequests=self.setup_requests, syntheticInstaller=True, productionSetupCard=True)
             result.unlink()
             (self.artifacts_dir / "gateway-onboarding-results.json").write_text(json.dumps(data, indent=2) + "\n")

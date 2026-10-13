@@ -28,6 +28,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   CronStandingGrantMintSpec,
   CronStandingGrantLookupInput,
@@ -41,35 +42,7 @@ import { operatorStandingGrantPublication } from "./operator-approval-store.publ
 const STANDING_GRANT_TABLE = "operator_approval_standing_grants";
 const STANDING_GRANT_GENERATION_TABLE = "operator_approval_standing_grant_generations";
 
-// Mirrors the canonical declaration in openclaw-state-schema.sql; the table is
-// a first-use lazy additive surface (FIRST_USE_STATE_TABLES) so older readers
-// stay valid without it and no schema-version bump is required.
-const STANDING_GRANT_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
-  grant_id TEXT NOT NULL PRIMARY KEY CHECK (length(grant_id) > 0),
-  minted_by_approval_id TEXT NOT NULL
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
-  cron_job_id TEXT NOT NULL CHECK (length(cron_job_id) > 0),
-  job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
-  operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
-  created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER CHECK (expires_at_ms IS NULL OR expires_at_ms >= created_at_ms),
-  revoked_at_ms INTEGER,
-  revoked_by TEXT,
-  last_used_at_ms INTEGER,
-  use_count INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
-  ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
-  grant_id TEXT NOT NULL PRIMARY KEY
-    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
-  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
-) STRICT;
-`;
+const STANDING_GRANT_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(STANDING_GRANT_TABLE);
 
 type StandingGrantDatabase = Pick<
   OpenClawStateKyselyDatabase,

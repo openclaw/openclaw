@@ -9,6 +9,7 @@ import {
 } from "../config/model-provider-config.js";
 import {
   getResolvedConfigEnvSecretRef,
+  hasUnresolvedConfigPath,
   resolveConfigSecretRef,
 } from "../config/resolution-facts.js";
 import {
@@ -120,6 +121,7 @@ export function resolveProviderConfigSecretInput(
     : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
   return {
+    path,
     providerConfig: resolveMergedModelProviderConfig(cfg, provider),
     resolvedEnvRef,
     ref: entry
@@ -663,7 +665,11 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
   sourceConfig: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (hasUnresolvedConfigPath(params.cfg, input.path)) {
+    return undefined;
+  }
+  const { providerConfig, ref } = input;
   const sourceRef = resolveProviderConfigSecretInput(params.sourceConfig, params.provider).ref;
   // Prepared Ref values are opaque bytes, not authored markers or copy/paste input.
   // Legacy metadata markers without a source Ref still use literal validation.

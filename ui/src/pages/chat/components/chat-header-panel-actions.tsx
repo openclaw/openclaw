@@ -1,8 +1,7 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
@@ -20,6 +19,7 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
+import { ChatQuickActionItem, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type ChatPaneLayoutMenuProps = {
@@ -38,10 +38,6 @@ export type ChatPaneLayoutMenuProps = {
   onSplitRight?: (paneId: string) => void;
   onClosePane?: (paneId: string) => void;
 };
-type LayoutAction = HeaderMenuQuickAction & {
-  className?: string;
-  shortcut?: KeyboardShortcutCombo;
-};
 
 function layoutModel(props: ChatPaneLayoutMenuProps) {
   const layout = props.sidebarLayout;
@@ -51,10 +47,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
   const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
   const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
   const split = layout?.open === true && !layout.expanded;
-  const actions: (HeaderMenuQuickAction & {
-    className?: string;
-    shortcut?: KeyboardShortcutCombo;
-  })[] = [];
+  const actions: ChatQuickAction[] = [];
   if (layout && props.onLayoutChange && (split || layout.expanded)) {
     actions.push({
       id: "focus",
@@ -89,13 +82,8 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions.push({
       id: "expand-side-panel",
       className: "side-panel__expand",
-      label: t(
-        layout.expanded && layout.expandedSide
-          ? "chat.sidePanel.restore"
-          : "chat.sidePanel.expandPanel",
-        { panel: sideDefinition.label },
-      ),
-      icon: layout.expanded && layout.expandedSide ? icons.minimize : icons.maximize,
+      label: t("chat.sidePanel.expandPanel", { panel: sideDefinition.label }),
+      icon: icons.maximize,
       onActivate: () =>
         props.onLayoutChange?.(toggleSidebarPanelExpanded(layout, side.id), {
           dashboardPresentation: "personal",
@@ -165,62 +153,8 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     sideHeaderAction: sideDefinition?.headerAction,
   };
 }
-function LayoutActionItem(props: { action: LayoutAction }) {
-  const command = () => {
-    const action = props.action;
-    return action.kind === "status" ? null : action;
-  };
-  return (
-    <Show
-      when={command()}
-      fallback={
-        <div class="session-menu__status" data-menu-status={props.action.id} role="note">
-          <span class="session-menu__check" aria-hidden="true">
-            <LitContent value={props.action.icon} />
-          </span>
-          <ActionLabel action={props.action} />
-        </div>
-      }
-    >
-      {(action) => (
-        <wa-dropdown-item
-          class={["session-menu__item", action().className]}
-          value={action().id}
-          aria-label={action().label}
-          type={action().active === undefined ? undefined : "checkbox"}
-          prop:checked={action().active ?? false}
-          disabled={action().disabled}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">
-            <LitContent value={action().icon} />
-          </span>
-          <ActionLabel action={action()} />
-          <Show when={action().shortcut}>
-            {(shortcut) => (
-              <KeyboardShortcut
-                combo={shortcut()}
-                slot="details"
-                class="side-panel-type-option__shortcut"
-              />
-            )}
-          </Show>
-        </wa-dropdown-item>
-      )}
-    </Show>
-  );
-}
-function ActionLabel(props: { action: LayoutAction }) {
-  return (
-    <span class="session-menu__text">
-      {props.action.label}
-      <Show when={props.action.description}>
-        <span class="session-menu__description">{props.action.description}</span>
-      </Show>
-    </span>
-  );
-}
-
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
+  const [opened, setOpened] = createSignal(false);
   const model = createMemo(() => layoutModel(props));
   let menu!: WaDropdown;
   let pendingAction: (() => void) | undefined;
@@ -232,6 +166,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
         }}
         class="chat-pane__layout-menu chat-panel-layout-menu"
         placement="bottom-end"
+        onWa-show={() => setOpened(true)}
         onWa-select={(event) => {
           const action = model().allActions.find(
             (candidate) => candidate.id === event.detail.item.value,
@@ -269,17 +204,19 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
           </span>
           {t("chat.sessionHeader.layout")}
         </button>
-        <For each={model().actions} keyed={(action) => action.id}>
-          {(action) => <LayoutActionItem action={action()} />}
-        </For>
-        <Show when={model().panelActions.length > 0}>
-          <div class="session-menu__separator" role="separator" />
-          <For each={model().panelActions} keyed={(action) => action.id}>
-            {(action) => <LayoutActionItem action={action()} />}
+        <Show when={opened()}>
+          <For each={model().actions} keyed={(action) => action.id}>
+            {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
           </For>
+          <Show when={model().panelActions.length > 0}>
+            <div class="session-menu__separator" role="separator" />
+            <For each={model().panelActions} keyed={(action) => action.id}>
+              {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
+            </For>
+          </Show>
+          <LitContent value={model().mainHeaderAction} />
+          <LitContent value={model().sideHeaderAction} />
         </Show>
-        <LitContent value={model().mainHeaderAction} />
-        <LitContent value={model().sideHeaderAction} />
       </wa-dropdown>
     </Show>
   );

@@ -9,7 +9,7 @@
     "@openclaw/workboard-contract": "workspace:*",
     "@solidjs/web": "2.0.0-rc.14",
     "solid-js": "2.0.0-rc.14",
-    "typebox": "1.3.34",
+    "typebox": "1.3.35",
     "zod": "4.6.5"
   },
   "devDependencies": {
@@ -41,6 +41,12 @@
       ]
     },
     "build": {
+      "staticAssets": [
+        {
+          "source": "./src/workboard-schema.postgres.sql",
+          "output": "./src/workboard-schema.postgres.sql"
+        }
+      ],
       "workerEntries": [
         "./src/sqlite-store.worker.ts"
       ]

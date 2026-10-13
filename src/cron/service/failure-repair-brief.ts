@@ -57,7 +57,7 @@ export function buildCronFailureRepairBrief(params: {
         ]
       : [
           `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply exactly ${SILENT_REPLY_TOKEN}.`,
-          "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): fix it, then reply with one line saying what you fixed.",
+          "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): change it, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
           "3. Otherwise: ask the user for exactly what you need to fix it.",
           "If the automation keeps failing, the user gets the normal failure alert.",
         ]),

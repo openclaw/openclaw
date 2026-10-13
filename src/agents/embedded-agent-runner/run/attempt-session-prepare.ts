@@ -62,7 +62,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
+import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
@@ -111,6 +111,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 }) {
   const { attempt, prepareSystemPromptUpdate } = input;
   const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+    sessionId: attempt.sessionId,
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
     cfg: attempt.config,
@@ -242,7 +243,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
-  installMessageToolOnlyTerminalHook({
+  installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
@@ -554,14 +555,20 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
             recorder: attempt.userTurnTranscriptRecorder,
             runId: attempt.runId,
           });
-          if (initial) {
+          if (initial || getOwnedSessionTranscriptReader(target)) {
             const manager = await SessionManager[sessionManagerOpenTranscriptCohort](
               target,
               { ...limits, cwd: input.effectiveCwd, signal: attempt.abortSignal },
-              initial.selection,
+              initial?.selection ?? {
+                sessionKey: target.sessionKey,
+                entryIds: [],
+                includeMessagePresence: true,
+              },
               (opened, prepared, assertView) => {
                 try {
-                  initial.consume(opened, prepared, assertView);
+                  initial?.consume(opened, prepared, assertView);
+                  messagePresence =
+                    prepared.kind === "bounded" ? prepared.transcript?.messagePresence : undefined;
                 } finally {
                   // Cleanup owns even a refused manager; publication cannot supply replay evidence.
                   publishedSessionManager = opened;
@@ -569,8 +576,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
                 }
               },
             );
-            initialReplay = initial.readInitial();
-            messagePresence = initial.readMessagePresence();
+            initialReplay = initial?.readInitial();
             return manager;
           }
           return SessionManager.openAsync(target, input.effectiveCwd, limits, attempt.abortSignal);

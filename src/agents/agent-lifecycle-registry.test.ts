@@ -1,4 +1,6 @@
+import childProcess from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,13 +34,20 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  requireOpenClawStateDatabaseIdentity,
+} from "../state/openclaw-state-db-cache.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
@@ -381,6 +390,44 @@ describe("agent lifecycle registry", () => {
         options,
       );
     }, options);
+  });
+
+  it("checks cold deletion authority without snapshot children except during artifact-preserving reads", async () => {
+    const options = createOptions();
+    await closeStateDatabaseForTest();
+    await withAgentDeletion(
+      "main",
+      async (begin) => {
+        const deletion = await begin(createEntry("main"));
+        const spawn = vi.spyOn(childProcess, "spawnSync");
+        syncBuiltinESMExports();
+        const snapshotChildren = () =>
+          spawn.mock.calls.filter(
+            ([, args]) => Array.isArray(args) && args.includes("--openclaw-sqlite-readonly-child"),
+          ).length;
+        try {
+          expect(isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env))).toBe(
+            false,
+          );
+          withArtifactPreservingStateReads(() => deletion.assertCurrentFinal());
+          expect(snapshotChildren()).toBe(1);
+          spawn.mockClear();
+          for (let invocation = 0; invocation < 3; invocation++) {
+            deletion.assertCurrentFinal();
+          }
+          expect(snapshotChildren()).toBe(0);
+          expect(isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env))).toBe(
+            false,
+          );
+        } finally {
+          spawn.mockRestore();
+          syncBuiltinESMExports();
+          await deletion.rollback();
+        }
+        expect(deletion.assertCurrentFinal).toThrow("no longer owns");
+      },
+      options,
+    );
   });
 
   it("refuses changed journal authority before filesystem effects while the original deletion lease is held", async () => {

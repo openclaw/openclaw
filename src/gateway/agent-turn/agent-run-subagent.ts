@@ -1,6 +1,5 @@
 /** Native subagent registration and paused-run adoption precede Gateway acceptance. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   readFollowupRequest,
@@ -33,7 +32,6 @@ export async function prepareGatewaySubagentRun(params: {
   resolvedSessionKey?: string;
   activeSessionAgentId: string;
   inputProvenance?: InputProvenance;
-  sessionEntry?: SessionEntry;
   request: Pick<AgentRunRequest, "message">;
   isOneShotModelRun: boolean;
   runId: string;
@@ -145,16 +143,7 @@ export async function prepareGatewaySubagentRun(params: {
     internalOwner !== "native_subagent" &&
     !isAcpSessionKey(sessionKey),
   );
-  if (!reactivateSubagent || !sessionKey) {
-    return { pluginSubagent, reactivateSubagent: false };
-  }
-  const entry = params.assertResumeAdmissionCurrent() ?? params.sessionEntry;
-  const [acpMeta] = await readAcpSessionMetaForEntries({
-    cfg: params.cfg,
-    entries: [{ agentId: params.activeSessionAgentId, sessionKey, entry }],
-  });
-  params.assertResumeAdmissionCurrent();
-  return { pluginSubagent, reactivateSubagent: acpMeta == null };
+  return { pluginSubagent, reactivateSubagent };
 }
 
 /** Rejection may settle only the exact physical execution already adopted by this admission. */

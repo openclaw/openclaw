@@ -23,7 +23,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
+import { postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { canvasWidgetMount } from "./canvas-widget-mount.ts";
 import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.tsx";
@@ -261,7 +261,6 @@ class WidgetFrameDirective extends Directive {
 
   render(params: PreviewFrameParams) {
     installWidgetSizeListener();
-    installWidgetThemeObserver();
     const sandbox = params.sandbox ?? "";
     // HTTP error pages also fire load. Until the widget bridge is adopted,
     // replace a stale frame; afterwards keep its document and interactive state.

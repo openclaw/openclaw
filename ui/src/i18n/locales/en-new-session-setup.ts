@@ -210,6 +210,7 @@ const enNewSessionSetup = {
     noSessionHosts:
       "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     deviceUnavailable: "Device unavailable. Reconnect it and try again.",
+    environmentUnavailable: "Unavailable",
     sessionHostingDisabled:
       "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
     deviceCapacityUnavailable:

@@ -19,6 +19,7 @@ import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -36,6 +37,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { wrapStreamFnWithSessionFork } from "../session-fork.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -339,6 +341,9 @@ export async function settleEmbeddedAttemptStream(input: {
               error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
           }
         }
@@ -449,9 +454,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     workspaceDir: input.workspaceDir,
     auth,
   });
+  const sessionFork = {
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
+    agentId: input.sessionAgentId,
+  };
   const directProviderStreamFn = providerStreamFn
     ? wrapStreamFnWithMessageTransform(
-        providerStreamFn,
+        wrapStreamFnWithSessionFork(providerStreamFn, sessionFork),
         (messages) => messages,
         async ({ context, ...provider }) => {
           assertRunCurrent?.();
@@ -496,6 +506,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
+    sessionFork,
   });
   session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
@@ -549,24 +560,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
-    session.agent,
-    attempt.config,
-    attempt.provider,
-    attempt.modelId,
-    streamExtraParamsOverride,
-    input.providerThinkingLevel,
-    input.sessionAgentId,
-    input.workspaceDir,
-    attempt.model,
-    input.agentDir,
-    resolvedTransport,
-    {
-      preparedExtraParams: effectiveExtraParams,
-      modelCallUrgency: resolveModelCallUrgency(attempt),
-      auth,
-      nativeWebSearchPolicyContext,
-    },
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
   );
   if (input.codeModeControlsEnabled) {
     session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
@@ -646,6 +659,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {

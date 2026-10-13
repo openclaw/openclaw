@@ -69,6 +69,7 @@ import {
 } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
+import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agent-owner-guidance.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
   scanTranscriptRows,
@@ -368,7 +369,7 @@ async function migrateAgentDatabase(params: {
       start: { generation: "", sessionId: "" },
       verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
-      transformContent: transformMediaArchiveContent,
+      transformLine: transformMediaArchiveContent,
     });
     refreshSqlitePlannerStatistics(database);
     return {
@@ -391,8 +392,8 @@ function archiveSourceMatches(
   try {
     const current = readRegularFileSync({ filePath });
     return (
-      current.stat.dev === expected.stat.dev &&
-      current.stat.ino === expected.stat.ino &&
+      current.exactIdentity.dev === expected.exactIdentity.dev &&
+      current.exactIdentity.ino === expected.exactIdentity.ino &&
       current.stat.mtimeMs === expected.stat.mtimeMs &&
       current.stat.size === expected.stat.size &&
       current.buffer.equals(expected.buffer)
@@ -460,6 +461,7 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   let recoverableWarningCount = 0;
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
@@ -579,6 +581,10 @@ export async function migrateLegacyMediaPersistence(
             resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
           );
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
+          const repairHint = formatAgentDatabaseCorruptionRepairHint(entry.agentId, error);
+          if (repairHint) {
+            notices.push(repairHint);
+          }
         }
       }
 
@@ -636,6 +642,7 @@ export async function migrateLegacyMediaPersistence(
   return {
     changes,
     warnings,
+    ...(notices.length > 0 ? { notices } : {}),
     ...(recoveredAgentDatabasePaths.size > 0
       ? { recoveredAgentDatabasePaths: [...recoveredAgentDatabasePaths] }
       : {}),

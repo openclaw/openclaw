@@ -52,6 +52,46 @@ it("keeps runtime capacity reads separate from cached API capability donors", ()
   ).toBeUndefined();
 });
 
+it.each([false, true])(
+  "preserves configured reasoning=%s when selecting a runtime route",
+  (reasoning) => {
+    const logicalEntry: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "Configured model",
+      api: "openai-chatgpt-responses",
+      reasoning,
+    };
+    const projection = resolveGatewaySessionThinkingProjectionInternal({
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+      agentId: "main",
+      sessionKey: "agent:main:route",
+      provider: "openai",
+      model: "gpt-5.4",
+      entry: { sessionId: "route", updatedAt: 1, thinkingLevel: "high" },
+      modelCatalog: [logicalEntry],
+      modelCatalogRouteVariants: [
+        { ...logicalEntry, api: "openai-responses", reasoning: true, nativeRuntime: "openclaw" },
+      ],
+    });
+    const levels = projection.thinkingLevels.map(({ id }) => id);
+    if (reasoning) {
+      expect(levels).toContain("high");
+      expect(projection.effectiveThinkingLevel).toBe("high");
+    } else {
+      expect(levels).toEqual(["off", "ultra"]);
+      expect(projection.thinkingDefault).toBe("off");
+      expect(projection.effectiveThinkingLevel).toBe("off");
+    }
+  },
+);
+
 describe("Gateway stored thinking levels", () => {
   it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
     // A synthetic model lets observed native efforts define the capability set.
@@ -516,7 +556,6 @@ describe("Gateway model identity", () => {
           now: 1,
           rowContext,
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
           modelCatalog: [
             { provider: "custom", id: selected, name: selected, contextWindow: 128_000 },
           ],
@@ -664,7 +703,6 @@ describe("Gateway model identity", () => {
           key,
           entry,
           lightweightListRow,
-          skipTranscriptUsageFallback: true,
         });
         expect(row).toMatchObject(expected);
         expect(row.agentRuntime?.id).toBe("openclaw");

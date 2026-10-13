@@ -7,9 +7,10 @@ import {
 import * as inProcessGateway from "../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "../config/sessions/session-accessor.sqlite-owner.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
@@ -222,7 +223,10 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
                           result: { isError: !archiveAllowed },
                         });
                         const entry = expectDefined(
-                          loadSessionEntry({ agentId: "main", sessionKey: targetKey }),
+                          await readSessionEntryInWorker({
+                            agentId: "main",
+                            sessionKey: targetKey,
+                          }),
                           "persisted target",
                         );
                         expect(entry.sessionId).toBe(

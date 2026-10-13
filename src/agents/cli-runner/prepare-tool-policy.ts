@@ -1,4 +1,4 @@
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -7,7 +7,7 @@ import type { RunCliAgentParams } from "./types.js";
  * Native CLI tools cannot enforce channel or inherited completion caps, so those
  * runs expose their whole surface through the mediated MCP policy projection.
  */
-export function resolveCliRuntimeToolPolicy(input: {
+export async function resolveCliRuntimeToolPolicy(input: {
   params: RunCliAgentParams;
   policySessionKey: string | undefined;
   policyAgentId: string;
@@ -16,7 +16,7 @@ export function resolveCliRuntimeToolPolicy(input: {
   canEnforceExactToolAvailability: boolean;
   isSideQuestion: boolean;
   skipsTurnPreparation: boolean;
-}): { params: RunCliAgentParams; runtimeToolsAllowPolicy: string[] | undefined } {
+}): Promise<{ params: RunCliAgentParams; runtimeToolsAllowPolicy: string[] | undefined }> {
   let { params } = input;
   let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
@@ -66,18 +66,20 @@ export function resolveCliRuntimeToolPolicy(input: {
   const requesterPolicy =
     params.disableTools === true || params.trustedInternalHandoff
       ? undefined
-      : resolveConversationCapabilityProfile({
-          ...params,
-          agentId: input.policyAgentId,
-          sessionKey: input.policySessionKey,
-          sandboxSessionKey: requesterSessionKey,
-          preparedSessionEntry:
-            params.sessionEntry && requesterSessionKey
-              ? { sessionKey: requesterSessionKey, entry: params.sessionEntry }
-              : undefined,
-          modelProvider: params.modelProvider ?? params.provider,
-          modelId: params.model,
-        }).policy;
+      : (
+          await prepareConversationCapabilityProfile({
+            ...params,
+            agentId: input.policyAgentId,
+            sessionKey: input.policySessionKey,
+            sandboxSessionKey: requesterSessionKey,
+            preparedSessionEntry:
+              params.sessionEntry && requesterSessionKey
+                ? { sessionKey: requesterSessionKey, entry: params.sessionEntry }
+                : undefined,
+            modelProvider: params.modelProvider ?? params.provider,
+            modelId: params.model,
+          })
+        ).policy;
   const senderRestricted = requesterPolicy?.inheritedToolPolicySource === "sender";
   const delegatedExecution = Boolean(requesterPolicy?.delegatedToolPolicy);
   if (

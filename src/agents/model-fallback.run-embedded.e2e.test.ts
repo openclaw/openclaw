@@ -1,6 +1,7 @@
 // Exercises model fallback through the embedded runner integration surface.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -130,6 +131,7 @@ async function runEmbeddedFallback(params: {
   // Runs the same embedded-agent entrypoint that production fallback uses while
   // keeping provider/model attempts deterministic through mocks.
   const cfg = params.config ?? makeModelFallbackConfig();
+  setRuntimeConfigSnapshot(cfg, cfg);
   const sessionId = params.sessionId ?? `session:${params.runId}`;
   return await runWithModelFallback({
     cfg,
@@ -173,6 +175,7 @@ async function runEmbeddedEntryFallback(params: {
   onFallbackStep?: (step: ModelFallbackStepFields) => void;
 }) {
   const cfg = params.config ?? makeModelFallbackConfig();
+  setRuntimeConfigSnapshot(cfg, cfg);
   const sessionId = `session:${params.runId}`;
   const preparedRunAdmission = createModelRoutingTestAdmission({
     cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
@@ -567,12 +570,14 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         }),
       );
 
+      const cfg = makeModelFallbackConfig();
+      setRuntimeConfigSnapshot(cfg, cfg);
       const result = await runEmbeddedAgent({
         sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
         workspaceDir,
         agentDir,
-        config: makeModelFallbackConfig(),
+        config: cfg,
         prompt: "write the file",
         provider: "openai",
         model: "mock-1",
@@ -740,6 +745,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           config: makeModelFallbackConfig(),
         };
         if (mode === "direct") {
+          setRuntimeConfigSnapshot(params.config, params.config);
           await expect(
             runEmbeddedAgent({
               ...params,

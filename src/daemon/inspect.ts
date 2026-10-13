@@ -44,7 +44,10 @@ import {
 } from "./schtasks-layout.js";
 import { listScheduledTasks } from "./schtasks-state-probe.js";
 import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
-import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
+import {
+  isLoadedSystemdMaintenanceCommand,
+  listLoadedSystemdUnits,
+} from "./systemd-loaded-unit-inventory.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import {
   DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
@@ -490,6 +493,9 @@ async function scanGatewayServices(
                   source: unit.name,
                   message: "Loaded systemd Gateway definition could not be inspected.",
                 });
+                continue;
+              }
+              if (!selected && (await isLoadedSystemdMaintenanceCommand(unit, scope, env))) {
                 continue;
               }
               push({

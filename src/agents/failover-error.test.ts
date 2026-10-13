@@ -13,7 +13,6 @@ import {
   FailoverError,
   findCliTimeoutError,
   hasLocalWorkerTaskTimeout,
-  hasProviderRequestSizeCeiling,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -452,13 +451,9 @@ describe("failover diagnostic isolation", () => {
       expect(coerceToFailoverError(candidate)).toBeNull();
       expect(isTimeoutError(candidate)).toBe(false);
       expect(diagnosticErrorFailureKind(candidate)).toBeUndefined();
-      expect(hasProviderRequestSizeCeiling(candidate)).toBe(false);
       expect(isLikelyContextOverflowError(formatErrorMessage(candidate))).toBe(false);
       expect(formatErrorMessage(candidate)).not.toContain(diagnostic);
     }
-    expect(
-      hasProviderRequestSizeCeiling(new AggregateError([{ error }], "Plugin execution failed")),
-    ).toBe(false);
   });
 
   describe("hasLocalWorkerTaskTimeout", () => {
@@ -679,21 +674,4 @@ describe("isNonProviderRuntimeCoordinationError", () => {
 it("does not treat an AbortError matching transport timeout wording as a signal timeout", () => {
   const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
   expect(isSignalTimeoutReason(err)).toBe(false);
-});
-
-describe("hasProviderRequestSizeCeiling", () => {
-  it("finds the recorded ceiling through nested error and aggregate wrappers", () => {
-    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
-      reason: "context_overflow",
-      rawError: "413 Request too large on tokens per minute (TPM): Limit 8000, Requested 8098",
-    });
-    expect(
-      hasProviderRequestSizeCeiling(
-        new AggregateError(
-          [new Error("unrelated"), { error: { cause: ceiling } }],
-          "agent run failed",
-        ),
-      ),
-    ).toBe(true);
-  });
 });

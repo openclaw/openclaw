@@ -10,8 +10,10 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
@@ -43,7 +45,6 @@ import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
-  openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStore,
 } from "./openclaw-agent-worker-store.js";
 import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
@@ -52,9 +53,18 @@ import type {
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
 import { waitForFixtureEntry } from "./openclaw-agent-worker-store.wait.test-support.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+
+const leaseCleanupFault = useSqliteWorkerFault([
+  {
+    name: "refuse_worker_lease_cleanup",
+    match: /^delete from agent_database_leases\b/u,
+    sql: `CREATE TEMP TRIGGER refuse_worker_lease_cleanup
+      BEFORE DELETE ON main.agent_database_leases
+      BEGIN SELECT RAISE(ABORT, 'controlled worker lease cleanup failure'); END;`,
+  },
+]);
 
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
 const fixture = createFixtureLifetime();
@@ -110,63 +120,6 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   workers.add(worker);
   return { db, worker };
 }
-
-it("V2 preserves absence until explicit worker preparation and rejects retained calls after close", async () => {
-  const worker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
-    options,
-    { version: 2, assertCurrent() {} },
-    { moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint), input: undefined },
-  );
-  workers.add(worker);
-  expect(
-    await worker.executeExisting({ type: "inspect", input: undefined }, () => {}),
-  ).toBeUndefined();
-  expect(fs.existsSync(options.path)).toBe(false);
-  await worker.prepare();
-  expect(fs.existsSync(options.path)).toBe(true);
-  const { db } = openOpenClawAgentDatabase(options);
-  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
-  expect(
-    await worker.execute({ type: "append", input: { value: "worker-owned" } }, () => {}),
-  ).toBeGreaterThan(0);
-  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "worker-owned" }]);
-  await worker.close();
-  await expect(worker.prepare()).rejects.toThrow("closed");
-  await expect(worker.execute({ type: "inspect", input: undefined }, () => {})).rejects.toThrow(
-    "closed",
-  );
-});
-
-it("V2 retains owner authority through commit even when the operation guard remains current", async () => {
-  const { db } = openOpenClawAgentDatabase(options);
-  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
-  let current = true;
-  const worker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
-    options,
-    {
-      version: 2,
-      assertCurrent() {
-        if (!current) {
-          throw new Error("V2 owner revoked");
-        }
-      },
-    },
-    {
-      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
-      input: undefined,
-      onAdmitted(request) {
-        if (request.stage === "transaction") {
-          current = false;
-        }
-      },
-    },
-  );
-  workers.add(worker);
-  await expect(
-    worker.execute({ type: "append", input: { value: "refused" } }, () => {}),
-  ).rejects.toThrow("V2 owner revoked");
-  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-});
 
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();
@@ -255,7 +208,7 @@ it("retains a warm executor through a fallback wait between publication generati
     beginGatewayShutdownCleanup();
     await lifetime.release();
     expect(db.isOpen).toBe(false);
-    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+    expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
   } finally {
     resume.resolve();
     await Promise.allSettled([publication]);
@@ -323,7 +276,7 @@ it.each([false, true])(
       await execution?.release();
       expect(db.isOpen).toBe(false);
       expect(readLeases()).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
     } finally {
       await worker.close();
       await execution?.release();
@@ -356,10 +309,9 @@ it.each([false, true])(
       const exec = vi.spyOn(db, "exec");
       await closeOpenClawAgentDatabasesAsync(root);
       expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(
-        pinned ? 0 : 1,
-      );
+      // Retirement may change lock policy, but must not run host-thread data SQL.
+      expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 0"]]);
+      expect(readSqliteDatabaseCleanClose(options.path)).toBe(!pinned);
       resetGatewayWorkAdmission();
       const reopened = openOpenClawAgentDatabase(options);
       expect(reopened.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
@@ -430,10 +382,10 @@ it("records a clean sibling receipt while an admitted worker publication still o
       );
       expect(healthy.db.isOpen).toBe(false);
       expect(readLeases(healthy.path)).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(healthy.path)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(healthy.path)).toBe(true);
       expect(db.isOpen).toBe(true);
       expect(readLeases(heldPath)).toHaveLength(2);
-      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(0);
+      expect(readSqliteDatabaseCleanClose(heldPath)).toBe(false);
       expect(closed).toBe(false);
       expect(captureAgentDatabaseCloseFence(healthy)).toBeDefined();
       const later = { agentId: "late", path: path.join(root, "late.sqlite") };
@@ -464,7 +416,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       await withinTest(closing, signal);
       expect(db.isOpen).toBe(false);
       expect(readLeases(heldPath)).toEqual([]);
-      expect(readOpenClawAgentIntegrityVerification(heldPath)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(heldPath)).toBe(true);
       expect(captureAgentDatabaseCloseFence(healthy)).toBeUndefined();
       expect(openOpenClawAgentDatabase(later).db.isOpen).toBe(true);
     } finally {
@@ -900,27 +852,20 @@ describe("pooled agent publication owner (captured source)", () => {
       (row) => !hostLeases.some((host) => host.lease_id === row.lease_id),
     );
     expect(workerLeases).toHaveLength(1);
-    const leaseId = workerLeases[0]?.lease_id;
-    if (typeof leaseId !== "string") {
-      throw new Error("Expected the canonical worker's new lease");
-    }
-    const literal = shared.db.prepare("SELECT quote(?) AS literal").get(leaseId)?.literal;
-    if (typeof literal !== "string") {
-      throw new Error("Expected an escaped SQLite lease identifier");
-    }
     const selection = { agentId: options.agentId, path: options.path };
-    shared.db.exec(`CREATE TRIGGER refuse_worker_lease_cleanup
-      BEFORE DELETE ON agent_database_leases WHEN OLD.lease_id = ${literal}
-      BEGIN SELECT RAISE(ABORT, 'controlled worker lease cleanup failure'); END`);
+    leaseCleanupFault.enable();
     const failures: unknown[] = [];
     try {
       const closing = await Promise.allSettled(revokeAgentDatabaseResources(selection));
-      expect(closing).toContainEqual({
-        status: "rejected",
-        reason: expect.objectContaining({
-          message: "controlled worker lease cleanup failure",
-        }),
-      });
+      const causes = (error: unknown): unknown[] =>
+        error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
+      const cleanupErrors = closing.flatMap((result) =>
+        result.status === "rejected" ? causes(result.reason) : [],
+      );
+      expect(cleanupErrors.length).toBeGreaterThan(0);
+      for (const error of cleanupErrors) {
+        expect(error).toMatchObject({ message: "controlled worker lease cleanup failure" });
+      }
       expect(readLeases()).toEqual(retainedLeases);
       await expect(
         worker.run(
@@ -935,7 +880,7 @@ describe("pooled agent publication owner (captured source)", () => {
         });
       await expect(open()).rejects.toThrow("resources are closing");
       expect(readLeases()).toEqual(retainedLeases);
-      shared.db.exec("DROP TRIGGER refuse_worker_lease_cleanup");
+      leaseCleanupFault.disable();
       const retried = await Promise.allSettled(revokeAgentDatabaseResources(selection));
       expect(retried).not.toContainEqual(expect.objectContaining({ status: "rejected" }));
       expect(readLeases()).toEqual(hostLeases);
@@ -953,11 +898,7 @@ describe("pooled agent publication owner (captured source)", () => {
     } catch (error) {
       failures.push(error);
     } finally {
-      try {
-        shared.db.exec("DROP TRIGGER IF EXISTS refuse_worker_lease_cleanup");
-      } catch (error) {
-        failures.push(error);
-      }
+      leaseCleanupFault.disable();
       const cleanup = await Promise.allSettled(revokeAgentDatabaseResources(selection));
       for (const result of cleanup) {
         if (result.status === "rejected") {

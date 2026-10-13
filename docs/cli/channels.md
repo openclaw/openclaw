@@ -183,6 +183,16 @@ If a channel plugin needs to be installed during a flag-driven add command, Open
 
 Both guided setup and flag-driven setup pass through the selected channel's parser, validation, account resolution, config writer, and post-write hooks. Unsupported flags fail with the owning channel's setup error instead of being accepted through a global input bag.
 
+New or changed SecretRef-supported channel credentials are saved as protected
+entries in the [shared secret store](/gateway/secrets/secret-store-and-egress).
+`openclaw.json` keeps a `store` SecretRef instead of the credential. Existing
+references, environment-backed setup, and token-file choices are preserved.
+Store writes use the local Gateway when it is running, or exclusive offline
+ownership when it is stopped. If config publication fails, setup retains saved
+entries and reports their names so you can inspect the config before cleanup.
+Unchanged plaintext credentials are left for the existing Doctor and secrets
+migration workflows; upgrading does not silently rewrite them.
+
 When you run `openclaw channels add` with no direct account, credential, or channel-config flags, the interactive wizard can prompt. A positional channel id and `--channel <id>` both open that channel's guided setup immediately. Back returns to the full channel picker:
 
 ```bash

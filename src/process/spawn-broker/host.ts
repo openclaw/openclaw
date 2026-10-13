@@ -14,7 +14,9 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
 import { BrokerChild } from "./child.js";
@@ -242,12 +244,15 @@ export class SpawnBrokerHost {
     if (!this.resourceClaims || !this.process) {
       return;
     }
+    const stderr = this.process.stderr instanceof Socket ? this.process.stderr : undefined;
     if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
       this.process.ref();
+      stderr?.ref();
       // Newer Bun releases, like Node, reference IPC independently of the child.
       this.process.channel?.ref?.();
     } else {
       this.process.unref();
+      stderr?.unref();
       this.process.channel?.unref?.();
     }
   }
@@ -386,12 +391,29 @@ export class SpawnBrokerHost {
     }
     // Native resource modules and bidirectional V8 frames require the parent's exact runtime.
     const child = spawn(process.execPath, resolveRuntimeWorkerArgv(this.workerUrl), {
-      stdio: ["inherit", "ignore", "ignore", "ipc"],
+      stdio: ["inherit", "ignore", "pipe", "ipc"],
       detached: true,
       serialization: "advanced",
     });
     this.process = child;
-    this.brokerClosed = waitForBrokerChildCompletion(child);
+    let stderrTail = "";
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      stderrTail = truncateUtf8Suffix(stderrTail + chunk, 2048);
+    });
+    const exitError = () => {
+      const stderr = redactToolPayloadText(stderrTail).trim();
+      return new Error(
+        `exited with code=${child.exitCode ?? "null"} signal=${child.signalCode ?? "none"}${stderr ? `\nstderr:\n${stderr}` : ""}`,
+      );
+    };
+    // Exit can precede the last stderr bytes; record diagnostics only after the pipe closes.
+    this.brokerClosed = waitForBrokerChildCompletion(child).then(() => {
+      if (this.closing && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
+        this.cleanupErrors.push(
+          new SpawnBrokerError("Spawn broker shutdown failed", { cause: exitError() }),
+        );
+      }
+    });
     const receiver = createBrokerReceiver();
     const brokerExited = createDeferredCore();
     let ended = false;
@@ -500,15 +522,9 @@ export class SpawnBrokerHost {
     };
     this.markNativeReady = markReady;
     child.once("error", fail);
-    child.once("exit", (code, signal) => {
-      const error = new Error(`exited with code=${code ?? "null"} signal=${signal ?? "none"}`);
-      if (this.closing && (code !== 0 || signal !== null)) {
-        this.cleanupErrors.push(
-          new SpawnBrokerError("Spawn broker shutdown failed", { cause: error }),
-        );
-      }
+    child.once("exit", () => {
       brokerExited.resolve();
-      fail(error);
+      fail(exitError());
     });
     child.once("disconnect", () => fail(new Error("IPC channel disconnected")));
     child.on("message", (raw: unknown, handle: unknown) => {
@@ -696,12 +712,6 @@ export class SpawnBrokerHost {
     try {
       const child = this.process;
       if (child && child.exitCode === null && child.signalCode === null) {
-        const exited =
-          this.resourceClaims && this.brokerClosed
-            ? this.brokerClosed
-            : new Promise<void>((resolve) => {
-                child.once("exit", () => resolve());
-              });
         // A deadline cannot certify native settlement. Keep the broker and its
         // transport until admitted work, resources, and output really close.
         if (this.resourceClaims) {
@@ -713,16 +723,13 @@ export class SpawnBrokerHost {
         } else if (child.connected) {
           child.disconnect();
         }
-        await exited;
       }
+      await this.brokerClosed;
       try {
         await this.waitForCleanup();
       } finally {
-        if (this.resourceClaims) {
-          await this.brokerClosed;
-          if (this.resourceDirectory) {
-            rmSync(this.resourceDirectory, { recursive: true, force: true });
-          }
+        if (this.resourceDirectory) {
+          rmSync(this.resourceDirectory, { recursive: true, force: true });
         }
       }
     } finally {

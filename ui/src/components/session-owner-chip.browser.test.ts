@@ -338,7 +338,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         expect(style.borderTopWidth).toBe("1px");
         const rowBackground = [
           getComputedStyle(sidebar).backgroundColor,
-          getComputedStyle(row).backgroundColor,
+          getComputedStyle(row, "::after").backgroundColor,
         ];
         const rowLuminance = renderedLuminance(...rowBackground);
         if (presence === "away") {
@@ -447,7 +447,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
             [getComputedStyle(stack, "::before"), getComputedStyle(stack, "::after")].map(
               (cutout) => ({
                 width: cutout.borderTopWidth,
-                matchesRow: cutout.borderTopColor === getComputedStyle(row).backgroundColor,
+                matchesRow:
+                  cutout.borderTopColor === getComputedStyle(row, "::after").backgroundColor,
               }),
             ),
           )

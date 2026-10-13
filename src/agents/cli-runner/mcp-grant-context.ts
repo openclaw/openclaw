@@ -77,6 +77,9 @@ function buildCliMcpExecSession(
       ? SESSION_PERMISSION_BY_EXEC_MODE[execOverrides.mode]
       : permissionMode;
   const execSession = {
+    sandbox: sessionEntry?.sandbox,
+    sandboxMode: sessionEntry?.sandboxMode,
+    createdActor: sessionEntry?.createdActor,
     execHost: normalizeOptionalString(sessionEntry?.execHost),
     execNode: normalizeOptionalString(sessionEntry?.execNode),
     ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),

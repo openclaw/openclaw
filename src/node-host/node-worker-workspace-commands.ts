@@ -102,6 +102,9 @@ export function workspaceCommandEnv(
   return {
     ...baseEnv,
     HOME: homeDir,
+    ...(process.platform === "linux"
+      ? { PATH: path.join(homeDir, ".local", "bin") + path.delimiter + (baseEnv.PATH ?? "") }
+      : {}),
     ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
     GCM_INTERACTIVE: "Never",
     GIT_ASKPASS: "",

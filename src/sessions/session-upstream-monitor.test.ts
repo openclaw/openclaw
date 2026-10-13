@@ -20,6 +20,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { listSessionStateEventsSince, registerSessionStateWatch } from "./session-state-events.js";
 import * as upstreamRuntime from "./session-upstream-links-runtime.js";
+import * as upstreamLinks from "./session-upstream-links.js";
 import { deleteSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
 import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 import { startSessionUpstreamMonitor } from "./session-upstream-monitor.js";
@@ -85,6 +86,36 @@ afterEach(async () => {
 });
 
 describe("session upstream monitor", () => {
+  it("skips watched-link reads without a capable provider and reads fresh links when one appears", async () => {
+    const database = createDatabaseOptions();
+    const list = vi.spyOn(upstreamLinks, "listWatchedSessionUpstreamLinks");
+    const missingCounts = createMissingCounts();
+    missingCounts.set("old-watch", { count: 2, linkUpdatedAt: 100 });
+    try {
+      await runSessionUpstreamMonitorTick({ ...database, providers: [] }, missingCounts);
+      expect(list).not.toHaveBeenCalled();
+      expect(missingCounts.size).toBe(0);
+
+      const sessionKey = "agent:main:adopted:new-provider";
+      await createLink(sessionKey, "claude", database);
+      const check = vi.fn(async () => []);
+      await runSessionUpstreamMonitorTick({
+        ...database,
+        providers: [provider("claude", check)],
+        loadEntry: () => ({ sessionId: "new-provider", updatedAt: 100 }),
+        isRunActive: () => false,
+        loadOwnRecentUserTexts: async () => [],
+      });
+      expect(list).toHaveBeenCalledOnce();
+      expect(check).toHaveBeenCalledWith(
+        [expect.objectContaining({ sessionKey })],
+        expect.anything(),
+      );
+    } finally {
+      list.mockRestore();
+    }
+  });
+
   it("discards discovery after the monitor is aborted", async () => {
     const database = createDatabaseOptions();
     await createLink("agent:main:adopted:aborted-discovery", "claude", database);

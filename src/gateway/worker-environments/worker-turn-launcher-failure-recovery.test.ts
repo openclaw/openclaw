@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import * as rootLogger from "../../logger.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -16,6 +17,7 @@ import { requestContext } from "../server-methods/sessions-read-cache.test-suppo
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner } from "./placement-record.js";
+import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -422,7 +424,12 @@ describe("worker turn launcher failure recovery", () => {
       stopTunnel,
       destroy,
     };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const persistAbandonedPartial = vi.fn(async () => {});
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      persistAbandonedPartial,
+    });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
 
     await expect(
@@ -440,6 +447,7 @@ describe("worker turn launcher failure recovery", () => {
 
     expect(startTunnel).toHaveBeenCalledOnce();
     expect(launchTurn).not.toHaveBeenCalled();
+    expect(persistAbandonedPartial).not.toHaveBeenCalled();
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
     expect(stopTunnel).not.toHaveBeenCalled();
@@ -592,81 +600,139 @@ describe("worker turn launcher failure recovery", () => {
     expect(startReconcile).not.toHaveBeenCalled();
   });
 
-  it("preserves the admission diagnosis with bounded redacted process failure details", async () => {
-    await seedActivePlacement();
-    const secret = "$SUPERSECRET123";
-    const diagnosis =
-      "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out; ";
-    const redactedPrefix = `${diagnosis}DISCORD_BOT_TOKEN=*** `;
-    const padding = "a".repeat(399 - redactedPrefix.length);
-    const retained = `${redactedPrefix}${padding}`;
-    const emoji = String.fromCodePoint(0x1f600);
-    const stderr = `${diagnosis}DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
-    const stopTunnel = vi.fn(async () => {});
-    const destroy = vi.fn(async () => attachedEnvironment());
-    const environments: WorkerTurnEnvironmentService = {
-      get: vi.fn(() => attachedEnvironment()),
-      acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () =>
-        createWorkerTurnTunnel({
-          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-            request.onDispatchReady?.();
-            return {
-              stdout: "",
-              stderr,
-              code: 1,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
+  it.each([
+    { saveRejects: false, pending: false },
+    { saveRejects: true, pending: false },
+    { saveRejects: false, pending: true },
+  ])(
+    "preserves process diagnostics and awaits partial persistence (save rejects: $saveRejects, pending: $pending)",
+    async ({ saveRejects, pending }) => {
+      await seedActivePlacement();
+      const secret = "$SUPERSECRET123";
+      const diagnosis =
+        "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out; ";
+      const redactedPrefix = `${diagnosis}DISCORD_BOT_TOKEN=*** `;
+      const padding = "a".repeat(399 - redactedPrefix.length);
+      const retained = `${redactedPrefix}${padding}`;
+      const emoji = String.fromCodePoint(0x1f600);
+      const stderr = `${diagnosis}DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
+      const stopTunnel = vi.fn(async () => {});
+      const destroy = vi.fn(async () => attachedEnvironment());
+      const partialStarted = createDeferred();
+      const finishPartial = createDeferred();
+      const warning = vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
+      onTestFinished(() => warning.mockRestore());
+      const persistAbandonedPartial = vi.fn(async (claim: WorkerSessionTurnClaim) => {
+        expect(placements.validateTurnClaim(claim)).toBe(true);
+        partialStarted.resolve();
+        await finishPartial.promise;
+        if (saveRejects) {
+          throw new Error("partial persistence unavailable");
+        }
+      });
+      const environments: WorkerTurnEnvironmentService = {
+        get: vi.fn(() => attachedEnvironment()),
+        acquireTurnCredential: vi.fn(async () => credential()),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
+        startTunnel: vi.fn(async () =>
+          createWorkerTurnTunnel({
+            launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+              request.onDispatchReady?.();
+              if (pending) {
+                await placements.markWorkspaceResultPending(request.turnClaim);
+              }
+              return {
+                stdout: "",
+                stderr,
+                code: 1,
+                signal: null,
+                killed: false,
+                termination: "exit",
+              };
+            }),
+            quiesceWorkspace: vi.fn(async () => {
+              throw new Error("unexpected workspace quiescence");
+            }),
+            reconcileWorkspace: vi.fn(async () => {
+              throw new Error("unexpected workspace reconciliation");
+            }),
           }),
-          quiesceWorkspace: vi.fn(async () => {
-            throw new Error("unexpected workspace quiescence");
-          }),
-          reconcileWorkspace: vi.fn(async () => {
-            throw new Error("unexpected workspace reconciliation");
-          }),
-        }),
-      ),
-      stopTunnel,
-      destroy,
-    };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const failurePrefix = "Cloud worker process failed before completing the turn: ";
-    let failure: unknown;
-
-    try {
-      await provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-process-failed",
+        ),
+        stopTunnel,
+        destroy,
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        persistAbandonedPartial,
+        reconcileActivePlacement: async () => {
+          expect(persistAbandonedPartial).toHaveBeenCalledOnce();
+          const [result] = await placements.listPendingWorkspaceResultsAsync();
+          if (!result) {
+            throw new Error("Expected the interrupted worker result");
+          }
+          await placements.failWorkspaceResultAndReleaseTurn(result, new Error("worker stopped"));
         },
-        turn("run-process-failed"),
-        async () => ({ meta: { durationMs: 1 } }),
-      );
-    } catch (error) {
-      failure = error;
-    }
+      });
+      const failurePrefix = "Cloud worker process failed before completing the turn: ";
+      const outcome = provider
+        .executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-process-failed",
+          },
+          turn("run-process-failed"),
+          async () => ({ meta: { durationMs: 1 } }),
+        )
+        .catch((error: unknown) => error);
+      try {
+        await awaitGateBeforeSettlement(
+          partialStarted.promise,
+          outcome,
+          "Worker failure did not preserve its partial reply",
+        );
+        expect(persistAbandonedPartial).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-process-failed",
+          }),
+        );
+        expect(stopTunnel).not.toHaveBeenCalled();
+        expect(destroy).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active" });
+      } finally {
+        finishPartial.resolve();
+        await outcome;
+      }
+      const failure = await outcome;
 
-    expect(failure).toBeInstanceOf(Error);
-    const message = (failure as Error).message;
-    expect(message).toBe(`${failurePrefix}${retained}`);
-    expect(message).not.toContain(secret);
-    expect(hasLoneSurrogate(message)).toBe(false);
-    const placement = placements.get(SESSION_ID);
-    expect(placement).toMatchObject({
-      state: "failed",
-      recoveryError: message,
-      terminalReason: message,
-      turnClaim: null,
-    });
-    expect(hasLoneSurrogate(placement?.recoveryError ?? "")).toBe(false);
-    expect(stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
-    expect(destroy).toHaveBeenCalledWith(ENVIRONMENT_ID);
-  });
+      expect(failure).toBeInstanceOf(Error);
+      const message = (failure as Error).message;
+      expect(message).toBe(`${failurePrefix}${retained}`);
+      expect(message).not.toContain(secret);
+      expect(hasLoneSurrogate(message)).toBe(false);
+      const placement = placements.get(SESSION_ID);
+      expect(placement).toMatchObject({ state: "failed", turnClaim: null });
+      if (pending) {
+        expect(placement).toMatchObject({
+          recoveryError: "worker stopped",
+          terminalReason: "worker stopped",
+        });
+        expect(stopTunnel).not.toHaveBeenCalled();
+        expect(destroy).not.toHaveBeenCalled();
+      } else {
+        expect(placement).toMatchObject({ recoveryError: message, terminalReason: message });
+        expect(hasLoneSurrogate(placement?.recoveryError ?? "")).toBe(false);
+        expect(stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
+        expect(destroy).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      }
+      expect(warning).toHaveBeenCalledTimes(saveRejects ? 1 : 0);
+    },
+  );
 
   it.each([
     {

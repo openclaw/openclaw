@@ -150,7 +150,7 @@ export async function prepareBundledDiscoveryMode(
     : undefined;
   if (snapshot) {
     const signal = getPluginCacheRetirementSignal(owner);
-    // Private policy needs no global activation, but its caller must retain this exact scope.
+    // Private policy never replaces the live memo and retains this exact snapshot.
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (
@@ -163,7 +163,21 @@ export async function prepareBundledDiscoveryMode(
       }
     };
     assertCurrent();
-    return assertCurrent;
+    let prepared = discoveryState.snapshotModes.get(snapshot);
+    if (!prepared) {
+      const row = readPreparedRow
+        ? await readPreparedRow(resolveBundledDiscoveryMemoKey(env))
+        : await readPluginMetadataStateRow("bundled-discovery", options);
+      prepared = { value: parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined) };
+      assertCurrent();
+    }
+    const activate = () => {
+      assertCurrent();
+      // A lifecycle clear while inventory preparation awaits must not trigger a native reread.
+      discoveryState.snapshotModes.set(snapshot, prepared);
+    };
+    activate();
+    return activate;
   }
   const cache = owner.preparedBundledDiscoveryModes;
   const key = resolveBundledDiscoveryMemoKey(env);

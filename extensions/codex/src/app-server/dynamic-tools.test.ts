@@ -31,6 +31,10 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -45,6 +49,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { mediaResult, textToolResult } from "./dynamic-tools.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolCallParams,
@@ -148,22 +153,6 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
     execute: vi.fn(),
     ...overrides,
   } as unknown as AnyAgentTool;
-}
-
-function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<unknown> {
-  return {
-    content: [{ type: "text", text: "Generated media reply." }],
-    details: {
-      media: {
-        mediaUrl,
-        ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
-      },
-    },
-  };
-}
-
-function textToolResult(text: string, details: unknown = {}): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details };
 }
 
 function createSingleToolBridge(
@@ -316,6 +305,7 @@ function expectSchemaRejection(
 afterEach(() => {
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
+  clearRuntimeConfigSnapshot();
 });
 
 describe("createCodexDynamicToolBridge", () => {
@@ -1062,89 +1052,6 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("preserves implicit source delivery when middleware redacts details", async () => {
-    installResultMiddleware((event) => ({
-      result: { content: event.result.content, details: { redacted: true } },
-    }));
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", {
-        messageDelivery: {
-          status: "settled",
-          primaryPlatformMessageId: "imessage-6264",
-          partialDelivery: false,
-          createdThreadIds: [],
-          sourceReplyDelivered: true,
-        },
-        receipt: {
-          primaryPlatformMessageId: "imessage-6264",
-          platformMessageIds: ["imessage-6264"],
-        },
-      }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "visible reply",
-      final: true,
-    });
-
-    expectInputText(result, "Sent.");
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
-    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
-  });
-
-  it("honors explicit progress message-tool finality", async () => {
-    const bridge = createBridgeWithToolResult(
-      "message",
-      { ...textToolResult("Sent.", { ok: true }), terminate: true },
-      {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    );
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "868",
-      message: "Still working.",
-      buttons: [],
-      final: false,
-    });
-
-    expectInputText(result, "Sent.");
-    expect(result.terminate).toBeUndefined();
-    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
-      sourceReplyFinal: false,
-    });
-  });
-
-  it("does not let prior message-send telemetry terminate a later non-delivery tool result", async () => {
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce(textToolResult("Sent.", { messageId: "source-reply-1" }))
-      .mockResolvedValueOnce(textToolResult("No message sent.", { ok: true }));
-    const bridge = createSingleToolBridge(createTool({ name: "message", execute }), {
-      hookContext: { sourceReplyDeliveryMode: "message_tool_only" },
-    });
-
-    const firstResult = await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "visible reply",
-    });
-    const secondResult = await bridge.handleToolCall(
-      createDynamicToolCall("message", { action: "inspect" }, "call-2"),
-    );
-
-    expect(firstResult.terminate).toBe(true);
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expectInputText(secondResult, "No message sent.");
-    expect(secondResult.terminate).toBeUndefined();
-  });
-
   it.each(["replaced", "failed", "preserved", "older"] as const)(
     "retains computer frame authority only for its delivered screenshot (%s)",
     async (mode) => {
@@ -1512,6 +1419,7 @@ describe("createCodexDynamicToolBridge", () => {
   it.each(["report-only", "scheduled"] as const)(
     "rejects unavailable approval in %s calls",
     async (mode) => {
+      await captureRuntimeConfigAsyncReader()();
       const scheduled = mode === "scheduled";
       const beforeToolCall = vi.fn(async () => ({
         requireApproval: {
@@ -1535,6 +1443,7 @@ describe("createCodexDynamicToolBridge", () => {
       const bridge = createSingleToolBridge(tool, {
         hookContext: scheduled
           ? {
+              config: {},
               trigger: "cron",
               runId: "run-scheduled-hook",
               sessionId: "session-scheduled-hook",

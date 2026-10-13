@@ -95,7 +95,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
-  protected readonly cfg = {} as OpenClawConfig;
+  protected readonly cfg: OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
@@ -154,8 +154,10 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     private readonly indexSessionUpdates = false,
     private readonly subscribeToRealEvents = false,
     private readonly deferSessionIndex = false,
+    cfg: OpenClawConfig = {},
   ) {
     super();
+    this.cfg = cfg;
     this.sources.add("sessions");
     this.publishedDatabase = database;
   }
@@ -165,12 +167,14 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     indexSessionUpdates = false,
     subscribeToRealEvents = false,
     deferSessionIndex = false,
+    cfg: OpenClawConfig = {},
   ): Promise<SessionStartupCatchupHarness> {
     return new SessionStartupCatchupHarness(
       await createStartupHarnessDatabase(sourceRows),
       indexSessionUpdates,
       subscribeToRealEvents,
       deferSessionIndex,
+      cfg,
     );
   }
 
@@ -180,6 +184,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
       this.indexSessionUpdates,
       false,
       this.deferSessionIndex,
+      this.cfg,
     );
   }
 

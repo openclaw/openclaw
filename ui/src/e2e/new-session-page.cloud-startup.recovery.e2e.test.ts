@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPausedRecovery } from "../lib/sessions/session-placement-recovery.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -72,11 +72,7 @@ suite.define(() => {
       await expect.poll(() => composer.isDisabled()).toBe(false);
       // Pending history permits editing before the authenticated recovery scope is ready.
       await waitForGatewayRecoveryScope(page);
-      const owner = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        const { gateway: appGateway } = app.runtime.context;
+      const owner = await evaluateControlUiContext(page, ({ gateway: appGateway }) => {
         return {
           gatewayUrl: appGateway.connection.gatewayUrl,
           recoveryScope: appGateway.snapshot.client!.recoveryScope,

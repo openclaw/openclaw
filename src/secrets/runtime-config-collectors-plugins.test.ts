@@ -143,6 +143,14 @@ describe("collectPluginConfigAssignments", () => {
     });
   });
 
+  it("does not load plugin metadata for empty entries", () => {
+    const config = asConfig({ plugins: { entries: {} } });
+    const context = makeContext(config);
+    collectPluginConfigAssignments({ config, defaults: undefined, context });
+    expect(context.assignments).toEqual([]);
+    expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("keeps dotted plugin identities and plugin-local route paths distinct", () => {
     const pluginIds = ["foo.config.bar", "foo"] as const;
     loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({

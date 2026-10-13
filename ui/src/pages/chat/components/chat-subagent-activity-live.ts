@@ -22,6 +22,7 @@ export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   context!: ApplicationContext;
   @property({ type: Boolean }) compact = false;
+  @property({ attribute: false }) turnStartedAt?: number;
   @property({ attribute: false }) rows: readonly ChatSubagentActivity[] = [];
   @property({ attribute: false }) onOpenSubagent?: (key: string) => void;
   @property({ attribute: false }) onOpenSession?: (key: string) => void;
@@ -129,6 +130,7 @@ export class ChatSubagentActivityLive extends OpenClawLightDomContentsElement {
       this.onOpenSubagent,
       this.onOpenSession,
       this.compact,
+      this.turnStartedAt,
     );
   }
 }

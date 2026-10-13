@@ -24,7 +24,6 @@ import {
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
 import { acquireMatrixCryptoStoreOwnership } from "./crypto-store-ownership.js";
-import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -67,15 +66,14 @@ describe("Matrix IndexedDB persistence", () => {
   it("holds exclusive crypto-store ownership until release", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     const first = await acquireMatrixCryptoStoreOwnership(snapshotPath);
-    const contention = observeCryptoStoreContention(snapshotPath);
-    const waiting = acquireMatrixCryptoStoreOwnership(snapshotPath);
     try {
-      await contention.waitFor(waiting);
+      await expect(acquireMatrixCryptoStoreOwnership(snapshotPath)).rejects.toMatchObject({
+        code: "matrix_crypto_store_owner_active",
+      });
     } finally {
-      contention.close();
       await first.release();
     }
-    const replacement = await waiting;
+    const replacement = await acquireMatrixCryptoStoreOwnership(snapshotPath);
     await replacement.release();
   });
 
@@ -87,21 +85,6 @@ describe("Matrix IndexedDB persistence", () => {
     await expect(acquireMatrixCryptoStoreOwnership(snapshotPath)).rejects.toThrow(
       "unresolved unsafe final state",
     );
-  });
-
-  it("refuses a successor after the departing owner poisons before unlock", async () => {
-    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
-    const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
-    const contention = observeCryptoStoreContention(snapshotPath);
-    const successor = acquireMatrixCryptoStoreOwnership(snapshotPath);
-    try {
-      await contention.waitFor(successor);
-      await owner.armUnsafeState();
-    } finally {
-      contention.close();
-      await owner.release();
-    }
-    await expect(successor).rejects.toThrow("unresolved unsafe final state");
   });
 
   it("persists and restores database contents for the selected prefix", async () => {

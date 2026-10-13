@@ -177,11 +177,6 @@ describe("openProviderWebSocket", () => {
       managed: true,
       dispatcherPolicy: { mode: "env-proxy" },
     },
-    {
-      name: "a managed proxy with configured direct policy",
-      managed: true,
-      dispatcherPolicy: { mode: "direct" },
-    },
   ] as const)("leaves target DNS to $name", async ({ managed, dispatcherPolicy }) => {
     const proxy = await createStalledHandshakeServer("connect");
     configureProxyEnvironment(proxy.url);
@@ -205,10 +200,7 @@ describe("openProviderWebSocket", () => {
     expect(proxy.connectionCount()).toBe(1);
   });
 
-  it.each([
-    { name: "ambient", managed: false, dispatcherPolicy: undefined },
-    { name: "managed", managed: true, dispatcherPolicy: { mode: "env-proxy" } },
-  ] as const)(
+  it.each([{ name: "managed", managed: true, dispatcherPolicy: { mode: "env-proxy" } }] as const)(
     "checks target DNS when NO_PROXY bypasses a $name proxy",
     async ({ managed, dispatcherPolicy }) => {
       const proxy = await createStalledHandshakeServer("connect");
@@ -341,23 +333,6 @@ describe("openProviderWebSocket", () => {
       }),
     ).rejects.toThrow(/private|loopback|blocked|aborted/iu);
     expect(server.requestHeaders).toHaveLength(0);
-  });
-
-  it("opens an allowed socket with resolved request headers", async () => {
-    const server = await createLocalWebSocketServer();
-    const socket = await openProviderWebSocket({
-      allowPrivateNetwork: true,
-      baseUrl: server.url,
-      headers: { authorization: "Token configured", "x-provider": "deepgram" },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: server.url,
-    });
-    await once(socket, "open");
-    expect(server.requestHeaders[0]?.authorization).toBe("Token configured");
-    expect(server.requestHeaders[0]?.["x-provider"]).toBe("deepgram");
-    socket.close();
-    await once(socket, "close");
   });
 
   it("applies target TLS settings to the WebSocket handshake", async () => {

@@ -86,6 +86,8 @@ export type NodeWorkerSupervisorTransport = {
     idempotencyKey?: string;
     authorizeDispatch?: () => Promise<boolean>;
     isDispatchAuthorized: () => boolean;
+    /** Completed effects may retain response custody after their dispatch snapshot changes. */
+    isCompletionAuthorized?: () => boolean;
     onDispatchReady?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult>;
 };
@@ -497,6 +499,10 @@ export function registerNodeRegistryPrivateRuntime(
           () => params.isDispatchAuthorized() && isNodeCurrent(),
           params.isDispatchAuthorized,
         );
+        const completionAuthority = params.isCompletionAuthorized;
+        const isCompletionCurrent = completionAuthority
+          ? () => completionAuthority() && isNodeCurrent()
+          : isProofCurrent;
         if (!isNodeCurrent()) {
           return nodeInvokeError(
             "PRIVATE_DIALECT_UNAVAILABLE",
@@ -519,7 +525,7 @@ export function registerNodeRegistryPrivateRuntime(
             ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
           },
           true,
-          isProofCurrent,
+          isCompletionCurrent,
         );
       },
     },

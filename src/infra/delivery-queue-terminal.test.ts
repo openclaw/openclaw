@@ -262,7 +262,7 @@ describe("delivery queue pending terminal transition", () => {
           expect(getDeliveryQueueEntryStatus(queueName, ids[0], stateDir)).toBeUndefined();
           const prune = prepare.mock.results
             .flatMap((result) => (result.type === "return" ? [result.value] : []))
-            .find((statement) => statement.sourceSQL.startsWith("WITH "));
+            .find((statement) => /^with\s/i.test(statement.sourceSQL));
           expect(prune).toBeDefined();
           const plan = db
             .prepare(`EXPLAIN QUERY PLAN ${prune!.expandedSQL}`)

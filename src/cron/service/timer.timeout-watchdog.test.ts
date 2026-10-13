@@ -7,6 +7,7 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   clearCronJobActive,
   markCronJobActive,
@@ -156,7 +157,7 @@ describe("cron execution watchdogs", () => {
     }
   });
 
-  it("keeps resolved provider/model/session on cancellation rows (#95873)", async () => {
+  it("returns cancellation attribution before the core finishes its owned cleanup (#95873)", async () => {
     resetActiveCronTaskRunsForTests();
     const job = dueJob("cancel-attribution", {
       payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0 },
@@ -165,10 +166,8 @@ describe("cron execution watchdogs", () => {
     const activeJobMarker = markCronJobActive(job.id);
     const entered = createDeferred();
     const release = createDeferred<{ status: "ok"; summary: string }>();
-    const state = createCronRegressionState({
-      storePath,
-      nowMs: () => SCHEDULED_AT,
-      runIsolatedAgentJob: vi.fn(async ({ onExecutionStarted }) => {
+    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(
+      async ({ onExecutionStarted }) => {
         onExecutionStarted?.({
           jobId: job.id,
           phase: "tool_execution_started",
@@ -178,13 +177,22 @@ describe("cron execution watchdogs", () => {
           sessionKey: "key-attrib",
         });
         entered.resolve();
-        return await release.promise;
+        const result = await release.promise;
+        return await trackAsyncWork(() => result);
+      },
+    );
+    const state = createCronRegressionState({
+      storePath,
+      nowMs: () => SCHEDULED_AT,
+      runIsolatedAgentJob,
+    });
+    const work = new AsyncWorkScope();
+    const resultPromise = work.run(() =>
+      executeJobCoreWithTimeout(state, job, {
+        activeJobMarker,
+        runId: `cron:${job.id}:${SCHEDULED_AT}`,
       }),
-    });
-    const resultPromise = executeJobCoreWithTimeout(state, job, {
-      activeJobMarker,
-      runId: `cron:${job.id}:${SCHEDULED_AT}`,
-    });
+    );
     try {
       await entered.promise;
       requestActiveCronJobCancellation(job.id, "Cancelled by operator.");
@@ -195,10 +203,18 @@ describe("cron execution watchdogs", () => {
       expect(result.model).toBe("deepseek-v4-pro");
       expect(result.sessionId).toBe("sess-attrib");
       expect(result.sessionKey).toBe("key-attrib");
+      const drained = work.drain();
+      release.resolve({ status: "ok", summary: "done" });
+      await expect(runIsolatedAgentJob.mock.results[0]?.value).resolves.toEqual({
+        status: "ok",
+        summary: "done",
+      });
+      await drained;
     } finally {
       stop(state);
       release.resolve({ status: "ok", summary: "done" });
       await drain(resultPromise, release.promise);
+      await work.drain();
       clearCronJobActive(job.id, activeJobMarker);
       resetActiveCronTaskRunsForTests();
     }

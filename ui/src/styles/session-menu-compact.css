@@ -3,7 +3,7 @@
   z-index: 1;
   position: sticky;
   top: 0;
-  background: var(--wa-color-surface-raised);
+  background: var(--popover);
 }
 
 html[dir="rtl"] .session-menu__chevron,

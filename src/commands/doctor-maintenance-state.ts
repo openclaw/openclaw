@@ -174,10 +174,18 @@ export async function createDoctorMaintenanceState(options: {
     }
   };
   const assertOwnerCurrent = (databasePath?: string) => {
-    options.assertCurrent?.();
-    owner!.assertCurrent();
-    if (databasePath !== undefined) {
-      owner!.assertDatabaseAccess(databasePath);
+    const assertCurrent = () => {
+      owner!.assertCurrent(options.assertCurrent);
+      if (databasePath !== undefined) {
+        owner!.assertDatabaseAccess(databasePath);
+      }
+    };
+    // Post-repair work runs outside the checks callback. Its policy reads must
+    // retain the repair scope's cached handles until that scope has drained.
+    if (resources) {
+      resources.run(assertCurrent);
+    } else {
+      owner!.run(assertCurrent);
     }
   };
   const state = {
@@ -189,9 +197,6 @@ export async function createDoctorMaintenanceState(options: {
     },
     get resources() {
       return resources;
-    },
-    get hasOpenResources() {
-      return Boolean(resources || inspections);
     },
     get receipt() {
       return owner ? undefined : capture?.receipt;
@@ -290,6 +295,7 @@ export async function createDoctorMaintenanceState(options: {
           return repairDoctorSqliteNoCow({
             paths,
             stateDir,
+            env: selectedEnv,
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });
@@ -400,7 +406,7 @@ export async function createDoctorMaintenanceState(options: {
       } catch (error) {
         // Uncertain command cleanup or a still-open scope can keep writing: retain
         // process ownership and publish no receipt.
-        if (hasCommandProcessCleanupError(error) || state.hasOpenResources) {
+        if (hasCommandProcessCleanupError(error) || resources || inspections) {
           throw error;
         }
         failures.push(error);

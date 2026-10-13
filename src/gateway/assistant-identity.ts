@@ -129,9 +129,15 @@ export async function resolveAssistantIdentity(params: {
     emoji: configuredEmoji,
     avatar: configuredAvatar,
   } = resolveAgentIdentity(params.cfg, agentId) ?? {};
-  const fileIdentity = workspaceDir
-    ? await loadAgentIdentityFromWorkspaceAsync(workspaceDir)
-    : null;
+  const agentName = normalizeIdentityValue("name", configuredName);
+  const agentAvatar =
+    normalizeAvatarValue(configuredAvatar) ?? normalizeAvatarValue(configuredEmoji);
+  const agentEmoji = normalizeEmojiValue(normalizeIdentityValue("emoji", configuredEmoji));
+  // A complete configured identity has no workspace fallback to refresh.
+  const fileIdentity =
+    workspaceDir && (!agentName || !agentAvatar || !agentEmoji)
+      ? await loadAgentIdentityFromWorkspaceAsync(workspaceDir)
+      : null;
   let prepared = preparedIdentities.get(params.cfg);
   if (!prepared) {
     prepared = new Map();
@@ -151,7 +157,6 @@ export async function resolveAssistantIdentity(params: {
     return cached.identity;
   }
 
-  const agentName = normalizeIdentityValue("name", configuredName);
   const fileName = normalizeIdentityValue("name", fileIdentity?.name);
   const resolvedName: [string, AssistantIdentityNameSource] | undefined = agentName
     ? [agentName, "agent"]
@@ -161,20 +166,19 @@ export async function resolveAssistantIdentity(params: {
   const [name, nameSource] = resolvedName ?? [DEFAULT_ASSISTANT_IDENTITY.name, "default"];
 
   const avatarCandidates = [
-    normalizeAvatarValue(configuredAvatar),
-    normalizeAvatarValue(configuredEmoji),
+    agentAvatar,
     normalizeAvatarValue(fileIdentity?.avatar),
     normalizeAvatarValue(fileIdentity?.emoji),
   ];
   const avatar = avatarCandidates.find(Boolean) ?? DEFAULT_ASSISTANT_IDENTITY.avatar;
 
   const emojiCandidates = [
-    normalizeIdentityValue("emoji", configuredEmoji),
     normalizeIdentityValue("emoji", fileIdentity?.emoji),
     normalizeIdentityValue("emoji", configuredAvatar),
     normalizeIdentityValue("emoji", fileIdentity?.avatar),
   ];
-  const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
+  const emoji =
+    agentEmoji ?? emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
 
   const identity = { agentId, name, nameSource, avatar, emoji };
   prepared.set(key, {

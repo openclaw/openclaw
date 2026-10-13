@@ -78,9 +78,6 @@ describe("database engine observation", () => {
       break;
     }
     expect(events).toHaveLength(4);
-    expect(events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ engine: "sqlite", outcome: "ok" })]),
-    );
     expect(events.at(-1)).toMatchObject({ engine: "sqlite", outcome: "ok" });
   });
 

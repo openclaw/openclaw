@@ -27,9 +27,9 @@ import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-s
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
+import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
@@ -355,29 +355,29 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it("refreshes a cached selection when background transcript enrichment publishes", () =>
+  it("refreshes a cached selection from committed previews while background reads are held", () =>
     withFixture(async (fixture) => {
       const release = retainSessionListForegroundWork();
       try {
-        await persistSessionTranscriptTurn(
-          { agentId: "main", sessionKey, sessionId: fixture.sessionId },
-          {
-            messages: [{ message: { role: "assistant", content: "Prepared background preview" } }],
-            touchSessionEntry: false,
-            updateMode: "none",
-          },
-        );
         const projection = getSessionRowProjection(fixture.context)!;
         await projection.ensureMaterialized();
         const before = await withSelectedFacts(fixture, async (value) => value);
         expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
-        const published = observeSessionRowBackfill([sessionKey], projection);
-        release();
-        await published;
+        using backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+        await persistSessionTranscriptTurn(
+          { agentId: "main", sessionKey, sessionId: fixture.sessionId },
+          {
+            config: fixture.cfg,
+            messages: [{ message: { role: "assistant", content: "Prepared committed preview" } }],
+            touchSessionEntry: false,
+            updateMode: "none",
+          },
+        );
         const after = await withSelectedFacts(fixture, async (value) => value);
-        expect(after.sessions[0]?.lastMessagePreview).toBe("Prepared background preview");
+        expect(after.sessions[0]?.lastMessagePreview).toBe("Prepared committed preview");
         expect(after.revision).not.toBe(before.revision);
         expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
+        expect(backfill).not.toHaveBeenCalled();
       } finally {
         release();
       }
@@ -866,9 +866,11 @@ describe("trusted plugin session facts", () => {
         // filter, so the reader itself must keep it away from preview enrichment.
         const foreignDraft = "agent:main:foreign-draft";
         await fixture.seed(foreignDraft, fixture.other.id, { visibility: "draft" });
+        using backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
         await persistSessionTranscriptTurn(
           { agentId: "main", sessionKey, sessionId: fixture.sessionId },
           {
+            config: fixture.cfg,
             messages: [{ message: { role: "assistant", content: "May I merge this change?" } }],
             touchSessionEntry: false,
             updateMode: "none",
@@ -897,8 +899,9 @@ describe("trusted plugin session facts", () => {
           },
         ]);
         expect(result.sessions.map((session) => session.key)).not.toContain(foreignDraft);
-        // Optional transcript enrichment must not bypass foreground ownership.
-        expect(result.sessions[0]?.lastMessagePreview).toBeUndefined();
+        // Committed preview facts remain available while optional transcript reads wait.
+        expect(result.sessions[0]?.lastMessagePreview).toBe("May I merge this change?");
+        expect(backfill).not.toHaveBeenCalled();
       } finally {
         releaseForeground();
       }

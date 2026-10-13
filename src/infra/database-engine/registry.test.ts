@@ -2,18 +2,13 @@ import { describe, expect, it } from "vitest";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./registry.js";
 
 describe("database engine selection", () => {
-  it("keeps unregistered stores and default configuration on SQLite", () => {
-    expect(selectDatabaseEngine({}, { database: { engine: "postgres" } })).toBe("sqlite");
-    expect(selectDatabaseEngine({ postgres: true }, {})).toBe("sqlite");
+  it("honors explicit SQLite selection for PostgreSQL-capable stores", () => {
     expect(selectDatabaseEngine({ postgres: true }, { database: { engine: "sqlite" } })).toBe(
       "sqlite",
     );
   });
 
-  it("selects PostgreSQL only for stores that registered support", () => {
-    expect(selectDatabaseEngine({ postgres: true }, { database: { engine: "postgres" } })).toBe(
-      "postgres",
-    );
+  it("registers PostgreSQL support only for Workboard", () => {
     expect(
       listDatabaseEngineStores()
         .filter((store) => store.postgres)

@@ -30,6 +30,8 @@ it.each(["cleanup failure", "admission refusal"] as const)(
     const cleanupFailure = new Error("Auth child failed to close");
     vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
       identity: undefined,
+      captureCredentialAuthority: () => undefined,
+      signal: new AbortController().signal,
       assertCurrent: () => {},
       dispose: async () => {
         events.push("disposed");

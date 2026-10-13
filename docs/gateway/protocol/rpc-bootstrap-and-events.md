@@ -111,7 +111,7 @@ streams, including foreground transcripts and passive views of runs started by
 another client. Repeating a request replaces that observer's subscription mode.
 `sessions.messages.unsubscribe` removes the observer identified by the same
 optional `subscriptionId`; omission selects the legacy observer.
-The subscribe acknowledgment includes the canonical `key` and resolved `agentId`.
+The subscribe acknowledgment includes the normalized `key` and resolved `agentId`.
 Clients retain the resolved owner for later `global` requests, whose key alone
 does not identify an agent. The SDK sends a stable opaque `subscriptionId` for
 each wire observer and includes it in resubscriptions and unsubscribe requests.
@@ -230,7 +230,7 @@ or protocol-version change.
   `sessions.changed` and `session.message` use the same full prepared metadata,
   viewer permissions, and clock as `sessions.list` with title, last-message,
   and activity-summary enrichment enabled. This adds catalog-backed fields such
-  as thinking options and replaces legacy model aliases with canonical model IDs
+  as thinking options and replaces legacy model aliases with standard model IDs
   in event rows. The Control UI applies these rows locally to existing roster
   members, so their values match the list. An explicit model, account, or runtime
   selection can also mark the event with `catalogChanged: true`.
@@ -325,6 +325,8 @@ or protocol-version change.
   snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
   distinct. Publication rechecks row readiness after each yield. Accepted recap
   notifications outlive the compaction or scheduler work that triggered them.
+  Queued session-change notifications also survive completion or cancellation of
+  the request that committed the change, so connected clients still receive the row.
   Shutdown stops new notifications and joins admitted publications before closing
   clients and disposing their projection.
   Authorized incognito descriptions and events use the same row presentation from
@@ -339,7 +341,7 @@ or protocol-version change.
   and an array replaces it. Delete notifications from `sessions.delete` and incognito
   reset carry the removed generation's `sessionId`, without a current-row snapshot.
   Clients must not delete a replacement with a different ID. A key-only delete event
-  or a rowless global notification invalidates the canonical session list; it does
+  or a rowless global notification invalidates the saved session list; it does
   not identify the current generation as deleted.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive/liveness event.
@@ -362,9 +364,10 @@ or protocol-version change.
   scoped; clients refresh via `config.get`.
 - `skills.changed`: connectivity, the skill catalog, config, or eligibility
   changed after the gateway invalidated its skills snapshot. The payload's
-  `reason` is `watch`, `watch-targets`, `manual`, `remote-node`,
-  `config-change`, or `workshop`. Operator-read scoped; clients refresh via
-  `skills.status`.
+  `reason` is `watch`, `watch-unavailable`, `manual`, `remote-node`,
+  `config-change`, or `workshop`. Passive disk changes publish after the background
+  discovery pass (about once per minute); explicit skill changes publish immediately
+  after refresh. Operator-read scoped; clients refresh via `skills.status`.
 - `exec.approval.requested` / `exec.approval.resolved`: exec approval
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
@@ -425,7 +428,7 @@ false` or `suppressNotifyOnExit: true` suppresses notifications. Denied events
 never enqueue a system event or wake agent work. Finished events notify only for
 timeout, nonzero or unknown exit code, or nonempty compacted output; successful
 exit 0 with no output stays quiet. Finished notifications with a run ID are
-deduplicated by canonical session and run ID. A heartbeat wake is requested only
+deduplicated by resolved session and run ID. A heartbeat wake is requested only
 after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.

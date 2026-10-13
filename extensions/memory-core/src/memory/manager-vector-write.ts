@@ -1,19 +1,24 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { vectorToBlob } from "./vector-blob.js";
 
-export function createMemoryVectorWriter(db: DatabaseSync) {
-  const tableName = "memory_index_chunks_vec";
-  let deleteStatement: StatementSync | undefined;
-  let insertStatement: StatementSync | undefined;
-
-  // One replacement owns the statements. A failed DELETE must not prevent INSERT.
-  return (id: string, embedding: number[]): void => {
+export function writeMemoryVectors(
+  db: DatabaseSync,
+  rows: readonly { id: string; embedding: number[] }[],
+): void {
+  if (rows.length === 0) {
+    return;
+  }
+  // A repeated id within one publication has the same last-write-wins behavior.
+  const unique = [...new Map(rows.map((row) => [row.id, row])).values()];
+  let deletion: StatementSync | undefined;
+  for (const row of unique) {
     try {
-      (deleteStatement ??= db.prepare(`DELETE FROM ${tableName} WHERE id = ?`)).run(id);
+      // sqlite-vec only uses its primary-key lookup for scalar equality.
+      deletion ??= db.prepare("DELETE FROM memory_index_chunks_vec WHERE id = ?");
+      deletion.run(row.id);
     } catch {}
-    (insertStatement ??= db.prepare(`INSERT INTO ${tableName} (id, embedding) VALUES (?, ?)`)).run(
-      id,
-      vectorToBlob(embedding),
-    );
-  };
+  }
+  db.prepare(
+    `INSERT INTO memory_index_chunks_vec (id, embedding) VALUES ${unique.map(() => "(?, ?)").join(",")}`,
+  ).run(...unique.flatMap((row) => [row.id, vectorToBlob(row.embedding)]));
 }

@@ -145,57 +145,48 @@ it("refuses a pending migration that changes agent database registry paths", () 
   ).toThrow("legacy agent database registry schema");
 });
 
-it.each(["native", "replacement"] as const)(
-  "keeps registry reads independent of audit contract drift after %s schema changes",
-  (source) => {
-    const options = createRegistry(false);
-    let db = openNodeSqliteDatabase(options.path);
-    const changeSchema = (sql: string) => {
-      if (source === "native") {
-        db.exec(sql);
-        return;
-      }
-      db.close();
-      const replacementPath = `${options.path}.replacement`;
-      fs.copyFileSync(options.path, replacementPath);
-      const replacement = new DatabaseSync(replacementPath);
-      try {
-        replacement.exec(sql);
-      } finally {
-        replacement.close();
-      }
-      fs.renameSync(replacementPath, options.path);
-      db = openNodeSqliteDatabase(options.path);
-    };
-    const read = () =>
-      runSqliteReadOperationSync(db, () =>
-        readRegisteredAgentDatabaseRows(db, options.path, false),
-      );
+it("keeps registry reads independent of audit contract drift after replacement schema changes", () => {
+  const options = createRegistry(false);
+  let db = openNodeSqliteDatabase(options.path);
+  const changeSchema = (sql: string) => {
+    db.close();
+    const replacementPath = `${options.path}.replacement`;
+    fs.copyFileSync(options.path, replacementPath);
+    const replacement = new DatabaseSync(replacementPath);
     try {
-      expect(read()).toEqual([]);
-      for (const [table, constraint, replacement] of [
-        ["audit_events", "source_id TEXT NOT NULL UNIQUE", "source_id TEXT NOT NULL"],
-        ["audit_identity_keys", "CHECK (id = 1)", "CHECK (id >= 1)"],
-      ] as const) {
-        const canonical = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table);
-        const malformed = canonical.replace(constraint, replacement);
-        expect(malformed).not.toBe(canonical);
-        changeSchema(`DROP TABLE ${table}; ${malformed}`);
-        expect(
-          detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, options.path),
-        ).toContainEqual({
-          kind: "audit-events-v2",
-          path: options.path,
-        });
-        expect(read()).toEqual([]);
-        changeSchema(`DROP TABLE ${table}; ${canonical}`);
-        expect(read()).toEqual([]);
-      }
+      replacement.exec(sql);
     } finally {
-      db.close();
+      replacement.close();
     }
-  },
-);
+    fs.renameSync(replacementPath, options.path);
+    db = openNodeSqliteDatabase(options.path);
+  };
+  const read = () =>
+    runSqliteReadOperationSync(db, () => readRegisteredAgentDatabaseRows(db, options.path, false));
+  try {
+    expect(read()).toEqual([]);
+    for (const [table, constraint, replacement] of [
+      ["audit_events", "source_id TEXT NOT NULL UNIQUE", "source_id TEXT NOT NULL"],
+      ["audit_identity_keys", "CHECK (id = 1)", "CHECK (id >= 1)"],
+    ] as const) {
+      const canonical = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table);
+      const malformed = canonical.replace(constraint, replacement);
+      expect(malformed).not.toBe(canonical);
+      changeSchema(`DROP TABLE ${table}; ${malformed}`);
+      expect(
+        detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, options.path),
+      ).toContainEqual({
+        kind: "audit-events-v2",
+        path: options.path,
+      });
+      expect(read()).toEqual([]);
+      changeSchema(`DROP TABLE ${table}; ${canonical}`);
+      expect(read()).toEqual([]);
+    }
+  } finally {
+    db.close();
+  }
+});
 
 it("returns registry unavailability only after the fixed native read and worker settle", async () => {
   const options = createRegistry(true);

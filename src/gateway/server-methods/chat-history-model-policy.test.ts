@@ -12,9 +12,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
   prepareOperatorModelPresentation,
   projectOperatorModelRead,
@@ -84,6 +86,8 @@ describe("historical model disclosure", () => {
   it("projects concrete tuples while preserving clearing facts, bookkeeping and content", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(f.client);
       expectDefined(f.cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
         sourceAgent: "main",
         allow: ["example/allowed*"],

@@ -70,6 +70,7 @@ import {
   canReplayAmbiguousFinalText,
   isPermanentDeliveryError,
   resolveMaxRetries,
+  shouldInspectQueuedDelivery,
 } from "./delivery-queue-recovery-policy.js";
 import {
   claimDeliveryPlatformSendAttempt,
@@ -77,7 +78,6 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   finalizeDeliveryFailureSettlement,
-  hasActiveDeliveryOwner,
   loadUnfinishedDelivery,
   loadUnfinishedDeliveries,
   stageDeliveryFailureSettlement,
@@ -743,6 +743,7 @@ async function drainQueuedEntry(
   );
   let mediaRecoveryLeaseId: string | undefined;
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  let releaseWriterAuthority: (() => void) | undefined;
   try {
     // Unknown-send reconciliation above owns already-dispatched work. Only a new
     // dispatch requires current generation authority.
@@ -760,13 +761,14 @@ async function drainQueuedEntry(
             stateContext,
           )
         : undefined;
-    const deliveryParams = await buildRecoveryDeliverParams(
+    const { release, ...deliveryParams } = await buildRecoveryDeliverParams(
       entry,
       opts.cfg,
       opts.stateDir,
       producerClaimId,
       stateContext,
     );
+    releaseWriterAuthority = release;
     let dispatchAdmitted = false;
     const result = await deliver({
       ...deliveryParams,
@@ -994,6 +996,7 @@ async function drainQueuedEntry(
       isProvenDeliveryNotSentError(err) ? failDeliveryBeforePlatformSend : failDelivery,
     );
   } finally {
+    releaseWriterAuthority?.();
     generation?.release();
     // Early fallback acks make the row non-replayable before the adapter has
     // necessarily finished reading every payload. Release only after the whole
@@ -1044,7 +1047,7 @@ async function processQueuedRecovery(
     await settleQueuedFailure({ ...opts, error: entry.settlement.error }, stateContext);
     return "continue";
   }
-  if (hasActiveDeliveryOwner(entry, Date.now())) {
+  if (!shouldInspectQueuedDelivery(entry, Date.now())) {
     if (context.kind === "startup") {
       log.info(`Recovery skipped for delivery ${entry.id}: active platform owner`);
     }
@@ -1252,7 +1255,7 @@ export async function drainPendingDeliveriesCore(
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir, stateContext)).filter(
-      (entry) => entry.settlement || opts.selectEntry(entry, now).match,
+      (entry) => shouldInspectQueuedDelivery(entry, now, opts.selectEntry),
     );
     if (matchingEntries.length > 0) {
       opts.onPending?.();
@@ -1312,7 +1315,7 @@ export async function recoverPendingDeliveries(
     opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
   };
   await recoveryCoordinator.scan({
-    entries: pending,
+    entries: pending.filter((entry) => shouldInspectQueuedDelivery(entry, Date.now())),
     loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
     deadlineMs: deadline,
     onDeadlineExceeded,

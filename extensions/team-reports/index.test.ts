@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawConfig,
   OpenClawPluginApi,
@@ -20,9 +19,10 @@ import { buildRoster } from "./src/roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./src/sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./src/store.js";
 
-vi.mock("./src/store.js", () => ({
+vi.mock("./src/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/store.js")>()),
   createTeamReportsStore: vi.fn(() => {
-    throw new Error("Registration and retired startup must not open report storage");
+    throw new Error("Registration must not open report storage");
   }),
 }));
 
@@ -119,57 +119,30 @@ describe("Team Reports registration", () => {
     },
   );
 
-  it("drains storage that opens after retirement without publishing the service", async () => {
-    const directory = tempDirs.make("team-reports-retired-open-");
+  it("closes owned storage when the service scheduler cannot start", async () => {
+    const directory = tempDirs.make("team-reports-failed-start-");
     const { createTeamReportsStore: openStore } =
       await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
     const store = await openStore({
       stateDir: directory,
       workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
     });
-    const opened = createDeferred<void>();
-    const releaseOpen = createDeferred<void>();
-    const releaseClose = createDeferred<void>();
-    const closeStore = store.close.bind(store);
-    const close = vi.spyOn(store, "close").mockImplementation(async () => {
-      await releaseClose.promise;
-      await closeStore();
-    });
-    vi.mocked(createTeamReportsStore).mockImplementationOnce(async () => {
-      opened.resolve();
-      await releaseOpen.promise;
-      return store;
-    });
+    onTestFinished(() => store.close());
+    const close = vi.spyOn(store, "close");
+    vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
     const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
     vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
       github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
       people: [],
     });
-    const { captured, services, scheduler } = captureReports();
+    const { services, scheduler } = captureReports();
     const service = services[0]!;
-    const lifecycle = captured.runtimeLifecycles[0]!;
-    const starting = service.start({
-      scheduler,
-      config,
-      stateDir: directory,
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    });
-    await opened.promise;
-    const stopped = vi.fn();
-    const cleanup = Promise.resolve(lifecycle.cleanup?.({ reason: "disable" })).then(stopped);
-    try {
-      releaseOpen.resolve();
-      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
-      expect(stopped).not.toHaveBeenCalled();
-    } finally {
-      releaseOpen.resolve();
-      releaseClose.resolve();
-      await Promise.all([starting, cleanup]);
-    }
-    await expect(store.listRuns()).rejects.toThrow("store is closed");
+    await scheduler.stop();
     await expect(
       service.start({ config, stateDir: directory, logger: console, scheduler }),
-    ).rejects.toThrow("runtime has been retired");
+    ).rejects.toThrow("scheduler cannot be started again");
+    expect(close).toHaveBeenCalledOnce();
+    await expect(store.listRuns()).rejects.toThrow("store is closed");
   });
 
   it("exposes reports through the authenticated tab, read methods, and admin generation method", () => {
@@ -300,46 +273,4 @@ describe("Team Reports registration", () => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
-
-  it.each(["disable", "restart"] as const)(
-    "does not revive storage or collection when credentials resolve after runtime %s",
-    async (reason) => {
-      const entered = createDeferred<void>();
-      const credentials =
-        createDeferred<Awaited<ReturnType<typeof configRuntime.resolveTeamReportsConfig>>>();
-      vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockImplementation(() => {
-        entered.resolve();
-        return credentials.promise;
-      });
-      const { captured, services, scheduler } = captureReports();
-      const service = services.find((entry) => entry.id === "team-reports");
-      const lifecycle = captured.runtimeLifecycles.find(
-        (entry) => entry.id === "team-reports-service",
-      );
-      if (!service || !lifecycle?.cleanup) {
-        throw new Error("Team Reports must register its service and runtime cleanup");
-      }
-      const context: OpenClawPluginServiceContextV2 = {
-        scheduler,
-        config,
-        stateDir: "/unused-team-reports-test-state",
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      };
-      const starting = service.start(context);
-      await entered.promise;
-      await lifecycle.cleanup({ reason });
-      const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
-      credentials.resolve({
-        github: {
-          ...parsed.github,
-          token: "fixture-github-token",
-          ignoreCommentPatterns: [],
-        },
-        people: [],
-      });
-      await starting;
-      expect(createTeamReportsStore).not.toHaveBeenCalled();
-      await expect(service.start(context)).rejects.toThrow("runtime has been retired");
-    },
-  );
 });

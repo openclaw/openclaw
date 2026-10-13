@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -679,6 +680,7 @@ async function runLauncher() {
     !waitingForNodeUpdateRespawn && !isSourceCheckoutLauncher()
       ? resolveOpenClawCompileCacheDirectory({
           installRoot: fileURLToPath(new URL(".", import.meta.url)),
+          foregroundGateway: isForegroundGatewayRunArgv(process.argv),
         })
       : undefined;
 

@@ -471,6 +471,16 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const result = access
     ? await access.installSkillDependencies!(request)
     : await installSkillDependencies(request);
+  if (result.ok) {
+    try {
+      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+      await refreshSkillsDiscovery({ workspaceDir, config: params.config });
+    } catch (error) {
+      warnings.push(
+        `Dependencies installed, but discovery refresh failed: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
   return withWarnings(result, warnings);
 }
 

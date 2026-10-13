@@ -3,12 +3,13 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
-import "../../../components/resizable-divider.ts";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
+import "../../../components/resizable-divider.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../../../plugins/control-ui-runtime.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
@@ -108,7 +109,9 @@ describe("chat sidebar region", () => {
       expanded: true,
       expandedSide: true,
     });
-    const tab = root(region).querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    const tab = root(region).querySelector<HTMLElement>(
+      '.tabstrip-tab[data-tab-value="workspace"]',
+    )!;
     tab.click();
     tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     tab.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
@@ -126,7 +129,9 @@ describe("chat sidebar region", () => {
     const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
     const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
     const label = () =>
-      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] .tabstrip-tab__label',
+      );
     expect(label()?.textContent).toBe("Chat");
 
     Object.assign(region, {
@@ -138,7 +143,9 @@ describe("chat sidebar region", () => {
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] [data-agent-avatar]',
+      ),
     ).not.toBeNull();
     expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
     expect(
@@ -149,8 +156,9 @@ describe("chat sidebar region", () => {
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
-        ?.content,
+      root(region)
+        .querySelector('.tabstrip-tab[data-tab-value="conversation"]')
+        ?.querySelector("openclaw-tooltip")?.content,
     ).toBe("Chat");
 
     Object.assign(region, {
@@ -462,10 +470,8 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.closeSlot).toHaveBeenCalledWith(slot);
 
     root(region)
-      .querySelector('wa-tab[panel="workspace"]')
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: "workspace" } }),
-      );
+      .querySelector<HTMLButtonElement>('.tabstrip-tab[data-tab-value="workspace"]')
+      ?.click();
     expect(region.callbacks?.activatePanel).toHaveBeenCalledWith("workspace");
     region.layout = activatePanel(region.layout, "workspace");
     await region.updateComplete;
@@ -505,6 +511,8 @@ describe("chat sidebar region", () => {
         }),
       );
       await region.updateComplete;
+      root(region).querySelector(".side-panel-type-menu")?.dispatchEvent(new Event("wa-show"));
+      flush();
       const menuItem = Array.from(
         root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
       ).find((item) => Reflect.get(item, "value") === slot);
@@ -573,6 +581,9 @@ describe("chat sidebar region", () => {
     );
     await region.updateComplete;
 
+    expect(root(region).querySelector(".side-panel-type-menu__item")).toBeNull();
+    root(region).querySelector(".side-panel-type-menu")?.dispatchEvent(new Event("wa-show"));
+    flush();
     expect(
       Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),

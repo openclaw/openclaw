@@ -24,7 +24,6 @@ import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
-import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -43,7 +42,7 @@ import type {
 } from "./chat-composer-plus-menu.tsx";
 import type { SkillMenuState } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenuState } from "./chat-composer-slash-menu.tsx";
-import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
+import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -77,7 +76,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sessionAdmitted?: boolean;
   connected: boolean;
   offline?: boolean;
-  queuedOutboxCount?: number;
   canSend: boolean;
   canCompose?: boolean;
   modelRequiredReason?: string | null;
@@ -92,8 +90,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
   waitingApproval?: boolean;
-  waitingSubagents?: ChatSubagentWait | null;
-  onOpenSubagents?: (focus?: boolean) => void;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;

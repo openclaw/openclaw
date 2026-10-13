@@ -11,6 +11,7 @@ import type { Job } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
 const effects = vi.hoisted(() => {
   const events: string[] = [];
@@ -47,7 +48,13 @@ vi.mock("./sqlite-worker-transfer.js", () => ({
   createSqliteWorkerTransferReceiver: effects.forbidden,
 }));
 
-function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
+function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched = true) {
+  const slotCustody = new SqliteWorkerSlotCustody();
+  const custody = slotCustody.createRequest();
+  custody.activate();
+  if (dispatched) {
+    custody.accept();
+  }
   const resolve = vi.fn((_value: unknown) => {
     effects.events.push("resolve");
   });
@@ -75,10 +82,10 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
     },
   };
   const job: Job = {
+    custody,
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
-    nativeDispatched: true,
     operationAdmission: {
       admission,
       releaseService() {
@@ -92,7 +99,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = []) {
       effects.events.push("detach");
     },
   };
-  return { job, resolve, reject, settleNative };
+  return { job, resolve, reject, settleNative, slotCustody };
 }
 
 function aggregate(value: unknown): AggregateError {
@@ -146,10 +153,14 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
       const current = jobWithCleanup();
       const error = new Error("Worker result was lost");
       const retirement = createDeferredCore();
-      failSqliteWorkerSlot({ current: current.job, queue: [], actors: new Set() }, error, {
-        retire: () => retirement.promise,
-        finish: settleSqliteWorkerJob,
-      });
+      failSqliteWorkerSlot(
+        { custody: current.slotCustody, current: current.job, queue: [], actors: new Set() },
+        error,
+        {
+          retire: () => retirement.promise,
+          finish: settleSqliteWorkerJob,
+        },
+      );
       expect(current.settleNative).not.toHaveBeenCalled();
       if (retired) {
         retirement.resolve();
@@ -173,14 +184,14 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
     "preserves a completed $outcome after joining failed native cleanup (retired: $retired)",
     async ({ outcome, retired }) => {
       const current = jobWithCleanup();
-      const queued = jobWithCleanup();
-      queued.job.nativeDispatched = false;
+      const queued = jobWithCleanup([], false);
       const value = { revision: 42 };
       const original = new Error("Original operation refused");
       const cleanup = new Error("Native operation cleanup failed");
       const retirementFailure = new Error("Worker retirement could not be confirmed");
       const retirement = createDeferredCore();
       const slot: Parameters<typeof failSqliteWorkerSlot>[0] = {
+        custody: current.slotCustody,
         current: current.job,
         queue: [queued.job],
         actors: new Set(),

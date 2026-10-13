@@ -330,7 +330,7 @@ describe("config form and navigation", () => {
     });
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
+    expect(container.querySelector(".hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
     expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
     expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(
@@ -341,7 +341,7 @@ describe("config form and navigation", () => {
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const active = container.querySelector(".config-toolbar .hub-tab[active]");
+    const active = container.querySelector('.config-toolbar .hub-tab[aria-selected="true"]');
     expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");

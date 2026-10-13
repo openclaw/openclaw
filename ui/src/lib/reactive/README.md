@@ -84,9 +84,8 @@ stream invalidation cadence.
 
 `afterCommit` requests a new generation and runs in Solid's split-effect apply
 phase, after DOM bindings. Requests made from a callback wait for the following
-generation. `afterLayout` additionally waits for a browser animation frame;
-ResizeObserver, child custom elements, images, and overlay animations retain
-their own settlement contracts. Both methods own returned cleanup until the
+generation. ResizeObserver, child custom elements, images, and overlay animations
+retain their own settlement contracts. The method owns returned cleanup until the
 callback calls `complete`, is cancelled, the pane parks, or the owner disposes.
 Pending callbacks wait through parking; disposal cancels them. Lit callers keep
 using the renderer-neutral interface and the existing controller adapter until

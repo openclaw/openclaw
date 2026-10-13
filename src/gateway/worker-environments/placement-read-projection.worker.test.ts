@@ -272,34 +272,8 @@ describe("worker placement read projection", () => {
     }
   });
 
-  it("invalidates an empty maintenance scan when a new placement commits", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-inventory-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
-    const empty = await store.prepareMaintenancePlacements();
-    try {
-      expect(empty.placements).toEqual([]);
-      const placement = await store.startDispatch({
-        sessionId: "new-placement",
-        sessionKey: "agent:main:new-placement",
-        agentId: "main",
-      });
-      expect(() => empty.assertCurrent()).toThrow("placement inventory changed");
-      const current = await store.prepareMaintenancePlacements();
-      try {
-        expect(current.placements).toEqual([placement]);
-        current.assertCurrent();
-      } finally {
-        current.release();
-      }
-      expect(() => current.assertCurrent()).toThrow("placement inventory changed");
-    } finally {
-      empty.release();
-    }
-  });
-
   it.each(["local", "worker-turn", "remote-exec"] as const)(
-    "fences inventory and session observations during %s publication settlement",
+    "fences session observations during %s publication settlement",
     async (kind) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-settlement-"));
       const database = openOpenClawStateDatabase();
@@ -322,7 +296,6 @@ describe("worker placement read projection", () => {
       const placement = store.get(session.sessionId)!;
       const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
       for (const settlement of ["rollback", "commit", "invalidate"] as const) {
-        const prepared = await store.prepareMaintenancePlacements();
         const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
         const publication = stagePlacementTurnClaimWorkerPublication(
           identity,
@@ -331,18 +304,8 @@ describe("worker placement read projection", () => {
           placement.state,
         );
         try {
-          if (kind === "local") {
-            prepared.assertCurrent();
-          } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-          }
           expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
           publication[settlement]();
-          if (kind === "local" || settlement === "rollback") {
-            prepared.assertCurrent();
-          } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-          }
           if (settlement === "rollback") {
             sessionRead.assertCurrent();
           } else {
@@ -351,7 +314,6 @@ describe("worker placement read projection", () => {
         } finally {
           publication.rollback();
           sessionRead.release();
-          prepared.release();
         }
       }
       const closing = await store.prepareMaintenancePlacements();

@@ -1,14 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -76,8 +72,6 @@ async function git(root: string, ...args: string[]) {
 
 describe("placement recovery session admission with persisted placements", () => {
   support.setupWorkerEnvironmentServiceSuite();
-  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
-  afterAll(() => clearRuntimeConfigSnapshot());
   let releaseOwnedWork: (() => Promise<void>) | undefined;
   afterEach(async () => {
     // Release blocked provider work before the service fixture drains on a failed test.

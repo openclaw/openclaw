@@ -144,6 +144,7 @@ export function collectAgentDatabasePreflightTargets(options: {
     registeredAgentDatabases: registeredDatabases,
   });
   return {
+    configuredTargets,
     candidates:
       purpose === "runtime"
         ? candidates.filter((row) => typeof classifyDeletion(row.path, row.agentId) !== "object")

@@ -383,6 +383,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         preambleOnlyProgress
           ? {
               text: previewText,
+              escapeMentions: true,
               allowNewMessage: typeof latestLine !== "object" || latestLine.complete !== false,
               ...(snapshot.preparedBlocks
                 ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
@@ -393,8 +394,16 @@ export function createSlackProgressRuntime(runtimeParams: {
                 text: progressCard.resolveCardText(cardBlocks),
                 blocks: cardBlocks,
               }
-            : snapshot.preparedBlocks
-              ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
+            : snapshot.preparedBlocks || (isProgressMode && slackProgressStyle === "compact")
+              ? {
+                  text: previewText,
+                  ...(isProgressMode && slackProgressStyle === "compact"
+                    ? { escapeMentions: true as const }
+                    : {}),
+                  ...(snapshot.preparedBlocks
+                    ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
+                    : {}),
+                }
               : previewText,
       );
       if (cardBlocks) {

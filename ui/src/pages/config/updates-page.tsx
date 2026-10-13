@@ -57,13 +57,15 @@ export function UpdatesPage(props: UpdatesPageProps) {
         props.context.runtimeConfig.patchForm(["update", "auto", "enabled"], enabled)
       }
       onUpdateNow={() => {
+        const context = props.context;
         const update = overlays().read();
         void confirmAndStartUpdate({
-          startGatewayUpdate: () => void props.context.overlays.runUpdate(),
+          isCurrentTarget: context.overlays.captureUpdateTarget(),
+          startGatewayUpdate: () => void context.overlays.runUpdate(),
           // The dialog outlives this page, so read live snapshots after each change.
-          watchUpdateProgress: createUpdateProgressWatcher(props.context),
-          onCheckStatus: () => props.context.overlays.refreshUpdateStatus(),
-          onAcknowledge: () => props.context.overlays.acknowledgeUpdateRun(),
+          watchUpdateProgress: createUpdateProgressWatcher(context),
+          onCheckStatus: () => context.overlays.refreshUpdateStatus(),
+          onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
           updateAvailable: update.updateAvailable,
           updateSchedule: update.updateSchedule,
           // Keep Gateway routing: this row has no native-decline listener.

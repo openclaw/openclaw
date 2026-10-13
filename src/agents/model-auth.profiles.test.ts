@@ -17,6 +17,7 @@ import {
   createApiKeyCredential as keyCredential,
   createAuthProfileStoreFixture as authStore,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -744,6 +745,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
             for (const removeSource of [false, true]) {
               if (removeSource) {
                 await fs.rm(legacyPath);
+                await refreshAuthProfileFileState();
               }
               await expect(
                 resolveAuth({ provider: "litellm", agentDir, cfg }),

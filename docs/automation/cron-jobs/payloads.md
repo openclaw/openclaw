@@ -95,6 +95,11 @@ jobs use the current operator read policy. Agent-created jobs retain their recor
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
 
+Scheduled agent turns can inspect their own job and remove it when finished,
+even without an interactive sender. This self-scoped `automations` tool does not
+grant administrator access or control over other jobs, and explicit tool-policy
+denials still apply.
+
 Manual runs use the same scheduled execution context as timer-fired runs after
 the request passes admission. Ending the chat turn or tool call that started a
 run does not expire the job's tool access. The job still uses its stored authority
@@ -185,9 +190,11 @@ Before an isolated run starts, OpenClaw checks reachable local endpoints for con
 
 Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
+The local check opens and closes a TCP connection without sending HTTP requests or provider credentials, so authenticated local servers do not log spurious `/models` authorization failures. TLS, authentication, and model errors are handled by inference. Endpoints routed through a managed proxy defer connectivity checks to inference instead of testing a direct connection.
+
 ### Command payloads
 
-Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
+Command payloads run scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
 
 <Note>
 When an agent-turn automation's exec needs approval, the card is delivered to connected approval surfaces and the run waits for the decision; answering **Always allow** mints a scoped standing grant so later occurrences run without prompting. See [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations) for lifetime, listing, and revocation.
@@ -285,7 +292,7 @@ Codex-created automations can retain the app IDs and permission ceiling
 available to the authenticated creator thread. At execution, OpenClaw requires
 the same prepared Codex profile and account, then narrows the stored cap against
 current app policy. Revoked apps, account/runtime changes, and interactive
-approval requirements fail closed with a recovery message; they never fall
+approval requirements stop execution with a recovery message; they never fall
 back to broader or different credentials. Older jobs without a captured app
 envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
@@ -323,7 +330,9 @@ With `announce`, agent, command, and script results belong to the chat or topic 
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply starts with `AUTOMATION_FAILED` on its own line, followed by what failed and what it tried. The scheduler records that run as an error with the remaining text as its error, delivers that text instead of the token when the job announces, and applies the normal retry, failure-alert, and owner-repair policy. When the run hands its work to a subagent, the child's settled final answer is classified the same way. Only an exact first line counts; a reply that mentions the token elsewhere is ordinary output.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply explains what failed and what it tried in ordinary prose.
+
+    A completed model run is not proof that the requested task succeeded. The scheduler does not classify assistant prose as an execution error: a blocker report remains ordinary output, including a subagent's settled final answer. It follows the job's delivery policy and does not itself trigger retries, error backoff, failure alerts, or owner-conversation repair. Runtime failures, such as provider errors or execution timeouts, still fail the run and use the normal scheduler failure policy. Required delivery failures are tracked separately; see [Failure notifications](/automation/cron-jobs/delivery#failure-notifications).
 
     For trusted scheduled jobs, the job's own instructions win when they intentionally ask for a question or plan, and the agent may remove a job that is no longer needed. External hook turns receive only the common unattended contract; they do not receive that override or self-removal guidance across the external-content boundary.
 
@@ -331,7 +340,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
   <Accordion title="Subagent and Discord delivery">
     When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. A child that deliberately stays silent (`NO_REPLY`) leaves a quiet successful run; a child that times out or ends without a reply fails the run.
 
-    For text-only Discord announce targets, OpenClaw sends the canonical final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
+    For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 
   </Accordion>
 </AccordionGroup>

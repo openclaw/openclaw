@@ -1,10 +1,8 @@
-import { For, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { connectDropdownMenu } from "./dropdown-menu-controller.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./web-awesome.ts";
+import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 
 export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
 type Props = {
@@ -28,43 +26,77 @@ const actions: readonly [CatalogSessionMenuAction, string, IconName][] = [
 defineSolidBridge<Props>(
   "openclaw-catalog-session-menu",
   (props, host) => {
-    onSettled(() => promoteToPopoverTopLayer(host));
-    const disconnect = connectDropdownMenu(
-      host,
-      { getTrigger: () => props.trigger, onClose: () => props.onClose() },
-      () => host.updateComplete,
+    const id = createUniqueId();
+    let menu: MenuHandle | undefined;
+    createEffect(
+      () => props.trigger,
+      (trigger) => {
+        if (trigger) {
+          menu?.overlay.setReturnTarget(trigger);
+        }
+      },
     );
-    onCleanup(disconnect);
     const label = () => t("chat.catalog.sessionMenu");
+    // Queued menu selections must reuse JSX descriptors created under this owner.
+    const items = createMemo<MenuItem[]>(() =>
+      actions
+        .filter(([action]) =>
+          action === "import" ? props.canImport : action === "delete" ? props.canDelete : true,
+        )
+        .map(([action, key, icon]) => ({
+          id: action,
+          label: t(key),
+          class: `session-menu__item${action === "delete" ? " session-menu__item--destructive" : ""}`,
+          variant: action === "delete" ? "danger" : undefined,
+          disabled: action === "terminal" && props.terminalDisabled,
+          attributes: {
+            title:
+              action === "terminal" && props.terminalDisabled
+                ? t("chat.catalog.terminalUnavailable")
+                : undefined,
+          },
+          icon: (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name={icon} />
+            </span>
+          ),
+          content: <span class="session-menu__text">{t(key)}</span>,
+        })),
+    );
     return (
-      <wa-dropdown
+      <Menu
+        id={id}
         class="session-menu"
-        prop:open={true}
+        panelClass="session-menu__panel"
         placement="bottom-start"
-        prop:distance={0}
-        aria-label={label()}
-        onWa-select={(event) => {
-          event.preventDefault();
-          const action = actions.find(([value]) => value === event.detail.item.value)?.[0];
+        label={label()}
+        items={items()}
+        ref={(handle) => {
+          menu = handle;
+          if (props.trigger) {
+            handle.overlay.setReturnTarget(props.trigger);
+          }
+          handle.open();
+        }}
+        onSelect={(item) => {
+          const action = actions.find(([value]) => value === item.id)?.[0];
           if (action) {
             // Capture the action before closing clears the caller's menu snapshot.
             props.onAction(action);
+            if (!host.isConnected) {
+              props.onClose();
+            }
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open && host.isConnected) {
             props.onClose();
           }
         }}
-        onWa-after-hide={(event) => {
-          if (event.currentTarget instanceof Node && event.currentTarget.isConnected) {
-            props.onClose();
-          }
-        }}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex={-1}
-          aria-hidden="true"
-          aria-label={label()}
-          style={{
+        triggerAttributes={{
+          tabindex: -1,
+          "aria-hidden": "true",
+          style: {
             position: "fixed",
             left: `${Math.max(8, Math.min(props.x, window.innerWidth - 248))}px`,
             top: `${Math.max(8, Math.min(props.y, window.innerHeight - 148 - (props.canDelete ? 40 : 0) - (props.canImport ? 40 : 0)))}px`,
@@ -72,43 +104,15 @@ defineSolidBridge<Props>(
             height: "1px",
             opacity: "0",
             "pointer-events": "none",
-          }}
-        />
+          },
+        }}
+      >
         <Show when={props.lastActive}>
           <div class="session-menu__info">
             {t("sessionsView.lastActive", { time: props.lastActive })}
           </div>
         </Show>
-        <For each={actions}>
-          {([action, key, icon]) => (
-            <Show
-              when={
-                action === "import" ? props.canImport : action === "delete" ? props.canDelete : true
-              }
-            >
-              <wa-dropdown-item
-                class={[
-                  "session-menu__item",
-                  { "session-menu__item--destructive": action === "delete" },
-                ]}
-                variant={action === "delete" ? "danger" : undefined}
-                value={action}
-                title={
-                  action === "terminal" && props.terminalDisabled
-                    ? t("chat.catalog.terminalUnavailable")
-                    : undefined
-                }
-                disabled={action === "terminal" && props.terminalDisabled}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                  <Icon name={icon} />
-                </span>
-                <span class="session-menu__text">{t(key)}</span>
-              </wa-dropdown-item>
-            </Show>
-          )}
-        </For>
-      </wa-dropdown>
+      </Menu>
     );
   },
   {

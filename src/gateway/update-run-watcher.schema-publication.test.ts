@@ -9,6 +9,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
 } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -24,6 +25,12 @@ vi.mock("./server-update-sentinel.js", async (original) => ({
   refreshLatestUpdateRestartSentinel: async () => null,
 }));
 // Publication deadlines share the fixture clock; worker transport is covered separately.
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: async (
+    ...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>
+  ) => reconcileOpenClawStateSchemaPublication(...args),
+}));
 vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
   reconcileAbandonedUpdateRunsAsync: async (
@@ -165,8 +172,20 @@ describe("Gateway schema publication timer", () => {
     // No wake: the already scheduled timer must discover this new driver itself.
     await clock.advanceBy(1);
     expectVersion(db, 15);
+    const publicationScheduled = createDeferredCore();
+    const publicationDeadline = clock.clock.now() + graceMs;
+    const arm = clock.clock.arm;
+    const scheduling = vi.spyOn(clock.clock, "arm").mockImplementation((run, delayMs) => {
+      const cancel = arm(run, delayMs);
+      if (clock.clock.now() + delayMs === publicationDeadline) {
+        publicationScheduled.resolve();
+      }
+      return cancel;
+    });
     wakeUpdateRunWatcher();
     finishUpdateRun(next.runId, { status: "succeeded" });
+    await publicationScheduled.promise;
+    scheduling.mockRestore();
     await clock.advanceBy(graceMs - 1);
     expectVersion(db, 15);
     await clock.advanceBy(1);

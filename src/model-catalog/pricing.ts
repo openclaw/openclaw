@@ -12,7 +12,6 @@ import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getPluginCache,
-  getPluginCacheRetirementSignal,
   isPluginCacheFactInvalidatedError,
   retainPluginCache,
   withPluginCache,
@@ -230,14 +229,6 @@ export async function prepareModelPricingContext(
   const env = cloneEnvWithPlatformSemantics(process.env);
   const cache = getPluginCache();
   const release = retainPluginCache(cache);
-  const metadata = cache.metadata;
-  const signal = getPluginCacheRetirementSignal(cache);
-  const assertCurrent = () => {
-    signal.throwIfAborted();
-    if (cache.metadata !== metadata) {
-      throw new Error("Pricing metadata changed during preparation; retry the operation.");
-    }
-  };
   try {
     await withPluginCache(cache, async () => {
       let snapshot: PluginMetadataSnapshot | undefined;
@@ -253,16 +244,13 @@ export async function prepareModelPricingContext(
         }
         snapshot = undefined;
       }
-      assertCurrent();
       if (snapshot && isRemoteModelCatalogRefreshEnabled(config)) {
         await prepareRemoteModelCatalogStartupSnapshot({ env });
       }
-      assertCurrent();
       const catalog = getActiveRemoteModelCatalog(config, false);
       // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
       if (!readPricingContext(config, catalog)) {
         const context = buildPricingContext(config, snapshot);
-        assertCurrent();
         retainPricingContext(config, catalog, context);
       }
     });

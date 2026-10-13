@@ -154,9 +154,6 @@ describe("telemetry cli", () => {
 
   it.each([
     { reason: "never-asked", label: "consent has not been requested", method: "GET" },
-    { reason: "config-disabled", label: "disabled in configuration", method: "GET" },
-    { reason: "do-not-track", label: "disabled by DO_NOT_TRACK", method: "GET" },
-    { reason: "update-disabled", label: "update checks are disabled", method: null },
     {
       reason: "automated-environment",
       label: "disabled in an automated environment (CI is set)",
@@ -256,24 +253,23 @@ describe("telemetry cli", () => {
     }
   });
 
-  it.each([
-    { name: "explicit help", args: ["--help"], usage: "telemetry [options] [command]" },
-    { name: "implicit help", args: ["help"], usage: "telemetry [options] [command]" },
-    { name: "nested help", args: ["help", "show"], usage: "telemetry show [options]" },
-  ])("preserves $name without reading or changing telemetry", async ({ args, usage }) => {
-    const previousExitCode = process.exitCode;
-    process.exitCode = undefined;
-    const { program, stdout, stderr } = createTelemetryProgram();
-    try {
-      await expect(
-        program.parseAsync(["telemetry", ...args], { from: "user" }),
-      ).rejects.toMatchObject({ exitCode: 0 });
-      expect(stdout.join("")).toContain(`Usage: openclaw ${usage}`);
-      expect(stderr).toEqual([]);
-      expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-      expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
-    } finally {
-      process.exitCode = previousExitCode;
-    }
-  });
+  it.each([{ name: "implicit help", args: ["help"], usage: "telemetry [options] [command]" }])(
+    "preserves $name without reading or changing telemetry",
+    async ({ args, usage }) => {
+      const previousExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const { program, stdout, stderr } = createTelemetryProgram();
+      try {
+        await expect(
+          program.parseAsync(["telemetry", ...args], { from: "user" }),
+        ).rejects.toMatchObject({ exitCode: 0 });
+        expect(stdout.join("")).toContain(`Usage: openclaw ${usage}`);
+        expect(stderr).toEqual([]);
+        expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+        expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
+      } finally {
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
 });

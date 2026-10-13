@@ -7,7 +7,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "../../server-methods/types.js";
-import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 
 type TalkHandlerCallOptions = {
   params: Record<string, unknown>;
@@ -34,7 +34,7 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
       method === "talk.client.create" ||
       method === "talk.session.create" ||
       method === "talk.client.toolCall"
-        ? resolveSessionMutationAuthorization({
+        ? await resolveSessionMutationAuthorizationAsync({
             client: client as GatewayClient,
             context: context as GatewayRequestContext,
             method,
@@ -45,25 +45,29 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
       respond(false, undefined, admission.error);
       return;
     }
-    await expectDefined(
-      talkHandlers[method],
-      `talkHandlers["${method}"] test invariant`,
-    )({
-      req: { type: "req", id, method },
-      params: params as never,
-      client: client as never,
-      isWebchatConnect: () => false,
-      respond,
-      context: context as never,
-      // Row creation is mocked here; talk-target.test covers the real post-ensure fence.
-      ...(admission?.authorization
-        ? {
-            sessionMutationAuthorization: {
-              ...admission.authorization,
-              assertTargetCurrent: vi.fn(),
-            },
-          }
-        : {}),
-    });
+    try {
+      await expectDefined(
+        talkHandlers[method],
+        `talkHandlers["${method}"] test invariant`,
+      )({
+        req: { type: "req", id, method },
+        params: params as never,
+        client: client as never,
+        isWebchatConnect: () => false,
+        respond,
+        context: context as never,
+        // Row creation is mocked here; talk-target.test covers the real post-ensure fence.
+        ...(admission?.authorization
+          ? {
+              sessionMutationAuthorization: {
+                ...admission.authorization,
+                assertTargetCurrent: vi.fn(),
+              },
+            }
+          : {}),
+      });
+    } finally {
+      admission?.authorization?.release?.();
+    }
   };
 }

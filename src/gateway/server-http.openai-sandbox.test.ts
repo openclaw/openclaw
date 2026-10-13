@@ -3,7 +3,7 @@ import "../commands/agent-command.test-mocks.js";
 import "../commands/agent-command-attempt.test-mocks.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -162,7 +162,7 @@ async function post(params: {
 
 function reportRuntimeIsolation() {
   vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
-    const runtime = resolveSandboxRuntimeStatus({
+    const runtime = await resolveSandboxRuntimeStatusAsync({
       cfg: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,

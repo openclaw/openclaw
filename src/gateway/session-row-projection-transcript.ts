@@ -27,7 +27,6 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
   store: (path: string) => SessionRowStore | undefined;
-  invalidate: (id: string) => void;
   refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts) => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
@@ -71,7 +70,6 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
     }
     for (const row of found) {
       const id = identity(row);
-      params.invalidate(id);
       const pending = row.pendingDatabaseFacts !== undefined;
       const retained = retainedTranscriptFacts(row);
       // Delayed or message-less notifications refresh the current committed facts.
@@ -125,10 +123,16 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                   generation: fact.value.generation,
                   maxSeq: fact.value.rawSeq,
                 },
+                transcriptPreview: fact.value.lastMessagePreview,
               }
             : undefined;
         row.retainedDatabaseFacts = retained;
-        if (!retained || pending || readSessionActivitySummary(facts?.entry)) {
+        if (
+          !retained ||
+          pending ||
+          retained.transcriptPreview !== undefined ||
+          readSessionActivitySummary(facts?.entry)
+        ) {
           params.refresh(identity(row), retained);
         } else {
           row.databaseFactsRevision++;

@@ -684,7 +684,9 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
+  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/app/app-shell-chrome.ts",
+  "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
@@ -950,6 +952,19 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "src/snapshot/**",
+  "src/infra/backup-*.ts",
+  "src/infra/update-database-*.ts",
+  "src/cli/update-cli/**",
+  "src/commands/backup*.ts",
+  "src/state/openclaw-state-snapshot-sanitizer.ts",
+  "scripts/generate-postgres-schema.mts",
+  "scripts/lib/postgres-schema-catalog.mts",
+  "test/scripts/generate-postgres-schema.test.ts",
+  "src/state/*schema*",
+  "src/state/openclaw-state-db-contract.ts",
+  "src/state/postgres-schema.generated/**",
+  "src/cron/store/runtime-authority-store.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
@@ -1220,7 +1235,9 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-signing.test.ts",
           "test/scripts/pr-baseline-successor.test.ts",
+          "test/scripts/pr-correction-continuation.test.ts",
         ],
         (plan) =>
           ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
@@ -1334,7 +1351,7 @@ const additionalChecks = [
   {
     check_name: "check-additional-extension-package-boundary",
     group: "extension-package-boundary",
-    runner: "blacksmith-32vcpu-ubuntu-2404",
+    runner: frozenTarget ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
   },
   {
     check_name: "check-additional-runtime-topology-architecture",

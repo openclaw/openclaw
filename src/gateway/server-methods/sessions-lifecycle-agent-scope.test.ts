@@ -26,7 +26,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import { resolveGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";

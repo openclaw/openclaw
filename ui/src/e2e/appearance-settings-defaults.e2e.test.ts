@@ -13,6 +13,7 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTweakcnThemePayload } from "../test-helpers/custom-theme.ts";
+import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   configResponse,
   patchPrefs,
@@ -44,12 +45,6 @@ function settingsRow(page: Page, title: string): Locator {
     .locator(".settings-row")
     .filter({ has: page.locator(".settings-row__title", { hasText: title }) })
     .first();
-}
-
-async function selectValue(locator: Locator): Promise<string> {
-  return locator.evaluate((element) =>
-    String((element as HTMLElement & { value?: unknown }).value),
-  );
 }
 
 async function readPersistedSettings(page: Page): Promise<Record<string, unknown>> {
@@ -167,10 +162,10 @@ suite.define(() => {
       const themeSection = page.locator("#settings-appearance-theme");
       const colorModeRow = settingsRow(page, "Color mode");
       const textSizeSection = page.locator("#settings-appearance-text-size");
-      const languageSelect = languageRow.locator("wa-select");
+      const languageSelect = languageRow.locator("openclaw-select-picker");
       const colorModeGroup = colorModeRow.getByRole("radiogroup");
 
-      await expect.poll(() => selectValue(languageSelect)).toBe("en");
+      await expect.poll(() => pickerValue(languageSelect)).toBe("en");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
@@ -194,12 +189,7 @@ suite.define(() => {
       const withoutLocale = { ...initialPrefs };
       delete withoutLocale.locale;
       await resetSyncedPreference({
-        click: () =>
-          languageSelect.evaluate((element) => {
-            const select = element as HTMLElement & { value: string };
-            select.value = "system";
-            select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-          }),
+        click: () => selectPickerValue(languageSelect, "system"),
         expectedKey: "locale",
         gateway,
         hash: "appearance-defaults-2",
@@ -238,7 +228,7 @@ suite.define(() => {
       await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
-      await expect.poll(() => selectValue(languageSelect)).toBe("system");
+      await expect.poll(() => pickerValue(languageSelect)).toBe("system");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
@@ -260,7 +250,9 @@ suite.define(() => {
       const reloadedColorModeRow = settingsRow(page, "Color mode");
       const reloadedTextSizeSection = page.locator("#settings-appearance-text-size");
 
-      await expect.poll(() => selectValue(reloadedLanguageRow.locator("wa-select"))).toBe("system");
+      await expect
+        .poll(() => pickerValue(reloadedLanguageRow.locator("openclaw-select-picker")))
+        .toBe("system");
       await expect
         .poll(() =>
           reloadedThemeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
@@ -479,13 +471,13 @@ suite.define(() => {
         await gateway.waitForRequest("config.get");
 
         const languageRow = page.locator("#settings-language .settings-row");
-        const languageSelect = languageRow.locator("wa-select");
+        const languageSelect = languageRow.locator("openclaw-select-picker");
         const themeSection = page.locator("#settings-appearance-theme");
         const themeDescription = themeSection.locator(":scope > .settings-section__desc");
         const followUpSelect = page.locator("[data-settings-follow-up-mode]");
         const followUpRow = page.locator(".settings-row").filter({ has: followUpSelect });
 
-        await expect.poll(() => selectValue(languageSelect)).toBe("en");
+        await expect.poll(() => pickerValue(languageSelect)).toBe("en");
         await expect
           .poll(() =>
             themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
@@ -515,11 +507,7 @@ suite.define(() => {
           .toContain("Stored in this browser only");
 
         await gateway.deferNext("config.patch");
-        await languageSelect.evaluate((element) => {
-          const select = element as HTMLElement & { value: string };
-          select.value = "fr";
-          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        });
+        await selectPickerValue(languageSelect, "fr");
         await waitForRequestCount(gateway, "config.patch", 2);
         expect(
           patchPrefs((await gateway.getRequests("config.patch"))[1] as MockGatewayRequest),
@@ -529,7 +517,7 @@ suite.define(() => {
           message: "mock validation failure",
         });
 
-        await expect.poll(() => selectValue(languageSelect)).toBe("fr");
+        await expect.poll(() => pickerValue(languageSelect)).toBe("fr");
         await expect.poll(() => languageRow.textContent()).toContain("Par défaut : Anglais");
         await expect
           .poll(() => languageRow.textContent())
@@ -552,11 +540,7 @@ suite.define(() => {
           .toContain("Stocké uniquement dans ce navigateur");
 
         await themeSection.locator(".settings-theme-card--claw").click();
-        await languageSelect.evaluate((element) => {
-          const select = element as HTMLElement & { value: string };
-          select.value = "system";
-          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        });
+        await selectPickerValue(languageSelect, "system");
         await followUpRow.locator("button.btn--sm").click();
 
         await expect
@@ -564,7 +548,7 @@ suite.define(() => {
             themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
           )
           .toBe("true");
-        await expect.poll(() => selectValue(languageSelect)).toBe("en");
+        await expect.poll(() => pickerValue(languageSelect)).toBe("en");
         await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
         await expect.poll(() => page.locator("html").getAttribute("lang")).toBe("en");
         await page.waitForTimeout(100);

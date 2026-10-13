@@ -402,8 +402,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node"],
     policy: { networkProxy: "bypass" },
   },
+  // Controllers can target an older live node; its process owns state preparation.
+  ...["install", "uninstall", "start", "stop", "restart"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["node", subcommand],
+      exact: true,
+      policy: { configGuard: "validate", loadPlugins: "never" },
+    }),
+  ),
   // Remote pairing verification owns a read-only identity lookup, including before its action.
   { commandPath: ["node", "identity"], exact: true, policy: PASSIVE_STARTUP_POLICY },
+  { commandPath: ["node", "status"], exact: true, policy: PASSIVE_STARTUP_POLICY },
   {
     commandPath: ["node", "worker"],
     exact: true,

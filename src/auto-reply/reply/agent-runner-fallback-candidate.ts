@@ -146,6 +146,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         agentId: turn.followupRun.run.agentId,
         sessionId: turn.followupRun.run.sessionId,
         sessionKey: turn.sessionKey,
+        sessionLifecycleRevision: turn.getActiveSessionEntry()?.lifecycleRevision ?? null,
         lane: runLane,
       },
       harness: {

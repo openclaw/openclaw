@@ -1,7 +1,7 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import { render as renderSolid, type JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -12,13 +12,12 @@ import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-o
 import { formatUiError } from "../lib/format-error.ts";
 import { pathDisplayName } from "../lib/path-display.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
-import { LitContent } from "../lit/solid-content.tsx";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
-import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
+import { PlaceBrowser } from "../pages/new-session/place-browser.tsx";
 import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { Icon } from "./solid/icon.tsx";
-import { syncPopoverLabel } from "./web-awesome-popover.ts";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 registerSessionOrganizationEnglish();
@@ -55,6 +54,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       let submitting = false;
       let failure: string | null = null;
       let browserVisible = false;
+      let folderPopover: PopoverHandle | undefined;
       const browser = new PlaceBrowserState(options.listDirectory, paint);
 
       const handleSubmit = async (event: Event) => {
@@ -85,12 +85,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       };
 
       const closePicker = () => {
-        const picker = host.querySelector<HTMLElement & { open: boolean }>(
-          "wa-popover.session-group-defaults__folder-popover",
-        );
-        if (picker) {
-          picker.open = false;
-        }
+        folderPopover?.overlay.request(false, "return");
       };
 
       const showPickerRoot = () => {
@@ -168,6 +163,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         setRevision((value) => value + 1);
       }
       function Dialog() {
+        let folderAnchor!: HTMLButtonElement;
         onCleanup(() => {
           browser.reset();
           repositoryRequestToken += 1;
@@ -211,9 +207,14 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           };
         });
         function Browser() {
+          onSettled(() => {
+            host
+              .querySelector<HTMLInputElement>(".new-session-page__browser-path")
+              ?.focus({ preventScroll: true });
+          });
           const content = createMemo(() => {
             revision();
-            return renderPlaceBrowser({
+            return {
               browser,
               id: "session-group-defaults-browser",
               label: t("newSession.gateway"),
@@ -223,9 +224,55 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               onClose: showPickerRoot,
               onApplyFolder: applyFolder,
               onRegisterProject: () => {},
-            });
+            };
           });
-          return <LitContent value={content()} />;
+          return <PlaceBrowser params={content()} />;
+        }
+        function PickerRoot() {
+          onSettled(() => {
+            if (folderPopover?.overlay.open) {
+              folderPopover.overlay.surface
+                .querySelector<HTMLButtonElement>("button")
+                ?.focus({ preventScroll: true });
+            }
+          });
+          return (
+            <div class="new-session-page__picker-root">
+              <button
+                type="button"
+                class="session-menu__item"
+                data-value="agent-workspace"
+                data-popover="close"
+                aria-pressed={!state().trimmedCwd ? "true" : "false"}
+                disabled={state().submitting}
+                ref={nativeListener("click", () => applyFolder(""))}
+              >
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="folder" />
+                </span>
+                <span class="session-menu__text">
+                  {t("sessionsView.groupDefaultsCwdPlaceholder")}
+                </span>
+                <span class="session-menu__check" aria-hidden="true">
+                  {!state().trimmedCwd ? <Icon name="check" /> : undefined}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="session-menu__item"
+                data-value="browse"
+                aria-pressed="false"
+                disabled={state().submitting}
+                onClick={showBrowser}
+              >
+                <span class="session-menu__check" aria-hidden="true" />
+                <span class="session-menu__text">{t("newSession.browse")}</span>
+                <span class="new-session-page__menu-chevron" aria-hidden="true">
+                  <Icon name="chevronRight" />
+                </span>
+              </button>
+            </div>
+          );
         }
         function ModeOption(props: { index: number }) {
           const option = () => state().environmentOptions[props.index]!;
@@ -279,7 +326,10 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               }
             }}
           >
-            <form class="exec-approval-card session-group-defaults" onSubmit={handleSubmit}>
+            <form
+              class="exec-approval-card session-group-defaults"
+              onSubmit={(event) => void handleSubmit(event)}
+            >
               <div class="exec-approval-header">
                 <div>
                   <div class="exec-approval-title">
@@ -297,7 +347,15 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     class="new-session-page__trigger session-group-defaults__folder"
                     aria-label={`${t("sessionsView.groupDefaultsCwd")}: ${state().folderLabel}`}
                     aria-haspopup="dialog"
+                    aria-controls="session-group-defaults-folder-popover"
                     disabled={state().submitting}
+                    ref={(element) => {
+                      folderAnchor = element;
+                    }}
+                    onClick={() => {
+                      const overlay = folderPopover?.overlay;
+                      overlay?.request(!overlay.open, overlay.open ? "return" : "none");
+                    }}
                   >
                     <span class="new-session-page__target-icon" aria-hidden="true">
                       <Icon name="folder" />
@@ -312,54 +370,27 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                       <Icon name="chevronDown" />
                     </span>
                   </button>
-                  <wa-popover
-                    ref={syncPopoverLabel}
+                  <Popover
+                    id="session-group-defaults-folder-popover"
+                    label={`${t("sessionsView.groupDefaultsCwd")}: ${state().folderLabel}`}
+                    anchor={folderAnchor}
                     class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
-                    for="session-group-defaults-folder-trigger"
                     placement="bottom-start"
-                    without-arrow
-                    onWa-hide={showPickerRoot}
+                    ref={(handle) => {
+                      folderPopover = handle;
+                    }}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        folderPopover?.overlay.surface
+                          .querySelector<HTMLButtonElement>("button")
+                          ?.focus({ preventScroll: true });
+                      } else {
+                        showPickerRoot();
+                      }
+                    }}
                   >
-                    {state().browserVisible ? (
-                      <Browser />
-                    ) : (
-                      <div class="new-session-page__picker-root">
-                        <button
-                          type="button"
-                          class="session-menu__item"
-                          data-value="agent-workspace"
-                          data-popover="close"
-                          aria-pressed={!state().trimmedCwd ? "true" : "false"}
-                          disabled={state().submitting}
-                          ref={nativeListener("click", () => applyFolder(""))}
-                        >
-                          <span class="session-menu__icon" aria-hidden="true">
-                            <Icon name="folder" />
-                          </span>
-                          <span class="session-menu__text">
-                            {t("sessionsView.groupDefaultsCwdPlaceholder")}
-                          </span>
-                          <span class="session-menu__check" aria-hidden="true">
-                            {!state().trimmedCwd ? <Icon name="check" /> : undefined}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          class="session-menu__item"
-                          data-value="browse"
-                          aria-pressed="false"
-                          disabled={state().submitting}
-                          onClick={showBrowser}
-                        >
-                          <span class="session-menu__check" aria-hidden="true" />
-                          <span class="session-menu__text">{t("newSession.browse")}</span>
-                          <span class="new-session-page__menu-chevron" aria-hidden="true">
-                            <Icon name="chevronRight" />
-                          </span>
-                        </button>
-                      </div>
-                    )}
-                  </wa-popover>
+                    {state().browserVisible ? <Browser /> : <PickerRoot />}
+                  </Popover>
                 </div>
                 <div class="field">
                   <span>{t("sessionsView.groupDefaultsMode")}</span>

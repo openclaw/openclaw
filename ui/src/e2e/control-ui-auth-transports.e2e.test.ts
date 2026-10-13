@@ -13,8 +13,8 @@ import {
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
@@ -530,7 +530,7 @@ async function createBrowserPage(
   // Browser startup shares CI shard CPU. Bound navigation and the first
   // rendered interaction separately; transport assertions stay narrow.
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
-  await confirmation.waitFor({ timeout: controlUiSettleTimeoutMs });
+  await confirmation.getByRole("dialog").waitFor({ timeout: controlUiSettleTimeoutMs });
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation
@@ -880,20 +880,18 @@ suite.define(() => {
           .waitFor({ timeout: controlUiSettleTimeoutMs });
 
         const seededEvidenceStart = proxy.evidence.length;
-        await connected.page.evaluate((gatewayUrl) => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          if (!app?.runtime) {
-            throw new Error("Control UI runtime is unavailable");
-          }
-          app.runtime.context.gateway.connect({
-            gatewayUrl,
-            token: "prior-gateway-token",
-            password: "prior-gateway-password",
-            bootstrapToken: "prior-gateway-bootstrap",
-          });
-        }, proxy.trustedUrl);
+        await evaluateControlUiContext(
+          connected.page,
+          (application, gatewayUrl) => {
+            application.gateway.connect({
+              gatewayUrl,
+              token: "prior-gateway-token",
+              password: "prior-gateway-password",
+              bootstrapToken: "prior-gateway-bootstrap",
+            });
+          },
+          proxy.trustedUrl,
+        );
         await waitForConnectionEvidence(
           (entry) =>
             entry.requestTarget === "/trusted" &&
@@ -903,15 +901,13 @@ suite.define(() => {
 
         const queryScopedUrl = `${proxy.trustedUrl}?credential-scope=next`;
         const queryEvidenceStart = proxy.evidence.length;
-        await connected.page.evaluate((gatewayUrl) => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          if (!app?.runtime) {
-            throw new Error("Control UI runtime is unavailable");
-          }
-          app.runtime.context.gateway.connect({ gatewayUrl });
-        }, queryScopedUrl);
+        await evaluateControlUiContext(
+          connected.page,
+          (application, gatewayUrl) => {
+            application.gateway.connect({ gatewayUrl });
+          },
+          queryScopedUrl,
+        );
         const queryEvidence = await waitForConnectionEvidence(
           (entry) =>
             entry.requestTarget === "/trusted?credential-scope=next" &&
@@ -922,15 +918,13 @@ suite.define(() => {
         expect(queryEvidence.browserConnect?.authFields).toEqual(["password", "token"]);
 
         const originEvidenceStart = proxy.evidence.length;
-        await connected.page.evaluate((gatewayUrl) => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          if (!app?.runtime) {
-            throw new Error("Control UI runtime is unavailable");
-          }
-          app.runtime.context.gateway.connect({ gatewayUrl });
-        }, proxy.ipv4TrustedUrl);
+        await evaluateControlUiContext(
+          connected.page,
+          (application, gatewayUrl) => {
+            application.gateway.connect({ gatewayUrl });
+          },
+          proxy.ipv4TrustedUrl,
+        );
         const originEvidence = await waitForConnectionEvidence(
           (entry) => entry.requestTarget === "/trusted" && entry.gatewayResult?.ok === true,
           originEvidenceStart,

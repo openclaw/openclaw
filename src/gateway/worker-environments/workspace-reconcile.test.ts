@@ -239,7 +239,7 @@ describe("worker workspace reconciliation", () => {
         abort: async () => {},
       },
     });
-    expect(replayCommit).toHaveBeenCalledWith(current.ref);
+    expect(replayCommit).not.toHaveBeenCalled();
     await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: ref });
     expect(
       (
@@ -412,7 +412,7 @@ describe("worker workspace reconciliation", () => {
     });
 
     expect(replay.conflictPaths).toEqual(["result.pipe"]);
-    expect(committed).toEqual([base.ref]);
+    expect(committed).toEqual([]);
     await expect(fs.lstat(fifoPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -450,7 +450,7 @@ describe("worker workspace reconciliation", () => {
 
     expect(replay.conflictPaths).toEqual(["conflict.txt", "result.txt"]);
     expect(replay.manifestRef).not.toBe(current.ref);
-    expect(replayCommit).toHaveBeenCalledWith(replay.manifestRef);
+    expect(replayCommit).not.toHaveBeenCalled();
     await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe(
       "later local\n",
     );

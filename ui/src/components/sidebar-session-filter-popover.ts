@@ -58,13 +58,9 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
       event.preventDefault();
       event.stopPropagation();
       this.onClose(true);
-    } else if (
-      event.key === "Tab" &&
-      !event.defaultPrevented &&
-      isMobileNavLayout() &&
-      event.currentTarget instanceof HTMLElement
-    ) {
-      keepSheetFocus(event.currentTarget, event);
+    } else if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout()) {
+      // SAFETY: This handler belongs to the rendered panel; Solid can retarget currentTarget.
+      keepSheetFocus(this.querySelector<HTMLElement>(".sidebar-session-filter-panel")!, event);
     }
   };
 
@@ -91,6 +87,10 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   private readonly focusInitialControl = () => {
     if (!this.focused) {
       this.focused = true;
+      // A late reposition must not take focus from a control already chosen inside the panel.
+      if (this.contains(this.ownerDocument.activeElement)) {
+        return;
+      }
       this.querySelector<HTMLElement>(this.initialFocusSelector)?.focus({
         preventScroll: true,
       });

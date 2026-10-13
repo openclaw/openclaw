@@ -20,11 +20,34 @@ import {
   resolveLegacyMigrationRelativePath,
 } from "./state-migrations.source-snapshot.js";
 
+const sourceIdentityFixture = vi.hoisted(() => ({
+  filePath: undefined as string | undefined,
+  ino: 0n,
+}));
+
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/advanced")>();
+  return {
+    ...actual,
+    readRegularFileSync: (params: Parameters<typeof actual.readRegularFileSync>[0]) => {
+      const result = actual.readRegularFileSync(params);
+      if (params.filePath !== sourceIdentityFixture.filePath) {
+        return result;
+      }
+      return {
+        ...result,
+        exactIdentity: { ...result.exactIdentity, ino: sourceIdentityFixture.ino },
+      };
+    },
+  };
+});
+
 describe("doctor legacy migration source contract", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       configureFsSafeNative({ mode: "auto" });
       __setFsSafeTestHooksForTest(undefined);
+      sourceIdentityFixture.filePath = undefined;
       vi.restoreAllMocks();
       cleanup();
     });
@@ -105,6 +128,20 @@ describe("doctor legacy migration source contract", () => {
     ).toThrow("changed after doctor loaded it");
   });
 
+  it("accepts an unchanged large file identity and rejects a rounded-number collision", () => {
+    const { sourcePath } = createSource();
+    sourceIdentityFixture.filePath = sourcePath;
+    sourceIdentityFixture.ino = 9_007_199_254_740_992n;
+    const snapshot = readLegacyMigrationSourceSnapshotSync({ sourcePath, label: "test" });
+    expect(() =>
+      assertLegacyMigrationSourceUnchanged({ sourcePath, snapshot, label: "test" }),
+    ).not.toThrow();
+    sourceIdentityFixture.ino += 1n;
+    expect(() =>
+      assertLegacyMigrationSourceUnchanged({ sourcePath, snapshot, label: "test" }),
+    ).toThrow("changed after doctor loaded it");
+  });
+
   it("restores the original source when verified claim cleanup fails", () => {
     const { sourcePath } = createSource();
     const snapshot = readLegacyMigrationSourceSnapshotSync({ sourcePath, label: "test" });
@@ -159,10 +196,10 @@ describe("doctor legacy migration source contract", () => {
       const claimed = await claim.claim({ snapshot, mismatchMessage: "source changed" });
       expect(legacyMigrationSourceSnapshotsMatch(claimed, snapshot)).toBe(true);
       expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.statSync(claim.claimPath).nlink).toBe(1);
+      expect(fs.statSync(claim.claimPath, { bigint: true }).nlink).toBe(1n);
       expect(await claim.restore()).toBeNull();
       expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+      expect(fs.statSync(sourcePath, { bigint: true }).ino).toBe(snapshot.ino);
       expect(fs.existsSync(claim.claimPath)).toBe(false);
     },
   );
@@ -195,7 +232,7 @@ describe("doctor legacy migration source contract", () => {
         refusal,
       );
       expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+      expect(fs.statSync(sourcePath, { bigint: true }).ino).toBe(snapshot.ino);
       expect(fs.existsSync(claim.claimPath)).toBe(false);
     },
   );
@@ -225,7 +262,7 @@ describe("doctor legacy migration source contract", () => {
       }
       expect(publish).not.toHaveBeenCalled();
       expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+      expect(fs.statSync(sourcePath, { bigint: true }).ino).toBe(snapshot.ino);
       expect(fs.existsSync(claim.claimPath)).toBe(false);
     },
   );
@@ -251,10 +288,16 @@ describe("doctor legacy migration source contract", () => {
       refusal,
     );
     expect(publish).not.toHaveBeenCalled();
-    expect(fs.statSync(sourcePath)).toMatchObject({ ino: snapshot.ino, nlink: 2 });
-    expect(fs.statSync(claim.claimPath).ino).toBe(snapshot.ino);
+    expect(fs.statSync(sourcePath, { bigint: true })).toMatchObject({
+      ino: snapshot.ino,
+      nlink: 2n,
+    });
+    expect(fs.statSync(claim.claimPath, { bigint: true }).ino).toBe(snapshot.ino);
     await claim.recoverLinkedMove();
-    expect(fs.statSync(sourcePath)).toMatchObject({ ino: snapshot.ino, nlink: 1 });
+    expect(fs.statSync(sourcePath, { bigint: true })).toMatchObject({
+      ino: snapshot.ino,
+      nlink: 1n,
+    });
     expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
     expect(fs.existsSync(claim.claimPath)).toBe(false);
   });
@@ -293,7 +336,7 @@ describe("doctor legacy migration source contract", () => {
     );
 
     expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-    expect(fs.statSync(claim.claimPath).ino).toBe(snapshot.ino);
+    expect(fs.statSync(claim.claimPath, { bigint: true }).ino).toBe(snapshot.ino);
   });
 
   it.each(["claim", "recovery"] as const)(
@@ -323,9 +366,11 @@ describe("doctor legacy migration source contract", () => {
 
       expect(assertAuthority).toHaveBeenCalledOnce();
       expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-      expect(fs.statSync(sourcePath).nlink).toBe(operation === "recovery" ? 2 : 1);
+      expect(fs.statSync(sourcePath, { bigint: true }).nlink).toBe(
+        operation === "recovery" ? 2n : 1n,
+      );
       if (operation === "recovery") {
-        expect(fs.statSync(claim.claimPath).ino).toBe(snapshot.ino);
+        expect(fs.statSync(claim.claimPath, { bigint: true }).ino).toBe(snapshot.ino);
       } else {
         expect(fs.existsSync(claim.claimPath)).toBe(false);
       }
@@ -372,14 +417,14 @@ describe("doctor legacy migration source contract", () => {
       if (extraAlias) {
         fs.linkSync(sourcePath, path.join(stateDir, "unrelated-alias"));
         await expect(claim.recover("conflicting source")).rejects.toThrow();
-        expect(fs.statSync(claim.claimPath).nlink).toBe(3);
+        expect(fs.statSync(claim.claimPath, { bigint: true }).nlink).toBe(3n);
       } else {
         await claim.recover("conflicting source");
         expect(fs.existsSync(claim.claimPath)).toBe(false);
-        expect(fs.statSync(sourcePath).nlink).toBe(1);
+        expect(fs.statSync(sourcePath, { bigint: true }).nlink).toBe(1n);
       }
       expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+      expect(fs.statSync(sourcePath, { bigint: true }).ino).toBe(snapshot.ino);
     },
   );
 
@@ -436,7 +481,7 @@ describe("doctor legacy migration source contract", () => {
     const snapshot = await claim.read();
     const replacementPath = path.join(stateDir, "replacement.json");
     fs.writeFileSync(replacementPath, snapshot.buffer);
-    const replacementInode = fs.statSync(replacementPath).ino;
+    const replacementInode = fs.statSync(replacementPath, { bigint: true }).ino;
 
     await expect(
       claim.claim({
@@ -447,8 +492,8 @@ describe("doctor legacy migration source contract", () => {
     ).rejects.toThrow("source inode changed before claim");
     expect(await claim.restore()).toBeNull();
 
-    expect(fs.statSync(sourcePath).ino).toBe(replacementInode);
-    expect(fs.statSync(sourcePath).ino).not.toBe(snapshot.ino);
+    expect(fs.statSync(sourcePath, { bigint: true }).ino).toBe(replacementInode);
+    expect(fs.statSync(sourcePath, { bigint: true }).ino).not.toBe(snapshot.ino);
     expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
     expect(fs.existsSync(claim.claimPath)).toBe(false);
   });

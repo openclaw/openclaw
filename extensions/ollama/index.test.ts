@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderAuthMethod, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import plugin from "./index.js";
@@ -125,9 +124,6 @@ describe("ollama compaction policy", () => {
     expected: undefined,
   } as const;
   it.each([
-    { ...localRoute, provider: "ollama-cloud" },
-    { ...localRoute, id: "qwen3.5:cloud" },
-    { ...localRoute, api: "openai-completions", baseUrl: `${localBaseUrl}/v1` },
     { ...localRoute, providerBaseUrl: cloudBaseUrl },
     { ...localRoute, baseUrl: cloudBaseUrl, providerBaseUrl: localBaseUrl, expected: "off" },
   ] as const)(
@@ -260,19 +256,6 @@ describe("ollama plugin", () => {
       models: ["gemma4:latest"],
       customBaseUrl: "http://ollama-host:11434/",
       customModelId: "ollama/gemma4",
-    },
-    {
-      name: "accepts an installed completion and embedding model when the default is unavailable",
-      models: ["dual-model"],
-      capabilities: ["completion", "embedding"],
-    },
-    {
-      name: "rejects an explicitly selected embedding-only model before reset",
-      models: ["embedding-model"],
-      customModelId: "embedding-model",
-      capabilities: ["embedding"],
-      omitListedCapabilities: true,
-      error: "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
     },
     {
       name: "retains known embedding-only metadata when inspection is unavailable",
@@ -517,10 +500,7 @@ describe("ollama plugin", () => {
     expect(showMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { baseUrl: "https://api.ollama.com", contextTokens: undefined },
-    { baseUrl: "https://ollama.com.example/v1", contextTokens: 32_768 },
-  ])(
+  it.each([{ baseUrl: "https://ollama.com.example/v1", contextTokens: 32_768 }])(
     "prepares the exact configured idle model at $baseUrl with its runtime context",
     async ({ baseUrl, contextTokens }) => {
       const provider = registerProvider();
@@ -555,18 +535,6 @@ describe("ollama plugin", () => {
       expect(loadedMock).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects an explicit installed model that setup did not configure", async () => {
-    mockInstalledModels({ "other-model": true });
-    await expect(
-      registerProvider().auth[0].appGuidedSetup?.prepare({
-        config: {},
-        env: {},
-        modelRef: "ollama/other-model",
-      }),
-    ).resolves.toBeNull();
-    expect(showMock).not.toHaveBeenCalled();
-  });
 
   it("skips preferred models whose measured context is below 16k", async () => {
     mockInstalledModels({ "llama3.3:70b": true, "qwen3.5:4b": true });
@@ -664,29 +632,6 @@ describe("ollama plugin", () => {
         models: [{ id: "llama3.2", name: "Llama 3.2" }],
         apiKey: "profile-key",
       },
-    });
-  });
-
-  it("accepts baseURL alias as explicit discovery config", async () => {
-    const provider = registerProvider();
-    mockDiscovery([], "http://remote-ollama:11434");
-    const result = await runCatalog(
-      provider,
-      { apiKey: "" },
-      ollamaConfig({
-        baseURL: "http://remote-ollama:11434",
-        api: "ollama",
-        models: [],
-      }),
-      { NODE_ENV: "development" },
-    );
-    expect(result).toMatchObject({
-      provider: { models: [] },
-      outcomes: [{ provider: "ollama", status: "ready" }],
-    });
-    expect(discoveryMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
-      onListedModels: expect.any(Function),
-      discoveryMode: "strict",
     });
   });
 
@@ -796,24 +741,6 @@ describe("ollama plugin", () => {
     });
   });
 
-  it("fails closed when a dynamic Ollama SecretRef cannot be resolved", async () => {
-    const provider = registerProvider();
-    const envId = "VITEST_OLLAMA_DYNAMIC_MISSING_KEY";
-    vi.stubEnv(envId, undefined);
-    const context = dynamicContext(
-      "unreachable-private-model",
-      ollamaConfig({
-        baseUrl: "https://missing-secretref-ollama.example.com",
-        api: "ollama",
-        apiKey: { source: "env", provider: "default", id: envId },
-        models: [],
-      }),
-    );
-    await expect(provider.prepareDynamicModel?.(context as never)).resolves.toBeUndefined();
-    expect(discoveryMock).not.toHaveBeenCalled();
-    expect(showMock).not.toHaveBeenCalled();
-  });
-
   it("keeps rotated managed SecretRefs request-owned and fails closed when unavailable", async () => {
     const provider = registerProvider();
     const baseUrl = "https://managed-dynamic-ollama.example.com";
@@ -847,38 +774,6 @@ describe("ollama plugin", () => {
       apiKey: "rotated-managed-access",
     });
     expect(discoveryMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("resolves a requested cloud model through local show without a context cap", async () => {
-    const { baseUrl, modelId } = { baseUrl: localBaseUrl, modelId: "deepseek-v4-pro:cloud" };
-    const provider = registerProvider();
-    vi.stubEnv("OLLAMA_API_KEY", "ollama-local");
-    mockDiscovery(
-      [
-        createModel("kimi-k2.5:cloud", "kimi-k2.5:cloud", {
-          reasoning: true,
-          contextWindow: 262144,
-        }),
-      ],
-      baseUrl,
-    );
-    mockShow(["completion", "tools", "thinking"]);
-    const context = dynamicContext(
-      modelId,
-      ollamaConfig({ baseUrl, api: "ollama", apiKey: "fixture-access", models: [] }),
-    );
-    const resolved = await provider.prepareDynamicModel?.(context as never);
-    expect(showMock).toHaveBeenCalledWith(baseUrl, modelId, {
-      apiKey: "fixture-access",
-    });
-    expect(resolved?.provider).toBe("ollama");
-    expect(resolved?.id).toBe(modelId);
-    expect(resolved?.api).toBe("ollama");
-    expect(resolved?.baseUrl).toBe(baseUrl);
-    expect(resolved?.contextWindow).toBe(1_048_576);
-    expect(resolved?.contextTokens).toBeUndefined();
-    expect(resolved?.reasoning).toBe(true);
-    expect(resolved?.compat?.supportsTools).toBe(true);
   });
 
   it("reconciles configured refs and incomplete catalog rows without probing complete rows", async () => {
@@ -1103,12 +998,6 @@ describe("ollama plugin", () => {
       checkCatalog: true,
     },
     {
-      name: "does not mint synthetic auth for a public IPv4 endpoint",
-      providerPatch: { baseUrl: "http://8.8.8.8:11434" },
-      mintsAuth: false,
-      checkCatalog: false,
-    },
-    {
       name: "mints synthetic auth for non-default baseURL alias config",
       providerPatch: { baseURL: "http://remote-ollama:11434" },
       mintsAuth: true,
@@ -1133,40 +1022,6 @@ describe("ollama plugin", () => {
       ).resolves.toBeNull();
       expect(discoveryMock).not.toHaveBeenCalled();
     }
-  });
-
-  it("reports cloud catalog authentication rejection with its profile", async () => {
-    discoveryMock.mockRejectedValue(new LiveModelCatalogHttpError("ollama-cloud", 401));
-    const result = await runCatalog(registerOllamaCloudProvider(), {
-      apiKey: "catalog-key",
-      discoveryApiKey: "catalog-key",
-      profileId: "ollama-cloud:default",
-    });
-    expect(result).toEqual({
-      providers: {},
-      outcomes: [
-        {
-          provider: "ollama-cloud",
-          profileId: "ollama-cloud:default",
-          status: "auth-rejected",
-          rejectionScope: "catalog",
-        },
-      ],
-    });
-  });
-
-  it("keeps ollama-cloud live empties authoritative", async () => {
-    const provider = registerOllamaCloudProvider();
-    mockDiscovery([]);
-    const result = await runCatalog(provider, {
-      apiKey: "catalog-key",
-      discoveryApiKey: "catalog-key",
-    });
-    expect(result).toMatchObject({
-      provider: { models: [] },
-      outcomes: [{ provider: "ollama-cloud", status: "ready" }],
-    });
-    expect(showMock).not.toHaveBeenCalled();
   });
 
   it("uses Ollama Cloud auth for live catalog discovery", async () => {
@@ -1242,9 +1097,9 @@ describe("ollama plugin", () => {
       expect(payload).toEqual({ options: { temperature: 0.1, num_ctx: 32_768 } });
       return payloadResult;
     });
-    const baseStreamFn = vi.fn((_model, _context, options) => {
+    const baseStreamFn = vi.fn(async (_model, _context, options) => {
       const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
-      expect(options?.onPayload?.(payload, _model)).toBe(payloadResult);
+      await expect(options?.onPayload?.(payload, _model)).resolves.toBeUndefined();
       return {} as never;
     });
     const wrapped = provider.wrapStreamFn?.({

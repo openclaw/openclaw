@@ -1,20 +1,17 @@
-import type {
-  AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseIncognitoIdentity,
-} from "../../state/openclaw-agent-execution-identity.types.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
 } from "./session-transcript-context-version.types.js";
+import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionActorTarget = Readonly<{
   database:
     | AgentDatabaseExecutionFileIdentity
-    | AgentDatabaseIncognitoIdentity
     | { kind: "memory"; handle: string; incarnation: string };
   sessionKey: string;
 }>;
@@ -64,6 +61,8 @@ export type SessionActorHotState = {
   /** Complete retry-key membership; outcome bodies stay in the worker. */
   completionKeys: string[];
   transcript: {
+    /** Durable projection postimage; omitted by adapters without SQLite projections. */
+    projection?: SessionTranscriptProjectionFacts;
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;
     /** Empty anchors prove absence only when this exact projection is resident. */

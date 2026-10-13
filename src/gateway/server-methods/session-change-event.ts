@@ -3,6 +3,7 @@ import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -290,21 +291,22 @@ function startPendingSessionChange(pending: PendingSessionChange, leading?: Sess
   if (pending.work) {
     return;
   }
-  pending.work = Promise.resolve()
-    .then(async () => {
-      if (leading) {
-        await publishSessionChange(pending.context, leading);
+  // The sidecar drain owns publication after the emitting request has completed.
+  pending.work = runOutsideAsyncWorkScope(async () => {
+    await Promise.resolve();
+    if (leading) {
+      await publishSessionChange(pending.context, leading);
+    }
+    while (pending.due) {
+      const next = pending.latest;
+      if (next) {
+        pending.latest = undefined;
+        await publishSessionChange(pending.context, next);
+      } else {
+        break;
       }
-      while (pending.due) {
-        const next = pending.latest;
-        if (next) {
-          pending.latest = undefined;
-          await publishSessionChange(pending.context, next);
-        } else {
-          break;
-        }
-      }
-    })
+    }
+  })
     .catch((error: unknown) => {
       log.warn("Session change publication failed", { error: formatErrorMessageWithCode(error) });
     })

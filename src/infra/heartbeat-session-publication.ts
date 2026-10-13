@@ -6,7 +6,6 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import {
-  loadExactSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
@@ -291,13 +290,13 @@ export async function publishHeartbeatSessionReply(params: {
 
 const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
 
-export function prepareHeartbeatTargetAwareness(params: {
+export async function prepareHeartbeatTargetAwareness(params: {
   agentId: string;
   storePath: string;
   runSessionKey: string;
   targetSessionKey?: string;
   startedAt: number;
-}): ((payload: NormalizedOutboundPayload) => void) | undefined {
+}): Promise<((payload: NormalizedOutboundPayload) => void) | undefined> {
   const sessionKey = params.targetSessionKey?.trim();
   if (!sessionKey || sessionKey === params.runSessionKey) {
     return undefined;
@@ -307,24 +306,14 @@ export function prepareHeartbeatTargetAwareness(params: {
       return undefined;
     }
     const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
-    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
+    const entry = await readSessionEntryReadOnlyInWorker(scope);
     if (!entry?.sessionId) {
       return undefined;
     }
-    const expectedSessionId = entry.sessionId;
-    const expectedLifecycleRevision = entry.lifecycleRevision;
     const idempotencyKey = `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`;
     return (payload) => {
       try {
-        // Recheck the exact pre-send lifecycle before publishing awareness. Resets
-        // can preserve sessionId while rotating lifecycleRevision.
-        const latest = loadExactSessionEntryReadOnly(scope)?.entry;
-        if (
-          latest?.sessionId !== expectedSessionId ||
-          latest.lifecycleRevision !== expectedLifecycleRevision
-        ) {
-          return;
-        }
+        // Awareness is best-effort bookkeeping; a concurrent reset can inherit this notice.
         const deliveredText = resolveMirroredTranscriptText({
           text: payload.hookContent ?? resolveOutboundPayloadMirrorText(payload),
           mediaUrls: payload.mediaUrls,

@@ -440,6 +440,8 @@ children, Stop waits for its admitted descendants to reach real terminal events
 and finish completion settlement. A child that completes successfully during
 Stop keeps its result. Stop does not cancel a sibling run or a replacement
 session generation.
+If its previous native process is already closing, Stop cancels the waiting run
+without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
 side-run restrictions. Native descendants retain host-captured request custody
 after their foreground parent finishes; restored observations without that

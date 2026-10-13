@@ -11,7 +11,7 @@ import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
-import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
+import { postWidgetTheme } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { McpAppConfirm } from "../mcp-app-confirm.ts";
@@ -180,7 +180,6 @@ export class BoardWidgetFrameLifecycle {
     if (this.host.active()) {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
     }
-    installWidgetThemeObserver();
   }
 
   disconnect(): void {

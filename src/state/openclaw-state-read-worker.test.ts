@@ -283,8 +283,12 @@ it("reads externally created state after an absent read without allocating a wor
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
-it("retains read custody until release and retires failed native cleanup", async () => {
+it("retires a successful read without hydrating an error and retains custody until exit", async () => {
   const { options } = source();
+  const hydrate = vi.spyOn(
+    await import("./openclaw-state-worker-error.js"),
+    "hydrateOpenClawStateWorkerError",
+  );
   const task = queueTask();
   const stopping = createDeferredCore();
   const stopped = createDeferredCore();
@@ -317,11 +321,16 @@ it("retains read custody until release and retires failed native cleanup", async
       mock.create.mock.invocationCallOrder[0]!,
     );
     expect(settled).toBe(false);
+    expect(hydrate).not.toHaveBeenCalled();
     expect(mock.closePool).not.toHaveBeenCalled();
   } finally {
     task.result.resolve(reply);
     stopped.resolve();
-    await assertion;
+    try {
+      await assertion;
+    } finally {
+      hydrate.mockRestore();
+    }
   }
   expect(task.close).toHaveBeenCalledOnce();
 });

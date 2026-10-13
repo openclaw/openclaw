@@ -32,6 +32,7 @@ export type ServiceRuntimeIntentStatus =
 
 /** Deep inspection projects canonical intent; the revision is observation, never a write grant. */
 export async function inspectServiceRuntimeIntent(params: {
+  kind: "gateway" | "node";
   service: GatewayService;
   command: GatewayServiceCommandConfig | null;
   env: NodeJS.ProcessEnv;
@@ -42,13 +43,13 @@ export async function inspectServiceRuntimeIntent(params: {
     return { runtimeIntent: { status: "unknown" } };
   }
   try {
-    const pin = readDaemonRuntimePin({ kind: "gateway", env: params.serviceEnv }, params.command);
+    const pin = readDaemonRuntimePin({ kind: params.kind, env: params.serviceEnv }, params.command);
     const capability = await params.service.readDefinitionMutationCapability?.({
       env: params.env,
       environment: params.serviceEnv,
     });
     const currentPin = readDaemonRuntimePin(
-      { kind: "gateway", env: params.serviceEnv },
+      { kind: params.kind, env: params.serviceEnv },
       params.command,
     );
     if (currentPin.revision !== pin.revision) {

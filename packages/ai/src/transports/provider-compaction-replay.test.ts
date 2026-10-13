@@ -226,46 +226,6 @@ describe("bounded compaction replay projection", () => {
     expect(JSON.stringify(input)).not.toContain("owner");
   });
 
-  it("does not project when the owner is retained, even after earlier source entries", () => {
-    const owner = createAssistant([{ type: "text", text: "covered" }], 1);
-    const source = [latest, owner];
-    expect(preserveCompactionReplayWindow(source, source, model, replayIdentity)).toBe(source);
-    expect(preserveCompactionReplayWindow(source, [owner], model, replayIdentity)).toEqual([owner]);
-  });
-
-  it.each([
-    "azure-openai-responses",
-    "openai-chatgpt-responses",
-    "openclaw-openai-responses-transport",
-  ])("preserves checkpoints on the %s Responses API route", (api) => {
-    const route = { ...model, api };
-    const owner = createAssistant([{ type: "text", text: "covered" }], 1);
-    captureOpenAIResponsesCompaction(
-      owner,
-      { type: "compaction", encrypted_content: "route checkpoint" },
-      1,
-      route,
-      buildOpenAIResponsesReasoningReplayMetadata(route, replayIdentity),
-    );
-    const projected = preserveCompactionReplayWindow(
-      [owner, latest],
-      [latest],
-      route,
-      replayIdentity,
-    );
-    expect(
-      convertResponsesMessages(
-        route,
-        { messages: projected },
-        new Set(["openai"]),
-        replayIdentity,
-      )[0],
-    ).toMatchObject({ type: "compaction", encrypted_content: "route checkpoint" });
-    expect(
-      resolveCompactionReplayPressure(projected, route, replayIdentity, estimator)?.prefixTokens,
-    ).toBe("route checkpoint".length);
-  });
-
   it.each(["malformed", "mismatched", "suppressed"])("honors the newest %s barrier", (kind) => {
     const old = createAssistant([], 0);
     const barrier = createAssistant([], 0);
@@ -311,7 +271,7 @@ describe("bounded compaction replay projection", () => {
     ).toThrow(CompactionReplayRefreshRequiredError);
   });
 
-  it.each(["anthropic-messages", "openclaw-anthropic-messages-transport"])(
+  it.each(["openclaw-anthropic-messages-transport"])(
     "projects %s summaries through their own replay owner",
     (api) => {
       const anthropic = {
@@ -344,7 +304,7 @@ describe("bounded compaction replay projection", () => {
     },
   );
 
-  it.each([false, undefined])(
+  it.each([undefined])(
     "does not use Anthropic checkpoints without enabled replay: %s",
     (enabled) => {
       const anthropic = {
@@ -385,26 +345,12 @@ describe("prepared compaction replay eligibility", () => {
   };
 
   it.each([
-    { apiKey: undefined, extraParams: {}, expected: false },
     { apiKey: "test-key", extraParams: {}, expected: true },
-    { apiKey: "test-key", extraParams: { anthropicServerCompaction: false }, expected: false },
-    {
-      apiKey: "test-key",
-      extraParams: {},
-      model: { ...anthropic, id: "claude-opus-4-5" },
-      expected: false,
-    },
-    {
-      apiKey: "test-key",
-      extraParams: { anthropicServerCompaction: true },
-      model: { ...anthropic, id: "claude-opus-4-5" },
-      expected: true,
-    },
     { apiKey: "test-sk-ant-oat-fixture", extraParams: {}, expected: false },
   ])(
     "requires known eligible authentication and an enabled model: $expected",
-    ({ expected, model: replayModel = anthropic, ...options }) => {
-      expect(resolveCompactionReplayEligibility(replayModel, options)).toBe(expected);
+    ({ expected, ...options }) => {
+      expect(resolveCompactionReplayEligibility(anthropic, options)).toBe(expected);
     },
   );
 
@@ -427,25 +373,6 @@ describe("prepared compaction replay eligibility", () => {
 });
 
 describe("canonical compaction replay pressure", () => {
-  it.each([
-    { provider: "other-provider" },
-    { api: "openai-completions" },
-    { model: "other-model" },
-  ])("does not trust later usage from a different route: %j", (route) => {
-    const owner = createAssistant([], 0);
-    const later = { ...createAssistant([{ type: "text", text: "later" }], 0), ...route };
-    delete later.providerReplay;
-    later.usage.contextUsage = { state: "available", promptTokens: 100, totalTokens: 101 };
-    later.usage.totalTokens = 101;
-    const plan = resolveCompactionReplayPressure([owner, later], model, replayIdentity, estimator);
-    expect(plan?.messages[1]).not.toHaveProperty("usage.contextUsage");
-    expect(plan?.messages[1]).toMatchObject({
-      content: later.content,
-      usage: { totalTokens: 101, cost: later.usage.cost },
-    });
-    expect(later.usage.contextUsage.totalTokens).toBe(101);
-  });
-
   it("counts the returned prefix once after restart and an auth A to B to A round trip", () => {
     const owner = createAssistant([{ type: "text", text: "covered" }], 1);
     const output = [

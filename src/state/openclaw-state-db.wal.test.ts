@@ -9,15 +9,18 @@ import { z } from "zod";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
+import { SqliteWorkerBroker } from "../infra/sqlite-worker-broker.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -34,6 +37,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import type { SharedStateWalFixtureOperations } from "./openclaw-state-worker-wal.test-support.js";
 import { createSqliteWorkerBackend } from "./openclaw-state.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -90,6 +94,94 @@ function sqliteBytes(databasePath: string) {
     }),
   );
 }
+
+it.each(["maintenance", "ordinary"] as const)(
+  "suspends shared-worker ticks only while maintenance clients retain the actor (%s opener)",
+  async (firstOwner) => {
+    const root = tempDirs.make("state-worker-wal-tick-");
+    const databasePath = path.join(root, "state", "openclaw.sqlite");
+    const context = { environment: { ...process.env, OPENCLAW_STATE_DIR: root } };
+    const broker = new SqliteWorkerBroker();
+    const firstMaintenance = createOpenClawDatabaseMaintenanceScope();
+    const secondMaintenance = createOpenClawDatabaseMaintenanceScope();
+    const open = async (maintenance?: typeof firstMaintenance) => {
+      const store = await broker.open<SharedStateWalFixtureOperations>(
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sharedStateWalFixture),
+          databasePath,
+          input: undefined,
+        },
+        context,
+        undefined,
+        { maintenanceScope: maintenance },
+      );
+      if (!store) {
+        throw new Error("Shared-state WAL fixture did not open");
+      }
+      maintenance?.own(store, "shared-resources", () => store.close());
+      return store;
+    };
+    try {
+      const first = await open(firstOwner === "maintenance" ? firstMaintenance : undefined);
+      const second = await open(firstOwner === "maintenance" ? undefined : firstMaintenance);
+      const ordinary = firstOwner === "ordinary" ? first : second;
+      const maintained = firstOwner === "maintenance" ? first : second;
+      const overlapping = await open(secondMaintenance);
+      const actor = broker.getActorIdentity(ordinary);
+      expect(broker.getActorIdentity(maintained)).toBe(actor);
+      expect(broker.getActorIdentity(overlapping)).toBe(actor);
+
+      const before = await ordinary.execute({ type: "fixture.seed", input: undefined });
+      const heldTick = await ordinary.execute({ type: "fixture.tick", input: undefined });
+      expect(heldTick).toEqual(before);
+      expect(heldTick.checkpoints).toBe(0);
+
+      let grants = 0;
+      await firstMaintenance.run(() =>
+        broker.runOperation(
+          maintained,
+          (worker) =>
+            worker.execute({
+              type: "database.walMaintenance",
+              input: { maxPages: 0, checkpointMode: "PASSIVE" },
+            }),
+          context,
+          undefined,
+          () => ({
+            nativeLocations: [databasePath],
+            admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+              if (grant()) {
+                grants++;
+              }
+            }),
+          }),
+        ),
+      );
+      const admitted = await ordinary.execute({ type: "fixture.snapshot", input: undefined });
+      expect(admitted.actor).toBe(before.actor);
+      expect(admitted.digest).not.toBe(before.digest);
+      expect(admitted.checkpoints).toBeGreaterThan(0);
+      expect(grants).toBeGreaterThan(0);
+
+      const pending = await ordinary.execute({ type: "fixture.seed", input: undefined });
+      await firstMaintenance.close();
+      expect(await ordinary.execute({ type: "fixture.tick", input: undefined })).toEqual(pending);
+      await secondMaintenance.close();
+      const resumed = await ordinary.execute({ type: "fixture.tick", input: undefined });
+      expect(broker.getActorIdentity(ordinary)).toBe(actor);
+      expect(resumed.actor).toBe(pending.actor);
+      expect(resumed.digest).not.toBe(pending.digest);
+      expect(resumed.checkpoints).toBeGreaterThan(0);
+    } finally {
+      try {
+        await firstMaintenance.close();
+        await secondMaintenance.close();
+      } finally {
+        await broker.close();
+      }
+    }
+  },
+);
 
 it("keeps periodic WAL work off the host before and after a competing SQLite writer releases", async ({
   signal,

@@ -22,7 +22,7 @@ type PersonalNavigationHost = {
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins">
+    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
     | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   getRouteSessionKey(): string;
@@ -90,16 +90,17 @@ export class SidebarPinnedSessions implements ReactiveController {
   }
 
   get(key: string): GatewaySessionRow | undefined {
+    const context = this.host.sessionDataContext;
     const source = this.synchronize();
     const scope = this.scope;
-    if (!this.host.isConnected || !source || !scope) {
+    if (!this.host.isConnected || !source || !scope || !context) {
       return undefined;
     }
     if (!this.requested.has(key)) {
       this.requested.set(key, "pending");
       const current = () =>
         this.source === source &&
-        this.host.sessionDataContext?.sessions === source &&
+        this.host.sessionDataContext === context &&
         this.scope === scope &&
         source.isConnectionScopeCurrent(scope);
       const publish = (row?: GatewaySessionRow | null) => {
@@ -116,13 +117,24 @@ export class SidebarPinnedSessions implements ReactiveController {
           this.host.sessionData.requestSessionDataUpdate();
         }
       };
-      void source.describe({ key }).then(
-        (result) => publish(result.session),
-        () => {
-          /* Missing or failed pins stay saved, invisible, and silent. */
-          publish();
-        },
-      );
+      const describe = async () => {
+        if (!current()) {
+          return;
+        }
+        if (!this.host.isConnected) {
+          this.requested.delete(key);
+          return;
+        }
+        await source.describe({ key }).then(
+          (result) => publish(result.session),
+          () => {
+            /* Missing or failed pins stay saved, invisible, and silent. */
+            publish();
+          },
+        );
+      };
+      // Cached pins can paint while the selected conversation takes the request budget.
+      void context.connectionBootstrap.run(describe, describe, { background: true });
     }
     return this.rows.get(key);
   }

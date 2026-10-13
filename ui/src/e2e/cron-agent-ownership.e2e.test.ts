@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -310,11 +311,8 @@ suite.define(() => {
         await picker.getByRole("listbox").waitFor({ state: "hidden" });
         const inventoryReadsBeforeSwitch = (await gateway.getRequests("cron.list")).length;
 
-        await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: { agentSelection: { set(agentId: string): void } } };
-          };
-          app.runtime.context.agentSelection.set("writer");
+        await evaluateControlUiContext(page, (context) => {
+          context.agentSelection.set("writer");
         });
         await gateway.waitForRequest("models.list", {
           match: { agentId: "writer", view: "configured" },
@@ -405,7 +403,7 @@ suite.define(() => {
         const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "All agents" })
           .click();
         await expect

@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -20,7 +23,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
-import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.kernel.js";
+import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.worker.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -149,11 +152,27 @@ describe("session row transcript backfill", () => {
     );
   });
 
-  it.each(["current", "unavailable", "absent", "runtime alias"] as const)(
+  it.each([
+    "current",
+    "unavailable",
+    "absent",
+    "runtime alias",
+    "media-only rewrite",
+    "hidden rewrite",
+    "silent rewrite",
+  ] as const)(
     "reads optional terminal fallback fields without writer admission (%s)",
     async (storage) => {
       const alias = storage === "runtime alias";
-      const preview = alias ? "Finished on equivalent runtime" : "Finished with fallback";
+      const mediaRewrite = storage === "media-only rewrite" || storage === "hidden rewrite";
+      const silentRewrite = storage === "silent rewrite";
+      const preview = alias
+        ? "Finished on equivalent runtime"
+        : mediaRewrite
+          ? "MEDIA:./proof.png"
+          : silentRewrite
+            ? "NO_REPLY"
+            : "Finished with fallback";
       await withSession(
         async (seeded) => {
           if (alias) {
@@ -193,14 +212,16 @@ describe("session row transcript backfill", () => {
               const hostSql = observeHostDataSql();
               try {
                 await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
-                  storage === "current"
-                    ? {
-                        lastMessagePreview: "Finished with fallback",
-                        fallbackModel: { provider: "unit-test", model: "fallback" },
-                      }
-                    : alias
-                      ? { lastMessagePreview: preview }
-                      : {},
+                  storage === "media-only rewrite"
+                    ? { fallbackModel: { provider: "unit-test", model: "fallback" } }
+                    : storage === "current"
+                      ? {
+                          lastMessagePreview: "Finished with fallback",
+                          fallbackModel: { provider: "unit-test", model: "fallback" },
+                        }
+                      : alias
+                        ? { lastMessagePreview: preview }
+                        : {},
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();
@@ -236,6 +257,18 @@ describe("session row transcript backfill", () => {
           {
             role: "assistant",
             content: preview,
+            ...(mediaRewrite || silentRewrite
+              ? {
+                  openclawDisplayContent: [
+                    {
+                      type: "image",
+                      url: "/api/chat/media/outgoing/proof.png",
+                      mimeType: "image/png",
+                    },
+                  ],
+                }
+              : {}),
+            ...(storage === "hidden rewrite" ? { display: false } : {}),
             provider: "unit-test",
             model: alias ? "same" : "fallback",
             stopReason: "stop",
@@ -253,6 +286,103 @@ describe("session row transcript backfill", () => {
       );
     },
   );
+
+  it("reads preview and terminal facts once and sees the next committed transcript", async () => {
+    await withSession(
+      async (params) => {
+        const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+        const read = () => {
+          reads.queries.length = 0;
+          const fields = readSessionRowTranscriptFields({ ...params, includeTerminalModel: true });
+          expect(
+            reads.queries.filter((sql) => sql.includes('from "transcript_events" as "event"')),
+          ).toHaveLength(1);
+          expect(
+            reads.queries.filter(
+              (sql) =>
+                sql.includes('from "session_transcript_active_events" as "active"') &&
+                sql.includes('as "serialized_bytes"'),
+            ),
+          ).toHaveLength(1);
+          return fields;
+        };
+        try {
+          expect(read()).toEqual({
+            lastMessagePreview: "First terminal reply",
+            terminalModel: { modelProvider: "unit-test", model: "fallback" },
+          });
+          await sessionAccessor.persistSessionTranscriptTurn(params, {
+            messages: [
+              {
+                message: {
+                  role: "assistant",
+                  content: "Next terminal reply",
+                  provider: "unit-test",
+                  model: "next-fallback",
+                  stopReason: "stop",
+                  __openclaw: { runId: "terminal-run" },
+                },
+              },
+            ],
+            touchSessionEntry: false,
+          });
+          expect(read()).toEqual({
+            lastMessagePreview: "Next terminal reply",
+            terminalModel: { modelProvider: "unit-test", model: "next-fallback" },
+          });
+        } finally {
+          reads.restore();
+        }
+      },
+      [
+        {
+          role: "assistant",
+          content: "First terminal reply",
+          provider: "unit-test",
+          model: "fallback",
+          stopReason: "stop",
+          __openclaw: { runId: "terminal-run" },
+        },
+      ],
+      {
+        lastRunId: "terminal-run",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "unit-test/selected",
+          activeModel: "unit-test/fallback",
+        },
+      },
+    );
+  });
+
+  it("reads terminal facts beyond the preview budget without showing an older preview", async () => {
+    await withSession(
+      async (params) => {
+        expect(readSessionRowTranscriptFields({ ...params, includeTerminalModel: true })).toEqual({
+          terminalModel: { modelProvider: "unit-test", model: "fallback" },
+        });
+      },
+      [
+        { role: "assistant", content: "Older preview" },
+        {
+          role: "assistant",
+          content: "x".repeat(70 * 1024),
+          provider: "unit-test",
+          model: "fallback",
+          stopReason: "stop",
+          __openclaw: { runId: "terminal-run" },
+        },
+      ],
+      {
+        lastRunId: "terminal-run",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "unit-test/selected",
+          activeModel: "unit-test/fallback",
+        },
+      },
+    );
+  });
 
   it("does not parse oversized bodies or name a session from an incomplete prefix", async () => {
     const oversized = `oversized-title-payload ${"x".repeat(70 * 1024)}`;

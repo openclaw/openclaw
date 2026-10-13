@@ -77,32 +77,30 @@ function projectPendingApproval(
 }
 
 export function projectSessionApprovalReplay(
-  value: unknown,
+  replay: unknown,
   sessionKey: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] {
-  if (!Value.Check(SessionApprovalReplaySchema, value)) {
+  if (!Value.Check(SessionApprovalReplaySchema, replay)) {
     return [];
   }
-  const replay = Value.Decode(SessionApprovalReplaySchema, value);
   if (!approvalStreamMatchesSession(replay.sessionKey, sessionKey, selectedAgentId)) {
     return [];
   }
-  return replay.approvals
-    .filter((approval) => approval.status === "pending")
-    .map((approval) => projectPendingApproval(approval, sessionKey, approval.sourceSessionKey));
+  return replay.approvals.map((approval) =>
+    projectPendingApproval(approval, sessionKey, approval.sourceSessionKey),
+  );
 }
 
 export function reconcileSessionApprovalEvent(
   queue: readonly ExecApprovalRequest[],
-  value: unknown,
+  event: unknown,
   sessionKey?: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] | null {
-  if (!Value.Check(SessionApprovalEventSchema, value)) {
+  if (!Value.Check(SessionApprovalEventSchema, event)) {
     return null;
   }
-  const event = Value.Decode(SessionApprovalEventSchema, value);
   const presentationSessionKey = sessionKey ?? event.sessionKey;
   if (!approvalStreamMatchesSession(event.sessionKey, presentationSessionKey, selectedAgentId)) {
     return null;

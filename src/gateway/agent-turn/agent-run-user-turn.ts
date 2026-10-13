@@ -23,6 +23,7 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -133,6 +134,7 @@ export function recordAgentRunUserTurnParticipant(
 
 export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
+  onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
@@ -164,7 +166,8 @@ export async function prepareAgentRunUserTurn(params: {
 }): Promise<PreparedAgentRunUserTurn> {
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
-  let durableMediaIds: string[] = [];
+  let createdMediaIds: string[] = [];
+  let recorder: UserTurnTranscriptRecorder | undefined;
   try {
     const claimFollowup = (sessionKey: string | undefined) =>
       claimExecApprovalFollowupRuntimeHandoff({
@@ -237,7 +240,6 @@ export async function prepareAgentRunUserTurn(params: {
           inputProvenance: params.inputProvenance,
           internalEvents: params.request.internalEvents,
         }));
-    let recorder: UserTurnTranscriptRecorder | undefined;
     if (
       params.resolvedSessionKey &&
       !params.suppressVisibleSessionEffects &&
@@ -250,7 +252,11 @@ export async function prepareAgentRunUserTurn(params: {
         logContext: "agent",
         assertCurrent: params.assertCurrent,
       });
-      durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      // The parser still owns offloaded files until admission retains them.
+      // This scope only removes inline files it created, avoiding a second delete.
+      createdMediaIds = persistedMedia.entries
+        .filter((entry) => entry.imageKind === "inline")
+        .map((entry) => entry.id);
       params.assertCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
@@ -277,12 +283,12 @@ export async function prepareAgentRunUserTurn(params: {
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion: params.privateCompletion,
+        trackInputCompletion: params.privateCompletion || settleWakeReplay !== undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: async () => {
           const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
-            cfg: params.cfg,
+            cfg: params.cfgForAgent ?? params.cfg,
             key: params.resolvedSessionKey!,
             agentId: params.activeSessionAgentId,
             assertActive: params.assertCurrent,
@@ -390,11 +396,19 @@ export async function prepareAgentRunUserTurn(params: {
       suppressPromptPersistence,
     };
   } catch (error) {
+    const mediaRetained = recorder !== undefined && retainsUserTurnTranscriptMedia(recorder);
+    if (mediaRetained) {
+      // This callback transfers parser cleanup ownership, not a public success fact.
+      // Retained input must keep its media even if later preparation or cleanup fails.
+      params.onUserTurnMediaPersisted();
+    }
     releaseExecApprovalFollowupRuntimeHandoff({
       handoffId: claimedExecApprovalFollowupHandoffId,
       claimId: execApprovalFollowupHandoffClaimId,
     });
-    await Promise.allSettled(durableMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+    if (!mediaRetained) {
+      await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+    }
     throw error;
   }
 }

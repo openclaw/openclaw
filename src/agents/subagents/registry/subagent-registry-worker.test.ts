@@ -36,11 +36,8 @@ import { mutateRequesterCompletionBatch } from "../completion/subagent-completio
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
-  assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
-  SubagentRegistryMutationRejectedError,
-  SubagentRegistryVersionConflictError,
 } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -55,6 +52,7 @@ import {
   clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
+  prepareSubagentRegistrationRows,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -107,34 +105,6 @@ async function register(...entries: SubagentRunRecord[]) {
     }),
   );
 }
-
-it("revalidates the live registry source without enumerating the process environment", () => {
-  const context = captureOpenClawStateWorkerContext();
-  const originalEnv = process.env;
-  let stateDir = originalEnv.OPENCLAW_STATE_DIR;
-  let enumerations = 0;
-  process.env = new Proxy(originalEnv, {
-    get(target, key) {
-      return key === "OPENCLAW_STATE_DIR" ? stateDir : Reflect.get(target, key);
-    },
-    ownKeys(target) {
-      enumerations++;
-      return Reflect.ownKeys(target);
-    },
-  });
-  try {
-    for (let index = 0; index < 30; index++) {
-      assertSubagentRegistryWriteSourceCurrent(context);
-    }
-    stateDir = path.join(state.stateDir, "replacement");
-    expect(() => assertSubagentRegistryWriteSourceCurrent(context)).toThrow(
-      "Queued registry write lost its original database",
-    );
-  } finally {
-    process.env = originalEnv;
-  }
-  expect(enumerations).toBe(0);
-});
 
 it("streams bounded restore batches in one read and retains snapshot row versions", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>
@@ -287,6 +257,12 @@ function interceptWrites(callback: (phase: "before" | "after") => void | Promise
 
 it("publishes overlapping same-row mutations in FIFO order after each real commit ACK", async () => {
   await register(entry("overlap"));
+  const context = captureOpenClawStateWorkerContext();
+  const registrationRows = await prepareSubagentRegistrationRows(
+    "agent:main:subagent:overlap",
+    [],
+    context,
+  );
   const reached = createDeferredCore();
   const release = createDeferredCore();
   let held = false;
@@ -323,6 +299,10 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
       label: "first mutation",
       cleanupCompletedAt: 42,
     });
+    expect(registrationRows().get("overlap")).toMatchObject({
+      label: "first mutation",
+      cleanupCompletedAt: 42,
+    });
     expect(() => {
       subagentRuns.get("overlap")!.label = "uncommitted mutation";
     }).toThrow(TypeError);
@@ -332,123 +312,52 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
   }
 });
 
-it("rejects a foreign connection change without replaying until canonical restore", async () => {
-  await register(entry("foreign"));
-  let injected = false;
-  interceptWrites((phase) => {
-    if (phase !== "before" || injected) {
-      return;
+it("does not resurrect prepared rows deleted by a queued predecessor receipt", async () => {
+  const original = entry("prepared-deletion");
+  await register(original);
+  const preparedRows = await prepareSubagentRegistrationRows(
+    original.childSessionKey,
+    [original.runId],
+    captureOpenClawStateWorkerContext(),
+  );
+  const reached = createDeferredCore();
+  const release = createDeferredCore();
+  let held = false;
+  interceptWrites(async (phase) => {
+    if (phase === "after" && !held) {
+      held = true;
+      reached.resolve();
+      await release.promise;
     }
-    injected = true;
-    const foreign = loadSubagentRegistryFromSqlite().get("foreign")!;
-    foreign.model = "foreign metadata";
-    // This fixture's admitted native handle is a different SQLite connection from the worker.
-    saveSubagentRegistryChangesToSqlite(new Map([[foreign.runId, foreign]]), [foreign.runId]);
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
-      .run(foreign.runId);
   });
-  const plan = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
-    const current = rows.get("foreign")!;
-    if (current.requesterSessionKey !== "agent:main:requester") {
-      throw new SubagentRegistryMutationRejectedError("Requester ownership changed");
-    }
-    return {
-      value: true,
-      postimages: new Map([[current.runId, { ...current, label: "local metadata" }]]),
-    };
-  });
-  const mutation = mutateSubagentRuns(["foreign"], plan);
-  await expect(mutation).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
-  expect(plan).toHaveBeenCalledOnce();
-  const saved = loadSubagentRegistryFromSqlite().get("foreign");
-  expect(saved?.model).toBe("foreign metadata");
-  expect(saved?.label).toBeUndefined();
-  expect(subagentRuns.get("foreign")?.model).toBeUndefined();
-  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-  await expect(mutateSubagentRuns(["foreign"], plan)).resolves.toBe(true);
-  expect(loadSubagentRegistryFromSqlite().get("foreign")).toMatchObject({
-    model: "foreign metadata",
-    label: "local metadata",
-  });
+  const deletion = mutateSubagentRuns([original.runId], () => ({
+    value: undefined,
+    postimages: new Map([[original.runId, null]]),
+  }));
+  let successor: Promise<boolean> | undefined;
+  try {
+    await awaitGateBeforeSettlement(reached.promise, deletion, "delete did not reach its ACK gate");
+    successor = mutateSubagentRuns(
+      [original.runId],
+      (rows) => {
+        const previous = rows.get(original.runId);
+        return {
+          value: Boolean(previous),
+          ...(previous ? { postimages: new Map([[original.runId, previous]]) } : {}),
+        };
+      },
+      { preparedRows },
+    );
+    release.resolve();
+    await deletion;
+    await expect(successor).resolves.toBe(false);
+    expect(subagentRuns.has(original.runId)).toBe(false);
+    expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([deletion, successor]);
+  }
 });
-
-it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"] as const)(
-  "rejects an entire cohort before companion events when one selected row is foreign %s",
-  async (conflict) => {
-    const kept = entry("cohort-kept");
-    const deleted = entry("cohort-deleted");
-    const guarded = entry("cohort-guarded");
-    await register(kept, deleted, ...(conflict === "inserted" ? [] : [guarded]));
-    const { db } = openOpenClawStateDatabase();
-    const rows = () => db.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
-    let foreignRows: ReturnType<typeof rows> = [];
-    let injected = false;
-    const intercept = interceptWrites((phase) => {
-      if (phase !== "before" || injected) {
-        return;
-      }
-      injected = true;
-      if (conflict === "inserted" || conflict === "removed") {
-        saveSubagentRegistryChangesToSqlite(
-          new Map(conflict === "inserted" ? [[guarded.runId, guarded]] : []),
-          [guarded.runId],
-        );
-      } else if (conflict === "indexed field") {
-        db.prepare("UPDATE subagent_runs SET created_at = created_at + 1 WHERE run_id = ?").run(
-          guarded.runId,
-        );
-      } else {
-        const original = db
-          .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
-          .get(guarded.runId);
-        db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
-          conflict === "undecodable" ? "{" : `${String(original?.payload_json)} `,
-          guarded.runId,
-        );
-      }
-      foreignRows = rows();
-    });
-    const plan = vi.fn(() => {
-      return {
-        value: undefined,
-        postimages: new Map<string, SubagentRunRecord | null>([
-          [kept.runId, { ...kept, label: "must not be written" }],
-          [deleted.runId, null],
-        ]),
-        terminalEvents: [
-          {
-            input: {
-              event: {
-                sessionKey: kept.childSessionKey,
-                agentId: "main",
-                kind: "run_completed" as const,
-                actorType: "agent" as const,
-                runId: kept.runId,
-                summary: "must not be recorded",
-              },
-              now: 10,
-            },
-          },
-        ],
-      };
-    });
-    try {
-      await expect(
-        mutateSubagentRuns([kept.runId, deleted.runId, guarded.runId], plan),
-      ).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
-      expect(plan).toHaveBeenCalledOnce();
-      expect(rows()).toEqual(foreignRows);
-      expect(
-        db.prepare("SELECT * FROM session_state_events WHERE run_id = ?").all(kept.runId),
-      ).toEqual([]);
-    } finally {
-      intercept.mockRestore();
-      // An undecodable foreign row is intentionally absent from the canonical cleanup reader.
-      saveSubagentRegistryChangesToSqlite(new Map(), [guarded.runId]);
-    }
-  },
-);
 
 it("fences an uncertain row through source close until canonical restoration", async () => {
   await register(entry("uncertain"));
@@ -742,7 +651,7 @@ it("keeps an acknowledged row and notifies readers when its custody callback fai
   }
 });
 
-it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
+it.each(["before ACK", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));

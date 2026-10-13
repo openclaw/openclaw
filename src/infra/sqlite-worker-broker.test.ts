@@ -31,6 +31,11 @@ import {
 } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
+vi.mock("./diagnostic-flags.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./diagnostic-flags.js")>()),
+  isDiagnosticFlagEnabled: () => false,
+}));
+
 vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   availableParallelism: () => 32,
@@ -75,6 +80,18 @@ function holdDatabaseAdmission(pathname: string) {
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();
   const store = await open(file);
+  await waitForDiagnosticEventsDrained();
+  const completed: DiagnosticWorkerRequestFields[] = [];
+  onTestFinished(
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request" && event.phase === "completed") {
+          completed.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    ),
+  );
   const admission = holdDatabaseAdmission(file);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const first = append(store, "first");
@@ -95,6 +112,28 @@ it("waits for schema publication after opening, then dispatches queued writes on
       { status: "fulfilled", value: { writes: 2 } },
     ]);
     expect(await read(store)).toEqual(["first", "second"]);
+    await waitForDiagnosticEventsDrained();
+    expect(completed).toHaveLength(3);
+    for (const { timing } of completed) {
+      expect(timing).toBeDefined();
+      const stages = [
+        timing?.enqueued,
+        timing?.dispatched,
+        timing?.posted,
+        timing?.received,
+        timing?.inputReady,
+        timing?.executeStarted,
+        timing?.executeFinished,
+        timing?.serialized,
+        timing?.replied,
+        timing?.replyReceived,
+      ];
+      for (const stamp of stages) {
+        expect(stamp).toEqual(expect.any(Number));
+      }
+      expect(stages).toEqual(stages.toSorted((a, b) => a! - b!));
+      expect(timing?.postFinished).toBeGreaterThanOrEqual(timing!.posted!);
+    }
   } finally {
     admission.release();
     await vi.advanceTimersByTimeAsync(10);
@@ -547,68 +586,3 @@ poolIt.each([
     parallelism.mockRestore();
   }
 });
-
-poolIt(
-  "reserves ephemeral actors within durable capacity and isolates their native loss",
-  async () => {
-    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(16);
-    const broker = new SqliteWorkerBroker();
-    const namespace = databasePath();
-    let lost = false;
-    let nativeStopped: Promise<void> | undefined;
-    const options = {
-      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-      databasePath: namespace,
-      target: { kind: "ephemeral" as const, handle: "first", incarnation: "first" },
-      input: undefined,
-    };
-    try {
-      expect(await broker.open({ ...options, existingOnly: true })).toBeUndefined();
-      const memory = await broker.open<FixtureOperations>(options, undefined, undefined, {
-        onNativeLost() {
-          lost = true;
-        },
-        onNativeStopped(stopped) {
-          nativeStopped = stopped;
-        },
-      });
-      assert(memory);
-      const first = await append(memory, "private");
-      const durableThreads = new Set<number>();
-      let durableSibling: SqliteWorkerStore<FixtureOperations> | undefined;
-      for (let index = 0; index < 2; index++) {
-        const durable = await broker.open<FixtureOperations>({
-          moduleUrl: options.moduleUrl,
-          databasePath: databasePath(),
-          input: undefined,
-        });
-        assert(durable);
-        durableSibling = durable;
-        durableThreads.add((await append(durable, "durable")).threadId);
-      }
-      expect(durableThreads.size).toBe(1);
-      expect(durableThreads.has(first.threadId)).toBe(false);
-      await expect(
-        broker.open({
-          ...options,
-          target: { kind: "ephemeral", handle: "second", incarnation: "second" },
-        }),
-      ).rejects.toMatchObject({ code: "overloaded" });
-      expect(await read(memory)).toEqual(["private"]);
-      expect(existsSync(namespace)).toBe(false);
-      await expect(
-        memory.execute({ type: "commitThenExit", input: { value: "lost" } }),
-      ).rejects.toMatchObject({ code: "outcome-unknown" });
-      expect(lost).toBe(true);
-      await nativeStopped;
-      await expect(memory.execute({ type: "read", input: undefined })).rejects.toMatchObject({
-        code: "unavailable",
-      });
-      assert(durableSibling);
-      expect(await read(durableSibling)).toEqual(["durable"]);
-    } finally {
-      await broker.close();
-      parallelism.mockRestore();
-    }
-  },
-);

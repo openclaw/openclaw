@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
 import { createMergeGhFixturePrograms } from "./pr-merge-gh-process.test-support.js";
 import {
@@ -17,6 +18,8 @@ import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.
 export function createMergeOutcomeFixtureHarness() {
   const temps = useAutoCleanupTempDirTracker(afterEach);
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+  const restoredRoots = new Set<string>();
+  afterEach(() => cleanupTempDirs(restoredRoots));
   let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
   const scripts = join(process.cwd(), "scripts");
   const nodeExecutable = requireNodeTool("node");
@@ -39,6 +42,29 @@ export function createMergeOutcomeFixtureHarness() {
   // Git 2.45 introduced no-lazy-fetch; older Git cannot prove offline probes.
   const supportsNoLazyFetch =
     spawnSync("git", ["--no-lazy-fetch", "--version"], { env: gitEnv }).status === 0;
+
+  function reuseCompletedSetup<Args extends unknown[], Setup extends { f: { root: string } }>(
+    create: (...args: Args) => Setup,
+  ): (...args: Args) => Setup {
+    const completed = new Map<string, { setup: Setup; snapshot: string }>();
+    return (...args) => {
+      const key = JSON.stringify(args);
+      const cached = completed.get(key);
+      if (cached) {
+        // Keep absolute Git worktree links and retained evidence paths intact.
+        rmSync(cached.setup.f.root, { recursive: true, force: true });
+        copyTreeCloseOnExec(cached.snapshot, cached.setup.f.root);
+        restoredRoots.add(cached.setup.f.root);
+        return cached.setup;
+      }
+      const setup = create(...args);
+      const snapshot = templateDirs.make("pr-recovery-setup-");
+      // Builders settle every command and recover failed dispatch locks before returning.
+      copyTreeCloseOnExec(setup.f.root, snapshot);
+      completed.set(key, { setup, snapshot });
+      return setup;
+    };
+  }
 
   function createFixtureTemplate(directory: string) {
     const root = realpathSync(directory);
@@ -807,7 +833,7 @@ if [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}"
 fi
 `,
       true,
@@ -857,6 +883,7 @@ fi
       adminEvidence = "",
       confirmedAdmin = false,
       mergedHead = "",
+      observedHead = "",
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -877,6 +904,7 @@ fi
           adminEvidence,
           String(confirmedAdmin),
           mergedHead,
+          observedHead,
         ],
         {
           cwd,
@@ -1021,7 +1049,24 @@ fi
         ),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
-      cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
+      cancel: (oid: string, observedHead = "") =>
+        run(
+          false,
+          repo,
+          "squash",
+          oid,
+          "",
+          "",
+          "",
+          "",
+          true,
+          "",
+          false,
+          "",
+          false,
+          "",
+          observedHead,
+        ),
       acceptHeadDrift: (oid: string, mergedHead: string) =>
         run(false, repo, "squash", oid, "", "", "", "", false, "", false, "", false, mergedHead),
       recover,
@@ -1102,6 +1147,7 @@ Run the following to resolve the merge conflicts locally:
 
   return {
     fixture,
+    reuseCompletedSetup,
     expectNoProbeFetch,
     createLegacyRefusal,
     reconciledMergeAfterCleanup,

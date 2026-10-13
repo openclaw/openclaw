@@ -8,6 +8,7 @@ import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
 } from "../infra/approval-resolution-ref.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalDecision,
@@ -23,7 +24,6 @@ export const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS = 128;
 export const OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS = 64;
-export const OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE = 256;
 export const OPERATOR_APPROVAL_MAX_LIST_LIMIT = 1_001;
 export const OPERATOR_APPROVAL_HISTORY_DEFAULT_LIMIT = 50;
 export const OPERATOR_APPROVAL_HISTORY_MAX_LIMIT = 100;
@@ -55,18 +55,9 @@ export function parseOperatorApprovalKind(value: string): OperatorApprovalKind |
   return value === "exec" || value === "plugin" || value === "system-agent" ? value : null;
 }
 
-export const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
-  approval_id TEXT NOT NULL PRIMARY KEY
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  source_context_id TEXT NOT NULL CHECK (
-    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
-  ),
-  source_execution_id TEXT NOT NULL CHECK (
-    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
-  )
-) STRICT;
-`;
+export const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
+  "operator_approval_execution_identities",
+);
 
 export function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
   const binding = input.executionIdentityToken;

@@ -4,11 +4,12 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery } from "../../cron/types.js";
+import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
 import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -589,9 +590,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("job required");
             }
-            // Admin patches still need stored-payload inference, but must not
-            // recapture the creator's execution authority.
-            const creatorOptions = managementAuthority ? undefined : opts;
+            let creatorOptions = managementAuthority ? undefined : opts;
+            if (
+              managementAuthority &&
+              opts?.resolveCreatorToolAuthority &&
+              isRecord(patch.payload) &&
+              Object.hasOwn(patch.payload, "toolsAllow")
+            ) {
+              const current = await callGateway<CronJob>("cron.get", gatewayOpts, { id });
+              if (
+                current.owner?.sessionKey === callerIdentity?.sessionKey &&
+                normalizeAccountId(current.owner?.accountId) ===
+                  normalizeAccountId(opts?.agentAccountId)
+              ) {
+                // Resolve a fresh owner ceiling even for already-visible tools.
+                creatorOptions = { ...opts, creatorToolAllowlist: undefined };
+              }
+            }
             return jsonResult(
               await updateCronJobFromAgentTool({
                 id,
@@ -600,10 +615,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
                 creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,
                 resolveCreatorToolAuthority: creatorOptions?.resolveCreatorToolAuthority,
-                withCreatorAuthorityProvenance:
-                  !managementAuthority && callerIdentity
-                    ? withCreatorAuthorityProvenance
-                    : undefined,
+                withCreatorAuthorityProvenance,
                 gatewayOpts,
                 callGateway,
                 operationSignal,

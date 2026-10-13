@@ -216,7 +216,13 @@ export async function listSessionCatalogWithinBudget(
   if (active.progress !== progress) {
     subscribe(active.progress);
   }
-  const result = await raceWithTimeout(active.result, 1_000, () => undefined, { ref: false });
+  // Prepared pages do not wait for discovery; already-settled refreshes still win the race.
+  const result = await raceWithTimeout(
+    active.result,
+    operations.pages.has(key) ? 0 : 1_000,
+    () => undefined,
+    { ref: false },
+  );
   const catalog = result?.catalogs[0];
   const error = catalog?.error;
   if (result && !error) {

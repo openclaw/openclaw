@@ -640,8 +640,8 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
             <Show
               when={read().pending}
               fallback={
+                // Preserve the empty reserved box across the lazy element's upgrade.
                 <div
-                  class="skeleton"
                   role="status"
                   aria-label={t("common.loading")}
                   style={{ "min-height": `${height()}px` }}

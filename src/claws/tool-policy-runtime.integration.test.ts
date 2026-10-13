@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
@@ -17,11 +18,14 @@ import {
 } from "../agents/tool-search-catalog.js";
 import { resolveToolSearchConfig } from "../agents/tool-search-config.js";
 import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
+import * as configIo from "../config/io.js";
 import {
   clearRuntimeConfigSnapshot,
+  setAppliedRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -31,7 +35,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { applyClawMigrationPlan, buildClawMigrationPlan } from "./migrate.js";
 import { persistClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
-import { prepareCapturedClawToolPolicyConsent } from "./tool-policy-runtime.js";
+import {
+  isFrozenClawToolAllowPolicy,
+  prepareCapturedClawToolPolicyConsent,
+} from "./tool-policy-runtime.js";
 import type { ClawOpenClawProfile } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,6 +88,39 @@ async function migrateToolConsentAgent() {
 }
 
 describe("Claw tool policy consent provenance", () => {
+  it("prepares restarted Claw consent before standalone agent capability resolution", async () => {
+    const root = tempDirs.make("openclaw-claw-standalone-consent-");
+    const env = stateEnv(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const { plan } = await makeToolConsentPlan(root);
+    persistClawInstallRecord(plan, { env });
+    closeOpenClawStateDatabase();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { entries: toAgentEntriesRecord([plan.agent.config]) },
+    };
+    clearSecretsRuntimeSnapshot();
+    setRuntimeConfigSnapshot(config, config);
+    vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
+      new Error("fixture has no source file"),
+    );
+    try {
+      const resolved = await resolveAgentRuntimeConfig({
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      });
+      const capability = resolveConversationCapabilityProfile({
+        agentId: "worker",
+        config: resolved,
+      });
+      expect(isFrozenClawToolAllowPolicy(capability.policy.agentPolicy)).toBe(true);
+    } finally {
+      clearSecretsRuntimeSnapshot();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("runs an adopted agent with frozen tools and inherited settings after restart", async () => {
     const { config, env } = await migrateToolConsentAgent();
     const workspace = config.agents.entries.worker.workspace;
@@ -114,7 +154,7 @@ describe("Claw tool policy consent provenance", () => {
       });
     };
     closeOpenClawStateDatabase();
-    setRuntimeConfigSnapshot(config);
+    await setAppliedRuntimeConfigSnapshot(config, config);
     const captured = structuredClone(config);
     prepareCapturedClawToolPolicyConsent(captured, { env });
     const dispatcher = prepareDispatcher(captured);
@@ -162,12 +202,12 @@ describe("Claw tool policy consent provenance", () => {
       },
     ];
     for (const changed of changedConfigs) {
-      setRuntimeConfigSnapshot(changed);
+      await setAppliedRuntimeConfigSnapshot(changed, changed);
       await expect(
         (async () => prepareDispatcher(changed).call("exec", execInput))(),
       ).rejects.toThrow("Cannot verify the installed tool authority");
     }
-    setRuntimeConfigSnapshot(config);
+    await setAppliedRuntimeConfigSnapshot(config, config);
     openOpenClawStateDatabase({ env });
     closeOpenClawStateDatabase();
     await expect((async () => prepareDispatcher(config).call("exec", execInput))()).rejects.toThrow(
@@ -206,7 +246,7 @@ describe("Claw tool policy consent provenance", () => {
         },
       },
     };
-    setRuntimeConfigSnapshot(mixedConfig);
+    await setAppliedRuntimeConfigSnapshot(mixedConfig, mixedConfig);
     for (const agentId of ["worker", "created"]) {
       expect(() =>
         resolveConversationCapabilityProfile({ agentId, config: mixedConfig }),
@@ -219,12 +259,12 @@ describe("Claw tool policy consent provenance", () => {
 
   it.each([{ profile: "coding" as const }, { profile: "full" as const, allow: ["read"] }])(
     "does not infer ownership or create state for uninitialized tools %j",
-    (tools) => {
+    async (tools) => {
       const root = tempDirs.make("openclaw-uninitialized-tool-consent-");
       const stateDir = join(root, "state");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const config = { agents: { entries: { worker: { tools } } } };
-      setRuntimeConfigSnapshot(config);
+      await setAppliedRuntimeConfigSnapshot(config, config);
       expect(() =>
         resolveConversationCapabilityProfile({ agentId: "worker", config }),
       ).not.toThrow();
@@ -254,7 +294,7 @@ describe("Claw tool policy consent provenance", () => {
       if (known) {
         expect(() => openOpenClawStateDatabase({ env })).toThrow();
       }
-      setRuntimeConfigSnapshot(config);
+      await setAppliedRuntimeConfigSnapshot(config, config);
       expect(() => resolveConversationCapabilityProfile({ agentId: "worker", config })).toThrow(
         "Cannot verify the installed tool authority",
       );
@@ -282,7 +322,7 @@ describe("Claw tool policy consent provenance", () => {
           ]),
         },
       };
-      setRuntimeConfigSnapshot(config);
+      await setAppliedRuntimeConfigSnapshot(config, config);
       if (kind === "closed") {
         closeOpenClawStateDatabase();
       }
@@ -306,7 +346,7 @@ describe("Claw tool policy consent provenance", () => {
     const { plan } = await makeToolConsentPlan(root, { profile, allow: ["read"] });
     persistClawInstallRecord(plan, { env });
     const config = { agents: { entries: toAgentEntriesRecord([plan.agent.config]) } };
-    setRuntimeConfigSnapshot(config);
+    await setAppliedRuntimeConfigSnapshot(config, config);
     const capabilityProfile = resolveConversationCapabilityProfile({ agentId: "worker", config });
     const policies = resolveConversationToolPolicies({ capabilityProfile });
     const filtered = applyToolPolicyPipeline({
@@ -330,7 +370,7 @@ describe("Claw tool policy consent provenance", () => {
     const legacyConfig = {
       agents: { entries: toAgentEntriesRecord([{ ...plan.agent.config, tools: { profile } }]) },
     };
-    setRuntimeConfigSnapshot(legacyConfig);
+    await setAppliedRuntimeConfigSnapshot(legacyConfig, legacyConfig);
     expect(() =>
       resolveConversationCapabilityProfile({ agentId: "worker", config: legacyConfig }),
     ).toThrow(message);
@@ -369,7 +409,7 @@ describe("Claw tool policy consent provenance", () => {
         entries: toAgentEntriesRecord([validPlan.agent.config, invalidPlan.agent.config]),
       },
     };
-    setRuntimeConfigSnapshot(config);
+    await setAppliedRuntimeConfigSnapshot(config, config);
 
     expect(() =>
       resolveConversationCapabilityProfile({
@@ -396,7 +436,7 @@ describe("Claw tool policy consent provenance", () => {
       tools: { profile: "minimal" as const },
       agents: { entries: toAgentEntriesRecord([plan.agent.config]) },
     };
-    setRuntimeConfigSnapshot(config);
+    await setAppliedRuntimeConfigSnapshot(config, config);
     const capabilityProfile = resolveConversationCapabilityProfile({
       agentId: "worker",
       config,

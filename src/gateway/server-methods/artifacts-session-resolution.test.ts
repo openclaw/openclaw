@@ -224,6 +224,7 @@ describe("artifact session authorization", () => {
         setRuntimeConfigSnapshot({});
         const owner = ensureProfileForEmail("artifact-owner@example.test");
         const viewer = roleClient("view", "artifact-reader");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:readable-artifacts";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },

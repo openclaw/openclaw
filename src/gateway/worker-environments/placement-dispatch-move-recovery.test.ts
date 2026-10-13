@@ -3,6 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -278,17 +280,21 @@ describe("worker Gateway move recovery", () => {
       const pending = await placements.listPendingWorkspaceResultsAsync();
       const entry = { sessionId: active.sessionId, updatedAt: 1 };
       const target = {
-        storePath: path.join(support.testState.root, "sessions.sqlite"),
+        storePath: resolveSessionStorePathCore(undefined, { agentId: active.agentId }),
         canonicalKey: active.sessionKey,
         storeKeys: [active.sessionKey],
         agentId: active.agentId,
         store: { [active.sessionKey]: entry },
       };
+      await replaceSessionEntry(
+        { agentId: active.agentId, sessionKey: active.sessionKey, storePath: target.storePath },
+        entry,
+      );
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
         placements,
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
-          resolveGatewaySessionStoreTargetWithStore: () => target,
+          resolveGatewaySessionStoreTargetInWorker: async () => target,
           resolveCanonicalSessionEntryFromStoreKeys: () => entry,
         }),
         cancelSessionWork: async ({ assertCurrent }) => assertCurrent(),

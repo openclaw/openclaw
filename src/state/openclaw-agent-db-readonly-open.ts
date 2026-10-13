@@ -5,12 +5,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import {
-  admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
-  runSqliteReadOperationSync,
-} from "../infra/sqlite-schema-facts.js";
-import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
@@ -29,7 +24,10 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
 import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
-import { hasOpenClawAgentCanonicalValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  adoptOpenClawAgentDatabaseSchema,
+  hasOpenClawAgentCanonicalValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -78,23 +76,6 @@ function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase)
   assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
   assertCanonicalSessionValidationSchema(database.db);
   return true;
-}
-
-/** Retained grants reuse their fresh read scope without re-admitting changed schema under a lock. */
-export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentReadOnlyDatabase) {
-  const changed = () =>
-    new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${database.path} schema admission changed; retry the request.`,
-    );
-  const schema = getAdmittedSqliteSchemaFacts(database.db);
-  if (!schema) {
-    throw changed();
-  }
-  return () => {
-    if (getAdmittedSqliteSchemaFacts(database.db) !== schema) {
-      throw changed();
-    }
-  };
 }
 
 /** Recheck admission and consume retained rows in the same fresh synchronous scope. */
@@ -198,10 +179,13 @@ export function openOpenClawAgentDatabaseReadOnly(
       ? db.location()
       : undefined;
     const database = { agentId, db, path: privatePath ?? pathname, close };
-    const hasSchema = runSqliteReadOperationSync(db, () => {
-      admitSqliteSchema(db);
-      return hasAdmittedAgentReadOnlySchema(database);
-    });
+    // The physical owner already checked ownership and canonical definitions.
+    const hasSchema =
+      adoptOpenClawAgentDatabaseSchema(database) ||
+      runSqliteReadOperationSync(db, () => {
+        admitSqliteSchema(db);
+        return hasAdmittedAgentReadOnlySchema(database);
+      });
     if (!hasSchema) {
       close();
       return { found: false, reason: "schema-missing" };

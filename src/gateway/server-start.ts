@@ -1,3 +1,4 @@
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
@@ -39,6 +40,7 @@ async function startGatewayServerWithSdkHost(
   const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
+    deferRequestRuntime: true,
     sdkResourceHost,
   });
   // A Gateway restart must refresh restored skill catalogs, even in the same process.
@@ -56,6 +58,7 @@ async function startGatewayServerWithSdkHost(
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
       httpRequestLifetime: gatewayKernel.gatewayRequestContext,
+      waitForRequestRuntime: gatewayKernel.ensureRequestRuntimeReady,
       updateCanary: opts.updateCanary,
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
@@ -117,6 +120,7 @@ async function startGatewayServerWithSdkHost(
       if (gatewayKernel.lifecycle.closePreludeStarted) {
         return;
       }
+      scheduleOpenClawCompileCacheFlush();
       // Deferred sidecars must finish before the I/O window for background work begins.
       gatewayKernel.scheduler.schedule({
         id: "startup:post-ready-work",

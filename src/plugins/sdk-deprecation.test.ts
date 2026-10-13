@@ -28,8 +28,8 @@ it("attributes legacy use to its runtime owner and gives each family an independ
     ]);
     for (const [message] of warning.mock.calls) {
       expect(message).toContain("store.writeAsync");
-      expect(message).toContain("remains supported in the current Plugin SDK major");
-      expect(message).toContain("removed in the next Plugin SDK major");
+      expect(message).toContain("remains supported during its deprecation period");
+      expect(message).toContain("removed in a later release after stable deprecation");
     }
   } finally {
     await Promise.all([first.dispose(), reloaded.dispose()]);
@@ -52,7 +52,7 @@ it("bounds unscoped warnings and never prints path-like caller labels", () => {
     });
   }
   expect(warning).toHaveBeenCalledExactlyOnceWith(
-    "Plugin SDK: store.write is deprecated; use store.writeAsync instead. The legacy contract remains supported in the current Plugin SDK major. It will be removed in the next Plugin SDK major.",
+    "Plugin SDK: store.write is deprecated; use store.writeAsync instead. The legacy contract remains supported during its deprecation period. It will be removed in a later release after stable deprecation.",
     { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
   );
 });

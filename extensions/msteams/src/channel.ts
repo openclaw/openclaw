@@ -264,112 +264,89 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             note: undefined as string | undefined,
           }));
           type ResolveTargetResultEntry = (typeof results)[number];
-          type PendingTargetEntry = { query: string; index: number };
-          const resolvePending = async <T>(
-            pending: PendingTargetEntry[],
-            resolveEntries: (entries: string[]) => Promise<T[]>,
-            applyResolvedEntry: (target: ResolveTargetResultEntry, entry: T) => void,
-          ) => {
-            if (pending.length === 0) {
-              return;
+          const pending: { query: string; target: ResolveTargetResultEntry }[] = [];
+          for (const entry of results) {
+            const trimmed = entry.input.trim();
+            if (!trimmed) {
+              entry.note = "empty input";
+              continue;
             }
-            try {
-              const resolved = await resolveEntries(pending.map((entry) => entry.query));
-              resolved.forEach((entry, idx) => {
-                const target = results[pending[idx]?.index ?? -1];
-                if (!target) {
-                  return;
-                }
-                applyResolvedEntry(target, entry);
-              });
-            } catch (err) {
-              runtime.error?.(`msteams resolve failed: ${String(err)}`);
-              for (const { index } of pending) {
-                results[index]!.note = "lookup failed";
-              }
-            }
-          };
-
-          if (kind === "user") {
-            const pending: PendingTargetEntry[] = [];
-            results.forEach((entry, index) => {
-              const trimmed = entry.input.trim();
-              if (!trimmed) {
-                entry.note = "empty input";
-                return;
-              }
+            if (kind === "user") {
               const cleaned = normalizeMSTeamsUserInput(trimmed);
               if (/^[0-9a-fA-F-]{16,}$/.test(cleaned) || cleaned.includes("@")) {
                 entry.resolved = true;
                 entry.id = cleaned;
-                return;
+              } else {
+                pending.push({ query: cleaned, target: entry });
               }
-              pending.push({ query: cleaned, index });
-            });
-
-            await resolvePending(
-              pending,
-              (entries) => resolveMSTeamsUserAllowlist({ cfg, accountId, entries }),
-              (target, entry) => {
-                target.resolved = entry.resolved;
-                target.id = entry.id;
-                target.name = entry.name;
-                target.note = entry.note;
-              },
-            );
-
-            return results;
-          }
-
-          const pending: PendingTargetEntry[] = [];
-          results.forEach((entry, index) => {
-            const trimmed = entry.input.trim();
-            if (!trimmed) {
-              entry.note = "empty input";
-              return;
+              continue;
             }
             const conversationId = parseMSTeamsConversationId(trimmed);
             if (conversationId !== null) {
               entry.resolved = Boolean(conversationId);
               entry.id = conversationId || undefined;
               entry.note = conversationId ? "conversation id" : "empty conversation id";
-              return;
+              continue;
             }
             const parsed = parseMSTeamsTeamChannelInput(trimmed);
             if (!parsed.team) {
               entry.note = "missing team";
-              return;
+              continue;
             }
             const query = parsed.channel ? `${parsed.team}/${parsed.channel}` : parsed.team;
-            pending.push({ query, index });
-          });
-
-          await resolvePending(
-            pending,
-            (entries) => resolveMSTeamsChannelAllowlist({ cfg, accountId, entries }),
-            (target, entry) => {
-              if (!entry.resolved || !entry.teamId) {
-                target.resolved = false;
-                target.note = entry.note;
-                return;
-              }
-              target.resolved = true;
-              if (entry.channelId) {
-                target.id = `${entry.teamId}/${entry.channelId}`;
-                target.name =
-                  entry.channelName && entry.teamName
-                    ? `${entry.teamName}/${entry.channelName}`
-                    : (entry.channelName ?? entry.teamName);
-              } else {
-                target.id = entry.teamId;
-                target.name = entry.teamName;
-                target.note = "team id";
-              }
-              if (entry.note) {
-                target.note = entry.note;
-              }
-            },
-          );
+            pending.push({ query, target: entry });
+          }
+          if (pending.length === 0) {
+            return results;
+          }
+          const entries = pending.map((entry) => entry.query);
+          try {
+            if (kind === "user") {
+              const resolved = await resolveMSTeamsUserAllowlist({ cfg, accountId, entries });
+              resolved.forEach((entry, index) => {
+                const target = pending[index]?.target;
+                if (target) {
+                  target.resolved = entry.resolved;
+                  target.id = entry.id;
+                  target.name = entry.name;
+                  target.note = entry.note;
+                }
+              });
+            } else {
+              const resolved = await resolveMSTeamsChannelAllowlist({ cfg, accountId, entries });
+              resolved.forEach((entry, index) => {
+                const target = pending[index]?.target;
+                if (!target) {
+                  return;
+                }
+                if (!entry.resolved || !entry.teamId) {
+                  target.resolved = false;
+                  target.note = entry.note;
+                  return;
+                }
+                target.resolved = true;
+                if (entry.channelId) {
+                  target.id = `${entry.teamId}/${entry.channelId}`;
+                  target.name =
+                    entry.channelName && entry.teamName
+                      ? `${entry.teamName}/${entry.channelName}`
+                      : (entry.channelName ?? entry.teamName);
+                } else {
+                  target.id = entry.teamId;
+                  target.name = entry.teamName;
+                  target.note = "team id";
+                }
+                if (entry.note) {
+                  target.note = entry.note;
+                }
+              });
+            }
+          } catch (err) {
+            runtime.error?.(`msteams resolve failed: ${String(err)}`);
+            for (const { target } of pending) {
+              target.note = "lookup failed";
+            }
+          }
 
           return results;
         },

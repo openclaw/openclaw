@@ -12,6 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -140,6 +141,7 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
 afterAll(() => observed.timers.mockRestore());
 
 afterEach(async () => {
+  memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
@@ -190,6 +192,11 @@ it.each([false, true])(
       if (incognito) {
         expect(observed.workers).toHaveLength(workersBefore);
         expect(fs.existsSync(databasePath)).toBe(false);
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath });
+        expect(await read()).toBe(false);
+        await replaceSessionEntry(target, { sessionId: "replacement-memory-owner", updatedAt: 2 });
+        expect(await read()).toBe(true);
+        expect(observed.workers).toHaveLength(workersBefore);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
         target.storePath = path.join(state.agentDir(), "replacement.sqlite");
@@ -323,6 +330,8 @@ it("settles cancelled message reads before reuse and closes their database handl
     setRuntimeConfigSnapshot({});
     const fixture = await seed(state, "main", "cancel-message-read");
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    // Cold admission uses the discovery lane; compare cancellation reuse on the warm history lane.
+    await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
     const reads: Array<{ worker: Worker; threadId: number }> = [];
@@ -619,7 +628,7 @@ it("leaves the unrelated warm worker running when admission rejects a request be
 });
 
 it.each([false, true])(
-  "joins the history worker when its 30-minute idle timer fires (missing=%s)",
+  "joins the history worker when its five-minute idle timer fires (missing=%s)",
   async (missing) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
@@ -634,7 +643,7 @@ it.each([false, true])(
       const beforeRead = observed.timers.mock.calls.length;
       await a.read();
       const worker = observed.workers.at(-1)!;
-      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
+      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 5 * 60_000);
       expect(index).toBeGreaterThanOrEqual(beforeRead);
       const [expire] = observed.timers.mock.calls[index]!;
       const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
@@ -653,16 +662,16 @@ it.each([false, true])(
         // No database resource exists to close; the reopened empty worker owns only its idle timer.
         const emptyWorker = observed.workers.at(-1)!;
         const nextIndex = observed.timers.mock.calls.findLastIndex(
-          (call) => call[1] === 30 * 60_000,
+          (call) => call[1] === 5 * 60_000,
         );
         expect(nextIndex).toBeGreaterThan(index);
         clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
         observed.timers.mock.calls[nextIndex]![0]();
         await expect.poll(() => emptyWorker.threadId).toBe(-1);
-        expect(observed.timers.mock.calls.filter((call) => call[1] === 30 * 60_000)).toHaveLength(
+        expect(observed.timers.mock.calls.filter((call) => call[1] === 5 * 60_000)).toHaveLength(
           observed.timers.mock.calls
             .slice(0, nextIndex + 1)
-            .filter((call) => call[1] === 30 * 60_000).length,
+            .filter((call) => call[1] === 5 * 60_000).length,
         );
       }
     });

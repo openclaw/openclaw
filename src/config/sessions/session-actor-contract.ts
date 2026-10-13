@@ -29,6 +29,7 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputWorkerReceipt } from "./session-pending-input.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -251,6 +252,7 @@ export type SessionActorReceipt = {
     appendedMessages: SessionTurnCommitted["result"]["appendedMessages"];
     /** Complete append delta in this generation; absent when payloads are unavailable. */
     appendedEvents?: Array<{ rawSeq: number; event: unknown; serializedBytes: number }>;
+    authorityReceipts?: readonly SessionTranscriptAuthorityReceipt[];
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };
@@ -324,7 +326,8 @@ type SessionActorCommands = {
 };
 
 type SessionActorStorageCommitObserver<Value> = {
-  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 
 /** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */

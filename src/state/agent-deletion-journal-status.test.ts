@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+import { isAgentDeletionBlocked, withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import {
   beginSessionWorkAdmission,
   closeAgentWorkAdmissions,
@@ -36,6 +36,9 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
     };
     const first = await beginSessionWorkAdmission(target);
     first.release();
+    const directReads = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseCurrentReadOnly");
+    expect(isAgentDeletionBlocked("doomed", options)).toBe(false);
+    expect(directReads).not.toHaveBeenCalled();
     reads.mockClear();
     const active = await beginSessionWorkAdmission(target);
     const queued = beginSessionWorkAdmission(target);
@@ -59,6 +62,9 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
           expect(active.isActive()).toBe(true);
           await expect(beginSessionWorkAdmission(target)).rejects.toThrow("deletion");
           expect(await readAgentDeletionJournalStatusInWorker("doomed", options)).toBe("pending");
+          directReads.mockClear();
+          expect(isAgentDeletionBlocked("doomed", options)).toBe(true);
+          expect(directReads).not.toHaveBeenCalled();
           active.release();
           await deletion.rollback();
         },
@@ -95,9 +101,11 @@ it("publishes completion and recreation only on commit and reloads a discarded t
     };
     const read = () => readAgentDeletionJournalStatusInWorker(input.agentId, options);
     expect(await read()).toBe("absent");
+    expect(isAgentDeletionBlocked(input.agentId, options)).toBe(false);
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
         beginAgentDeletionJournalInDatabase(database, input);
+        expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
         throw new Error("rollback");
       }, options),
     ).toThrow("rollback");
@@ -107,6 +115,7 @@ it("publishes completion and recreation only on commit and reloads a discarded t
       completeAgentDeletionJournalInDatabase(database, input.agentId, input.operationId);
     }, options);
     expect(await read()).toBe("complete");
+    expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
     invalidateAgentDeletionJournalStatus(openOpenClawStateDatabase(options).db, input.agentId);
     expect(await read()).toBe("complete");
     expect(() =>

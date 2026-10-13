@@ -1,7 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { parseStoredJson } from "./plugin-state-error.js";
 import { readCommittedPluginStateObservationCache } from "./plugin-state-observation-cache.js";
-import { pluginStatePublication } from "./plugin-state-publication.js";
+import { pluginStatePublication, pluginStatePublicationKey } from "./plugin-state-publication.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { capturePluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
 import { observePluginStateInWorker } from "./plugin-state-worker-client.js";
@@ -21,7 +21,11 @@ export async function capturePluginStateNativeBindingFacts(
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const identity = context.admission.identity.key;
   const scope = { pluginId: options.pluginId, namespace: options.namespace, key };
-  const entryKey = JSON.stringify([scope.pluginId, scope.namespace, key]);
+  const entryKey = pluginStatePublicationKey({
+    plugin_id: scope.pluginId,
+    namespace: scope.namespace,
+    entry_key: key,
+  });
   let active = true;
   let loaded = false;
   let row: PluginStateReadRow | undefined;

@@ -8,7 +8,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema-ensure.js";
 import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import {

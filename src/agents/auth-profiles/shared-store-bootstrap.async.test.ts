@@ -22,7 +22,8 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { SHARED_AUTH_STORE_STATE_KEY, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import {
   prepareAuthProfileWriteTransactionAsync,
   resolveAuthProfileDatabasePath,

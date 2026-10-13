@@ -21,6 +21,7 @@ import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
 import { parseWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentNativePatch } from "./store-projection.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationInput } from "./store.types.js";
 
 type PreparationRow = Pick<
@@ -280,7 +281,7 @@ export function createPreparedEnvironmentStoreOps(options: {
         if (reusable) {
           // Explicit build demand must survive a disabled reserve target while
           // this allocation finishes. Reuse never renews its expiry window.
-          executeSqliteQuerySync(
+          executeWorkerEnvironmentWrite(
             db,
             query(db)
               .updateTable("worker_environments")
@@ -345,7 +346,7 @@ export function createPreparedEnvironmentStoreOps(options: {
       if (current.destroyRequestedAtMs !== null) {
         return current;
       }
-      executeSqliteQuerySync(
+      executeWorkerEnvironmentWrite(
         db,
         query(db)
           .updateTable("worker_environments")

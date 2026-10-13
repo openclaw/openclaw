@@ -1,26 +1,38 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { loadOpenIncognitoSessionStores } from "../../config/sessions/combined-store-gateway.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import type { withIncognitoSessionStoreEntries } from "../../config/sessions/session-incognito-binding.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageAuthority } from "../../config/sessions/session-actor-storage-contract.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { prepareSessionRowSelection } from "../session-utils-list.js";
 
-export type IncognitoStores = Parameters<Parameters<typeof withIncognitoSessionStoreEntries>[0]>[0];
+export type MemoryProjectStores = ReturnType<typeof readMemoryProjectStores>;
 
-export function readMemoryProjectStores(binding: SessionActorStorageBinding) {
-  binding.actor.assertReadable();
-  const root = path.resolve(binding.path, "../../../..");
+export function readMemoryProjectStores(assertCurrent: () => void) {
+  assertCurrent();
+  const binding = getSessionActorStorageBinding({});
+  binding?.actor.assertReadable();
+  const root = binding
+    ? path.resolve(binding.path, "../../../..")
+    : path.resolve(resolveStateDir());
+  const authority: SessionActorStorageAuthority = {
+    assertCurrent() {
+      assertCurrent();
+      binding?.actor.assertReadable();
+      binding?.authority.assertCurrent();
+    },
+    authorize: (...args) => binding?.authority.authorize(...args),
+  };
   return memorySessionActorOwners
     .list()
     .filter((owner) => path.resolve(owner.path, "../../../..") === root)
     .map((owner) => ({
       agentId: owner.agentId,
       storePath: owner.path,
+      read: (sessionKey: string) => owner.readSession(sessionKey, authority),
       entries: owner
-        .listSessions(binding.authority)
+        .listSessions(authority)
         .flatMap(({ target, entry, members }) =>
           entry ? [{ sessionKey: target.sessionKey, entry, members }] : [],
         ),
@@ -29,20 +41,21 @@ export function readMemoryProjectStores(binding: SessionActorStorageBinding) {
 
 /** Only changed disclosure authority retires a prepared private project listing. */
 export function assertMemoryProjectStoresCurrent(
-  binding: SessionActorStorageBinding,
-  stores: ReturnType<typeof readMemoryProjectStores>,
+  stores: MemoryProjectStores,
+  keys: ReadonlySet<string>,
+  assertCurrent: () => void,
 ): void {
-  const current = readMemoryProjectStores(binding);
+  assertCurrent();
   for (const store of stores) {
-    const entries = current.find((candidate) => candidate.storePath === store.storePath);
     for (const selected of store.entries) {
-      const latest = entries?.entries.find(
-        (candidate) => candidate.sessionKey === selected.sessionKey,
-      );
+      if (!keys.has(selected.sessionKey)) {
+        continue;
+      }
+      const latest = store.read(selected.sessionKey);
       const fields = ["sessionId", "lifecycleRevision", "createdActor", "visibility"] as const;
       if (
         !latest ||
-        fields.some((field) => !isDeepStrictEqual(selected.entry[field], latest.entry[field])) ||
+        fields.some((field) => !isDeepStrictEqual(selected.entry[field], latest.entry?.[field])) ||
         !isDeepStrictEqual(selected.members, latest.members)
       ) {
         throw new Error("Project access changed while preparing the listing. Retry the request.");
@@ -53,7 +66,7 @@ export function assertMemoryProjectStoresCurrent(
 
 export function loadProjectSessionStore(
   projection: SessionRowProjection,
-  incognitoStores?: IncognitoStores,
+  memoryStores: MemoryProjectStores,
 ) {
   const selection = prepareSessionRowSelection(
     projection,
@@ -61,24 +74,59 @@ export function loadProjectSessionStore(
     { metadataPrepared: true, ordered: true },
   );
   const paths = projection.state.scope({}).paths;
+  const targets = new Map(selection.entries.map(([key]) => [key, selection.getTarget(key)!]));
   // Stable locale-equal recency ties retain physical-store and SQLite binary key order.
   const entries = selection.entries
     .map(([key, entry]) => ({
       key,
       entry,
       keyBytes: Buffer.from(key),
-      order: paths.get(selection.getTarget(key)!.storeTarget.storePath)!,
+      order: paths.get(targets.get(key)!.storeTarget.storePath)!,
     }))
     .toSorted(
       (left, right) => left.order - right.order || Buffer.compare(left.keyBytes, right.keyBytes),
     );
   const store = Object.fromEntries(entries.map(({ key, entry }) => [key, entry]));
-  for (const source of incognitoStores ?? loadOpenIncognitoSessionStores()) {
+  const privateAgents = new Map<string, string>();
+  for (const source of memoryStores) {
     for (const { sessionKey, entry } of source.entries) {
-      if (isIncognitoSessionKey(sessionKey) && entry.incognito === true) {
-        store[sessionKey] = entry;
-      }
+      store[sessionKey] = entry;
+      privateAgents.set(sessionKey, source.agentId);
     }
   }
-  return store;
+  return {
+    store,
+    agentId: (key: string) => privateAgents.get(key) ?? targets.get(key)?.agentId,
+    assertCurrent(keys: Iterable<string>) {
+      for (const key of keys) {
+        // The memory snapshot retains its own final disclosure guard.
+        if (privateAgents.has(key)) {
+          continue;
+        }
+        const target = targets.get(key);
+        const query = target && {
+          agentId: target.agentId,
+          storePath: target.storeTarget.storePath,
+          key: target.key,
+        };
+        const current =
+          query && projection.capture(query)?.generation === target?.generation
+            ? projection.readCapabilityEntry(query)?.entry
+            : undefined;
+        const fields = [
+          "sessionId",
+          "lifecycleRevision",
+          "createdActor",
+          "visibility",
+          "incognito",
+        ] as const;
+        if (
+          !current ||
+          fields.some((field) => !isDeepStrictEqual(store[key]?.[field], current[field]))
+        ) {
+          throw new Error("Project access changed while preparing the listing. Retry the request.");
+        }
+      }
+    },
+  };
 }

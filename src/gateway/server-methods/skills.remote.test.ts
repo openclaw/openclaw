@@ -11,7 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
-import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,

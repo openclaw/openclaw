@@ -3,6 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -40,10 +44,12 @@ describe("memory forget source removal", () => {
 
   beforeEach(async () => {
     fixture = await createMemoryForgetFixture();
+    setRuntimeConfigSnapshot(fixture.cfg);
   });
 
   afterEach(async () => {
     await fixture.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   function indexSelection() {

@@ -492,7 +492,10 @@ async function prepareHeartbeatDispatchReply(
   // Receipt identity uses the producer answer, not transport prefix decoration.
   policy.publicationSourceText = outcome.replyPayload?.text;
   const deliveryText =
-    !failed && delivery.implicitDefaultRoute && stateEntry?.lastHeartbeatSentAt === undefined
+    text &&
+    !failed &&
+    delivery.implicitDefaultRoute &&
+    stateEntry?.lastHeartbeatSentAt === undefined
       ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${text}`
       : text;
   const payload = copyReplyPayloadMetadata(selected ?? {}, {
@@ -563,7 +566,7 @@ export async function deliverHeartbeatDispatch(
   const { delivery, runSessionKey, storePath, outboundPolicySessionKey, internalProjection } =
     policy.prepared;
   const onDeliveredPayload = policy.projectTarget
-    ? prepareHeartbeatTargetAwareness({
+    ? await prepareHeartbeatTargetAwareness({
         agentId,
         storePath,
         runSessionKey,

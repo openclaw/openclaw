@@ -9,7 +9,7 @@ import {
   renderCloudChoiceMenuItems,
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
-} from "../pages/new-session/cloud-target.ts";
+} from "../pages/new-session/cloud-target-view.tsx";
 import type { DevicePlacementOption } from "../pages/new-session/device-placement.ts";
 import type { DraftCloudProfile } from "../pages/new-session/discovery.ts";
 import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";
@@ -94,8 +94,10 @@ export function showSessionPlacementTargetDialog(
             finish(target);
             return;
           }
-          const machineClass = cloudMachines.resolve(target.profileId);
-          const os = cloudMachines.resolveOs(target.profileId);
+          const { machineClass, os } = cloudMachines.selection(
+            target.profileId,
+            catalog().profiles,
+          );
           finish({ ...target, ...(machineClass ? { machineClass } : {}), ...(os ? { os } : {}) });
         };
 
@@ -117,10 +119,7 @@ export function showSessionPlacementTargetDialog(
               label: t("newSession.machine"),
               choices: machines,
               visible: profileSelected && machines.length > 0,
-              selectedId:
-                cloudMachines.resolve(profile.id) ||
-                machines.find((machine) => machine.default === true)?.id ||
-                "",
+              selectedId: cloudMachines.selection(profile.id, catalog().profiles).machineClass,
             },
           ];
         }

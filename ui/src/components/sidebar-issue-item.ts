@@ -195,6 +195,7 @@ export function renderSidebarUpdateSurface(params: {
     .canNativeUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
     .canHoldUpdate=${canCallGatewayMethod(gateway, "update.hold", "operator.admin")}
     .onUpdate=${() => void context.overlays.runUpdate()}
+    .captureUpdateTarget=${context.overlays.captureUpdateTarget}
     .refreshRequired=${false}
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}

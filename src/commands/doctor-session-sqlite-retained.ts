@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
@@ -28,6 +29,7 @@ import {
   type SessionImportSource,
 } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   moveMigrationArtifact,
   readMigrationArtifactIdentity,
@@ -67,6 +69,28 @@ import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+
+/** Sidecars settle with archived transcripts or terminally missing trajectory targets. */
+export function collectRetainedTrajectoryPointers(
+  sources: ReadonlySet<string>,
+  conflicts?: ReadonlyMap<string, string>,
+): string[] {
+  return [...sources].filter((source) => {
+    const transcript = source.replace(/\.trajectory-path\.json$/u, ".jsonl");
+    if (sources.has(transcript)) {
+      // Receipt-backed pointers follow transcript verification, not a missing runtime target.
+      return transcript !== source && !conflicts?.has(transcript) && !fs.existsSync(transcript);
+    }
+    const target = source.endsWith(".trajectory-path.json") && tryReadJsonSync(source);
+    return (
+      isRecord(target) &&
+      target.traceSchema === "openclaw-trajectory-pointer" &&
+      typeof target.runtimeFile === "string" &&
+      !fs.existsSync(transcript) &&
+      !fs.existsSync(path.resolve(path.dirname(source), target.runtimeFile))
+    );
+  });
+}
 
 /** Archival, not plugin completion alone, ends the original index's no-replay obligation. */
 export function retireDeferredPluginSessionImport(
@@ -115,13 +139,8 @@ export function retireDeferredPluginSessionImport(
           return;
         }
         // Diagnostic callbacks and cached verification cannot authorize retirement.
-        readDeferredPluginSessionImport({
-          cfg: params.cfg,
-          env: params.env,
-          target: params.target,
-          sqlitePath: params.sqlitePath,
-          database: db,
-        });
+        const { cfg, env, target, sqlitePath } = params;
+        readDeferredPluginSessionImport({ cfg, env, target, sqlitePath, database: db });
         markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
       }),
     { env: params.env },

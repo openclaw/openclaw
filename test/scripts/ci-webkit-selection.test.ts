@@ -68,6 +68,12 @@ describe("Control UI WebKit selection", () => {
             repository: "openclaw/openclaw",
             runAttempt: 1,
             matrix: { shard },
+            failed: true,
+            steps: {
+              node_setup: { outputs: {}, outcome: "success" },
+              ui_webkit: { outputs: {}, outcome: "success" },
+              ui_bun: { outputs: {}, outcome: "skipped" },
+            },
             preflightOutputs: { run_ui_webkit: selected },
           }),
         ).toBe(expected);

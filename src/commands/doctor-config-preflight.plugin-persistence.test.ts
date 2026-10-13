@@ -23,7 +23,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { readConfigPreflightSnapshot } from "./config-preflight-snapshot.js";
+import { createConfigPreflightSnapshotReader } from "./config-preflight-snapshot.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
@@ -106,14 +106,16 @@ async function withPreflightPluginFixture(
   });
 }
 
-const readPluginPreflight = () =>
-  readConfigPreflightSnapshot({
+const readPluginPreflight = async () => {
+  await using snapshots = createConfigPreflightSnapshotReader();
+  return snapshots.read({
     purpose: "doctor",
     allowCurrentPluginMetadata: true,
     includePluginMetadata: true,
     skipPluginValidation: false,
     observe: false,
   });
+};
 
 describe("startup plugin metadata admission", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -334,7 +336,8 @@ describe("startup plugin metadata admission", () => {
         await readPluginPreflight();
         await writeVersion("2.0.0");
         let producer: ReturnType<typeof getPluginCache> | undefined;
-        const refreshed = await readConfigPreflightSnapshot({
+        await using snapshots = createConfigPreflightSnapshotReader();
+        const refreshed = await snapshots.read({
           purpose: "doctor",
           allowCurrentPluginMetadata: false,
           includePluginMetadata: true,

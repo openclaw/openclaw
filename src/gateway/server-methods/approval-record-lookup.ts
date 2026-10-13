@@ -163,11 +163,11 @@ async function resolveApprovalRecordForState<TPayload>(
     cfg?: OpenClawConfig;
     getCfg?: () => OpenClawConfig;
     exposeAmbiguousPrefixError?: boolean;
-    recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
+    recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
   },
   expectedState: "pending" | "resolved",
 ): Promise<ApprovalRecordLookupResult<TPayload>> {
-  const visible = (record: ExecApprovalRecord<TPayload>) => {
+  const visible = async (record: ExecApprovalRecord<TPayload>) => {
     const cfg = params.getCfg?.() ?? params.cfg;
     return (
       !params.client?.invalidated &&
@@ -176,7 +176,7 @@ async function resolveApprovalRecordForState<TPayload>(
         client: params.client ?? null,
         ...(cfg ? { cfg } : {}),
       }) &&
-      (params.recordFilter?.(record) ?? true)
+      ((await params.recordFilter?.(record)) ?? true)
     );
   };
   const resolvedId = await params.manager.lookupApprovalId(params.inputId, {
@@ -200,7 +200,7 @@ async function resolveApprovalRecordForState<TPayload>(
   const snapshot = await params.manager.getSnapshot(resolvedId.id, params.authority);
   params.authority?.assertCurrent();
   const isResolved = snapshot?.resolvedAtMs !== undefined;
-  if (!snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)) {
+  if (!snapshot || isResolved !== (expectedState === "resolved") || !(await visible(snapshot))) {
     return { ok: false, response: "missing" };
   }
   params.authority?.bindSource(readApprovalRequestSource(snapshot));

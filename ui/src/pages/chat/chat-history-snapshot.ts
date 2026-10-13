@@ -10,6 +10,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
+import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
@@ -141,6 +142,21 @@ export function reconcileHistoryTail(options: {
   ) {
     return null;
   }
+  const previousByIdentity = new Map<string, unknown[]>();
+  for (const message of options.previousMessages) {
+    const identity = nativeHistoryMessageIdentity(message);
+    if (identity) {
+      const matches = previousByIdentity.get(identity) ?? [];
+      matches.push(message);
+      previousByIdentity.set(identity, matches);
+    }
+  }
+  // Identical history rows keep their render identity, including projected siblings.
+  const messages = options.nextMessages.map((message) => {
+    const identity = nativeHistoryMessageIdentity(message);
+    return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
+  });
+  const reconciled = { messages, pagination: options.nextPagination };
   const previousTotal = options.previousPagination.totalMessages;
   const nextTotal = options.nextPagination.totalMessages;
   const previousStart = retainedRawHistoryStart(options.previousPagination);
@@ -154,18 +170,18 @@ export function reconcileHistoryTail(options: {
     nextStart > previousTotal + 1 ||
     nextStart <= previousStart
   ) {
-    return null;
+    return reconciled;
   }
   const prefix = options.previousMessages.filter((message) => {
     const seq = readSessionMessageSequence(message);
     return seq !== null && seq < nextStart;
   });
   if (prefix.length === 0) {
-    return null;
+    return reconciled;
   }
   const retainedDepth = nextTotal - previousStart + 1;
   return {
-    messages: [...prefix, ...options.nextMessages],
+    messages: [...prefix, ...messages],
     pagination:
       previousStart > 1
         ? { hasMore: true, nextOffset: retainedDepth, totalMessages: nextTotal }

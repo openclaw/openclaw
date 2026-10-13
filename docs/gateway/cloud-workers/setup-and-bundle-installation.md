@@ -1,16 +1,28 @@
 ---
-summary: "The idempotent setup command, Gateway-prepared runtime archives, and building a custom node package"
+summary: "The setup command (safe to repeat), Gateway-prepared runtime archives, and building a custom node package"
 title: "Worker setup and bundle installation"
 read_when: "You are writing a profile setup command, or you need a custom node distribution."
 ---
 
 What runs on the leased box before enrollment, how the Gateway prepares and verifies the runtime archive it installs there, and how to build a complete custom node package.
 
+For repository dependencies and lifecycle commands, commit a [cloud environment file](/gateway/cloud-workers/environment-file). OpenClaw uses `.devcontainer/devcontainer.json` or `.devcontainer.json` before the committed executable `.openclaw/worktree-setup.sh` fallback, then detects JavaScript dependency installs when neither exists. Preparation commands run before capture; `postCreateCommand` and `postStartCommand` run after session workspace binding. Keep `settings.setup` below focused on machine prerequisites.
+
+## Automatic Linux Node toolchains
+
+Linux x64 and arm64 workers need no Node installation in `settings.setup`. Before project preparation or runtime installation, OpenClaw preserves a supported Node on `PATH` when npm, npx, and Corepack are also available; otherwise it installs the development/CI-pinned Node.js 24.21.0 release from nodejs.org. The default Linux archive digests are pinned in OpenClaw source. Downloads use HTTPS and must pass SHA-256 verification before extraction. The image needs a compatible glibc, `curl`, `tar`, and `sha256sum`.
+
+Prepared repositories select their Node requirement in this order: `.nvmrc`, `.node-version`, `.tool-versions` (`nodejs` or `node`), `mise.toml` (`[tools] node`), then `package.json` `engines.node`. Release versions, major versions, SemVer ranges, `node`/`latest`, and `lts/*` or named LTS aliases resolve to the latest matching official Linux release. `system` retains the bootstrap Node. Repository releases are verified against that release's HTTPS `SHASUMS256.txt` before installation. Invalid declarations and missing releases fail preparation with a repair hint.
+
+Toolchains live below the machine HOME's `~/.openclaw-worker/toolchains/node/`, keyed by release, platform, architecture and archive SHA-256. An existing installation passes its file checksums and version check before reuse; warm image forks retain those files. Repository setup and session commands use shims in the prepared HOME's `.local/bin` first on `PATH`. When `package.json` declares `packageManager`, OpenClaw runs `corepack enable --install-directory` there without sudo. A repository Node release that does not bundle Corepack uses the worker's Corepack. When that Corepack's `engines` exclude the repository Node, the prepared HOME receives a copy pinned to the worker Node, so Corepack, its package manager shims, and later `corepack enable` runs work. The package manager then also runs on the worker Node, while `node` on `PATH` stays the repository release. The worker runtime continues to use its own supported Node by absolute path, even for repositories requesting an older Node. Crabbox retains that executable in a machine-level link so later diagnostics and snapshot capture commands can use it in fresh shells.
+
+Existing profiles keep their optional setup scripts, including custom Node installs. Updating the Gateway applies this bootstrap to new Linux provisions; snapshots reuse verified toolchains. macOS and Windows retain their existing image/setup-provided Node and npm behavior. OpenClaw does not install Node on those targets.
+
 ## The setup command
 
 Crabbox coordinator transport timeouts before profile setup, node runtime preparation, or node enrollment scripts start allow up to three attempts with backoff, within the existing phase budget. Only output consisting entirely of coordinator timeout diagnostics qualifies; any script output prevents retry. Lease inspection, readiness reads, heartbeat, and release use the same bounded retry policy; allocation remains owned by Gateway provisioning replay. Exhausted retries preserve the coordinator diagnostic and report the number of attempts.
 
-`settings.setup` runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be idempotent. Workers forked from a [warm image](/gateway/cloud-workers/warm-images) skip it: the image key covers the exact setup script, so the image already carries its results. Setup that only starts processes, rather than writing to disk, does not survive into the fork. Fresh cloud images often still run cloud-init or unattended-upgrades when setup starts; a script that installs packages should wait for them (`cloud-init status --wait`) and pass an apt lock timeout (`-o DPkg::Lock::Timeout=600`), otherwise the first dispatch fails on a held `/var/lib/apt/lists/lock` while a retry on the same box would succeed. Check Node's version, not just executable presence, and preserve supported installations as in the example. Recheck the installed version and npm after any repair. If the final check still fails, fix the image's PATH or package selection before dispatching again. Automatic bootstrap installs the Gateway-matched OpenClaw runtime, not Node.js; keep the image or setup prerequisites aligned with the serving Gateway's `package.json` `engines.node` requirement when upgrading. If setup or enrollment fails, the provider stops the lease and the dispatch fails closed; no half-configured paid box is hidden behind terminal state.
+`settings.setup` is optional. When configured, it runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be safe to repeat. Workers forked from a [warm image](/gateway/cloud-workers/warm-images) skip it: the image key covers the exact setup script, so the image already carries its results. Setup that only starts processes, rather than writing to disk, does not survive into the fork. Fresh cloud images often still run cloud-init or unattended-upgrades when setup starts; a script that installs packages should wait for them (`cloud-init status --wait`) and pass an apt lock timeout (`-o DPkg::Lock::Timeout=600`), otherwise the first dispatch fails on a held `/var/lib/apt/lists/lock` while a retry on the same box would succeed. If setup or enrollment fails, the provider stops the lease and the dispatch stops with an error; no half-configured paid box is hidden behind terminal state.
 
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
@@ -62,7 +74,7 @@ Worker bundle downloads on the node resume from retained staging bytes after tra
 
 While a prepared worker is provisioning, cache cleanup retains the exact worker bundle recorded at admission, including before readiness produces a bootstrap receipt. After the environment reaches a terminal state, normal bundle cleanup can reclaim those bytes when no other environment or placement needs them.
 
-Worker bundles include their JavaScript dependencies, including the WebSocket transport. They target Node.js even when Bun runs the build; the destination still needs a supported Node.js installation.
+Worker bundles include their JavaScript dependencies, including the WebSocket transport. They target Node.js even when Bun runs the build; the destination uses the supported Node.js runtime supplied by automatic Linux bootstrap or its image.
 
 ### Reuse a node runtime archive after Gateway restart
 
@@ -82,7 +94,7 @@ This avoids repeated archive construction after restart. It does not reuse enrol
 
 ## Build a complete custom node package
 
-Automatic cloud bootstrap does not require a manually published package. For a separate deployment or package-validation workflow, the canonical package builder can still produce a complete custom distribution and explicitly include source-owned plugins that the ordinary core package excludes:
+Automatic cloud bootstrap does not require a manually published package. For a separate deployment or package-validation workflow, the standard package builder can still produce a complete custom distribution and explicitly include source-owned plugins that the ordinary core package excludes:
 
 ```bash
 source_sha="$(git rev-parse HEAD)"

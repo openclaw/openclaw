@@ -224,11 +224,19 @@ export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileS
       return { kind: "missing" };
     }
     try {
-      const { dev, ino, size, mtimeMs, ctimeMs } = opened.stat;
+      const { size, mtimeMs, ctimeMs } = opened.stat;
+      const { dev, ino } = opened.exactIdentity;
       if (size > MAX_IDENTITY_FILE_BYTES) {
         return { kind: "too-large" };
       }
-      const revision = JSON.stringify([opened.path, dev, ino, size, mtimeMs, ctimeMs]);
+      const revision = JSON.stringify([
+        opened.path,
+        String(dev),
+        String(ino),
+        size,
+        mtimeMs,
+        ctimeMs,
+      ]);
       if (revision === input.knownRevision) {
         return { kind: "unchanged" };
       }

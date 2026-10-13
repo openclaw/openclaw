@@ -9,8 +9,8 @@
   "type": "module",
   "dependencies": {
     "apache-arrow": "21.2.0",
-    "openai": "7.27.0",
-    "typebox": "1.3.34"
+    "openai": "7.28.0",
+    "typebox": "1.3.35"
   },
   "devDependencies": {
     "@lancedb/lancedb": "0.39.0",

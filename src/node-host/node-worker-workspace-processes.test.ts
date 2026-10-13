@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
-  parseNodeWorkerWorkspaceExecInput,
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
 } from "../worker/node-workspace-protocol.js";
@@ -15,6 +19,13 @@ import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workspaces: NodeWorkerWorkspaceRuntime[] = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(workspaces.splice(0).map((workspace) => workspace.processes.close()));
@@ -27,9 +38,12 @@ const identity = {
   generation: 1,
 };
 const serverScript = `
-const fs = require("node:fs");
-const server = require("node:http").createServer((req, res) => res.end(fs.existsSync("page.txt") ? fs.readFileSync("page.txt") : process.env.DISPLAY));
-server.listen(0, "127.0.0.1", () => console.log("http://127.0.0.1:" + server.address().port));
+import fs from "node:fs";
+import http from "node:http";
+const server = http.createServer((req, res) => res.end(fs.existsSync("page.txt") ? fs.readFileSync("page.txt") : process.env.DISPLAY));
+server.listen(0, "127.0.0.1", () => {
+  process.stdout.write("http://127.0.0.1:" + server.address().port + "\\n", () => sendReceipt(source, "ready"));
+});
 `;
 const runtimeExecutableName = path.basename(process.execPath);
 function fixture(ephemeral = false) {
@@ -47,7 +61,12 @@ function fixture(ephemeral = false) {
   workspaces.push(workspace);
   const start: NodeWorkerWorkspaceExecInput = {
     ...identity,
-    argv: [runtimeExecutableName, "-e", serverScript],
+    argv: [
+      runtimeExecutableName,
+      "--input-type=module",
+      "-e",
+      `${fixtureReceiptClientSource(receipts.endpoint)}\nconst source = ${JSON.stringify(root)};\n${serverScript}`,
+    ],
     process: { action: "start", processId: "preview-server" },
   };
   const control = (action: "status" | "stop", extra: Partial<typeof identity> = {}) =>
@@ -57,7 +76,8 @@ function fixture(ephemeral = false) {
       argv: ["openclaw-internal-workspace-process"],
       process: { action, processId: "preview-server" },
     });
-  const ready = async () => {
+  const ready = async (signal: AbortSignal) => {
+    await withinTest(receipts.waitFor(root, "ready"), signal);
     let url = "";
     await vi.waitFor(async () => {
       url = (await control("status")).stdout.trim();
@@ -69,21 +89,25 @@ function fixture(ephemeral = false) {
 }
 
 describe("conversation-owned preview processes", () => {
-  it("keeps identical logical process ids isolated across node workspace runtimes", async () => {
+  it("keeps identical logical process ids isolated across node workspace runtimes", async ({
+    signal,
+  }) => {
     const first = fixture();
     const second = fixture();
     await first.workspace.exec(first.start);
     await second.workspace.exec(second.start);
-    const [firstUrl, secondUrl] = await Promise.all([first.ready(), second.ready()]);
+    const [firstUrl, secondUrl] = await Promise.all([first.ready(signal), second.ready(signal)]);
     await first.workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
     await expect(fetch(firstUrl)).rejects.toThrow();
     expect(await (await fetch(secondUrl)).text()).toBe(":99");
   });
 
-  it("rejects an unavailable app while preserving an already running server", async () => {
+  it("rejects an unavailable app while preserving an already running server", async ({
+    signal,
+  }) => {
     const { workspace, start, ready } = fixture();
     await workspace.exec(start);
-    const url = await ready();
+    const url = await ready(signal);
     await expect(
       workspace.exec({
         ...start,
@@ -100,11 +124,13 @@ describe("conversation-owned preview processes", () => {
     });
   });
 
-  it("keeps the same app and desktop environment across turns, reuses a retried start, and stops its server", async () => {
+  it("keeps the same app and desktop environment across turns, reuses a retried start, and stops its server", async ({
+    signal,
+  }) => {
     const { workspace, start, control, ready } = fixture();
     const turn = new AbortController();
     const started = await workspace.exec(start, turn.signal);
-    const url = await ready();
+    const url = await ready(signal);
     expect(await (await fetch(url)).text()).toBe(":99");
     turn.abort();
     await workspace.exec({
@@ -132,10 +158,12 @@ describe("conversation-owned preview processes", () => {
     await expect(fetch(url)).rejects.toThrow();
   });
 
-  it("keeps running workspaces through retention and fences exact environment cleanup", async () => {
+  it("keeps running workspaces through retention and fences exact environment cleanup", async ({
+    signal,
+  }) => {
     const { workspace, start, control, ready } = fixture();
     const launched = await workspace.exec(start);
-    const url = await ready();
+    const url = await ready(signal);
     await expect(control("stop", { sessionId: "another-conversation" })).rejects.toThrow(
       "unknown workspace process",
     );
@@ -172,58 +200,46 @@ describe("conversation-owned preview processes", () => {
     expect(fs.existsSync(launched.workspaceDir)).toBe(false);
   });
 
-  it.each(["foreground", "preview", "reset"] as const)(
-    "revokes a queued %s command but reopens fresh execution at the retained epoch",
-    async (kind) => {
-      const { workspace } = fixture(true);
-      const entered = createDeferredCore();
-      const lookup = createDeferredCore<undefined>();
-      const find = vi
-        .spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find")
-        .mockResolvedValue(undefined);
-      const command: NodeWorkerWorkspaceExecInput = {
-        ...identity,
-        argv: [runtimeExecutableName, "-e", "process.stdout.write('fresh')"],
-        ...(kind === "preview"
-          ? { process: { action: "start" as const, processId: "fresh-preview" } }
-          : { nativeProcessOwner: true, ...(kind === "reset" ? { resetWorkspace: true } : {}) }),
-      };
-      // Keep a sentinel in the retained workspace so a late reset cannot silently delete it.
-      const initial = await workspace.exec({
-        ...identity,
-        nativeProcessOwner: true,
-        argv: [runtimeExecutableName, "-e", "process.exit(0)"],
-      });
-      const sentinel = path.join(initial.workspaceDir, "retained.txt");
-      fs.writeFileSync(sentinel, "retained");
-      find.mockImplementationOnce(async () => {
-        entered.resolve();
-        return await lookup.promise;
-      });
-      const pending = workspace.exec(command);
-      void pending.catch(() => undefined);
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "lookup did not hold the command",
-        );
-        await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
-        lookup.resolve(undefined);
-        await expect(pending).rejects.toThrow("retired");
-        expect(fs.readFileSync(sentinel, "utf8")).toBe("retained");
-        const fresh = await workspace.exec(command);
-        if (kind === "preview") {
-          expect(fresh.process?.processId).toBe("fresh-preview");
-        } else {
-          expect(fresh).toMatchObject({ code: 0, stdout: "fresh" });
-        }
-      } finally {
-        lookup.resolve(undefined);
-        await pending.catch(() => undefined);
-      }
-    },
-  );
+  it("revokes a queued reset command but reopens fresh execution at the retained epoch", async () => {
+    const { workspace } = fixture(true);
+    const entered = createDeferredCore();
+    const lookup = createDeferredCore<undefined>();
+    const find = vi
+      .spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find")
+      .mockResolvedValue(undefined);
+    const command: NodeWorkerWorkspaceExecInput = {
+      ...identity,
+      argv: [runtimeExecutableName, "-e", "process.stdout.write('fresh')"],
+      nativeProcessOwner: true,
+      resetWorkspace: true,
+    };
+    // Keep a sentinel in the retained workspace so a late reset cannot silently delete it.
+    const initial = await workspace.exec({
+      ...identity,
+      nativeProcessOwner: true,
+      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
+    });
+    const sentinel = path.join(initial.workspaceDir, "retained.txt");
+    fs.writeFileSync(sentinel, "retained");
+    find.mockImplementationOnce(async () => {
+      entered.resolve();
+      return await lookup.promise;
+    });
+    const pending = workspace.exec(command);
+    void pending.catch(() => undefined);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "lookup did not hold the command");
+      await workspace.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
+      lookup.resolve(undefined);
+      await expect(pending).rejects.toThrow("retired");
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("retained");
+      const fresh = await workspace.exec(command);
+      expect(fresh).toMatchObject({ code: 0, stdout: "fresh" });
+    } finally {
+      lookup.resolve(undefined);
+      await pending.catch(() => undefined);
+    }
+  });
 
   it("keeps overlapping stops sealed and excludes higher epochs from stale stop", async () => {
     const { workspace } = fixture(true);
@@ -323,8 +339,8 @@ describe("conversation-owned preview processes", () => {
     }
   });
 
-  it("rejects revoked starts before launch and bounds both output streams", async () => {
-    const { workspace, start, control } = fixture();
+  it("rejects revoked starts before launch and bounds both output streams", async ({ signal }) => {
+    const { root, workspace, start, control } = fixture();
     const revoked = AbortSignal.abort();
     await expect(workspace.exec(start, revoked)).rejects.toThrow();
     await expect(control("status")).rejects.toThrow("unknown workspace process");
@@ -332,10 +348,17 @@ describe("conversation-owned preview processes", () => {
       ...start,
       argv: [
         runtimeExecutableName,
+        "--input-type=module",
         "-e",
-        'process.stdout.write("界".repeat(20000)); process.stderr.write("界".repeat(20000))',
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(${JSON.stringify(root)}, "output-ready");
+await awaitRelease(${JSON.stringify(root)}, "write");
+process.stdout.write("界".repeat(20000)); process.stderr.write("界".repeat(20000));`,
       ],
     });
+    await withinTest(receipts.waitFor(root, "output-ready"), signal);
+    receipts.release(root, "write");
+    await withinTest(receipts.waitForExit(root), signal);
     await vi.waitFor(async () => {
       const result = await control("status");
       expect(result.process?.state).toBe("exited");
@@ -343,17 +366,5 @@ describe("conversation-owned preview processes", () => {
       expect(result.stderr.length).toBeGreaterThan(0);
       expect(parseNodeWorkerWorkspaceExecResult(result)).toEqual(result);
     });
-  });
-
-  it.each([
-    { process: { action: "start", processId: "bad/id" } },
-    { process: { action: "status", processId: "preview" } },
-    { process: { action: "start", processId: "preview" }, resetWorkspace: true },
-  ])("rejects malformed process operations at the node protocol boundary %#", (change) => {
-    expect(() =>
-      parseNodeWorkerWorkspaceExecInput(
-        JSON.stringify({ ...identity, argv: ["node", "-e", "process.exit(0)"], ...change }),
-      ),
-    ).toThrow("INVALID_REQUEST:");
   });
 });

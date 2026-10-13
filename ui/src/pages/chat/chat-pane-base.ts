@@ -514,10 +514,17 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         selfInstanceId: snapshot?.client?.instanceId,
       })
     ) {
-      this.requestUpdate("presencePayload", previous);
+      this.chatState.requestBackgroundUpdate();
     }
   }
-  @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  private sessionSharingStatesValue = new Map<string, ChatSessionSharingState>();
+  protected get sessionSharingStates(): Map<string, ChatSessionSharingState> {
+    return this.sessionSharingStatesValue;
+  }
+  protected set sessionSharingStates(value: Map<string, ChatSessionSharingState>) {
+    this.sessionSharingStatesValue = value;
+    this.chatState.requestBackgroundUpdate();
+  }
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
   @litState() protected resetConfirmation:
@@ -610,7 +617,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
   protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;

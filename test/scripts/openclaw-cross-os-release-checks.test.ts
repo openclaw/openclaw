@@ -80,7 +80,7 @@ import {
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
-  waitForGatewayWithStartupMigrationRestart,
+  waitForGatewayWithStartupRecovery,
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
@@ -513,7 +513,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const firstError = new Error("first gateway failed readiness");
       const secondError = new Error("second gateway exited");
       const restartGateway = vi.fn(async () => second.handle);
-      const ready = waitForGatewayWithStartupMigrationRestart({
+      const ready = waitForGatewayWithStartupRecovery({
+        gatewayPort: 18_789,
         gatewayHolder: holder,
         restartGateway,
         waitUntilReady: async (gateway) => {

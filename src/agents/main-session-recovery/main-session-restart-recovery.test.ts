@@ -52,6 +52,11 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  enqueueCommandInLane,
+  getQueueSize,
+  setCommandLaneConcurrency,
+} from "../../process/command-queue.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   GatewayDrainingError,
@@ -456,6 +461,102 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
+  it.each(["finish", "stop"] as const)(
+    "bounds resumed turns and preserves waiting work on %s",
+    async (outcome) => {
+      const sessionsDir = await makeSessionsDir();
+      const entries = Object.fromEntries(
+        [0, 1, 2].map((index) => [
+          `agent:main:dashboard:recovery-${index}`,
+          mainSessionEntry({ sessionId: `recovery-${index}` }),
+        ]),
+      );
+      await writeStore(sessionsDir, entries);
+      for (const entry of Object.values(entries)) {
+        await writeTranscript(sessionsDir, entry.sessionId, [
+          { role: "user", content: "finish the interrupted task" },
+        ]);
+      }
+      setCommandLaneConcurrency("main", 20);
+      const cancellation = new AbortController();
+      const finish = createDeferred();
+      const firstDispatch = createDeferred();
+      let active = 0;
+      let peak = 0;
+      let dispatches = 0;
+      const runtime: GatewayRecoveryRuntime = {
+        ...mockRecoveryRuntime,
+        dispatchAgent: <T>(
+          request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
+          _timeout?: number,
+          options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
+        ) => {
+          const ordinal = ++dispatches;
+          let executionStarted = false;
+          options?.onStartOwner?.({
+            observe: () => ({ executionStarted, expiresAtMs: Date.now() + 60_000 }),
+            abort: () => false,
+          });
+          options?.onAccepted?.({ runId: request.idempotencyKey });
+          return enqueueCommandInLane(request.lane ?? "main", async () => {
+            active++;
+            peak = Math.max(peak, active);
+            executionStarted = true;
+            options?.onExecutionStarted?.();
+            if (ordinal === 1) {
+              firstDispatch.resolve();
+            }
+            await finish.promise;
+            active--;
+            return { runId: request.idempotencyKey, status: "ok" } as T;
+          });
+        },
+      };
+      const recovery = recoverRestartAbortedMainSessions({
+        stateDir: tmpDir,
+        signal: cancellation.signal,
+        shouldContinue: () => !cancellation.signal.aborted,
+        gatewayRuntime: runtime,
+      });
+      try {
+        await firstDispatch.promise;
+        await waitForFast(() => {
+          expect(getQueueSize("background") > 1 || peak > 1).toBe(true);
+        });
+        await expect(enqueueCommandInLane("main", async () => "interactive reply")).resolves.toBe(
+          "interactive reply",
+        );
+        expect(peak).toBe(1);
+        if (outcome === "stop") {
+          cancellation.abort(new Error("recovery stopped"));
+          await expect(recovery).rejects.toThrow("recovery stopped");
+          for (const index of [1, 2]) {
+            expect(
+              loadSessionEntry({
+                storePath: path.join(sessionsDir, "sessions.json"),
+                sessionKey: `agent:main:dashboard:recovery-${index}`,
+              }),
+            ).toMatchObject({
+              status: "interrupted",
+              abortedLastRun: true,
+              mainRestartRecovery: { chargedAttempts: 0 },
+            });
+          }
+        }
+      } finally {
+        finish.resolve();
+        await recovery.catch((error: unknown) => {
+          if (!cancellation.signal.aborted) {
+            throw error;
+          }
+        });
+        setCommandLaneConcurrency("main", 1);
+      }
+      expect(dispatches).toBe(outcome === "finish" ? 3 : 1);
+      expect(peak).toBe(1);
+    },
+  );
+
   it("preserves exact restart identities against stale same-id rows", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -1383,7 +1484,7 @@ describe("main-session-restart-recovery", () => {
         const resumeParams = gatewayParams() as Record<string, unknown>;
         expect(resumeParams).toMatchObject({
           bestEffortDeliver: true,
-          lane: "main",
+          lane: "background",
           threadId: "123",
         });
         const recoveryRunId = String(resumeParams.idempotencyKey);
@@ -1419,10 +1520,9 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps recovered Telegram notice authority current after a transport failure", async () => {
+  it("releases recovered Telegram notice authority after a transport failure", async () => {
     const sessionsDir = await makeSessionsDir();
     const sessionKey = "agent:main:telegram:group:-100123:topic:99";
-    const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
       sessionsDir,
       sessionKey,
@@ -1434,8 +1534,13 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeCompletedToolTranscript(sessionsDir);
-    sendRecoveryNotice.mockRejectedValueOnce(new Error("temporary transport failure"));
+    let currentAtSend: boolean | undefined;
+    sendRecoveryNotice.mockImplementationOnce(async (notice) => {
+      currentAtSend = notice.isCurrent?.({});
+      throw new Error("temporary transport failure");
+    });
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(currentAtSend).toBe(true);
     expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     const notice = sendRecoveryNotice.mock.calls[0]?.[0];
     expect(notice).toMatchObject({
@@ -1446,23 +1551,8 @@ describe("main-session-restart-recovery", () => {
       text: "I'm continuing your interrupted request now (the gateway has just restarted).  Don't be concerned with the lack of typing; I am working behind the scenes and I'll send a message when I'm done!",
       idempotencyKey: `main-session-restart-recovery:${String(gatewayParams().idempotencyKey)}:resumed-notice`,
     });
-    expect(notice?.isCurrent?.({})).toBe(true);
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected recovered session");
-    }
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, abortedLastRun: true },
-    });
     expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, sessionId: "replacement-session" },
-    });
-    expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, { [sessionKey]: current });
-    expect(notice?.isCurrent?.({})).toBe(true);
     dispatchSettlement.resolve();
-    await waitForFast(() => expect(notice?.isCurrent?.({})).toBe(false));
   });
 
   it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {

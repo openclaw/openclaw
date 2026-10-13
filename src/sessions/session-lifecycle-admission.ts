@@ -448,7 +448,7 @@ export async function beginSessionWorkAdmission(params: {
   /** Queue behind earlier admissions of the same owner, including pending work. */
   serializeOwner?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
-  assertAllowed: (signal: AbortSignal) => Promise<void> | void;
+  assertAllowed?: (signal: AbortSignal) => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
   onInterrupt?: SessionWorkAdmissionInterrupt;
@@ -593,8 +593,8 @@ export async function beginSessionWorkAdmission(params: {
       identities: rawIdentities,
       signal,
       run: async () => {
-        if (params.revalidateAllowed) {
-          await lease.run(async () => await params.assertAllowed(signal));
+        if (params.revalidateAllowed && params.assertAllowed) {
+          await lease.run(async () => await params.assertAllowed?.(signal));
         }
         assertIngressOpen();
         if (isGatewaySubordinateWorkAdmissionClosed()) {
@@ -613,7 +613,7 @@ export async function beginSessionWorkAdmission(params: {
               if (params.revalidateAllowed) {
                 await params.revalidateAllowed();
               } else {
-                await params.assertAllowed(signal);
+                await params.assertAllowed?.(signal);
                 admission.phase = "acquired";
               }
             });

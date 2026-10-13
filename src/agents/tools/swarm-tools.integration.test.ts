@@ -16,7 +16,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
 import { configureMockSubagentRegistryPersistence } from "../subagent-test-fixtures.test-helpers.js";
 import {
@@ -131,16 +131,18 @@ describe("swarm tools integration", () => {
       const gatewayRunId = `gateway-${index}`;
       collectorRunIds.add(publicRunId);
       collectorRunIds.add(gatewayRunId);
-      const structuredOutput = createOpenClawTools({
-        agentSessionKey: childSessionKey,
-        runId: publicRunId,
-        config,
-        disableMessageTool: true,
-        disablePluginTools: true,
-        wrapBeforeToolCallHook: false,
-        swarmCollector: true,
-        swarmOutputSchema: outputSchema,
-      }).find((tool) => tool.name === "structured_output");
+      const structuredOutput = (
+        await createOpenClawToolsAsync({
+          agentSessionKey: childSessionKey,
+          runId: publicRunId,
+          config,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+          swarmCollector: true,
+          swarmOutputSchema: outputSchema,
+        })
+      ).find((tool) => tool.name === "structured_output");
       if (outputSchema) {
         expect(structuredOutput).toBeDefined();
         await structuredOutput?.execute("mock-model-output", { result: { index } });

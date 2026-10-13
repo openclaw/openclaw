@@ -374,6 +374,7 @@ describe("usage creator attribution", () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       setDisplayName(ada.id, "Ada");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {
@@ -432,6 +433,7 @@ describe("usage creator attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
       const former = ensureProfileForEmail("former@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         {
           "agent:main:ada": {

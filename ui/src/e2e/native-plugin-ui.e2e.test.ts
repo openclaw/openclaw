@@ -862,7 +862,7 @@ suite.define(() => {
             })
             .toBeGreaterThanOrEqual(0);
         }
-        await page.locator(".shell-chrome-controls__nav-toggle").click();
+        await page.locator('[data-navigation-view="pages"]').click();
         const pluginPage = page.locator("openclaw-plugin-page");
         await pluginPage.getByRole("status", { name: "Loading…", exact: true }).waitFor();
         expect(

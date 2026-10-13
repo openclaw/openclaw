@@ -24,6 +24,8 @@ type ConfigMachineStateReadCommand = Extract<
   {
     type:
       | "nodeHost.config"
+      | "cron.store"
+      | "hooks.internal.installs"
       | "operator.channelPolicy"
       | "tts.prefsPath"
       | "voicewake.triggers"
@@ -36,6 +38,8 @@ export function isConfigMachineStateReadCommand(
 ): command is ConfigMachineStateReadCommand {
   return (
     command.type === "nodeHost.config" ||
+    command.type === "cron.store" ||
+    command.type === "hooks.internal.installs" ||
     command.type === "operator.channelPolicy" ||
     command.type === "tts.prefsPath" ||
     command.type === "voicewake.triggers" ||

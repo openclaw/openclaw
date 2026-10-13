@@ -3,13 +3,27 @@ import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { hasErrnoCode } from "../../infra/errno.js";
 
+export const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+
+export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
+  const trimmed = storePath?.trim();
+  if (!trimmed || trimmed === MULTI_STORE_PATH_SENTINEL || trimmed.includes("{agentId}")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 /** Resolves only the legacy unsuffixed target, without reading ownership state. */
 export function resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath: string): {
   agentId?: string;
   path: string;
   shared?: boolean;
 } {
-  const resolved = path.resolve(storePath);
+  const concrete = resolveConcreteSessionStorePath(storePath);
+  if (!concrete) {
+    throw new Error("Session storage requires a concrete store path");
+  }
+  const resolved = path.resolve(concrete);
   if (resolved.endsWith(".sqlite")) {
     const agentId = resolveAgentIdFromSqliteDatabasePath(resolved);
     return { path: resolved, ...(agentId ? { agentId } : { shared: true }) };

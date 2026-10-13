@@ -8,6 +8,28 @@ title: "Talk realtime sessions and delegation"
 sidebarTitle: "Realtime sessions"
 ---
 
+## Split speech in the browser
+
+With `talk.realtime.mode: "stt-tts"`, browser Talk uses separate transcription,
+agent, and speech steps instead of a realtime speech-to-speech provider. Every
+utterance goes through the current chat session, so its configured model and
+tool permissions apply. Set `talk.provider` and `talk.providers.<provider>` for
+Talk output, or leave the provider unset to use the global `tts` configuration.
+
+For local transcription, configure an audio entry in `tools.media.models` as
+described in [Audio and voice notes](/nodes/audio). The browser uses the existing
+Gateway transcription session; the Gateway passes the completed recording to
+the file-transcription owner. Its provider selection, input limits, timeout, and
+fallback policy also apply here. Explicit streaming-provider selections and a
+matching `agents.defaults.voiceModel` take precedence. File transcription produces
+a final transcript after the utterance ends. The catalog marks file transcription
+ready only when a configured provider or CLI command is available.
+
+Capture pauses during the agent response and speech playback, then resumes for
+the next utterance. Stop cancels the call's own chat run and playback. Split Talk
+does not offer realtime voice switching or camera input. Leaving the mode unset
+preserves realtime Talk.
+
 ## Choose a Talk voice from chat
 
 During an active browser, iOS, or Android realtime Talk call, ask the assistant

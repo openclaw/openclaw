@@ -571,7 +571,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       const result = await runCronIsolatedAgentTurn(makePersistParams());
       expect(result.status).toBe("ok");
 
-      expect(snapshotsAtRun).toHaveLength(preRunWriteFails ? 3 : 2);
+      expect(snapshotsAtRun).toHaveLength(2);
       expect(snapshotsAtRun.filter(({ sessionKey }) => !sessionKey.includes(":run:"))).toHaveLength(
         1,
       );

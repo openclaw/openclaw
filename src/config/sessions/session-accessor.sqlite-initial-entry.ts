@@ -29,7 +29,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export function ensureSessionEntryInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ReturnType<typeof resolveSqliteScope>,
-  scope: Pick<SessionTranscriptWriteScope, "expectedWriterRunId">,
+  scope: Pick<SessionTranscriptWriteScope, "expectedWriterRunId" | "expectedOwner">,
   entry: SessionEntry,
   initialWriterRunId?: string,
 ): InitialSessionEntryCommit {
@@ -41,7 +41,10 @@ export function ensureSessionEntryInTransaction(
     }
     return { owned: existing.sessionId === entry.sessionId };
   }
-  if (scope.expectedWriterRunId !== undefined && initialWriterRunId === undefined) {
+  if (
+    scope.expectedOwner !== undefined ||
+    (scope.expectedWriterRunId !== undefined && initialWriterRunId === undefined)
+  ) {
     return { owned: false };
   }
   const previous = new Map<string, SessionEntry>();

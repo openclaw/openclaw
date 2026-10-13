@@ -2,13 +2,14 @@ import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
-import { renderNewSessionLink } from "./new-session-link.ts";
 import { renderPicker } from "./select-picker.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
+import "./sidebar-collapse-toggle.tsx";
 
 type SessionFilterHost = Pick<SessionListHost, "sessionsStatusFilter">;
 
@@ -128,24 +129,14 @@ function renderSidebarSessionFilter(
   </button>`;
 }
 
-export function renderSessionListToolbar(host: SessionListHost, teamNewSession?: unknown) {
-  const newSessionAccess = host.readNewSessionAccess();
+export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
   return html`
-    <div class="sidebar-session-toolbar">
+    <div class="sidebar-session-toolbar sidebar-panel-header" @mousedown=${beginNativeWindowDrag}>
       ${renderSidebarOwnerPicker(host)}
       ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
-      ${
-        teamNewSession ??
-        renderNewSessionLink({
-          basePath: host.basePath,
-          agentId: host.expandedAgentId(),
-          className: "sidebar-session-toolbar__button sidebar-new-session",
-          label: t("agentChip.newConversation"),
-          showShortcut: true,
-          disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-        })
-      }
+      <openclaw-sidebar-collapse-toggle
+        .onToggle=${() => host.onToggleSidebar?.()}
+      ></openclaw-sidebar-collapse-toggle>
     </div>
   `;
 }

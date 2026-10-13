@@ -365,7 +365,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
     const startup = transport.start();
     expect(requestCallsFor(client, "talk.catalog")).toEqual([
-      ["talk.catalog", { provider: "openai", model: "gpt-live-1" }, expect.any(Object)],
+      [
+        "talk.catalog",
+        { sessionKey: "main", provider: "openai", model: "gpt-live-1" },
+        expect.any(Object),
+      ],
     ]);
     void transport.stop();
     resolveCatalog(defaultRelayResponse("talk.catalog", false));
@@ -795,12 +799,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
     void transport.stop();
 
-    const appendCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
-    const closeCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.close");
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    const closeCalls = requestCallsFor(client, "talk.session.close");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(1);
     expect(closeCalls[0]?.[1]).toEqual({ sessionId: "relay-1" });
@@ -821,12 +821,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
     void transport.stop();
 
-    const appendCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.appendAudio");
-    const closeCalls = vi
-      .mocked(client["request"])
-      .mock.calls.filter(([method]) => method === "talk.session.close");
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    const closeCalls = requestCallsFor(client, "talk.session.close");
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime relay closed");
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(0);

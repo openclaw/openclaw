@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -15,6 +16,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -114,6 +116,7 @@ it.each([
 it.each([
   { kind: "alias", agentId: "main" },
   { kind: "global", agentId: "work" },
+  { kind: "unknown", agentId: "main" },
 ])(
   "admits missing $agentId $kind session authority without caller-thread SQL",
   async ({ kind, agentId }) => {
@@ -129,14 +132,14 @@ it.each([
       const client = roleClient("write", "new-session-owner");
       const scope = {
         agentId,
-        sessionKey: "global",
+        sessionKey: kind === "unknown" ? "unknown" : "global",
       };
       const route = resolveGatewaySessionStoreTarget({
         cfg,
         key: kind === "alias" ? "agent:main:main" : scope.sessionKey,
         agentId: scope.agentId,
       });
-      const qualified = prepareQualifiedSessionEntryTarget({
+      const qualified = await prepareQualifiedSessionEntryTarget({
         ...route,
         requestedKey: kind === "alias" ? route.canonicalKey : scope.sessionKey,
         storeKey: route.canonicalKey,
@@ -153,7 +156,7 @@ it.each([
         expect(result.error).toBeNull();
         await withQualifiedGatewaySessionEntry({
           cfg,
-          target: qualified.target,
+          target: qualified,
           logicalStorePath: route.storePath,
           includeMembership: true,
           assertConfigCurrent: () => {},
@@ -169,14 +172,14 @@ it.each([
                 members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
               },
               () => {
-                if (kind === "global") {
+                if (kind === "global" || kind === "unknown") {
                   const wrongOwnerEffect = vi.fn();
                   expect(() =>
                     result.authorization!.withPreparedCurrent!(
                       {
                         agentId: latest.agentId,
                         storePath: latest.storePath,
-                        sessionKey: "agent:other:global",
+                        sessionKey: `agent:other:${kind}`,
                         entry: latest.entry,
                         readSource: latest.capturedReadSource,
                         members: [],
@@ -197,6 +200,7 @@ it.each([
           },
         });
         await result.authorization!.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+          expect(facts.sessionKey).toBe(route.canonicalKey);
           expect(facts.entry).toBeUndefined();
           expect(facts.members).toEqual([]);
           assertCurrent();
@@ -206,7 +210,6 @@ it.each([
         expect(host.queries).toEqual([]);
       } finally {
         host.restore();
-        qualified.release();
       }
     });
   },
@@ -221,7 +224,7 @@ function invalidateSessionReadFacts(scope: { agentId: string; sessionKey: string
   });
 }
 
-it("allows unrelated config reloads while worker authorization reads are pending", async () => {
+it("allows unrelated config reloads after session authority is prepared", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg = rolePolicyConfig();
     const client = roleClient("write", "reload-owner");
@@ -235,39 +238,20 @@ it("allows unrelated config reloads while worker authorization reads are pending
         id: client.authenticatedUserProfile!.profileId,
       },
     });
-    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-    let reloads = 0;
-    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await read(...args);
-      if (
-        reply.ok &&
-        typeof reply.value === "object" &&
-        reply.value !== null &&
-        "kind" in reply.value &&
-        reply.value.kind === "session-exact-entries"
-      ) {
-        reloads += 1;
-        cfg = { ...cfg, logging: { level: reloads % 2 ? "debug" : "info" } };
-      }
-      return reply;
+    const result = await resolveSessionMutationAuthorizationAsync({
+      client,
+      method: "chat.send",
+      requestParams: scope,
+      context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
     });
     try {
-      const result = await resolveSessionMutationAuthorizationAsync({
-        client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
       expect(result.error).toBeNull();
-      expect(reloads).toBeGreaterThan(0);
-      const initialReloads = reloads;
-      invalidateSessionReadFacts(scope);
+      cfg = { ...cfg, logging: { level: "debug" } };
       const effect = vi.fn(() => result.authorization!.assertCurrent());
       await result.authorization!.withCurrent!(effect);
-      expect(reloads).toBeGreaterThan(initialReloads);
       expect(effect).toHaveBeenCalledOnce();
     } finally {
-      spy.mockRestore();
+      result.authorization?.release?.();
     }
   });
 });
@@ -295,16 +279,71 @@ it("does not replay an authorization consumer after its own effect changes the r
     });
     expect(result.error).toBeNull();
     const effect = vi.fn();
-    await expect(
-      result.authorization!.withCurrent!(() => {
+    try {
+      await result.authorization!.withCurrent!(() => {
         effect();
         replaceSessionEntrySync(scope, { ...entry, updatedAt: effect.mock.calls.length + 1 });
         result.authorization!.assertCurrent();
-      }),
-    ).rejects.toThrow(/changed during read/);
-    expect(effect).toHaveBeenCalledOnce();
+      });
+      expect(effect).toHaveBeenCalledOnce();
+    } finally {
+      result.authorization?.release?.();
+    }
   });
 });
+
+it.for([false, true])(
+  "checks committed chat authority while an unrelated writer is held (revoked=%s)",
+  async (revoked, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const client = roleClient("view", "contended-member");
+      const scope = { agentId: "main", sessionKey: "agent:main:contended-sharing" };
+      replaceSessionEntrySync(scope, {
+        sessionId: "contended-session",
+        updatedAt: 1,
+        visibility: "read-only",
+        createdActor: { type: "human", source: "profile", id: "another-profile" },
+      });
+      const identityId = client.authenticatedUserProfile!.profileId;
+      await addSessionMember(scope, { identityId, addedBy: "another-profile" });
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+      });
+      expect(result.error).toBeNull();
+      if (revoked) {
+        await removeSessionMember(scope, identityId);
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const writer = runOpenClawAgentWriteAdmission(scope, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const effect = vi.fn(() => "accepted");
+      try {
+        await withinTest(entered.promise, signal);
+        const checked = result.authorization!.withCurrent!(effect);
+        if (revoked) {
+          await expect(withinTest(checked, signal)).rejects.toThrow(
+            "session is read-only for this connection",
+          );
+          expect(effect).not.toHaveBeenCalled();
+        } else {
+          expect(await withinTest(checked, signal)).toBe("accepted");
+          expect(effect).toHaveBeenCalledOnce();
+        }
+      } finally {
+        release.resolve();
+        await writer;
+        result.authorization?.release?.();
+      }
+    });
+  },
+);
 
 it.each([
   "worker-before-read",

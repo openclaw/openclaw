@@ -286,11 +286,15 @@ describe("sessions_send gateway loopback", () => {
 
     const tool = getSessionsSendTool();
 
-    const result = await tool.execute("call-loopback", {
-      sessionKey: "main",
-      message: body,
-      timeoutSeconds: 5,
-    });
+    const result = await tool
+      .execute("call-loopback", {
+        sessionKey: "main",
+        message: body,
+        timeoutSeconds: 5,
+      })
+      .catch((error: unknown) => {
+        throw new Error(`sessions_send tool execution failed: ${String(error)}`, { cause: error });
+      });
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0];
@@ -307,6 +311,8 @@ describe("sessions_send gateway loopback", () => {
       method: "chat.history",
       params: { sessionKey: "main", limit: 10 },
       timeoutMs: 5_000,
+    }).catch((error: unknown) => {
+      throw new Error(`sessions_send history read failed: ${String(error)}`, { cause: error });
     });
     // Observe both receiving and persisted body failures before ending the case.
     expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);

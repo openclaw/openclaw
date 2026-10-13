@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { WorkerEnvironmentStartStatusSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
 import { WorkerIdentifierSchema } from "./worker-protocol-primitives.js";
@@ -177,6 +178,7 @@ const ProvisioningSessionPlacementSchema = closedObject({
   ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
   workerRuntimeInstall: Type.Optional(SessionPlacementWorkerRuntimeInstallSchema),
+  startStatus: Type.Optional(WorkerEnvironmentStartStatusSchema),
 });
 
 const SyncingSessionPlacementSchema = closedObject({

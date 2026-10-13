@@ -69,6 +69,14 @@ plugin entry:
 openclaw plugins disable workboard
 ```
 
+## Storage recovery
+
+If a SQLite worker fails, Workboard reopens its store through the database worker
+owner on the next call, after native cleanup finishes. An operation already in
+flight can still report a failure or an unknown write outcome; Workboard does not
+replay that operation. A Gateway restart is not needed once the underlying storage
+problem is resolved. Updates require no configuration or data migration.
+
 ## Board appearance
 
 While Workboard is open, its sidebar entry expands to show both Cards and
@@ -421,6 +429,10 @@ so Control UI operators and other agents can inspect claim state without ever
 seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
+
+Promotion rejects completed (`done`) cards, including when `force` is set, and
+preserves their completion timestamp. It remains available for recovering
+blocked work; `force` only bypasses dependency or schedule holds.
 
 ## Dispatch
 

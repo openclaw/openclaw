@@ -1,12 +1,15 @@
 import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { jsonArrayTextElement } from "../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   sqliteStringSet,
+  sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
 import {
+  assertPluginStateKey,
   createPluginStateError,
   getPluginStateKysely,
   selectPluginStateEntriesInKeyRange,
@@ -26,6 +29,9 @@ export function lookupPluginStateEntries(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; keys: readonly string[] },
 ): Array<Result<unknown, PluginStateStoreError>> {
+  for (const key of params.keys) {
+    assertPluginStateKey(store.db, key, "lookup");
+  }
   const now = Date.now();
   const rows = executeSqliteQuerySync(
     store.db,
@@ -127,13 +133,7 @@ const pluginStateBatchQuery = createSqliteQueryCache((db) =>
     db,
     (parameter) =>
       getPluginStateKysely(db)
-        .selectFrom((eb) =>
-          eb
-            .fn<{ key: number; value: string }>("json_each", [
-              parameter((value) => value.entriesJson),
-            ])
-            .as("requested"),
-        )
+        .selectFrom(sqliteStringSetEntries(parameter((value) => value.entriesJson)).as("requested"))
         // Keep requested keys outermost so each row seeks the complete primary key.
         .crossJoin("plugin_state_entries")
         .where(
@@ -141,20 +141,8 @@ const pluginStateBatchQuery = createSqliteQueryCache((db) =>
           "=",
           parameter((value) => value.pluginId),
         )
-        .where((eb) =>
-          eb(
-            "namespace",
-            "=",
-            eb.fn<string>("json_extract", [eb.ref("requested.value"), eb.val("$[0]")]),
-          ),
-        )
-        .where((eb) =>
-          eb(
-            "entry_key",
-            "=",
-            eb.fn<string>("json_extract", [eb.ref("requested.value"), eb.val("$[1]")]),
-          ),
-        )
+        .where((eb) => eb("namespace", "=", jsonArrayTextElement(db, eb.ref("requested.value"), 0)))
+        .where((eb) => eb("entry_key", "=", jsonArrayTextElement(db, eb.ref("requested.value"), 1)))
         .select([
           "requested.key as position",
           "entry_key",
@@ -183,6 +171,9 @@ export function selectPluginStateBatchRows(
   const first = entries[0];
   if (!first) {
     return [];
+  }
+  for (const entry of entries) {
+    assertPluginStateKey(store.db, entry.key, "lookup");
   }
   const rows = new Map(
     pluginStateBatchQuery(store.db)({

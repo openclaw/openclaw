@@ -3,8 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import * as validationCache from "../state/openclaw-agent-db-validation-cache.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -472,6 +474,47 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 
+  it("persists a usage refresh when a sibling adopts shared admission during schema refresh", async () => {
+    const stateDir = tempDirs.make("openclaw-usage-cache-readmission-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "worker-1";
+      const database = await withOpenClawAgentDatabaseWrite({ agentId }, (opened) => opened);
+      const write = async (valueJson: string, updatedAt: number) => {
+        const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
+        try {
+          expect(await owner.acquire()).toBe(true);
+          return await owner.writeRollup({
+            rollupId: "session.jsonl",
+            valueJson: utf8Json(valueJson),
+            blob: null,
+            updatedAt,
+          });
+        } finally {
+          await owner.release();
+        }
+      };
+      expect(await write('{"totalTokens":1}', 1)).toBe(true);
+      database.db.exec("CREATE TABLE usage_readmission_fixture(value TEXT)");
+      const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+      const publication = vi
+        .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
+        .mockImplementation((target) => {
+          const publish = capture(target);
+          // A retained reader can adopt the shared receipt while worker admission is pending.
+          validationCache.getOpenClawAgentDatabaseValidation(database);
+          return publish;
+        });
+      try {
+        expect(await write('{"totalTokens":2}', 2)).toBe(true);
+        expect(readSessionCostUsageRollupRows(agentId, database.path)).toMatchObject([
+          { key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 },
+        ]);
+      } finally {
+        publication.mockRestore();
+      }
+    });
+  });
+
   it("returns empty values without creating a missing agent database", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-missing-");
 
@@ -492,10 +535,9 @@ describe("session cost usage SQLite cache", () => {
       const agentId = "worker-1";
       const database = openOpenClawAgentDatabase({ agentId });
       const databasePath = database.path;
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
 
-      const stateDatabase = openOpenClawStateDatabase();
-      stateDatabase.db.prepare("DELETE FROM agent_databases").run();
+      unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
       expect(countRegisteredAgentDatabases()).toBe(0);
 
       expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual([]);

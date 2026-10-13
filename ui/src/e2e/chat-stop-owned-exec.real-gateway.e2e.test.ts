@@ -240,8 +240,11 @@ for (const stopMethod of ["button", "slash"] as const) {
             expect(provider.parentRequests()).toBe(3);
             await composer.fill(fixture.nextPrompt);
             await pane.getByRole("button", { name: "Send message", exact: true }).click();
-            await pane.getByRole("paragraph").filter({ hasText: fixture.nextReply }).waitFor();
+            // The reply proves the new run started; Stop may still be hidden during send admission.
+            await pane.filter({ hasText: fixture.nextReply }).waitFor();
             await stop.waitFor({ state: "hidden" });
+            // Live and persisted reply copies can overlap until the run settles.
+            await pane.getByRole("paragraph").filter({ hasText: fixture.nextReply }).waitFor();
             expect(
               provider.parentRequests(),
               "only the new human prompt may start another model turn",

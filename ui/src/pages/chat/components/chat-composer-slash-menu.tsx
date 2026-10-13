@@ -14,7 +14,6 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
@@ -665,8 +664,4 @@ export function SlashMenu(props: { args: Parameters<typeof renderSlashMenuConten
       )}
     </Show>
   );
-}
-
-export function renderSlashMenu(...args: Parameters<typeof renderSlashMenuContents>) {
-  return solidTemplate(SlashMenu, { args });
 }

@@ -66,7 +66,6 @@ export const databaseEngineAdapters: {
           store.anchor,
           store.storeId,
           {
-            purpose: "admission",
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },

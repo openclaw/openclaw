@@ -15,9 +15,11 @@ import {
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_WRITE_SCOPE } from "../operator-scopes.js";
@@ -208,6 +210,8 @@ describe("operator model discovery at registered reads", () => {
       const f = createFixture(diagnostics);
       await state.writeConfig(f.cfg);
       setRuntimeConfigSnapshot(f.cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(f.client);
       const read = async (method: "models.list" | "chat.metadata", view?: string) => {
         const respond = await f.request(method, { agentId: "main", ...(view ? { view } : {}) });
         expect(respond.mock.calls).toHaveLength(1);

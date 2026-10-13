@@ -84,6 +84,26 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("cron run receipt store", () => {
+  it("allocates portable cursors inside the claim and reuses a deleted maximum", async () => {
+    const { storePath } = await makeStorePath();
+    const jobs = ["first", "second", "third"].map((id) => makeCronReceiptJob(id));
+    await saveCronStore(storePath, { version: 1, jobs });
+    const first = claimCronRunReceiptForTest(storePath, jobs[0]!, 100);
+    const second = claimCronRunReceiptForTest(storePath, jobs[1]!, 100);
+    const db = openOpenClawStateDatabase().db;
+    db.prepare("UPDATE cron_run_receipts SET rowid = 100 WHERE receipt_id = ?").run(
+      first.receiptId,
+    );
+    db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = ?").run(second.receiptId);
+    const third = claimCronRunReceiptForTest(storePath, jobs[2]!, 100);
+    expect(
+      db.prepare("SELECT receipt_id, cursor_id FROM cron_run_receipts ORDER BY cursor_id").all(),
+    ).toEqual([
+      { receipt_id: first.receiptId, cursor_id: 1 },
+      { receipt_id: third.receiptId, cursor_id: 2 },
+    ]);
+  });
+
   it("checks force-disabled message access without host SQL until its admission closes", async () => {
     const { storePath, job } = await storeJob({
       ...makeCronReceiptJob("force-disabled-message"),

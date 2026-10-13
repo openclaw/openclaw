@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
@@ -73,8 +74,9 @@ function sourceFor(db: DatabaseSync): SqliteCommitSource {
   return source;
 }
 
-function keyFor(row: EntryKey): string {
-  return JSON.stringify([row.plugin_id, row.namespace, row.entry_key]);
+/** Match SQLite text binding without changing public comparison-token scopes. */
+export function pluginStatePublicationKey(row: EntryKey): string {
+  return JSON.stringify([row.plugin_id, row.namespace, toUSVString(row.entry_key)]);
 }
 
 function captureReceipt(
@@ -120,7 +122,7 @@ export const pluginStatePublication = {
   stageDeletions: stagePluginStateDeletions,
   /** A compound native owner settled these keys without plugin-state postimages. */
   invalidateEntries(source: SqliteCommitSource, rows: readonly EntryKey[]): void {
-    const keys = rows.map(keyFor);
+    const keys = rows.map(pluginStatePublicationKey);
     if (keys.length === 0) {
       return;
     }
@@ -179,7 +181,13 @@ export function pluginStateReadDependenciesAffected(
     }
     if (change.kind === "committed") {
       return dependency.keys.some((key) =>
-        change.receipt.facts.has(JSON.stringify([dependency.pluginId, dependency.namespace, key])),
+        change.receipt.facts.has(
+          pluginStatePublicationKey({
+            plugin_id: dependency.pluginId,
+            namespace: dependency.namespace,
+            entry_key: key,
+          }),
+        ),
       );
     }
     return change.kind === "unknown";
@@ -272,12 +280,12 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginSt
 }
 
 function stagePluginStatePostimage(db: DatabaseSync, row: PluginStateRow): void {
-  stage(db, new Map([[keyFor(row), { kind: "postimage", value: { ...row } }]]));
+  stage(db, new Map([[pluginStatePublicationKey(row), { kind: "postimage", value: { ...row } }]]));
 }
 
 /** DELETE RETURNING captures exact tombstones, including eviction and whole-namespace clear. */
 function stagePluginStateDeletions(db: DatabaseSync, rows: readonly EntryKey[]): void {
-  stage(db, new Map(rows.map((row) => [keyFor(row), { kind: "absent" }])));
+  stage(db, new Map(rows.map((row) => [pluginStatePublicationKey(row), { kind: "absent" }])));
 }
 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
@@ -335,7 +343,9 @@ function readReceipt(value: unknown): Receipt {
       ([key, fact]) =>
         typeof key === "string" &&
         (fact.kind === "absent" ||
-          (fact.kind === "postimage" && isRow(fact.value) && keyFor(fact.value) === key)),
+          (fact.kind === "postimage" &&
+            isRow(fact.value) &&
+            pluginStatePublicationKey(fact.value) === key)),
     )
   ) {
     throw new Error("Plugin state commit receipt is invalid");

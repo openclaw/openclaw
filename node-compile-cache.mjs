@@ -76,8 +76,39 @@ export function enableOpenClawCompileCache({ directory, env = process.env }) {
   }
 }
 
-export function resolveOpenClawCompileCacheDirectory({ installRoot, env = process.env }) {
+// Node owns pending bytecode per isolate. Drain it after module loading instead
+// of leaving the whole graph for native worker/process teardown.
+export function scheduleOpenClawCompileCacheFlush() {
+  if (!module.getCompileCacheDir?.()) {
+    return;
+  }
+  const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
+  if (owner.flush) {
+    return;
+  }
+  owner.flush = setImmediate(() => {
+    owner.flush = undefined;
+    try {
+      module.flushCompileCache();
+    } catch {
+      // Disposable bytecode must never fail startup or a completed worker task.
+    }
+  });
+  owner.flush.unref();
+}
+
+export function resolveOpenClawCompileCacheDirectory({
+  installRoot,
+  env = process.env,
+  foregroundGateway = false,
+  prewarm = false,
+}) {
   if (env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+    return undefined;
+  }
+  // Cold cache persistence runs after output on Node and Bun. Pay that cost only
+  // for a long-lived Gateway, explicit prewarming, or a caller-requested cache.
+  if (!prewarm && !foregroundGateway && env.NODE_COMPILE_CACHE === undefined) {
     return undefined;
   }
   const packagePath = path.join(installRoot, "package.json");

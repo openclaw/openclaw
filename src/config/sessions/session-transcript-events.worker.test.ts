@@ -1,18 +1,21 @@
 import fs from "node:fs/promises";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript, loadTranscriptEvents } from "./session-accessor.js";
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
+
+afterEach(() => memorySessionActorOwners.reset());
 
 const events = [
   { type: "session", id: "raw-events", version: 3 },
@@ -196,23 +199,23 @@ it.each(["scope", "physical store"] as const)(
   },
 );
 
-it("keeps incognito events with their native owner without creating durable state", async () => {
+it("keeps incognito events with their memory owner without creating durable state", async () => {
   await withOpenClawTestState({ label: "transcript-events-incognito" }, async (state) => {
     const scope = {
       agentId: "main",
       env: state.env,
       sessionId: "raw-events",
       sessionKey: "agent:main:dashboard:incognito-events",
-      storePath: state.statePath("unused.sqlite"),
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     await createSessionEntryWithTranscript(scope, () => ({
       ok: true,
       entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
+      transcriptEvents: events,
     }));
-    await replaceTranscriptEvents(scope, events);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual(events);
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
-    await closeOpenClawAgentDatabasesAsync(state.root);
+    memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
   });

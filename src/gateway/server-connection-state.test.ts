@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -326,12 +327,6 @@ describe("gateway connection state", () => {
 
   it("advertises online people only through live operator connections", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const state = createGatewayConnectionState({
-        scheduler: createTestGatewayScheduler(),
-        bootId: "online-recipients",
-        cfg: { agents: { entries: { main: {} } } },
-      });
-      onTestFinished(() => state.mentionInbox.dispose());
       const reads = { count: 0 };
       const requester = makeClient("requester", reads);
       const recipient = makeClient("recipient", reads);
@@ -352,6 +347,16 @@ describe("gateway connection state", () => {
           hasAvatar: false,
           updatedAt: 1,
         };
+      }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "online-recipients",
+        cfg: { agents: { entries: { main: {} } } },
+      });
+      onTestFinished(() => state.mentionInbox.dispose());
+      for (const peer of [requester, recipient]) {
+        prepareGatewayRecipientProfile(peer.client);
         state.clients.add(peer.client);
       }
       const recipientOnline = async () => {

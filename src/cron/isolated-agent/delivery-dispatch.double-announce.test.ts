@@ -469,20 +469,16 @@ describe("dispatchCronDelivery", () => {
     }
   });
 
-  it("classifies a settled child's AUTOMATION_FAILED answer and delivers only its explanation", async () => {
-    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
-      "AUTOMATION_FAILED\nNo shell tool is available in this run.",
-    );
+  it("delivers a settled child's task-failure prose unchanged", async () => {
+    const reply = "AUTOMATION_FAILED\nNo shell tool is available in this run.";
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(reply);
 
     const state = await dispatchCronDelivery(emptyParams(true));
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, { payloads: [{ text: "No shell tool is available in this run." }] });
-    expect(state).toMatchObject({
-      delivered: true,
-      agentReportedFailure: "No shell tool is available in this run.",
-      summary: "No shell tool is available in this run.",
-    });
+    expectDeliveryCall(0, { payloads: [{ text: reply }] });
+    expect(state).toMatchObject({ delivered: true, summary: reply, outputText: reply });
+    expect(state.disposition).toBeUndefined();
   });
 
   it.each([
@@ -615,18 +611,21 @@ describe("dispatchCronDelivery", () => {
       return await state;
     }
 
-    it.each(["visible", "silent", "failure"] as const)(
+    it.each(["visible", "silent", "legacy-marker"] as const)(
       "records a settled %s child without delivery",
       async (kind) => {
         const params = spawnOnlyJob({ mode: "none" });
-        const explanation = "No shell tool is available in this run.";
+        const reply =
+          kind === "legacy-marker"
+            ? "AUTOMATION_FAILED\nNo shell tool is available in this run."
+            : childReply;
         childSettlesAt(
           kind === "visible" ? params.timeoutMs - 3_000 : 1_000,
           kind === "silent"
             ? { disposition: "silent" }
             : {
                 disposition: "visible",
-                text: kind === "failure" ? `AUTOMATION_FAILED\n${explanation}` : childReply,
+                text: reply,
               },
         );
 
@@ -637,20 +636,13 @@ describe("dispatchCronDelivery", () => {
           expect(state.summary).toBeUndefined();
         } else {
           expect(state).toMatchObject({
-            outputText: kind === "failure" ? explanation : childReply,
-            summary: kind === "failure" ? explanation : childReply,
+            outputText: reply,
+            summary: reply,
             deliveryState: { status: "not-requested" },
           });
         }
-        if (kind === "failure") {
-          expect(state.agentReportedFailure).toBe(explanation);
-          expect(callGateway).not.toHaveBeenCalledWith(
-            expect.objectContaining({ method: "sessions.delete" }),
-          );
-        } else {
-          expect(state.disposition).toBeUndefined();
-          expectSessionDeleted();
-        }
+        expect(state.disposition).toBeUndefined();
+        expectSessionDeleted();
       },
     );
 

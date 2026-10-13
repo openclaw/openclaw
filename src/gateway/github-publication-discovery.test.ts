@@ -121,6 +121,33 @@ describe("GitHub publication discovery", () => {
     },
   );
 
+  it("sleeps while idle and retires expired credentials on the next read", async () => {
+    owner = startGitHubPublicationDiscovery({ scheduler });
+    readGitHubPublicationFact(session);
+    await clock.wake();
+    expect(readGitHubPublicationFact(session)).toEqual(published);
+    expect(clock.armedAtMs).toBeNull();
+
+    await clock.advanceBy(5 * 60_000);
+    expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
+    expect(clock.armedAtMs).toBeNull();
+
+    const gate = holdPreparation();
+    expect(readGitHubPublicationFact(session)).toEqual({ available: true });
+    const refresh = clock.wake();
+    expect(readGitHubPublicationFact(session)).toEqual({ available: true });
+    expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2);
+
+    const replacement = {
+      ...published,
+      github: { ...published.github, token: "synthetic-refreshed-token" },
+    };
+    gate.resolve(replacement);
+    await refresh;
+    expect(readGitHubPublicationFact(session)).toEqual(replacement);
+    expect(clock.armedAtMs).toBeNull();
+  });
+
   it("discards a late result after the session workspace binding changes", async () => {
     const { projection, rebind } = projectionFixture();
     const stale = holdPreparation();

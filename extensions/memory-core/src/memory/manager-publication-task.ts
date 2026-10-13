@@ -3,16 +3,23 @@ import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
-import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
+import type {
+  MemorySourceIndexHeader,
+  readMemorySourceChunks,
+} from "./manager-source-index-kernel.js";
 import type {
   loadMemorySourceFileState,
   refreshMemorySessionSourceState,
 } from "./manager-source-state.js";
 
+export const MEMORY_INDEX_WRITE_SCOPE = "memory-index";
+export const MEMORY_EMBEDDING_CACHE_WRITE_SCOPE = "memory-embedding-cache";
+
 export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
+  hasVectorTable?: boolean;
   extensionPath?: string;
 };
 export type MemoryPublicationFragment = { json: string; last: boolean };
@@ -70,7 +77,7 @@ export type MemoryPublicationOperations = {
   };
   "source.chunks": {
     input: { source: "memory" | "sessions"; path: string };
-    output: Array<{ id: string; embedded: boolean }>;
+    output: ReturnType<typeof readMemorySourceChunks>;
   };
   "session.current": {
     input: { agentId: string; sessionId: string };
@@ -110,9 +117,14 @@ export type MemoryPublicationOperations = {
   "stage.discard": { input: undefined; output: void };
   "source.replace": {
     input: { state: MemoryPublicationState };
-    output: MemoryPublicationResult<{
-      retainedDrift: boolean;
-    }>;
+    output: MemoryPublicationResult<boolean>;
+  };
+  "source.replace.group": {
+    input: {
+      sources: Array<{ header: MemorySourceIndexHeader; fragments: MemoryPublicationFragment[] }>;
+      state: MemoryPublicationState;
+    };
+    output: MemoryPublicationOperations["source.replace"]["output"];
   };
   "source.replace.inline": {
     input: {

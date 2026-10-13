@@ -18,7 +18,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseExecutionCapture } from "./openclaw-agent-execution-incognito.js";
 import {
   createAgentDatabaseExecution,
   type AgentDatabaseExecutionState,
@@ -41,11 +40,13 @@ const executionState = resolveGlobalSingleton<AgentDatabaseExecutionState>(
 );
 const executions = executionState.owners;
 
-/** File captures stay synchronous; explicit ephemeral targets await their pinned actor. */
-export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutionCapture(
-  executions,
-  captureFileAgentDatabaseExecution,
-);
+/** Explicit preparation joins the file owner's already-captured creation target. */
+export function captureOpenClawAgentDatabasePreparationExecution(
+  options: OpenClawAgentDatabaseOptions,
+  expectedIdentity?: AgentDatabaseExecutionCaptureConstraints["expectedIdentity"],
+): OpenClawAgentDatabaseExecution {
+  return captureOpenClawAgentDatabaseExecution(options, { expectedIdentity }, true);
+}
 
 /** Only the deleted agent's store needs a fresh, exclusive cleanup owner. */
 export async function captureAgentDeletionDatabaseExecution(
@@ -58,14 +59,14 @@ export async function captureAgentDeletionDatabaseExecution(
     const previous =
       executions.get(pathname) ??
       executions.get(readDatabasePathIdentitySync(pathname).canonicalPath);
-    if (previous?.kind === "file") {
+    if (previous) {
       assertAgentDatabaseExecutionSharedState(options, previous.sharedDatabaseKey);
       assertAgentDeletionExecutionCleanupAccess(previous, options);
       await previous.retireForCleanup();
       cleanup.assertCurrentHost();
     }
   }
-  return captureFileAgentDatabaseExecution(options);
+  return captureOpenClawAgentDatabaseExecution(options);
 }
 
 /** Finish native initialization before publishing a newly available agent to readers. */
@@ -114,14 +115,17 @@ export function captureExistingOpenClawAgentDatabaseExecution(
   return borrowExistingAgentDatabaseExecution(
     executions,
     options,
-    constraints ? (target) => captureFileAgentDatabaseExecution(target, constraints) : undefined,
+    constraints
+      ? (target) => captureOpenClawAgentDatabaseExecution(target, constraints)
+      : undefined,
   );
 }
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
-function captureFileAgentDatabaseExecution(
+export function captureOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: AgentDatabaseExecutionCaptureConstraints = {},
+  inheritCreationIdentity = false,
 ): OpenClawAgentDatabaseExecution {
   assertAgentSessionWriteAdmission(options);
   assertAgentDeletionCleanupAliases(options, isSameOpenClawAgentDatabasePath);
@@ -142,8 +146,8 @@ function captureFileAgentDatabaseExecution(
       assertAgentDatabaseExecutionCreationIdentity(
         pathname,
         expectedCreationIdentity,
-        expectedCreationIdentity.key.startsWith("path:") && existing?.kind === "file"
-          ? existing.creationIdentity
+        expectedCreationIdentity.key.startsWith("path:") && existing
+          ? (existing.creationIdentity ?? identity)
           : identity,
         constraints.expectedIdentity,
       );
@@ -163,9 +167,6 @@ function captureFileAgentDatabaseExecution(
       );
     }
   }
-  if (existing.kind !== "file") {
-    throw new Error("Agent namespace belongs to an incognito execution owner");
-  }
   if (existing.agentId !== agentId) {
     throw new Error(
       `OpenClaw agent database ${pathname} is already open for agent ${existing.agentId}; requested agent ${agentId}.`,
@@ -176,7 +177,7 @@ function captureFileAgentDatabaseExecution(
   return existing.borrow(
     pathname,
     constraints.expectedIdentity,
-    expectedCreationIdentity,
+    expectedCreationIdentity ?? (inheritCreationIdentity ? existing.creationIdentity : undefined),
     constraints.requestedPath,
   );
 }

@@ -43,7 +43,10 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 WebChat keeps the `message` reaction description and schema stable between runs
 in the same conversation, including runs without a current-prompt reaction grant.
-Code Mode's schema-derived `exec` description stays stable with it. Reaction
+Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
+changes. Its current callable index and capability guidance follow the stable
+prompt prefix; supported in-history prompt updates append changes to the
+conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
 

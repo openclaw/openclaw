@@ -23,11 +23,13 @@ import {
   validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
 import { WorkerGatewayToolResultSchema } from "./worker-gateway-tool.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceStartParams,
+  validateWorkerInferenceTerminalFrame,
 } from "./worker-inference.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "./worker-protocol-primitives.js";
 
@@ -283,6 +285,73 @@ describe("worker protocol schemas", () => {
     ).toBe(true);
     expect(commitError("worker request rejected", "credential-replaced")).toBe(true);
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
+  });
+
+  it("accepts bounded opaque provider response IDs across worker message transports", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const accepts = (responseId: string) => {
+      const message = { ...assistantMessage, responseId };
+      return [
+        validateWorkerTranscriptCommitParams(transcriptCommit({ messages: [message] })),
+        validateWorkerInferenceStartParams({
+          ...inferenceStart,
+          context: { messages: [message] },
+        }),
+        validateWorkerInferenceTerminalFrame({
+          type: "event",
+          event: "worker.inference.terminal",
+          payload: { ...inferenceIdentity, seq: 1, outcome: { type: "done", message } },
+        }),
+      ];
+    };
+
+    // Compatible providers can encode routing state in IDs longer than internal worker IDs.
+    for (const responseId of [
+      "response" + "x".repeat(477),
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
+    ]) {
+      expect(accepts(responseId)).toEqual([true, true, true]);
+    }
+    for (const responseId of [
+      "",
+      " ",
+      " response",
+      "response ",
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1),
+    ]) {
+      expect(accepts(responseId)).toEqual([false, false, false]);
+    }
+    expect(
+      validateWorkerTranscriptCommitParams(
+        transcriptCommit({
+          messages: [{ ...assistantMessage, model: "x".repeat(257) }],
+        }),
+      ),
+    ).toBe(false);
+    expect(validateWorkerInferenceStartParams({ ...inferenceStart, runId: "x".repeat(257) })).toBe(
+      false,
+    );
+    for (const [responseId, withinBudget] of [
+      ["response" + "x".repeat(477), true],
+      ["x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES), false],
+    ] as const) {
+      expect(
+        isWorkerTranscriptFrameWithinBudget({
+          type: "req",
+          id: "commit-1",
+          method: "worker.transcript.commit",
+          params: {
+            runEpoch: 2,
+            seq: 1,
+            baseLeafId: null,
+            messages: [{ ...assistantMessage, responseId }],
+          },
+        }),
+      ).toBe(withinBudget);
+    }
   });
 
   it("accepts opaque provider replay state on assistant transcript messages", () => {

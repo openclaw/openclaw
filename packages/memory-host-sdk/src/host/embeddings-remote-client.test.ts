@@ -2,6 +2,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
@@ -138,6 +139,51 @@ describe("remote embedding private-network policy", () => {
     },
   );
 });
+
+it.each([
+  { hostname: "probe.openai.azure.com", allow: undefined, permitted: false },
+  { hostname: "probe.openai.azure.com", allow: true, permitted: true },
+  { hostname: "llm.corp.example", allow: undefined, permitted: true },
+])(
+  "uses inference private-DNS policy for $hostname, allow=$allow",
+  async ({ hostname, allow, permitted }) => {
+    const baseUrl = `https://${hostname}/v1`;
+    const client = await resolveRemoteEmbeddingBearerClient({
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      options: {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl,
+                request: { allowPrivateNetwork: allow },
+                models: [],
+              },
+            },
+          },
+        },
+        model: "fixture-model",
+        remote: { apiKey: "fixture-key" },
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response("fixture"));
+    const result = fetchWithSsrFGuard({
+      url: `${baseUrl}/embeddings`,
+      policy: client.ssrfPolicy,
+      fetchImpl,
+      lookupFn: async () => [{ address: "10.0.0.5", family: 4 }],
+    });
+    if (permitted) {
+      const response = await result;
+      await response.release();
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toThrow(/private\/internal\/special-use/);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  },
+);
 
 describe("resolveRemoteEmbeddingBearerClient", () => {
   it.each<{

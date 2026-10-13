@@ -11,6 +11,7 @@ import { createStorageMock } from "./storage.ts";
 export function setupSidebarTest() {
   let originalLocalStorage: PropertyDescriptor | undefined;
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
+  let frameChannel: MessageChannel | undefined;
 
   beforeEach(() => {
     layoutGlobals = [
@@ -20,8 +21,8 @@ export function setupSidebarTest() {
       "requestAnimationFrame",
       "cancelAnimationFrame",
     ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
-    // JSDOM has no paint cycle. Keep ordinary sidebar settlement deterministic;
-    // frame-sensitive cases replace this scheduler with their controlled clock.
+    // JSDOM has no paint cycle. Settle ordinary frames in microtasks, but yield
+    // recursive frames so overlay positioning cannot starve the test runner.
     if (!("__vitest_browser__" in globalThis)) {
       // Fake clocks must leave this fixture's frame scheduler in place.
       vi.setConfig({
@@ -37,18 +38,37 @@ export function setupSidebarTest() {
         },
       });
       let nextFrame = 0;
+      let inFrame = false;
       const frames = new Map<number, FrameRequestCallback>();
+      const channel = new MessageChannel();
+      frameChannel = channel;
+      const runFrame = (id: number) => {
+        const callback = frames.get(id);
+        if (callback) {
+          frames.delete(id);
+          inFrame = true;
+          try {
+            callback(performance.now());
+          } finally {
+            inFrame = false;
+          }
+        }
+      };
+      channel.port1.addEventListener("message", (event: MessageEvent<number>) =>
+        runFrame(event.data),
+      );
+      channel.port1.start();
       Object.defineProperty(globalThis, "requestAnimationFrame", {
         configurable: true,
         writable: true,
         value: (callback: FrameRequestCallback) => {
           const id = ++nextFrame;
           frames.set(id, callback);
-          queueMicrotask(() => {
-            if (frames.delete(id)) {
-              callback(performance.now());
-            }
-          });
+          if (inFrame) {
+            channel.port2.postMessage(id);
+          } else {
+            queueMicrotask(() => runFrame(id));
+          }
           return id;
         },
       });
@@ -107,18 +127,28 @@ export function setupSidebarTest() {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.resetConfig();
+    const sidebars =
+      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
+    // Open native menus keep scheduling frames while imports settle.
+    for (const sidebar of sidebars) {
+      // Lazy shell fixtures can retain an unupgraded sidebar tag.
+      if (sidebar.matches(":defined")) {
+        sidebar.dismissTransientMenus();
+      }
+    }
     await vi.dynamicImportSettled();
     // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
     for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
       modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     }
     await vi.dynamicImportSettled();
-    const sidebars =
-      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
     document.body.replaceChildren();
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.
     await settleLitElements(sidebars);
+    frameChannel?.port1.close();
+    frameChannel?.port2.close();
+    frameChannel = undefined;
     for (const [name, descriptor] of layoutGlobals) {
       if (descriptor) {
         Object.defineProperty(globalThis, name, descriptor);

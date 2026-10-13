@@ -178,6 +178,69 @@ it.each(["current", "revoked"] as const)(
   },
 );
 
+it("checks input authority after readiness before writing private stdin", async () => {
+  platformMock = mockProcessPlatform("darwin");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const inputWrites = vi.spyOn(stub.child.stdin!, "write");
+  const preparing = createDeferredCore();
+  const releasePreparation = createDeferredCore();
+  const revoked = new Error("private input authority revoked");
+  let current = true;
+  const prepareInput = vi.fn(async () => {
+    preparing.resolve();
+    await releasePreparation.promise;
+    if (!current) {
+      throw revoked;
+    }
+  });
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    input: "private prompt",
+    prepareInput,
+    oomScoreWrapperSelected: false,
+  });
+  const outcome = starting.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    const start = firstMockArg(stub.sendMock, "service start");
+    if (!isRecord(start) || typeof start.generation !== "string") {
+      throw new Error("Expected an admitted service generation");
+    }
+    expect(prepareInput).not.toHaveBeenCalled();
+    stub.control.push(
+      Buffer.from(
+        encodeServiceChildMessage({
+          type: "ready",
+          commandPid: 1234,
+          anchorPid: 1235,
+          generation: start.generation,
+          sequence: 1,
+        }),
+      ),
+    );
+    await Promise.race([preparing.promise, outcome]);
+    expect(prepareInput).toHaveBeenCalledOnce();
+    expect(inputWrites).not.toHaveBeenCalled();
+    current = false;
+    releasePreparation.resolve();
+    expect(await outcome).toBe(revoked);
+    expect(inputWrites).not.toHaveBeenCalled();
+    expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
+  } finally {
+    releasePreparation.resolve();
+    stub.control.destroy();
+    stub.lineage.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    await outcome;
+  }
+});
+
 it("reports cleanup uncertainty when deferred start delivery fails after abort", async () => {
   platformMock = mockProcessPlatform("darwin");
   const stub = createWritableRelayChild();

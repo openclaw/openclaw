@@ -1,12 +1,14 @@
 // Linux OOM score tests cover best-effort process OOM score adjustment.
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   prepareOomScoreAdjustedSpawn,
   prepareOomScoreAdjustedSpawnPreservingExecEnv,
+  spawnOomScoreAdjusted,
   type OomScoreAdjustedSpawn,
 } from "./linux-oom-score.js";
 
@@ -49,26 +51,57 @@ describe("prepareOomScoreAdjustedSpawn", () => {
     });
   });
 
-  it("keeps a distinct child argv0 out of the shell wrapper", () => {
+  it("adjusts a distinct child argv0 without a shell", () => {
     const argv0 = "/opt/shims/claude";
     const options = { ...linux, argv0 };
 
-    expect(prepareOomScoreAdjustedSpawn("/usr/bin/mise", ["-p"], options)).toEqual({
+    const prepared = prepareOomScoreAdjustedSpawn("/usr/bin/mise", ["-p"], {
+      ...options,
+      shellAvailable: () => false,
+    });
+    expect(prepared).toEqual({
       command: "/usr/bin/mise",
       args: ["-p"],
       argv0,
       env: {},
       wrapped: false,
+      afterSpawn: expect.any(Function),
     });
+    const write = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    try {
+      prepared.afterSpawn?.(4321);
+      expect(write).toHaveBeenCalledWith("/proc/4321/oom_score_adj", "1000");
+    } finally {
+      write.mockRestore();
+    }
   });
 
-  it.each(["off"])("respects the OPENCLAW_CHILD_OOM_SCORE_ADJ=%s opt-out", (value) => {
-    expect(
-      prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
-        ...linux,
-        env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: value },
-      }),
-    ).toMatchObject({ command: "/usr/bin/node", args: ["run.js"], wrapped: false });
+  it.each([undefined, "/opt/shims/claude"])("respects the OOM opt-out with argv0 %s", (argv0) => {
+    const prepared = prepareOomScoreAdjustedSpawn("/usr/bin/node", ["run.js"], {
+      ...linux,
+      argv0,
+      env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "off" },
+    });
+    expect(prepared).toMatchObject({ command: "/usr/bin/node", args: ["run.js"], wrapped: false });
+    expect(prepared).not.toHaveProperty("afterSpawn");
+  });
+
+  it("inherits the parent opt-out through sanitized child environments unless explicitly overridden", () => {
+    vi.stubEnv("OPENCLAW_CHILD_OOM_SCORE_ADJ", "0");
+    try {
+      const options = { ...linux, argv0: "/opt/shims/claude" };
+      expect(prepareOomScoreAdjustedSpawn("/usr/bin/node", [], options)).not.toHaveProperty(
+        "afterSpawn",
+      );
+      expect(
+        prepareOomScoreAdjustedSpawn("/usr/bin/node", [], {
+          ...options,
+          env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "1" },
+        }),
+      ).toHaveProperty("afterSpawn");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("does not double-wrap an adjusted command", () => {
@@ -102,6 +135,44 @@ describe("prepareOomScoreAdjustedSpawn", () => {
     });
   });
 });
+
+it("preserves native ENOENT for missing plugin commands", async () => {
+  const child = spawnOomScoreAdjusted("/openclaw-nonexistent-oom-test-command", [], {
+    stdio: "ignore",
+  });
+  await expect(once(child, "spawn")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.runIf(process.platform === "linux").each([undefined, "/opt/shims/claude"])(
+  "sets the child OOM score while preserving argv0 %s and the parent score",
+  async (argv0) => {
+    const parentScore = fs.readFileSync("/proc/self/oom_score_adj", "utf8");
+    const child = spawnOomScoreAdjusted(
+      process.execPath,
+      [
+        "-e",
+        'process.stdin.once("data", () => process.stdout.end(JSON.stringify({ argv0: process.argv0, score: require("node:fs").readFileSync("/proc/self/oom_score_adj", "utf8").trim() })))',
+      ],
+      { argv0, env: { ...process.env, OPENCLAW_CHILD_OOM_SCORE_ADJ: "1" }, stdio: "pipe" },
+    );
+    const closed = once(child, "close");
+    try {
+      await once(child, "spawn");
+      let output = "";
+      child.stdout!.on("data", (chunk) => {
+        output += chunk;
+      });
+      child.stdin!.end("ready");
+      const result = await closed;
+      expect(result).toEqual([0, null]);
+      expect(JSON.parse(output)).toEqual({ argv0: argv0 ?? process.execPath, score: "1000" });
+      expect(fs.readFileSync("/proc/self/oom_score_adj", "utf8")).toBe(parentScore);
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+    }
+  },
+);
 
 describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
   it("falls back to direct spawn on a defined carrier collision", () => {

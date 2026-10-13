@@ -31,6 +31,7 @@ import type { PluginInstanceDisposalResult } from "./plugin-instance.types.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 
 const log = createSubsystemLogger("plugins/cleanup");
 
@@ -360,7 +361,12 @@ export function createPluginHostRegistryRetirement(params: {
   if (!previousRegistry || previousRegistry === params.nextRegistry || !shouldCleanup()) {
     return async () => ({ cleanupCount: 0, failures: [] });
   }
-  const cfg = params.cfg ?? getRuntimeConfigSnapshot() ?? undefined;
+  // Cold CLI registries still own their load config; a later runtime snapshot may be a successor's.
+  const cfg =
+    params.cfg ??
+    getPluginRuntimeLoadContext(previousRegistry)?.config ??
+    getRuntimeConfigSnapshot() ??
+    undefined;
   const readConfig = captureRuntimeConfigAsyncReader();
   const runContextCleanup = preparePluginRunContextCleanup();
   const nextPluginIds = params.nextRegistry

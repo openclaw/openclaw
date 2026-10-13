@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
@@ -47,7 +46,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
-      setRuntimeConfigSnapshot(config);
       const disabledConfig: OpenClawConfig = {
         ...config,
         plugins: { entries: { acpx: { config: { nativeAgents: { qwen: false } } } } },

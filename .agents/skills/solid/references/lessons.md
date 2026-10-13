@@ -6,6 +6,7 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 
 - **Writes are deferred.** A setter's value is visible only after the microtask flush. That's why owners stay plain TypeScript and components derive instead of write-then-read. A signal-backed store broke callers that mutate and immediately read.
 - **Effect cleanup also runs for equal computed values.** A bridge props refresh can rerun `createEffect` even when its selected status is unchanged, canceling a timer without restarting it. Feed lifecycle effects through a `createMemo` when cleanup must follow value transitions; this kept the saved-status timer from hiding Apply indefinitely.
+- **Native `value` bindings rewrite on every rerun.** The compiled binding assigns `input.value` whenever its effect reruns, even with an equal value. Read through a spread props object, it reruns on every unrelated refresh and wipes uncommitted text; Settings lost a typed message width this way while hydrating. Bind commit-on-change text inputs through a `createMemo` of the owner value.
 - **Publish related lifecycle facts together.** A retained Board app reactivated with the new `active` prop and the previous inactive visibility snapshot, briefly tearing down its iframe and losing drafts. Recheck visibility before publishing activity and consume both from the same lifecycle projection.
 - **Removed namespaces compile silently.** `on:click`, `attr:`, `bool:`, `classList`, and `use:` don't error; they become literal attributes or no-ops. Lint is the only guard.
 - **Event names are case-sensitive.** `onWaSelect` listens to `waselect`, not `wa-select`. Use `onWa-select` or `listen(...)`.
@@ -63,7 +64,7 @@ The [rc.14 changelog](https://github.com/solidjs/solid/blob/8d23a5a13b23f8bfd5f0
 
 - **Small PRs land; big ones stall.** A focused 193-line lifecycle PR landed in about 22 minutes. The primitives PR (+7.9K lines) took nine hours of CI repair and blocked nine lanes. Split shared foundations from consumers.
 - **Ports grow unless you push back.** First drafts came in 7% to nearly 3x larger than the Lit they replaced (formatter-expanded JSX, wrapper layers, defensive branches). Ask for net LOC at or below the original and explain any growth.
-- **Attribute, don't stop.** A failing check gets rerun on the merge base. The same failure there means it's inherited: record it and continue.
+- **Attribute, don't stop.** Read PR CI failure classification before attribution. Matching-signature pre-existing: record + continue under landing rule. Job-name-only: compare failed tests with main run. New/unknown: investigate; `pnpm test:ci-failed <pr>` selects failed local proof, never whole merge-base suite.
 - **Startup bytes vary by machine.** Compare the merge base and the head on the same host before blaming a change.
 
 - Plugin fallback templates can contain nested Solid directives. Restore the fallback component owner when its effect commits the opaque Lit template; a raw `render` call otherwise creates nested roots in rc.14's ownerless effect phase.

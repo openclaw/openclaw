@@ -133,7 +133,12 @@ function hydrateCanonicalSessionCandidates(
   const byStore = new Map<string, CanonicalSessionCandidateFact[]>();
   for (const fact of facts) {
     const key = `${fact.agentId}\0${fact.storePath}`;
-    byStore.set(key, [...(byStore.get(key) ?? []), fact]);
+    const grouped = byStore.get(key);
+    if (grouped) {
+      grouped.push(fact);
+    } else {
+      byStore.set(key, [fact]);
+    }
   }
   for (const group of byStore.values()) {
     const first = group[0]!;

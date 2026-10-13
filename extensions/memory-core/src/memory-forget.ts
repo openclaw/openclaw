@@ -242,6 +242,7 @@ async function forgetWorkspaceMemory(
     readMemoryPreimages(workspaceDir),
     listMemoryArtifactProvenance({ workspaceDir }),
     listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
+      config: params.cfg,
       readOnly: true,
       includeContentRevision: false,
     }),
@@ -316,6 +317,8 @@ async function forgetWorkspaceMemory(
         (!entry.sessionKind || entry.sessionKind === "unknown"))
     ) {
       const parsed = await buildSessionEntry(entry.sessionFile, {
+        generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
+        generatedByCronRun: entry.generatedByCronRun === true,
         ...(entry.transcriptSource === "sqlite"
           ? { agentId: entry.agentId, sessionId: entry.sessionId, storePath: entry.storePath }
           : {}),

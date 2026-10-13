@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
+import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { withSessionHistoryReadAdmission } from "./session-transcript-worker-read-admission.js";
 import {
@@ -29,7 +30,9 @@ import {
 import type {
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
+  SessionHistoryWorkerPreparedInput,
   SessionTranscriptWorkerRequest,
+  SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -40,6 +43,24 @@ const historyPrewarms = new WeakMap<
   HistoryDatabaseResource,
   Map<SessionHistoryWorkerLane, { promise: Promise<void>; pending: boolean }>
 >();
+
+function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
+  switch (input.kind) {
+    case "transcript-hydration":
+    case "current-turn-entry":
+    case "recent-active-events":
+    case "latest-active-message":
+      return input.resolvedScope;
+    case "transcript-anchors":
+      return input.resolved;
+    case "session-row-backfill":
+      return input.params;
+    case "session-activity-summary-source":
+      return input.scope;
+    default:
+      return undefined;
+  }
+}
 
 export function runSessionBranchSummaryWorkerRequest(
   request: SessionBranchSummaryReadRequest,
@@ -136,7 +157,6 @@ export function retainSessionHistoryWorkerDatabase(
       onRequest,
       timeoutMs = 60_000,
     ) => {
-      const validation = captureOpenClawAgentDatabaseReadValidation(database);
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
       return withSessionHistoryReadAdmission(
@@ -148,6 +168,11 @@ export function retainSessionHistoryWorkerDatabase(
           aborters: owned.aborters,
         },
         async (admit, requestLane) => {
+          // Reopened lanes check replacement before lending the next request a receipt.
+          const validation = captureOpenClawAgentDatabaseReadValidation(
+            database,
+            owned.nativeSequences.has(requestLane) ? "retained" : "admission",
+          );
           try {
             const reply = await admit((requestSignal, remaining) =>
               runWithSqliteDatabaseAdmissionTurn([database.path], () =>
@@ -155,11 +180,19 @@ export function retainSessionHistoryWorkerDatabase(
                   () => {
                     assertCurrent();
                     const input = prepare();
+                    const projection = projectionTarget(input);
                     owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
                     return {
                       ...input,
                       database,
                       validation: validation?.validation,
+                      projectionReceipt: projection?.sessionId
+                        ? readSessionActorProjectionReceipt({
+                            path: database.path,
+                            sessionKey: projection.sessionKey,
+                            sessionId: projection.sessionId,
+                          })
+                        : undefined,
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
@@ -210,7 +243,11 @@ export function retainSessionHistoryWorkerDatabase(
             ) {
               knownSource = true;
             }
-            const value = receive(received);
+            // SAFETY: The pool pairs this reply with the exact prepared request above.
+            const paired = received as SessionTranscriptWorkerValues[ReturnType<
+              typeof prepare
+            >["kind"]];
+            const value = receive(paired);
             if (reply.ok && reply.closedHistoryDatabase) {
               await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
             }

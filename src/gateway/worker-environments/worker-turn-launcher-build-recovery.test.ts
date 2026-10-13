@@ -22,6 +22,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import {
@@ -88,7 +89,13 @@ function refreshPlacementBundle(bundleHash: string) {
 
 async function createBuildRecoveryHarness(
   options: {
-    rejection?: "recorded" | "admission" | "pending refresh" | "disconnected" | "handoff";
+    rejection?:
+      | "recorded"
+      | "admission"
+      | "pending refresh"
+      | "disconnected"
+      | "handoff"
+      | "interrupted";
     repeated?: boolean;
     pendingResult?: boolean;
     refreshInPlace?: boolean;
@@ -101,6 +108,20 @@ async function createBuildRecoveryHarness(
   await seedActivePlacement();
   const rejection = options.rejection ?? "admission";
   let environment = attachedEnvironment();
+  let connected = rejection !== "interrupted";
+  if (rejection === "interrupted") {
+    environment = { ...environment, nodeDeviceId: "retained-node" };
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("interrupted fixture requires an active placement");
+    }
+    await placements.claimTurn({
+      ...sessionTarget,
+      claimId: "interrupted-claim",
+      runId: "interrupted-run",
+      owner: placementTurnOwner(active),
+    });
+  }
   const retire = () => {
     environment = {
       ...environment,
@@ -161,7 +182,11 @@ async function createBuildRecoveryHarness(
     },
     acknowledgeCredentialDelivery: vi.fn(async () => true),
     startTunnel: async () => {
-      if (rejection !== "handoff" && (!replaced || options.repeated)) {
+      if (
+        rejection !== "handoff" &&
+        rejection !== "interrupted" &&
+        (!replaced || options.repeated)
+      ) {
         if (rejection === "disconnected") {
           throw new WorkerTunnelOwnerDisconnectedError(
             "device worker node is not connected with the supervisor dialect",
@@ -183,7 +208,13 @@ async function createBuildRecoveryHarness(
         stop: async () => {},
       });
     },
-    stopTunnel: vi.fn(async () => {}),
+    stopTunnel: vi.fn(async () => {
+      if (!connected) {
+        throw new WorkerTunnelOwnerDisconnectedError(
+          "device worker node is not connected with the supervisor dialect",
+        );
+      }
+    }),
     destroy,
     requestDestroy: destroy,
     attachSession: vi.fn(async () => {
@@ -192,7 +223,11 @@ async function createBuildRecoveryHarness(
     createWithRequest: vi.fn(async () => {
       throw new Error("unexpected worker environment creation");
     }),
-    reconcileOnce: async () => retire(),
+    reconcileOnce: async () => {
+      if (rejection !== "interrupted") {
+        retire();
+      }
+    },
     reconcileEnvironment: vi.fn(),
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
@@ -215,6 +250,9 @@ async function createBuildRecoveryHarness(
       resolveWorkspace: async () => ({ kind: "local", path: root }),
     }),
   });
+  if (rejection === "interrupted") {
+    await dispatch.reconcile("startup");
+  }
   const redispatchPlacement = vi.fn(async () => {
     replaced = true;
     environment = attachedEnvironment();
@@ -229,8 +267,10 @@ async function createBuildRecoveryHarness(
   const provider = createWorkerSessionTurnPlacementProvider({
     environments,
     placements,
+    isInterruptedTurn: dispatch.isInterruptedTurn,
     waitForAdmissionNode: async (params) => {
       await options.waitForAdmissionNode?.(params);
+      connected = true;
       if (rejection === "disconnected") {
         replaced = true;
       }
@@ -315,6 +355,37 @@ describe("worker turn launcher build recovery", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     resetDiagnosticRunActivityForTest();
+  });
+
+  it("waits for reconnect and settles the exact interrupted claim before the next turn", async () => {
+    const waiting = createDeferred();
+    const reconnected = createDeferred();
+    const harness = await createBuildRecoveryHarness({
+      rejection: "interrupted",
+      waitForAdmissionNode: async ({ signal, assertCurrent }) => {
+        waiting.resolve();
+        await racePromiseWithAbortSignal(reconnected.promise, signal);
+        assertCurrent();
+      },
+    });
+    const execution = harness.execute();
+    void execution.catch(() => waiting.resolve());
+    try {
+      await waiting.promise;
+      expect(placements.get(SESSION_ID)?.turnClaim?.claimId).toBe("interrupted-claim");
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      reconnected.resolve();
+      await expect(execution).resolves.toMatchObject({
+        payloads: [{ text: "Continued on the replacement worker" }],
+      });
+      expect(harness.launchTurn).toHaveBeenCalledOnce();
+      expect(harness.redispatchPlacement).not.toHaveBeenCalled();
+      expect(harness.runLocal).not.toHaveBeenCalled();
+      await expectSinglePersistedInput();
+    } finally {
+      reconnected.resolve();
+      await execution.catch(() => {});
+    }
   });
 
   async function createRefreshWaitHarness(fence = false) {

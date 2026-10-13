@@ -106,7 +106,9 @@ export async function createServiceChildRelayAdapter(
           events.emitError(error, "stderr"),
         )
       : undefined;
-  child.stdin?.on("error", (error) => events.emitError(error, "stdin"));
+  if (!params.terminateOnHostLoss) {
+    child.stdin?.on("error", (error) => events.emitError(error, "stdin"));
+  }
 
   let state: AuthorityState = "starting";
   let commandPid: number | undefined;
@@ -451,8 +453,8 @@ export async function createServiceChildRelayAdapter(
         });
       }
     } else if (message.type === "startup-error") {
-      if (useWindowsJobAnchor || useLinuxSubreaper) {
-        startup.reject(new Error(message.error));
+      if (useWindowsJobAnchor || useLinuxSubreaper || message.errorDetails) {
+        startup.reject(Object.assign(new Error(message.error), message.errorDetails));
       } else {
         loseIdentity(message.error);
       }
@@ -572,6 +574,7 @@ export async function createServiceChildRelayAdapter(
     env: params.env ? toStringEnv(params.env) : undefined,
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
+    terminateOnHostLoss: params.terminateOnHostLoss,
     controlFd,
     ...preparation.ownership,
     treeOwnership: useLinuxSubreaper ? "linux-subreaper" : undefined,
@@ -579,7 +582,19 @@ export async function createServiceChildRelayAdapter(
     ...(control ? { acknowledgeClosing: true as const } : {}),
     windowsShellCommand: params.windowsShellCommand,
   };
-  const stdin = createManagedChildStdin(child.stdin);
+  const stdin = createManagedChildStdin(
+    child.stdin,
+    params.terminateOnHostLoss
+      ? () => {
+          void sendControlMessage({ type: "stdin-end" }).then(
+            () => child.stdin?.end(),
+            (error: unknown) =>
+              loseIdentity(toErrorObject(error, "stdin EOF delivery failed").message),
+          );
+        }
+      : undefined,
+    params.terminateOnHostLoss ? (error) => events.emitError(error, "stdin") : undefined,
+  );
   params.abortSignal?.addEventListener("abort", onConstructionAbort, { once: true });
   const ready = (async () => {
     using delivery = preparation.transferSecretInput();
@@ -605,6 +620,9 @@ export async function createServiceChildRelayAdapter(
           await cleanup.completion.promise;
         }
         throw startupError ?? secretDeliveryError;
+      }
+      if (params.input !== undefined && params.prepareInput) {
+        await params.prepareInput();
       }
       if (params.abortSignal?.aborted || waitError) {
         throw waitError ?? new Error("service child construction aborted");

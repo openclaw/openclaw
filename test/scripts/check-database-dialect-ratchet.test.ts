@@ -163,6 +163,25 @@ it("counts only SQLite-specific transaction modes across owners", () => {
   expect(inventory(root).map((row) => row.matches.length)).toEqual([3]);
 });
 
+it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors", () => {
+  const { root, write } = fixture();
+  write(
+    "src/postgres.ts",
+    'const sql = "SELECT jsonb_build_object(), jsonb_build_array(), jsonb_agg(value), pg_catalog.jsonb_object_agg(key, value) FROM facts";',
+  );
+  write(
+    "src/sqlite.ts",
+    'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
+  );
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "src/sqlite.ts",
+      matches: Array.from({ length: 4 }, () => ({ construct: "json-projection" })),
+    },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
+});
+
 it("distinguishes table column lists from custom function calls", () => {
   const { root, write } = fixture();
   write(
@@ -240,3 +259,40 @@ it("compares base to working tree or index using only changed files, and permits
   expect(main(root, ["--prune"])).toBe(1);
   expect(errors).toHaveBeenCalledWith("SQLite dialect ratchet has no baseline to prune.");
 });
+
+it.each([
+  { file: "src/infra/sqlite-strict.ts", sql: "PRAGMA foreign_keys = OFF", result: 0, owner: true },
+  { file: "src/consumer.ts", sql: "PRAGMA foreign_keys = OFF", result: 1, owner: false },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "INSERT OR IGNORE INTO t VALUES (1)",
+    result: 1,
+    owner: true,
+  },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "SELECT json_extract(value, '$') FROM t",
+    result: 1,
+    owner: true,
+  },
+])(
+  "ratchets $sql in $file with only primitive maintenance excluded",
+  ({ file, sql, result, owner }) => {
+    const { root, write, git } = fixture();
+    write(file, "export {};\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    write(file, `db.exec(${JSON.stringify(sql)});`);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", base])).toBe(result);
+    expect(inventory(root)).toMatchObject([{ file, matches: [{ owner }] }]);
+    if (result === 0) {
+      expect(logs).toHaveBeenCalledWith(
+        "SQLite primitive owners: 1 engine-maintenance matches in changed files (excluded from comparison).",
+      );
+      expect(logs).toHaveBeenCalledWith(expect.stringContaining("pragma (owner)"));
+    }
+  },
+);

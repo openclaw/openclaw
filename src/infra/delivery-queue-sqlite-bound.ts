@@ -20,13 +20,21 @@ type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
 type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const BOUNDED_DELIVERY_RECEIPTS_SQL = `
-    SELECT queue_name, id, enqueued_at,
-      retention_id_prefix id_prefix,
-      retention_max_age_ms max_age_ms,
-      retention_max_entries max_entries
-    FROM delivery_queue_entries WHERE status IN ('completed', 'failed')
-      AND recovery_state = 'completed_bounded' AND retention_id_prefix IS NOT NULL`;
+function boundedDeliveryReceipts(db: DatabaseSync) {
+  return getNodeSqliteKysely<DeliveryQueueDatabase>(db)
+    .selectFrom("delivery_queue_entries")
+    .select([
+      "queue_name",
+      "id",
+      "enqueued_at",
+      "retention_id_prefix as id_prefix",
+      "retention_max_age_ms as max_age_ms",
+      "retention_max_entries as max_entries",
+    ])
+    .where("status", "in", ["completed", "failed"])
+    .where("recovery_state", "=", "completed_bounded")
+    .where("retention_id_prefix", "is not", null);
+}
 
 export type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 const deliveryQueueRowColumns = [
@@ -70,30 +78,75 @@ export function pruneDeliveryQueueTombstones(
   now: number,
   prefix?: { queueName: string; idPrefix: string },
 ): boolean {
-  const result =
-    // sqlite-allow-raw: A window rank enforces each receipt's authored count limit.
-    db
-      .prepare(`WITH policies AS (
-      ${BOUNDED_DELIVERY_RECEIPTS_SQL}
-      ${prefix ? "AND queue_name = @queueName AND retention_id_prefix = @idPrefix" : ""}
-    ), ranked AS (
-      SELECT *, row_number() OVER (PARTITION BY queue_name, id_prefix
-        ORDER BY enqueued_at DESC, id DESC) retention_rank FROM policies
-    ) DELETE FROM delivery_queue_entries WHERE (queue_name, id) IN (
-      SELECT queue_name, id FROM ranked
-      WHERE enqueued_at < @now - max_age_ms OR retention_rank > max_entries
-    )`)
-      .run(prefix ? { now, ...prefix } : { now });
+  let policies = boundedDeliveryReceipts(db);
+  if (prefix) {
+    policies = policies
+      .where("queue_name", "=", prefix.queueName)
+      .where("retention_id_prefix", "=", prefix.idPrefix);
+  }
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(db);
+  const result = executeSqliteQuerySync(
+    db,
+    queueDb
+      .with("policies", () => policies)
+      .with("ranked", (qb) =>
+        qb
+          .selectFrom("policies")
+          .selectAll()
+          .select((eb) =>
+            eb.fn
+              .agg<number>("row_number", [])
+              .over((window) =>
+                window
+                  .partitionBy(["queue_name", "id_prefix"])
+                  .orderBy("enqueued_at", "desc")
+                  .orderBy("id", "desc"),
+              )
+              .as("retention_rank"),
+          ),
+      )
+      .deleteFrom("delivery_queue_entries")
+      .where((eb) =>
+        eb(
+          eb.refTuple("queue_name", "id"),
+          "in",
+          eb
+            .selectFrom("ranked")
+            .select(["queue_name", "id"])
+            .where((ranked) =>
+              ranked.or([
+                ranked("enqueued_at", "<", ranked(ranked.val(now), "-", ranked.ref("max_age_ms"))),
+                ranked("retention_rank", ">", ranked.ref("max_entries")),
+              ]),
+            )
+            .$asTuple("queue_name", "id"),
+        ),
+      ),
+  );
   const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
-  return result.changes > 0 || ordinaryPruned;
+  return (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
 export function pruneDeliveryQueueTombstoneAges(db: DatabaseSync, now: number): void {
-  // sqlite-allow-raw: Delete by row identity from the bounded-policy relation.
-  db.prepare(`DELETE FROM delivery_queue_entries WHERE (queue_name, id) IN (
-    SELECT queue_name, id FROM (${BOUNDED_DELIVERY_RECEIPTS_SQL})
-    WHERE enqueued_at < @now - max_age_ms)`).run({ now });
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DeliveryQueueDatabase>(db)
+      .deleteFrom("delivery_queue_entries")
+      .where((eb) =>
+        eb(
+          eb.refTuple("queue_name", "id"),
+          "in",
+          eb
+            .selectFrom(boundedDeliveryReceipts(db).as("policies"))
+            .select(["queue_name", "id"])
+            .where((policy) =>
+              policy("enqueued_at", "<", policy(policy.val(now), "-", policy.ref("max_age_ms"))),
+            )
+            .$asTuple("queue_name", "id"),
+        ),
+      ),
+  );
   pruneOrdinaryDeliveryReceipts(db, now);
 }
 

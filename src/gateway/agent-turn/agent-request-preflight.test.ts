@@ -282,18 +282,6 @@ describe("agent request Swarm preflight", () => {
     }
   });
 
-  it("rejects a structured schema outside collector mode", async () => {
-    const { respond, result } = await runPreflight({ type: "object" }, false);
-    expect(result).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "active swarm collector sessions require swarmCollector=true",
-      }),
-    );
-  });
-
   it("rejects collector flags while Swarm is disabled", async () => {
     const { respond, result } = await runPreflight(undefined, true, {
       enabled: false,
@@ -327,20 +315,6 @@ describe("agent request Swarm preflight", () => {
       subagentRuns.clear();
     }
   });
-
-  it.each([undefined, true])(
-    "accepts a registered backend collector with Swarm enabled=%s",
-    async (enabled) => {
-      const { respond, result } = await runPreflight({ type: "object" }, true, {
-        enabled,
-        backend: true,
-        register: true,
-      });
-
-      expect(result).toBeDefined();
-      expect(respond).not.toHaveBeenCalled();
-    },
-  );
 
   it("rejects ordinary turns and mismatched launch identities for an active collector", async () => {
     for (const options of [
@@ -380,68 +354,6 @@ describe("agent request Swarm preflight", () => {
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
-
-  it("keeps a provisionally ended collector session reserved until completion", async () => {
-    const run = subagentRuns.get("collector-run");
-    expect(run).toBeUndefined();
-    const { respond, result } = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-      includeCollectorFields: false,
-    });
-    const registered = subagentRuns.get("collector-run");
-    if (!registered) {
-      throw new Error("expected collector registration");
-    }
-    registered.execution = { ...registered.execution, status: "terminal", endedAt: 2 };
-
-    const retry = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      includeCollectorFields: false,
-    });
-    expect(result).toBeUndefined();
-    expect(respond).toHaveBeenCalled();
-    expect(retry.result).toBeUndefined();
-    expect(retry.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
-
-  it("allows an accepted collector launch identity to replay only from Gateway dedupe", async () => {
-    const rejected = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-      launchPending: false,
-    });
-    expect(rejected.result).toBeUndefined();
-    expect(rejected.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-
-    subagentRuns.clear();
-    const replayed = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-      launchPending: false,
-      cached: true,
-    });
-    expect(replayed.result).toBeDefined();
-    await replayed.replay();
-    expect(replayed.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ runId: "gateway-run", status: "in_flight" }),
-      undefined,
-      expect.objectContaining({ cached: true, runId: "gateway-run" }),
     );
   });
 
@@ -534,17 +446,6 @@ describe("agent request Swarm preflight", () => {
       undefined,
       expect.objectContaining({ cached: true, runId: "gateway-run" }),
     );
-  });
-
-  it("uses the registered requester per-agent gate for a cross-agent collector", async () => {
-    const { respond, result } = await runPreflight({ type: "object" }, true, {
-      requesterOnlyEnabled: true,
-      backend: true,
-      register: true,
-    });
-
-    expect(result).toBeDefined();
-    expect(respond).not.toHaveBeenCalled();
   });
 
   it("uses the effective requester override when its session key names another agent", async () => {

@@ -10,7 +10,7 @@ import type {
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
 import { resolveCronJobsStorePath } from "../cron/store/paths.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { getUserProfileDisplays } from "../state/user-profile-list.js";
+import { getUserProfileDisplaysNative } from "../state/user-profile-list.native.js";
 import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
 import {
   projectForwardedMessages,
@@ -39,6 +39,12 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "recent-usage") {
+    return {
+      kind: "recent-usage",
+      result: options.readers.readRecentUsage(request.params.maxBytes),
+    };
+  }
   if (request.kind === "history-event-page") {
     return {
       kind: "history-event-page",
@@ -245,10 +251,10 @@ export async function readSessionHistoryRequest(
               state,
             )
           : undefined;
-        let profiles: ReturnType<typeof getUserProfileDisplays> | undefined;
+        let profiles: ReturnType<typeof getUserProfileDisplaysNative> | undefined;
         const project = createCurrentUserProfileMessageProjector((id) =>
           resolveCurrentUserProfileDisplay(id, (senderId) =>
-            (profiles ??= getUserProfileDisplays(profileIds, state)).get(senderId),
+            (profiles ??= getUserProfileDisplaysNative(profileIds, state)).get(senderId),
           ),
         );
         return projectForwardedMessages(displayMessages, (jobId) =>

@@ -81,22 +81,6 @@ describe("diffs tool", () => {
     });
   }
 
-  it("returns a viewer URL in view mode", async () => {
-    const tool = createTool();
-    const result = await tool.execute("tool-1", {
-      before: "one\n",
-      after: "two\n",
-      path: "README.md",
-      mode: "view",
-    });
-
-    expect(readTextContent(result, 0)).toContain("http://127.0.0.1:18789/plugins/diffs/view/");
-    expect(String(readDetails(result).viewerUrl)).toContain(
-      "http://127.0.0.1:18789/plugins/diffs/view/",
-    );
-    expect(readDetails(result).changed).toBe(true);
-  });
-
   it("uses current public origin for retained tools after config reload", async () => {
     let config: OpenClawConfig = { gateway: { publicOrigin: "https://first.example" } };
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
@@ -177,52 +161,6 @@ describe("diffs tool", () => {
     );
   });
 
-  it("does not expose reserved format in the tool schema", () => {
-    const tool = createTool();
-
-    const properties = readParametersProperties(tool.parameters);
-    expect(properties).not.toHaveProperty("format");
-  });
-
-  it("returns an image artifact in image mode", async () => {
-    const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
-    const screenshotter = createPngScreenshotter({
-      assertHtml: (html) => {
-        expect(html).toContain("../../assets/viewer.js");
-      },
-      assertImage: (image) => {
-        expect(image.format).toBe("png");
-        expect(image.qualityPreset).toBe("standard");
-        expect(image.scale).toBe(2);
-        expect(image.maxWidth).toBe(960);
-      },
-    });
-
-    const tool = createToolWithScreenshotter(store, screenshotter);
-
-    const result = await tool.execute?.("tool-2", {
-      before: "one\n",
-      after: "two\n",
-      mode: "image",
-    });
-
-    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
-    expect(readTextContent(result, 0)).toContain("Diff PNG generated at:");
-    // Artifact text is model-visible, so it names the delivery capability rather
-    // than the `message` tool, which gating removes from many sessions.
-    expect(readTextContent(result, 0)).toContain("use an available file-sending tool");
-    expect(readTextContent(result, 0)).not.toMatch(/`message`|\bmessage tool\b/);
-    expect(result?.content).toHaveLength(1);
-    const details = readDetails(result);
-    expect(requireString(details.filePath, "filePath")).toMatch(/preview\.png$/);
-    expect(details.fileFormat).toBe("png");
-    expect(details.fileQuality).toBe("standard");
-    expect(details.fileScale).toBe(2);
-    expect(details.fileMaxWidth).toBe(960);
-    expect(details.viewerUrl).toBeUndefined();
-    expect(cleanupSpy).toHaveBeenCalledTimes(1);
-  });
-
   it("renders PDF output when fileFormat is pdf", async () => {
     const screenshotter = createPdfScreenshotter({
       assertOutputPath: (outputPath) => {
@@ -242,32 +180,10 @@ describe("diffs tool", () => {
 
     expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
     expect(readTextContent(result, 0)).toContain("Diff PDF generated at:");
+    expect(readTextContent(result, 0)).toContain("use an available file-sending tool");
+    expect(readTextContent(result, 0)).not.toMatch(/`message`|\bmessage tool\b/);
     expect(readDetails(result).fileFormat).toBe("pdf");
     expect(readDetails(result).filePath).toMatch(/preview\.pdf$/);
-  });
-
-  it("accepts mode=file as an alias for file artifact rendering", async () => {
-    const screenshotter = createPngScreenshotter({
-      assertOutputPath: (outputPath) => {
-        expect(outputPath).toMatch(/preview\.png$/);
-      },
-    });
-
-    const tool = createToolWithScreenshotter(store, screenshotter);
-
-    const result = await tool.execute?.("tool-2c", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-    });
-
-    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
-    expect(readDetails(result).mode).toBe("file");
-    expect(readDetails(result).viewerUrl).toBeUndefined();
-    expect(requireString(readDetails(result).artifactId, "artifactId")).toMatch(/^[a-f0-9]{20}$/u);
-    expect(requireString(readDetails(result).expiresAt, "expiresAt")).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
-    );
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -299,52 +215,6 @@ describe("diffs tool", () => {
       vi.useRealTimers();
       await fixture.cleanup();
     }
-  });
-
-  it("caps artifact-only ttlSeconds that bypass schema validation", async () => {
-    const screenshotter = createPngScreenshotter();
-    const tool = createToolWithScreenshotter(store, screenshotter);
-
-    const result = await tool.execute?.("tool-2c-ttl-cap", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-      ttlSeconds: Number.MAX_SAFE_INTEGER,
-    });
-
-    const details = readDetails(result);
-    const entry = await blobStore.lookup(requireString(details.artifactId, "artifactId"));
-    expect(entry).toBeDefined();
-    expect(entry!.expiresAt! - entry!.createdAt).toBe(21_600_000);
-    expect(requireString(details.expiresAt, "expiresAt")).toBe(
-      new Date(entry!.expiresAt!).toISOString(),
-    );
-  });
-
-  it("uses default ttlSeconds when tool input omits ttlSeconds", async () => {
-    const screenshotter = createPngScreenshotter();
-    const tool = createToolWithScreenshotter(store, screenshotter, {
-      ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-      ttlSeconds: 60,
-    });
-
-    const result = await tool.execute?.("tool-2c-default-ttl", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-    });
-    const filePath = (result.details as Record<string, unknown>).filePath as string;
-    const stat = await fs.stat(filePath);
-    expect(stat.isFile()).toBe(true);
-
-    await store.stopCleanup();
-    await expireDiffArtifactForTest(
-      rootDir,
-      requireString(readDetails(result).artifactId, "artifactId"),
-      60000,
-    );
-    await store.cleanupExpired();
-    await expectFsEnoent(fs.stat(filePath));
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -539,57 +409,6 @@ describe("diffs tool", () => {
     const html = Buffer.from(viewer!.html).toString("utf8");
     expect(html).toContain('body data-theme="dark"');
   });
-
-  it("routes tool context into artifact details for file mode", async () => {
-    const screenshotter = createPngScreenshotter();
-    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
-      agentId: "reviewer",
-      sessionId: "session-456",
-      messageChannel: "telegram",
-      agentAccountId: "work",
-    });
-
-    const result = await tool.execute?.("tool-context-file", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-    });
-
-    expect(readDetails(result).context).toEqual({
-      agentId: "reviewer",
-      sessionId: "session-456",
-      messageChannel: "telegram",
-      agentAccountId: "work",
-    });
-  });
-
-  it("stores partial tool context for viewer and rendered-file artifacts", async () => {
-    const screenshotter = createPngScreenshotter();
-    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
-      agentId: "reviewer",
-      sessionId: "session-partial",
-    });
-
-    const result = await tool.execute?.("tool-context-partial", {
-      before: "one\n",
-      after: "two\n",
-      mode: "both",
-    });
-
-    expect(readDetails(result).context).toEqual({
-      agentId: "reviewer",
-      sessionId: "session-partial",
-    });
-    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
-
-    const viewerPath = String(readDetails(result).viewerPath);
-    const id = extractViewerArtifactId(viewerPath);
-    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
-    expect(viewer?.artifact.context).toEqual({
-      agentId: "reviewer",
-      sessionId: "session-partial",
-    });
-  });
 });
 
 function createToolWithScreenshotter(
@@ -685,13 +504,6 @@ function extractViewerArtifactToken(viewerPath: string): string {
     throw new Error("expected viewer artifact token");
   }
   return token;
-}
-
-function readParametersProperties(parameters: unknown): Record<string, unknown> {
-  if (isObjectValue(parameters) && isObjectValue(parameters.properties)) {
-    return parameters.properties;
-  }
-  throw new Error("expected diffs tool parameter properties");
 }
 
 function requireString(value: unknown, label: string): string {

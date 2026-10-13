@@ -622,6 +622,11 @@ describe("createGatewayKernel", () => {
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        failing: ["startup-sidecars"],
+      });
+      kernel.kernel.setDispatchReady(true);
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
@@ -908,10 +913,10 @@ describe("createGatewayKernel", () => {
         "config.snapshot.read.includes",
         "config.snapshot.read.env",
         "config.snapshot.read.validate",
-        "plugins.metadata.scan",
-        "plugins.metadata.freeze",
         "config.snapshot.read.materialize",
         "config.snapshot.read.observe",
+        "plugins.metadata.scan",
+        "plugins.metadata.freeze",
         "state.ownership",
         "state.runtime-imports",
         "state.schema-preflight",
@@ -931,6 +936,7 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
+        "cron.store-path",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
@@ -957,9 +963,10 @@ describe("createGatewayKernel", () => {
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "gateway.instance-runtime-import",
+        "gateway.owner-profile",
         "sessions.materialize",
         "gateway.lifetime-sidecars",
-        "gateway.instance-runtime-import",
       ]);
     } finally {
       try {

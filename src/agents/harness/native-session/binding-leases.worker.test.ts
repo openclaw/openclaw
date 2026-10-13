@@ -46,49 +46,53 @@ afterEach(() => {
 });
 
 describe("native binding worker admission", () => {
-  it("keeps native effect guards current from renewal, revocation, and unknown receipts", async () => {
-    await withOpenClawTestState({ label: "binding-worker-facts" }, async (fixture) => {
-      const { owner, asyncState } = bindingStores(fixture.env);
-      for (const mutation of ["replace", "delete", "unknown"] as const) {
-        let retainedAssertion: (() => void) | undefined;
-        await owner.withLease(
-          mutation,
-          async () => {
-            const assertCurrent = owner.captureLeaseAssertion(mutation);
-            retainedAssertion = assertCurrent;
-            const current = (await asyncState.lookup(mutation))!;
-            const lease = current.lease!;
-            await asyncState.register(mutation, {
-              ...current,
-              lease: { ...lease, expiresAt: lease.expiresAt + 60_000 },
-            });
-            expect(assertCurrent).not.toThrow();
-            if (mutation === "replace") {
-              await asyncState.register(mutation, {
+  it.each(["binding", "unicode-\ud800"])(
+    "keeps %s native effect guards current from renewal, revocation, and unknown receipts",
+    async (prefix) => {
+      await withOpenClawTestState({ label: "binding-worker-facts" }, async (fixture) => {
+        const { owner, asyncState } = bindingStores(fixture.env);
+        for (const mutation of ["replace", "delete", "unknown"] as const) {
+          const key = `${prefix}-${mutation}`;
+          let retainedAssertion: (() => void) | undefined;
+          await owner.withLease(
+            key,
+            async () => {
+              const assertCurrent = owner.captureLeaseAssertion(key);
+              retainedAssertion = assertCurrent;
+              const current = (await asyncState.lookup(key))!;
+              const lease = current.lease!;
+              await asyncState.register(key, {
                 ...current,
-                lease: { ...lease, token: "replacement" },
+                lease: { ...lease, expiresAt: lease.expiresAt + 60_000 },
               });
-            } else if (mutation === "delete") {
-              await asyncState.delete(mutation);
-            } else {
-              const context = captureOpenClawStateWorkerContext({ env: fixture.env });
-              pluginStatePublication.invalidateEntries(
-                { identity: context.admission.identity.key, incarnation: "unknown-settlement" },
-                [{ plugin_id: "binding-proof", namespace: "bindings", entry_key: mutation }],
-              );
-            }
-            expect(assertCurrent).toThrow();
-            if (mutation === "unknown") {
-              await owner.owner(mutation)!.facts!.refresh();
               expect(assertCurrent).not.toThrow();
-            }
-          },
-          { prepareLease: prepareBindingTestLease },
-        );
-        expect(retainedAssertion).toThrow("Lost binding lease");
-      }
-    });
-  });
+              if (mutation === "replace") {
+                await asyncState.register(key, {
+                  ...current,
+                  lease: { ...lease, token: "replacement" },
+                });
+              } else if (mutation === "delete") {
+                await asyncState.delete(key);
+              } else {
+                const context = captureOpenClawStateWorkerContext({ env: fixture.env });
+                pluginStatePublication.invalidateEntries(
+                  { identity: context.admission.identity.key, incarnation: "unknown-settlement" },
+                  [{ plugin_id: "binding-proof", namespace: "bindings", entry_key: key }],
+                );
+              }
+              expect(assertCurrent).toThrow();
+              if (mutation === "unknown") {
+                await owner.owner(key)!.facts!.refresh();
+                expect(assertCurrent).not.toThrow();
+              }
+            },
+            { prepareLease: prepareBindingTestLease },
+          );
+          expect(retainedAssertion).toThrow("Lost binding lease");
+        }
+      });
+    },
+  );
 
   it("allows host progress to release a competing writer before persisting the binding", async () => {
     await withOpenClawTestState({ label: "binding-worker-contention" }, async (fixture) => {

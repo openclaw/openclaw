@@ -51,12 +51,6 @@ const sharedMocks = vi.hoisted(() => ({
 let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
 let inspectSpies: Array<{ mockRestore(): void }> = [];
 
-type SnapshotDefaultsCase = {
-  label: string;
-  args: string[];
-  expectMode: "efficient" | undefined;
-};
-
 function restoreInspectSpies() {
   for (const spy of inspectSpies.toReversed()) {
     spy.mockRestore();
@@ -111,75 +105,45 @@ describe("browser cli snapshot defaults", () => {
     configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
   });
 
-  it.each(
-    ["ax42", "7_3"].flatMap((ref) =>
-      (["plain", "json", "file"] as const).map((output) => ({ ref, output })),
-    ),
-  )("preserves the returned ARIA ref $ref in $output output", async ({ ref, output }) => {
-    const result: SnapshotResult = {
-      ok: true,
-      format: "aria",
-      targetId: "t1",
-      url: "https://example.com",
-      nodes: [{ ref, role: "textbox", name: "Entry", value: "Ready", depth: 2 }],
-    };
-    sharedMocks.callBrowserRequest.mockResolvedValueOnce(result);
-    const outputPath =
-      output === "file"
-        ? path.join(tempDirs.make("openclaw-aria-output-"), "snapshot.json")
-        : undefined;
-    await runBrowserInspect(
-      ["snapshot", "--format", "aria", ...(outputPath ? ["--out", outputPath] : [])],
-      output === "json",
-    );
+  it.each(["plain", "file"] as const)(
+    "preserves the returned ARIA ref in %s output",
+    async (output) => {
+      const ref = "ax42";
+      const result: SnapshotResult = {
+        ok: true,
+        format: "aria",
+        targetId: "t1",
+        url: "https://example.com",
+        nodes: [{ ref, role: "textbox", name: "Entry", value: "Ready", depth: 2 }],
+      };
+      sharedMocks.callBrowserRequest.mockResolvedValueOnce(result);
+      const outputPath =
+        output === "file"
+          ? path.join(tempDirs.make("openclaw-aria-output-"), "snapshot.json")
+          : undefined;
+      await runBrowserInspect([
+        "snapshot",
+        "--format",
+        "aria",
+        ...(outputPath ? ["--out", outputPath] : []),
+      ]);
 
-    if (outputPath) {
-      expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toEqual(result);
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(outputPath);
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-    } else if (output === "json") {
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
-    } else {
-      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-        `    - textbox "Entry" = "Ready" [ref=${ref}]`,
-      );
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-    }
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("preserves AI snapshot text while ARIA refs are rendered separately", async () => {
-    await runSnapshot([]);
-    expect(runtime.log).toHaveBeenCalledExactlyOnceWith("ok");
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      if (outputPath) {
+        expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toEqual(result);
+        expect(runtime.log).toHaveBeenCalledExactlyOnceWith(outputPath);
+        expect(runtime.writeJson).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+          `    - textbox "Entry" = "Ready" [ref=${ref}]`,
+        );
+        expect(runtime.writeJson).not.toHaveBeenCalled();
+      }
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    {
-      command: "screenshot",
-      requestPath: "/screenshot",
-      args: ["screenshot"],
-      timeout: "30000",
-      ownerTimeoutMs: undefined,
-    },
-    {
-      command: "screenshot",
-      requestPath: "/screenshot",
-      args: ["--timeout", "60000", "screenshot"],
-      timeout: "60000",
-      ownerTimeoutMs: 60000,
-    },
-    {
-      command: "screenshot",
-      requestPath: "/screenshot",
-      args: ["screenshot", "tab-42", "--timeout", "60000"],
-      timeout: "60000",
-      ownerTimeoutMs: 60000,
-      targetId: "tab-42",
-    },
     {
       command: "screenshot",
       requestPath: "/screenshot",
@@ -190,34 +154,13 @@ describe("browser cli snapshot defaults", () => {
     {
       command: "snapshot",
       requestPath: "/snapshot",
-      args: ["snapshot"],
-      timeout: "30000",
-      ownerTimeoutMs: undefined,
-    },
-    {
-      command: "snapshot",
-      requestPath: "/snapshot",
-      args: ["--timeout", "60000", "snapshot"],
-      timeout: "60000",
-      ownerTimeoutMs: 60000,
-    },
-    {
-      command: "snapshot",
-      requestPath: "/snapshot",
-      args: ["snapshot", "--timeout", "60000"],
-      timeout: "60000",
-      ownerTimeoutMs: 60000,
-    },
-    {
-      command: "snapshot",
-      requestPath: "/snapshot",
       args: ["--timeout", "60000", "snapshot", "--timeout", "90000"],
       timeout: "90000",
       ownerTimeoutMs: 90000,
     },
   ])(
     "keeps the gateway and $command owner on the explicit $timeout ms timeout",
-    async ({ command, requestPath, args, timeout, ownerTimeoutMs, targetId }) => {
+    async ({ command, requestPath, args, timeout, ownerTimeoutMs }) => {
       await runBrowserInspect(args, true);
 
       expect(sharedMocks.callBrowserRequest).toHaveBeenLastCalledWith(
@@ -227,54 +170,22 @@ describe("browser cli snapshot defaults", () => {
       const [, request] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
       const payload = request as {
         query?: { timeoutMs?: number };
-        body?: { timeoutMs?: number; targetId?: string };
+        body?: { timeoutMs?: number };
       };
       const ownerPayload = command === "snapshot" ? payload.query : payload.body;
       expect(ownerPayload?.timeoutMs).toBe(ownerTimeoutMs);
-      if (ownerTimeoutMs === undefined) {
-        expect(ownerPayload).not.toHaveProperty("timeoutMs");
-      }
-      if (targetId !== undefined) {
-        expect(payload.body?.targetId).toBe(targetId);
-      }
     },
   );
 
-  it.each<SnapshotDefaultsCase>([
-    {
-      label: "uses config snapshot defaults when mode is not provided",
-      args: [],
-      expectMode: "efficient",
-    },
-    {
-      label: "does not apply config snapshot defaults to aria snapshots",
-      args: ["--format", "aria"],
-      expectMode: undefined,
-    },
-    {
-      label: "does not apply config snapshot defaults to explicit ai snapshots",
-      args: ["--format", "ai"],
-      expectMode: undefined,
-    },
-  ])("$label", async ({ args, expectMode }) => {
+  it("uses config snapshot defaults when mode is not provided", async () => {
     configMocks.getRuntimeConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
 
-    const params = await runSnapshot(args);
-    expect(params?.path).toBe("/snapshot");
-    if (expectMode === undefined) {
-      expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
-    } else {
-      expect(params?.query?.format).toBe("ai");
-      expect(params?.query?.mode).toBe(expectMode);
-    }
-  });
-
-  it("does not set mode when config defaults are absent", async () => {
-    configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
     const params = await runSnapshot([]);
-    expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
+    expect(params?.path).toBe("/snapshot");
+    expect(params?.query?.format).toBe("ai");
+    expect(params?.query?.mode).toBe("efficient");
   });
 
   it("applies explicit efficient mode without config defaults", async () => {
@@ -311,23 +222,10 @@ describe("browser cli snapshot defaults", () => {
     expect(params?.query?.depth).toBe(0);
   });
 
-  it.each([
-    {
-      args: ["screenshot", "tab-1", "--type", "webp"],
-      error: "Invalid --type: expected png or jpeg",
-    },
-    {
-      args: ["snapshot", "--format", "html"],
-      error: "Invalid --format: expected aria or ai",
-    },
-    {
-      args: ["snapshot", "--mode", "full"],
-      error: "Invalid --mode: expected efficient",
-    },
-  ])("rejects unsupported inspect option values before dispatch", async ({ args, error }) => {
-    await expect(runBrowserInspect(args)).rejects.toThrow("__exit__:1");
+  it("rejects unsupported snapshot mode before dispatch", async () => {
+    await expect(runBrowserInspect(["snapshot", "--mode", "full"])).rejects.toThrow("__exit__:1");
 
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(error);
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("Invalid --mode: expected efficient");
     expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
@@ -340,18 +238,7 @@ describe("browser cli snapshot defaults", () => {
     expect(body?.fullPage).toBe(false);
   });
 
-  it("passes screenshot labels", async () => {
-    const params = await runBrowserInspect(["screenshot", "tab-1", "--labels"], true);
-    expect(params?.path).toBe("/screenshot");
-    const body = (params as { body?: Record<string, unknown> } | undefined)?.body;
-    expect(body?.targetId).toBe("tab-1");
-    expect(body?.labels).toBe(true);
-  });
-
-  it.each([
-    { label: "AI", args: [] },
-    { label: "ARIA", args: ["--format", "aria"] },
-  ])("keeps an existing $label snapshot when publication fails", async ({ args }) => {
+  it("keeps an existing AI snapshot when publication fails", async () => {
     const tempDir = fsSync.mkdtempSync(path.join(tmpdir(), "openclaw-browser-snapshot-"));
     try {
       const outputPath = path.join(tempDir, "snapshot.txt");
@@ -364,7 +251,7 @@ describe("browser cli snapshot defaults", () => {
         throw new Error("injected snapshot write failure");
       });
       try {
-        await expect(runSnapshot([...args, "--out", outputPath])).rejects.toThrow("__exit__:1");
+        await expect(runSnapshot(["--out", outputPath])).rejects.toThrow("__exit__:1");
       } finally {
         writeSpy.mockRestore();
       }

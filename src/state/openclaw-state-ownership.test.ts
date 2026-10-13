@@ -14,6 +14,7 @@ import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js"
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
+  invalidateSqliteDatabaseCleanClose,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import {
@@ -673,84 +674,6 @@ describe("external shared-state ownership", () => {
     ).toBeDefined();
   });
 
-  it("fences a claim made immediately before cold-open schema repair", () => {
-    const env = createEnv();
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    retireFixtureAdmissions(databasePath);
-    fs.renameSync(databasePath, `${databasePath}.seed`);
-    fs.copyFileSync(`${databasePath}.seed`, databasePath);
-    const { DatabaseSync } = requireNodeSqlite();
-    const drifted = new DatabaseSync(databasePath);
-    try {
-      drifted.exec(`
-        ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;
-        DROP INDEX idx_task_runs_status;
-      `);
-    } finally {
-      drifted.close();
-    }
-
-    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
-      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
-      | undefined;
-    if (!originalExec) {
-      throw new Error("DatabaseSync.exec descriptor is unavailable");
-    }
-    let immediateTransactionCount = 0;
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      if (sql === "BEGIN IMMEDIATE" && ++immediateTransactionCount === 1) {
-        const claimant = new DatabaseSync(databasePath);
-        try {
-          claimant
-            .prepare(
-              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-               VALUES (?, ?, ?)`,
-            )
-            .run(
-              STATE_SUPERVISION_KEY,
-              JSON.stringify({
-                version: 1,
-                mode: "external",
-                managerId: "race-manager",
-                claimedAt: 1,
-              }),
-              1,
-            );
-        } finally {
-          claimant.close();
-        }
-      }
-      return originalExec.call(this, sql);
-    });
-
-    try {
-      expect(() => openOpenClawStateDatabase({ env })).toThrow(OpenClawStateOwnershipError);
-    } finally {
-      exec.mockRestore();
-    }
-    expect(immediateTransactionCount).toBe(1);
-
-    const verify = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        verify
-          .prepare("SELECT 1 FROM pragma_table_info('worktrees') WHERE name = ?")
-          .get("run_end_cleanup_json"),
-      ).toBeUndefined();
-      expect(
-        verify
-          .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = ?")
-          .get("idx_task_runs_status"),
-      ).toBeUndefined();
-    } finally {
-      verify.close();
-    }
-  });
-
   it("fences a claim made immediately before dangling Workshop index repair", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
@@ -938,8 +861,9 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
-    const location = database.db.location();
-    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    const owners = captureSqliteDatabaseAdmissions(undefined, { location: database.path });
+    assert.equal(owners.length, 1);
+    const [owner] = owners;
     assert(owner);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -991,6 +915,8 @@ describe("external shared-state ownership", () => {
 
   it("fences state repair and config health writes while allowing health reads", async () => {
     const fixture = claimFixture();
+    // Maintenance can discard derived seal proof before refusing a database write.
+    invalidateSqliteDatabaseCleanClose(fixture.databasePath);
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.databasePath, 0o666);
     }

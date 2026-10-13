@@ -5,13 +5,16 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { SessionEntry, SessionGoal } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
+import { sessionGoalHandlers } from "./sessions-goal.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -93,6 +96,8 @@ async function invoke(
     method?: "sessions.goal.update" | "sessions.goal.clear";
     client?: GatewayClient;
     commitGuard?: () => void;
+    direct?: boolean;
+    sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
   } = {},
 ) {
   const respond = vi.fn();
@@ -103,7 +108,7 @@ async function invoke(
     chatAbortControllers: new Map(),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
-  await handleGatewayRequest({
+  const handlerOptions: GatewayRequestHandlerOptions = {
     req: {
       type: "req",
       id: "goal-rpc",
@@ -113,9 +118,19 @@ async function invoke(
     respond,
     context,
     client: options.client ?? client(),
+    params: request,
     isWebchatConnect: () => true,
+    sessionMutationAuthorization: options.sessionMutationAuthorization,
     ...(options.commitGuard ? { sessionMutationCommitGuard: options.commitGuard } : {}),
-  });
+  };
+  if (options.direct) {
+    await sessionGoalHandlers[handlerOptions.req.method]!(handlerOptions);
+  } else {
+    await handleGatewayRequest(handlerOptions);
+  }
+  if (!options.sessionMutationAuthorization) {
+    assertNoRetainedSessionSharingReads();
+  }
   return respond;
 }
 
@@ -125,6 +140,73 @@ afterEach(async () => {
 });
 
 describe("typed Goal management RPCs", () => {
+  it.each([
+    { outcome: "success", patch: {}, succeeds: true },
+    { outcome: "early return", patch: { sessionId: "replaced-session" }, succeeds: false },
+    { outcome: "operation error", patch: { goalId: "replaced-goal" }, succeeds: false },
+  ])("releases directly acquired authorization after $outcome", async ({ patch, succeeds }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
+      await seedSession();
+      const resolve = sessionAuthorization.resolveSessionMutationAuthorizationAsync;
+      const release = vi.fn<() => void>();
+      using resolved = vi
+        .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+        .mockImplementation(async (request) => {
+          const result = await resolve(request);
+          if (!result.authorization?.release) {
+            throw new Error("Expected a retained Goal authorization");
+          }
+          release.mockImplementation(result.authorization.release);
+          return { ...result, authorization: { ...result.authorization, release } };
+        });
+      try {
+        const respond = await invoke(operation("complete", patch), { direct: true });
+        expect(respond).toHaveBeenCalledWith(
+          succeeds,
+          succeeds
+            ? expect.objectContaining({ goal: expect.objectContaining({ status: "complete" }) })
+            : undefined,
+          succeeds ? undefined : expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+        expect(resolved).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        release();
+      }
+    });
+  });
+
+  it("leaves borrowed authorization with its dispatch owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
+      await seedSession();
+      const request = operation("complete");
+      const resolved = await sessionAuthorization.resolveSessionMutationAuthorizationAsync({
+        client: client(),
+        method: "sessions.goal.update",
+        requestParams: request,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+      });
+      if (!resolved.authorization?.release) {
+        throw new Error("Expected a retained Goal authorization");
+      }
+      const release = vi.fn(resolved.authorization.release);
+      try {
+        const respond = await invoke(request, {
+          direct: true,
+          sessionMutationAuthorization: { ...resolved.authorization, release },
+        });
+        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        expect(release).not.toHaveBeenCalled();
+        expect(() => resolved.authorization?.assertCurrent()).not.toThrow();
+      } finally {
+        release();
+      }
+      assertNoRetainedSessionSharingReads();
+    });
+  });
+
   it("edits literal objectives without chat rows and rejects a changed retry", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot(cfg);

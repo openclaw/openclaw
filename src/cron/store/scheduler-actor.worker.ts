@@ -1,4 +1,5 @@
 import { BroadcastChannel } from "node:worker_threads";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -29,7 +30,7 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
-import { requestCronRunsInWorker } from "./run-queue.worker.js";
+import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -71,7 +72,16 @@ type StartupOverflow = {
 const actors = new Map<string, SchedulerActor>();
 
 function emptyResult(): CronSchedulerResult {
-  return { jobs: [], ownerless: [], accepted: [], rejected: [], notifications: [], logs: [] };
+  return {
+    jobs: [],
+    ownerless: [],
+    accepted: [],
+    rejected: [],
+    launches: [],
+    skipped: [],
+    notifications: [],
+    logs: [],
+  };
 }
 
 function readJobs(database: OpenClawStateDatabase, storeKey: string): CronJob[] {
@@ -395,7 +405,10 @@ export function runCronSchedulerInWorker(
   if (command.type === "cron.schedulerStart" && !actor.channels.has(command.input.channelName)) {
     const channel = new BroadcastChannel(command.input.channelName);
     channel.unref();
-    actor.channels.set(command.input.channelName, { channel, paused: false });
+    actor.channels.set(command.input.channelName, {
+      channel,
+      paused: command.input.paused ?? false,
+    });
   }
   if (command.type !== "cron.schedulerStart" && command.input.channelName) {
     const subscriber = actor.channels.get(command.input.channelName);
@@ -422,6 +435,15 @@ export function runCronSchedulerInWorker(
     elapsedWallMs - elapsedMonotonicMs > MIN_REFIRE_GAP_MS;
   const result = emptyResult();
   collectChanges(result, settleCronStartupBatchInWorker(database, input.storeKey, nowMs));
+  // This synchronous worker command owns all intervening writes. Fold their
+  // postimages into the loaded rows before selecting maintenance and the next wake.
+  const jobs = new Map(readJobs(database, input.storeKey).map((job) => [job.id, job]));
+  const currentJobs = () => {
+    for (const job of result.jobs) {
+      jobs.set(job.id, job);
+    }
+    return [...jobs.values()];
+  };
   if (
     snapshot.config.cronEnabled &&
     (command.type === "cron.schedulerRefresh" ||
@@ -442,7 +464,7 @@ export function runCronSchedulerInWorker(
       candidates = catchup.immediate;
       overflow = catchup.overflow;
     } else if (command.type !== "cron.schedulerRefresh") {
-      candidates = readJobs(database, input.storeKey).filter(
+      candidates = currentJobs().filter(
         (job) =>
           !waitsForStartupBatch(actor, job) &&
           isRunnableJob({ job, nowMs, activeInProcess: false }),
@@ -483,22 +505,41 @@ export function runCronSchedulerInWorker(
     const owned = candidates.filter(
       (job) => !ownerless.includes(job) && hasScheduledNextRunAtMs(job.state.nextRunAtMs),
     );
-    if (owned.length > 0) {
-      const requested = requestCronRunsInWorker(database, {
-        storeKey: input.storeKey,
-        nowMs,
-        defaultAgentId: snapshot.config.defaultAgentId,
-        requests: owned.map((job) => ({
-          mode: "scheduled",
-          jobId: job.id,
-          configRevision: resolveCronJobConfigRevision(job),
-          scheduledSlotMs: job.state.nextRunAtMs,
-          receiptId: createCronScheduledRunId(input.storeKey, job.id, job.state.nextRunAtMs!),
-        })),
-      });
+    if (
+      command.type !== "cron.schedulerRefresh" &&
+      (owned.length > 0 ||
+        (input.requests?.length ?? 0) > 0 ||
+        currentJobs().some((job) => job.state.queuedAtMs !== undefined))
+    ) {
+      currentJobs();
+      const requested = requestAndDrainCronRunsInWorker(
+        database,
+        {
+          storeKey: input.storeKey,
+          nowMs,
+          defaultAgentId: snapshot.config.defaultAgentId,
+          requests: owned.map((job) => ({
+            mode: "scheduled",
+            jobId: job.id,
+            configRevision: resolveCronJobConfigRevision(job),
+            scheduledSlotMs: job.state.nextRunAtMs,
+            receiptId: createCronScheduledRunId(input.storeKey, job.id, job.state.nextRunAtMs!),
+          })),
+        },
+        {
+          requests: input.requests ?? [],
+          maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          schedulingPaused: input.paused,
+        },
+        jobs,
+      );
       result.accepted.push(...requested.accepted);
       result.rejected.push(...requested.rejected);
+      result.launches.push(...requested.launches);
+      result.skipped.push(...requested.skipped);
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
+      result.jobs.push(...requested.launches.map((entry) => entry.job));
+      result.jobs.push(...requested.skipped.flatMap((entry) => (entry.job ? [entry.job] : [])));
     }
     if (overflow.size > 0 && (actor.startupBatch || result.accepted.length > 0)) {
       actor.startupBatch ??= { immediateReceiptIds: new Map(), overflow: new Map() };
@@ -516,11 +557,7 @@ export function runCronSchedulerInWorker(
       repairFutureCronNextRunAtMs: command.type !== "cron.schedulerRefresh" && elapsedWallMs >= 0,
       ...(command.type === "cron.schedulerRefresh" ? command.input.options : undefined),
     };
-    if (
-      readJobs(database, input.storeKey).some((job) =>
-        needsCronTimerMaintenance(job, nowMs, options),
-      )
-    ) {
+    if (currentJobs().some((job) => needsCronTimerMaintenance(job, nowMs, options))) {
       collectChanges(
         result,
         scheduleUnownedCronJobsInWorker(database, {
@@ -532,13 +569,7 @@ export function runCronSchedulerInWorker(
     }
   }
   result.jobs = [...new Map(result.jobs.map((job) => [job.id, job])).values()];
-  result.nextWakeAtMs = armActor(
-    input.storeKey,
-    actor,
-    snapshot,
-    readJobs(database, input.storeKey),
-    nowMs,
-  );
+  result.nextWakeAtMs = armActor(input.storeKey, actor, snapshot, currentJobs(), nowMs);
   if (command.type !== "cron.schedulerRefresh") {
     actor.lastWallMs = nowMs;
     actor.lastMonotonicMs = monotonicMs;

@@ -87,7 +87,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       : undefined;
   const eligibility = params.resolveEligibility?.() ?? params.eligibility;
   if (params.watch !== false) {
-    ensureSkillsWatcher({
+    await ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots
         ? {
@@ -198,6 +198,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
       librarySelections,
       config: params.config,
+      watch: params.watch,
       preserveEntryOrder: Boolean(skillRoots),
       agentId: params.agentId,
       skillFilter: params.skillFilter,

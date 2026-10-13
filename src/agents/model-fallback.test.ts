@@ -635,10 +635,6 @@ describe("runWithModelFallback", () => {
         ),
     ],
     ["transcript continuation", () => new TranscriptNotContinuableError("assistant")],
-    [
-      "context overflow without a provider ceiling",
-      () => makeNormalizedOverflowFailover("400 input is too long for the model"),
-    ],
   ])("stops fallback for %s without provider-failure attribution", async (_name, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValue(error);

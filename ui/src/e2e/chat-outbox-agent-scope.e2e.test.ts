@@ -2,6 +2,7 @@ import { writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
@@ -153,11 +154,8 @@ suite.define(() => {
       timeoutStage = "navigate to main agent";
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       timeoutStage = "select main agent";
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { agentSelection: { set: (agentId: string) => void } } };
-        };
-        app.runtime?.context.agentSelection.set("main");
+      await evaluateControlUiContext(page, (application) => {
+        application.agentSelection.set("main");
       });
       // A cold roster must not send the canonical global route back through its alias.
       const mainRoster = { agentId: "main", includeGlobal: true };
@@ -242,21 +240,14 @@ suite.define(() => {
       }
       const workPath = controlUiSessionPath("agent:work:main");
       timeoutStage = "select and navigate work agent";
-      await page.evaluate((pathname) => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              agentSelection: { set: (agentId: string) => void };
-              navigate: (routeId: string, options: { pathname: string }) => void;
-            };
-          };
-        };
-        if (!app.runtime) {
-          throw new Error("OpenClaw application runtime is unavailable");
-        }
-        app.runtime.context.agentSelection.set("work");
-        app.runtime.context.navigate("chat", { pathname });
-      }, workPath);
+      await evaluateControlUiContext(
+        page,
+        (application, pathname) => {
+          application.agentSelection.set("work");
+          application.navigate("chat", { pathname });
+        },
+        workPath,
+      );
       timeoutStage = "wait for work URL";
       await page.waitForURL((url) => url.pathname === workPath);
       timeoutStage = "install user history";

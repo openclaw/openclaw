@@ -69,7 +69,10 @@ export async function projectSessionEntryLifecycleMutationInWorker(
 ) {
   const prepared = await runSessionLifecyclePlanningInWorker(params, "prepare", {
     ...params.input,
-    upsertSessionKeys: params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    upserts: params.upserts.map(({ sessionKey, relatedSessionKeys }) => ({
+      sessionKey,
+      ...(relatedSessionKeys !== undefined ? { relatedSessionKeys } : {}),
+    })),
   });
   const upsertedEntries = await buildProjectedLifecycleUpserts(
     prepared.store,

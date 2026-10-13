@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target-view.tsx";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,

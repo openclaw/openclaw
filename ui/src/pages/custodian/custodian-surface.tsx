@@ -37,6 +37,7 @@ import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { CustodianChannelOnboardingNudge, CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
+import { CustodianSetupCard } from "./custodian-setup-card.tsx";
 import { renderCustodianWizardControls } from "./custodian-surface.ts";
 import {
   createPluginHelpRequest,
@@ -285,9 +286,14 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
       )}
     </Show>
   );
+  const setupCard = () => (
+    <Show when={props.onboarding}>
+      <CustodianSetupCard store={store()} />
+    </Show>
+  );
   return (
     <Show
-      when={!store().setupRequired}
+      when={!store().setupRequired && !store().autoSetup.blocksGreeting}
       fallback={
         <section
           class={[
@@ -295,21 +301,24 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
             { "custodian-surface--panel": props.compact },
           ]}
         >
+          {setupCard()}
           {alertCard()}
-          <div class="custodian__setup-state" role="alert">
-            <openclaw-mascot mood="idle" prop:size={props.compact ? 72 : 96} />
-            <h2>{t("modelSetup.required.title")}</h2>
-            <p>{t("modelSetup.required.body")}</p>
-            <div class="custodian__setup-actions">
-              <button
-                class="btn primary"
-                type="button"
-                onClick={() => store().exitSetup("model-setup")}
-              >
-                {t("modelSetup.required.action")}
-              </button>
+          <Show when={!store().autoSetup.blocksGreeting || store().autoSetup.dismissed}>
+            <div class="custodian__setup-state" role="alert">
+              <openclaw-mascot mood="idle" prop:size={props.compact ? 72 : 96} />
+              <h2>{t("modelSetup.required.title")}</h2>
+              <p>{t("modelSetup.required.body")}</p>
+              <div class="custodian__setup-actions">
+                <button
+                  class="btn primary"
+                  type="button"
+                  onClick={() => store().exitSetup("model-setup")}
+                >
+                  {t("modelSetup.required.action")}
+                </button>
+              </div>
             </div>
-          </div>
+          </Show>
         </section>
       }
     >
@@ -331,6 +340,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
             handleMarkdownTableInteraction(event);
           }}
         >
+          {setupCard()}
           {alertCard()}
           <Show when={props.channelOnboardingError || props.showChannelOnboardingNudge}>
             <CustodianChannelOnboardingNudge

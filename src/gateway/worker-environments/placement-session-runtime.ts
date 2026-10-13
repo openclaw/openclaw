@@ -1,4 +1,5 @@
 import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
+import { resolveSharedAuthStoreOwnershipAsync } from "../../agents/auth-profiles/path-resolve.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
@@ -6,18 +7,28 @@ import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { resolveSessionConfiguredDefault } from "../../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runtime-state.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { resolveSessionSelectedModelRef } from "../session-utils-model-selection.js";
-import { createGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 
@@ -29,29 +40,13 @@ export function resolveWorkerPlacementSessionRuntime(params: {
   agentId: string;
   sessionKey: string;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  readSourceEntry: (key: string) => SessionEntry | undefined;
 }): string {
   const { provider, model } = resolveSessionSelectedModelRef({
     ...params,
     source: {
       entry: params.entry,
-      readSourceEntry: (key) => {
-        const metadata = captureSessionEntryMetadataRead({
-          sessionKey: key,
-          agentId: params.agentId,
-        });
-        if (metadata) {
-          return metadata.readCurrent();
-        }
-        const target = resolveGatewaySessionStoreTargetWithStore({
-          ...params,
-          key: params.sessionKey,
-          preserveQualifiedAddress: true,
-          clone: false,
-          readOnly: true,
-          exactRead: true,
-        });
-        return createGatewaySessionEntryReader({ ...target, cfg: params.cfg })(key);
-      },
+      readSourceEntry: params.readSourceEntry,
     },
   });
   return resolveWorkerPlacementModelRuntime({ ...params, provider, model });
@@ -60,27 +55,163 @@ export function resolveWorkerPlacementSessionRuntime(params: {
 export async function resolveWorkerPlacementSessionRuntimeAsync(
   params: Omit<
     Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
-    "preparedRuntimeOwnership"
+    "preparedRuntimeOwnership" | "readSourceEntry"
   > & {
     assertCurrent?: () => void;
+    readSourceEntry?: (key: string) => Promise<SessionEntry | undefined>;
   },
 ): Promise<string> {
-  const ownership = await readSessionRuntimeOwnershipAsync({
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.entry,
-    assertCurrent: params.assertCurrent,
-  });
+  const preparedEnvironment = captureRuntimeStateEnvironment();
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const [metadataSnapshot, activateDiscovery] = await Promise.all([
+    resolvePluginMetadataSnapshotAsync({
+      config: params.cfg,
+      env: preparedEnvironment,
+      ...(workspaceDir ? { workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: true,
+    }),
+    prepareBundledDiscoveryMode(preparedEnvironment),
+    resolveSharedAuthStoreOwnershipAsync(
+      captureOpenClawStateReadWorkerContext({ env: preparedEnvironment }),
+    ),
+  ]);
   params.assertCurrent?.();
-  return resolveWorkerPlacementSessionRuntime({
-    ...params,
-    preparedRuntimeOwnership: ownership ?? null,
+  activateDiscovery();
+  return withPluginMetadataSnapshotScope(
+    metadataSnapshot,
+    async () => {
+      const ownership = await readSessionRuntimeOwnershipAsync({
+        config: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionEntry: params.entry,
+        assertCurrent: params.assertCurrent,
+        readPreparedPreviousSessionId: () => params.entry.previousSessionId,
+      });
+      params.assertCurrent?.();
+      const configured =
+        ownership?.modelRef ?? resolveSessionConfiguredDefault(params.cfg, params.agentId);
+      const storedOverride = ownership?.modelRef
+        ? null
+        : await resolveStoredModelOverrideAsync({
+            sessionEntry: params.entry,
+            sessionKey: params.sessionKey,
+            parentSessionKey: params.entry.parentSessionKey,
+            defaultProvider: configured.provider,
+            loadSessionEntry:
+              params.readSourceEntry ?? ((key) => readWorkerPlacementModelSource(params, key)),
+          });
+      params.assertCurrent?.();
+      return resolveWorkerPlacementModelRuntime({
+        ...params,
+        provider: storedOverride?.provider ?? configured.provider,
+        model: storedOverride?.model ?? configured.model,
+        preparedRuntimeOwnership: ownership ?? null,
+        preparedEnvironment,
+        metadataSnapshot,
+      });
+    },
+    {
+      config: params.cfg,
+      env: preparedEnvironment,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    },
+  );
+}
+
+/** Preserve qualified parent precedence and sentinel physical ownership during async selection. */
+export async function readWorkerPlacementModelSource(
+  params: Pick<
+    Parameters<typeof resolveWorkerPlacementSessionRuntimeAsync>[0],
+    "cfg" | "agentId" | "sessionKey" | "assertCurrent"
+  > & {
+    initialTarget?: GatewaySessionStoreTargetWithStore;
+    onSelected?: (target: GatewaySessionStoreTargetWithStore) => void;
+  },
+  key: string,
+): Promise<SessionEntry | undefined> {
+  const metadata = captureSessionEntryMetadataRead(
+    { sessionKey: key, agentId: params.agentId },
+    () => params.assertCurrent?.(),
+  );
+  if (metadata) {
+    return metadata.readCurrent();
+  }
+  if (key === "global" || key === "unknown") {
+    const target =
+      params.initialTarget ??
+      (await resolveGatewaySessionStoreTargetInWorker({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        key: params.sessionKey,
+        assertActive: params.assertCurrent,
+      }));
+    return await withSessionEntriesFromStoresInWorker(
+      [
+        {
+          agentId: target.readSource?.agentId ?? target.agentId,
+          storePath: target.readSource?.path ?? target.storePath,
+          sessionKeys: [key],
+          projection: "exact",
+        },
+      ],
+      ([read]) => {
+        params.assertCurrent?.();
+        const entry = read!.result.entries.find((row) => row.sessionKey === key)?.entry;
+        params.onSelected?.({
+          agentId: target.agentId,
+          storePath: read!.database.path,
+          canonicalKey: key,
+          storeKeys: [key],
+          store: entry ? { [key]: entry } : {},
+          readSource: read!.result.source,
+          capturedReadSource: read!.result.source,
+          capturedReadSources: read!.result.source ? [read!.result.source] : [],
+        });
+        return entry;
+      },
+      { ordered: params.onSelected !== undefined },
+    );
+  }
+  const agentId = parseAgentSessionKey(key)?.agentId ?? params.agentId;
+  const storedKey = resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: key,
+    preserveQualifiedAddress: true,
   });
+  const stored = await resolveGatewaySessionStoreTargetInWorker({
+    cfg: params.cfg,
+    agentId,
+    key: storedKey,
+    preserveQualifiedAddress: true,
+    assertActive: params.assertCurrent,
+    onSelected: params.onSelected,
+  });
+  const entry = stored.store[storedKey];
+  if (entry || isIncognitoSessionKey(storedKey)) {
+    return entry;
+  }
+  const aliasKey = resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: key,
+  });
+  if (aliasKey === storedKey) {
+    return undefined;
+  }
+  const aliased = await resolveGatewaySessionStoreTargetInWorker({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    key,
+    assertActive: params.assertCurrent,
+    onSelected: params.onSelected,
+  });
+  return aliased.store[aliased.canonicalKey];
 }
 
 export function resolveWorkerPlacementModelRuntime(
-  params: Parameters<typeof resolveWorkerPlacementSessionRuntime>[0] & {
+  params: Omit<Parameters<typeof resolveWorkerPlacementSessionRuntime>[0], "readSourceEntry"> & {
     provider: string;
     model: string;
     preparedEnvironment?: NodeJS.ProcessEnv;
@@ -162,12 +293,6 @@ export function resolveDefaultWorkerPlacementExecutionMode(params: {
     sessionKey: `agent:${params.agentId}:dashboard:prepared-pool-presence`,
   });
   return resolveWorkerPlacementExecutionMode(runtime);
-}
-
-export function resolveWorkerPlacementSessionRuntimeCapabilities(
-  params: Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
-) {
-  return resolveWorkerPlacementCapabilities(resolveWorkerPlacementSessionRuntime(params));
 }
 
 export async function resolveWorkerPlacementSessionRuntimeCapabilitiesAsync(

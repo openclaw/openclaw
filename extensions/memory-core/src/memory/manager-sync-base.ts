@@ -36,6 +36,7 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { MemoryBackgroundRebuildInterruptedError } from "./manager-sync-control.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
@@ -204,6 +205,18 @@ export abstract class MemoryManagerSyncBase {
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
+  protected sessionAgentBusy = false;
+  protected sessionBackgroundIndexing = false;
+
+  protected shouldYieldSessionIndexing(): boolean {
+    const interrupted =
+      this.sessionBackgroundIndexing && (this.sessionAgentBusy || this.closing || this.closed);
+    if (interrupted && this.database !== this.publishedDatabase) {
+      // A partial shadow must never replace the published index; retry the rebuild.
+      throw new MemoryBackgroundRebuildInterruptedError();
+    }
+    return interrupted;
+  }
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract computeProviderKey(): string;
@@ -259,7 +272,7 @@ export abstract class MemoryManagerSyncBase {
     }
   }
 
-  protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<void>;
+  protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<MemoryIndexWorkItem[]>;
 
   protected snapshotReindexRetryState(): MemoryReindexRetryState {
     return {
@@ -362,9 +375,9 @@ export abstract class MemoryManagerSyncBase {
     items: MemoryIndexWorkItem[],
     progress?: MemorySyncProgressState,
     label?: string,
-  ): Promise<void> {
+  ): Promise<MemoryIndexWorkItem[]> {
     if (items.length === 0) {
-      return;
+      return [];
     }
     if (progress && label) {
       progress.report({
@@ -373,8 +386,9 @@ export abstract class MemoryManagerSyncBase {
         label,
       });
     }
-    await this.indexFiles(items);
-    this.advanceSyncProgress(progress, items.length);
+    const remaining = await this.indexFiles(items);
+    this.advanceSyncProgress(progress, items.length - remaining.length);
+    return remaining;
   }
 
   protected async executeSourceSync(params: {

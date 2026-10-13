@@ -16,6 +16,7 @@ export async function prepareRemountedPublication(
   root: string,
   legacy = false,
   launchers: "equal-symlinks" | "different-files" = "equal-symlinks",
+  installed: "previous" | "candidate" = "candidate",
 ) {
   const prepared = await fixture.prepare(async () => {
     const stage = path.join(root, "stage/lib/node_modules/openclaw");
@@ -52,14 +53,24 @@ export async function prepareRemountedPublication(
         false,
         new Map([[actualDevice, historicalDevice]]),
       );
-  journal.transition(initial, "publishing", { kind: "publish" }, () => {});
-  fs.renameSync(prepared.packageRoot, path.join(prepared.anchor, "previous"));
-  fs.renameSync(candidate, prepared.packageRoot);
+  const previous = await createPackageIntegrityReader().tree(
+    prepared.packageRoot,
+    prepared.packageRoot,
+    undefined,
+    false,
+    new Map([[actualDevice, historicalDevice]]),
+  );
+  if (installed === "candidate") {
+    journal.transition(initial, "publishing", { kind: "publish" }, () => {});
+    fs.renameSync(prepared.packageRoot, path.join(prepared.anchor, "previous"));
+    fs.renameSync(candidate, prepared.packageRoot);
+  }
   const record = journal.read();
   if (!("digest" in record.descriptor.candidate)) {
     throw new Error("Fixture requires a full candidate fingerprint.");
   }
   record.descriptor.candidate.digest = tree.digest;
+  record.descriptor.previous.digest = previous.digest;
   const historical = JSON.stringify(record.descriptor, (_key, value: unknown) =>
     typeof value === "string" && /^\d+:\d+$/u.test(value)
       ? value.replace(/^\d+/u, (device) => String(BigInt(device) + 1000n))

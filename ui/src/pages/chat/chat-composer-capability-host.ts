@@ -12,6 +12,7 @@ import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
 } from "../../lib/agents/tools-effective.ts";
+import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
   MCP_SERVER_NAME_PATTERN,
@@ -46,12 +47,16 @@ registerMcpEnglish();
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
-function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
+function activeConfigFingerprint(
+  snapshot: ConfigSnapshot | null,
+  bootstrap: Record<string, unknown> | null,
+): string {
   const revision =
     snapshot?.appliedConfigHash ?? snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
   // Without a revision hash, connector edits still invalidate the effective tools.
   return (
-    revision || JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null)
+    revision ||
+    JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig ?? bootstrap)?.mcp)?.servers ?? null)
   );
 }
 
@@ -89,6 +94,7 @@ export class ChatComposerCapabilityHost {
     );
     const configFingerprint = activeConfigFingerprint(
       context.runtimeConfig.state.configSnapshot ?? null,
+      currentDisplayRuntimeConfig(context.runtimeConfig.state),
     );
     return { cacheKey: `${requestKey}\0config=${configFingerprint}`, requestKey };
   }
@@ -435,7 +441,7 @@ export class ChatComposerCapabilityHost {
     );
     // Sparse session overrides resolve against active runtime defaults, so display and key
     // removal decisions must use the same runtime snapshot that executes the session.
-    const runtimeConfig = context.runtimeConfig.state.configSnapshot?.runtimeConfig ?? null;
+    const runtimeConfig = currentDisplayRuntimeConfig(context.runtimeConfig.state);
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const gatewayAvailable = state.connected && Boolean(state.client);
     const effectiveToolsAvailable =

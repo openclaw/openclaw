@@ -548,7 +548,6 @@ describe("host-owned current admission annotation", () => {
     "admission-close",
     "abort",
     "writer",
-    "lifecycle",
     "session",
     "replacement",
     "blocked",
@@ -572,9 +571,6 @@ describe("host-owned current admission annotation", () => {
         }
         if (reason === "writer") {
           f.patchSession({ activeWriterRunId: "successor" });
-        }
-        if (reason === "lifecycle") {
-          f.patchSession({ lifecycleRevision: "successor" });
         }
         if (reason === "session") {
           f.patchSession({ sessionId: "successor" });

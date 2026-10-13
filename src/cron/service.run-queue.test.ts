@@ -21,10 +21,12 @@ import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
-import { drainCronRunQueue } from "./service/run-queue.js";
+import { drainCronRunQueue, stopCronRunQueue, waitForCronRunQueue } from "./service/run-queue.js";
 import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
+import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
+import { createCronScheduledRunId } from "./store/run-request-id.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
 
@@ -543,5 +545,77 @@ it("retires a stale markerless receipt at startup so the job can run again", asy
   } finally {
     cron.stop();
     await cron.waitForIdle();
+  }
+});
+
+it("contains recovered scheduled launch failures without an unhandled rejection", async () => {
+  const { storePath } = await makeStorePath();
+  const job = commandJob("recovered-launch-failure", NOW);
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const context = captureOpenClawStateWorkerContext();
+  await executeOpenClawStateWorker(context, { type: "cron.initializeRunReceipts", input: {} });
+  const receiptId = createCronScheduledRunId(storePath, job.id, NOW);
+  const requested = await executeOpenClawStateWorker(context, {
+    type: "cron.requestRuns",
+    input: {
+      storeKey: storePath,
+      nowMs: NOW,
+      defaultAgentId: "main",
+      requests: [
+        {
+          jobId: job.id,
+          receiptId,
+          configRevision: resolveCronJobConfigRevision(job),
+          mode: "scheduled",
+          scheduledSlotMs: NOW,
+          scheduleOwnershipAtMs: NOW,
+        },
+      ],
+    },
+  });
+  expect(requested.accepted).toHaveLength(1);
+  const failure = new Error("scheduler owner is retired");
+  const scheduler = createTestGatewayScheduler();
+  const state = createCronServiceState({
+    scheduler,
+    nowMs: () => NOW,
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runSchedulerOwned: async () => {
+      throw failure;
+    },
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+  });
+  // Durable requests survive restart; this new owner has no caller completion to observe.
+  state.store = await loadCronStore(storePath);
+  const unhandled: unknown[] = [];
+  const observe = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", observe);
+  try {
+    await drainCronRunQueue(state);
+    await waitForCronRunQueue(state);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(unhandled).toEqual([]);
+    expect(logger.error).toHaveBeenCalledWith(
+      { jobId: job.id, err: String(failure) },
+      "cron: queued launch failed",
+    );
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    expect(persisted?.state.queuedAtMs).toBeUndefined();
+    expect(persisted?.state.runningAtMs).toBeUndefined();
+  } finally {
+    process.off("unhandledRejection", observe);
+    state.stopped = true;
+    await stopCronRunQueue(state);
+    await waitForCronRunQueue(state);
+    await scheduler.stop();
   }
 });

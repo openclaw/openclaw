@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
-import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-store.js";
+import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-policy.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -138,6 +138,7 @@ describe("session suggestion handlers", () => {
       let revoked = false;
       let hostCurrent = true;
       let admittedCheck: (() => void) | undefined;
+      let releaseChatAuthority: (() => void) | undefined;
       const assertAdmittedCurrent = () => {
         if (!hostCurrent) {
           throw new Error("host closed");
@@ -156,6 +157,7 @@ describe("session suggestion handlers", () => {
           respond,
           sessionMutationAuthorization,
         }: Pick<GatewayRequestHandlerOptions, "respond" | "sessionMutationAuthorization">) => {
+          releaseChatAuthority = sessionMutationAuthorization?.takeRelease?.();
           sessionMutationAuthorization?.assertCurrent();
           admittedCheck = sessionMutationAuthorization?.assertAdmittedInputCurrent;
           reservation = runOpenClawAgentWorkerWrite({ ...scope, path: database.path }, async () => {
@@ -215,6 +217,7 @@ describe("session suggestion handlers", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([pending, reservation]);
+        releaseChatAuthority?.();
       }
     });
   });

@@ -2,7 +2,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
-import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
+import type {
+  SessionTranscriptReadScope,
+  TranscriptEvent,
+} from "../config/sessions/session-accessor.types.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -119,7 +122,7 @@ async function readSessionTerminalFallbackModelAsync(params: {
 
 /** Storage readers prepare terminal facts; the host retains runtime alias policy. */
 export function readSessionTerminalFallbackModel(
-  params: SessionFallbackSource,
+  params: SessionFallbackSource & { terminalEvent?: TranscriptEvent },
 ): SessionTerminalModel | undefined {
   const entry = params.sessionEntry;
   if (
@@ -130,6 +133,9 @@ export function readSessionTerminalFallbackModel(
     !entry.fallbackNotice
   ) {
     return undefined;
+  }
+  if (params.terminalEvent !== undefined) {
+    return selectSessionTerminalFallbackModel(entry, params.terminalEvent);
   }
   try {
     const page = readSessionTranscriptBoundedMessageTailPage(
@@ -157,7 +163,8 @@ export function selectSessionTerminalFallbackModel(
   if (
     (message?.stopReason === "stop" || message?.stopReason === "length") &&
     readSessionTranscriptRunId(message) === entry.lastRunId &&
-    projectSessionDisplayMessage(message)?.role === "assistant" &&
+    message.display !== false &&
+    projectSessionDisplayMessage(message, { view: "model-context" })?.role === "assistant" &&
     typeof message.provider === "string" &&
     typeof message.model === "string"
   ) {

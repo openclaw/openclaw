@@ -93,6 +93,7 @@ export type ChatRunRecord = assistantText.ChatRunBufferState & {
   registrations?: ChatRunEntry[];
   buffer?: string;
   bufferIsCurrent?: () => boolean;
+  releaseBufferAuthority?: () => void;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
   liveTextEpoch?: object;
@@ -220,6 +221,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     delete record.assistantItems;
     delete record.buffer;
     delete record.bufferIsCurrent;
+    record.releaseBufferAuthority?.();
+    delete record.releaseBufferAuthority;
     record.liveTextGroup?.abort();
     delete record.liveTextGroup;
     delete record.liveTextEpoch;
@@ -240,6 +243,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
   const clear = () => {
     for (const record of store.runs.values()) {
       clearPendingLiveTextFlushes(record);
+      record.releaseBufferAuthority?.();
       record.liveTextGroup?.abort();
     }
     store.runs.clear();

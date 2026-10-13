@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
   createContext,
@@ -24,6 +26,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -36,6 +39,72 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 afterEach(() => resetGatewayWorkAdmission());
 
 describe("harness completion caller lifetime", () => {
+  it.each(["current", "missing-requester", "requester-closed", "connection-closed"] as const)(
+    "settles memory requester root custody when %s",
+    async (outcome) => {
+      const context = createContext();
+      const resolver = () => context;
+      context.resolveGatewayContext = resolver;
+      const work = new AsyncWorkScope();
+      context.trackExecution = (run) => work.track(run);
+      if (outcome === "connection-closed") {
+        await work.drain();
+      }
+      const sessionKey = "agent:main:dashboard:incognito-completion";
+      const owner = createMemorySessionActorOwner({
+        agentId: "main",
+        path: "/synthetic/completion-custody",
+      });
+      const authority = { assertCurrent() {}, authorize() {} };
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      const root = tryBeginGatewayRootWorkAdmission("test:memory-completion")!;
+      let custody: AgentHarnessCompletionCustody | undefined;
+      try {
+        if (outcome === "current") {
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: { entry: { sessionId: "requester", updatedAt: 1, incognito: true } },
+            },
+            authority,
+          );
+        }
+        const scope = createAgentHarnessCompletionScope({
+          requesterSessionKey:
+            outcome === "missing-requester" ? `${sessionKey}-missing` : sessionKey,
+          gatewayContextResolver: resolver,
+        });
+        const pending = root.run(() =>
+          runWithSessionActorStorage({ actor, authority, agentId: "main", path: owner.path }, () =>
+            captureAgentHarnessCompletionCustody(scope),
+          ),
+        );
+        if (outcome === "requester-closed" || outcome === "connection-closed") {
+          await expect(pending).rejects.toThrow(
+            outcome === "connection-closed"
+              ? "Async work scope is closed"
+              : "Harness completion requester was closed",
+          );
+        } else {
+          custody = await pending;
+          expect(custody?.isCurrent()).toBe(outcome === "current" ? true : undefined);
+        }
+        root.release();
+        expect(getActiveGatewayRootWorkCount()).toBe(outcome === "current" ? 1 : 0);
+        custody?.release();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        custody?.release();
+        root.release();
+        await actor.release();
+        owner.close();
+      }
+    },
+  );
+
   it.each(["current", "requester-replaced", "preparation-failed"] as const)(
     "settles retained root work when pending custody preparation is %s",
     async (outcome) => {

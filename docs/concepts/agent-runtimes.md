@@ -25,7 +25,7 @@ A **harness** is the implementation that provides an agent runtime (code
 term). For example, the bundled Codex harness implements the `codex` runtime.
 Public config uses `agentRuntime.id` on provider or model entries; whole-agent
 runtime keys are legacy and ignored. `openclaw doctor --fix` removes old
-whole-agent runtime pins and rewrites legacy runtime model refs to canonical
+whole-agent runtime pins and rewrites legacy runtime model refs to standard
 provider/model refs plus model-scoped runtime policy where needed.
 
 Two runtime families:
@@ -34,7 +34,7 @@ Two runtime families:
   built-in `openclaw` runtime, plus registered plugin harnesses such as
   `codex` and `copilot`.
 - **CLI backends** run a local CLI process while keeping the model ref
-  canonical. For example, `anthropic/claude-opus-5` with a model-scoped
+  in its standard form. For example, `anthropic/claude-opus-5` with a model-scoped
   `agentRuntime.id: "claude-cli"` means "select the Anthropic model, execute
   through Claude CLI." `claude-cli` is not an embedded harness id and must not
   be passed to AgentHarness selection.
@@ -114,7 +114,7 @@ Different runtimes own different amounts of the loop:
 | Surface                     | OpenClaw embedded                              | Codex app-server                                                            |
 | --------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
 | Model loop owner            | OpenClaw, through the OpenClaw embedded runner | Codex app-server                                                            |
-| Canonical thread state      | OpenClaw transcript                            | Codex thread, plus OpenClaw transcript mirror                               |
+| Primary thread state        | OpenClaw transcript                            | Codex thread, plus OpenClaw transcript mirror                               |
 | OpenClaw dynamic tools      | Native OpenClaw tool loop                      | Bridged through the Codex adapter                                           |
 | Native shell and file tools | OpenClaw path                                  | Codex-native tools, bridged through native hooks where supported            |
 | Context engine              | Native OpenClaw context assembly               | OpenClaw projects assembled context into the Codex turn                     |
@@ -123,7 +123,7 @@ Different runtimes own different amounts of the loop:
 
 Design rule: if OpenClaw owns the surface, it can provide normal plugin hook
 behavior. If the native runtime owns the surface, OpenClaw needs runtime
-events or native hooks. If the native runtime owns canonical thread state,
+events or native hooks. If the native runtime owns primary thread state,
 OpenClaw mirrors and projects context rather than rewriting unsupported
 internals.
 
@@ -185,7 +185,7 @@ ACP sessions retain their ACP backend. Legacy whole-agent runtime config and
 `OPENCLAW_AGENT_RUNTIME` are ignored; use `openclaw doctor --fix` to remove stale
 config and repair legacy model refs.
 
-Explicit provider/model plugin runtimes fail closed when the harness is missing
+Explicit provider/model plugin runtimes refuse to run when the harness is missing
 or cannot support the route or authentication. There is one selection-time
 exception: a harness may declare that OpenClaw can reproduce the exact request.
 Codex uses this fallback for authored request overrides such as headers, request
@@ -219,10 +219,10 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 ```
 
 Legacy refs such as `claude-cli/claude-opus-4-7` are accepted as compatibility
-input, but new config should keep the provider/model canonical and put the
+input, but new config should keep the provider/model in its standard form and put the
 execution backend in provider/model runtime policy. Run `openclaw doctor --fix`
 to rewrite persisted legacy model selections, model-map keys, and explicit
-`modelPolicy.allow` entries to that canonical shape.
+`modelPolicy.allow` entries to that standard shape.
 
 Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
 they run through the Codex app-server harness instead of preserving a Codex
@@ -245,7 +245,7 @@ Codex model refs remain in config, treat that as legacy route state and run
 
 The external `@openclaw/copilot` plugin registers an opt-in `copilot` runtime
 backed by the GitHub Copilot CLI (`@github/copilot-sdk`). It claims the
-canonical subscription `github-copilot` provider and is **never** selected by
+standard subscription `github-copilot` provider and is **never** selected by
 `auto`. Opt in per-model or per-provider via `agentRuntime.id`:
 
 ```json5
@@ -277,7 +277,7 @@ it supports:
 | Question                               | Why it matters                                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Who owns the model loop?               | Determines where retries, tool continuation, and final answer decisions happen.                   |
-| Who owns canonical thread history?     | Determines whether OpenClaw can edit history or only mirror it.                                   |
+| Who owns primary thread history?       | Determines whether OpenClaw can edit history or only mirror it.                                   |
 | Do OpenClaw dynamic tools work?        | Messaging, sessions, cron, and OpenClaw-owned tools rely on this.                                 |
 | Do dynamic tool hooks work?            | Plugins expect `before_tool_call`, `after_tool_call`, and middleware around OpenClaw-owned tools. |
 | Do native tool hooks work?             | Shell, patch, and runtime-owned tools need native hook support for policy and observation.        |

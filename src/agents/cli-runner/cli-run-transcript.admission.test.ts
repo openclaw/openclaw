@@ -1,5 +1,10 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
+import { publishRetainedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -31,18 +36,24 @@ vi.mock("../../config/sessions/paths.js", () => ({ resolveSessionStorePathCore: 
 vi.mock("../../config/sessions/cli-history-boundary.js", () => ({
   getCliHistoryWriter: () => ({ assertCurrent: mocks.writer }),
 }));
+// mock-isolation: Admission fixtures control transcript paths and patch settlement independently of storage.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryCandidates: mocks.read,
   patchSessionEntryCore: mocks.patch,
-  resolveSessionEntrySelection: () => ({ normalizedKey: "agent:logical:block" }),
   resolveSessionTranscriptDatabasePath: mocks.resolvePath,
+}));
+// mock-isolation: The retained entry fixture controls writer replacement during admission.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: mocks.read,
 }));
 vi.mock("../../config/sessions/session-store-owner.js", () => ({
   resolvePersistedSessionStoreOwnerForTarget: () => ({ kind: "none" }),
 }));
-// mock-isolation: This native admission fixture has no actor; actor paths use real-worker coverage.
-vi.mock("../../config/sessions/session-incognito-binding.js", () => ({
-  captureIncognitoSessionBinding: () => undefined,
+// mock-isolation: This durable admission fixture has no memory owner.
+vi.mock("../../config/sessions/session-actor-storage-binding.js", () => ({
+  captureSessionActorStorageOwner: () => undefined,
+  getSessionActorStorageBinding: () => undefined,
+  acquireSessionActorStorage: async () => undefined,
+  runWithSessionActorStorage: (_binding: unknown, consume: () => unknown) => consume(),
 }));
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendExactAssistantMessageToSessionTranscript: vi.fn(),
@@ -115,11 +126,15 @@ const target = {
   sessionId: "original-session",
   storePath: "/synthetic/logical-store",
 };
-const source = { agentId: "physical-owner", path: "/synthetic/shared/openclaw-agent.sqlite" };
+const source = {
+  agentId: "physical-owner",
+  path: "/synthetic/shared/openclaw-agent.sqlite",
+  databaseIdentity: "cli-block-fixture",
+} satisfies CapturedSessionEntryReadSource;
 let current: InternalSessionEntry | undefined;
-let currentSource = source;
-let ambientSource = source;
 let capturedEnv: NodeJS.ProcessEnv;
+
+afterEach(assertNoRetainedSessionSharingReads);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -129,22 +144,32 @@ beforeEach(() => {
     lifecycleRevision: "original-lifecycle",
     activeWriterRunId: "original-writer",
   };
-  currentSource = source;
-  ambientSource = source;
   capturedEnv = { OPENCLAW_STATE_DIR: "/synthetic/state" };
   mocks.cloneEnv.mockReturnValue(capturedEnv);
   mocks.restore.mockImplementation(async (_scope, assertCurrent?: () => void) => assertCurrent?.());
   mocks.getTarget.mockReturnValue(target);
   mocks.open.mockImplementation(async () => SessionManager.inMemory());
   mocks.admit.mockImplementation(async (write) => write());
-  mocks.patch.mockImplementation(async () => ({ ...current }));
-  mocks.resolvePath.mockReturnValue(source.path);
-  mocks.read.mockImplementation(
-    (scope: { env?: NodeJS.ProcessEnv; onReadSource?: (value: typeof source) => void }) => {
-      scope.onReadSource?.(scope.env === capturedEnv ? currentSource : ambientSource);
-      return current ? [{ sessionKey: target.sessionKey, entry: { ...current } }] : [];
+  mocks.patch.mockImplementation(
+    async (
+      _target,
+      _update,
+      options: {
+        onCommittedSource?: (
+          source: CapturedSessionEntryReadSource,
+          entry: InternalSessionEntry,
+        ) => void;
+      },
+    ) => {
+      if (!current) {
+        return null;
+      }
+      const entry = { ...current };
+      options.onCommittedSource?.(source, entry);
+      return entry;
     },
   );
+  mocks.resolvePath.mockReturnValue(source.path);
 });
 
 function run(branch: "native" | "supplied") {
@@ -231,7 +256,7 @@ it.each(["native", "supplied"] as const)(
   },
 );
 
-it.each(["missing", "session", "lifecycle", "writer", "store"] as const)(
+it.each(["missing", "session", "lifecycle", "writer"] as const)(
   "refuses a %s native target after waiting",
   async (change) => {
     const admission = deferAdmission();
@@ -244,11 +269,17 @@ it.each(["missing", "session", "lifecycle", "writer", "store"] as const)(
         current!.sessionId = "successor-session";
       } else if (change === "lifecycle") {
         current!.lifecycleRevision = "successor-lifecycle";
-      } else if (change === "writer") {
-        current!.activeWriterRunId = "successor-writer";
       } else {
-        currentSource = { ...source, path: "/synthetic/successor-store" };
+        current!.activeWriterRunId = "successor-writer";
       }
+      publishRetainedSessionEntryChange(
+        source.databaseIdentity,
+        target.sessionKey,
+        current ? projectSessionSharingEntry(current) : undefined,
+        undefined,
+        true,
+        current,
+      );
     } finally {
       admission.release();
       await result;
@@ -307,13 +338,15 @@ it("keeps the native target captured before the caller changes its request", asy
   expect(mocks.append).toHaveBeenCalledOnce();
 });
 
-it("refuses a changed store owner before deferred cold restoration mutates it", async () => {
+it("refuses retired write ownership before deferred cold restoration mutates it", async () => {
   const restoration = deferRestoration();
   const { result } = run("native");
   try {
     await restoration.wait(result);
     expect(mocks.restoreCommit).not.toHaveBeenCalled();
-    currentSource = { ...source, agentId: "successor-owner" };
+    mocks.owned.mockImplementation(() => {
+      throw new Error("Retired source");
+    });
   } finally {
     restoration.release();
     await result;
@@ -329,7 +362,7 @@ it("retains the captured environment through cold restoration and admitted nativ
   const { result } = run("native");
   try {
     await restoration.wait(result);
-    ambientSource = { agentId: "ambient-successor", path: "/synthetic/ambient-successor" };
+    mocks.cloneEnv.mockReturnValue({ OPENCLAW_STATE_DIR: "/synthetic/ambient-successor" });
   } finally {
     restoration.release();
     await result;
@@ -358,3 +391,32 @@ it.each(["current", "lifecycle", "writer"] as const)(
     }
   },
 );
+
+it("releases the fallback read when its final authority check fails", async () => {
+  mocks.patch.mockResolvedValue({ ...current });
+  mocks.read.mockImplementation(
+    async (
+      _scope,
+      assertCurrent: () => void,
+      consume: Parameters<typeof withSessionEntryReadOnlyInWorker>[2],
+    ) => {
+      const result = await consume(
+        { ok: true, value: current },
+        { kind: "file", source, assertCurrent },
+      );
+      mocks.owned.mockImplementation(() => {
+        throw new Error("Retired source after entry read");
+      });
+      assertCurrent();
+      return result;
+    },
+  );
+
+  await run("native").result;
+
+  expect(mocks.open).not.toHaveBeenCalled();
+  expect(mocks.append).not.toHaveBeenCalled();
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("Retired source after entry read"),
+  );
+});

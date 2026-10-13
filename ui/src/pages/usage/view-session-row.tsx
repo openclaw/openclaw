@@ -1,5 +1,5 @@
 import { createMemo, Show } from "solid-js";
-import "../../components/agent-row-chip.ts";
+import "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 

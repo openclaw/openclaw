@@ -17,10 +17,10 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("keeps session context and progress in user-opened Details without composer duplicates", async () => {
+  it("docks Details in wide conversations and preserves manual intent, drafts, and independent scrolling", async () => {
     const sessionKey = "agent:main:details-progress";
     await suite.withPage(
-      { colorScheme: "dark", locale: "en-US", viewport: { width: 1440, height: 1000 } },
+      { colorScheme: "dark", locale: "en-US", viewport: { width: 1728, height: 1000 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -121,18 +121,18 @@ suite.define(() => {
           },
         });
         const trigger = page.getByRole("button", { name: "Details", exact: true });
-        const details = page.locator('.chat-details[role="dialog"]');
+        const details = page.locator(".chat-details");
         const progress = details.locator('[data-progress-card-placement="details"]');
         const session = details.locator(".chat-details-session");
         const progressToggle = progress.locator(":scope > summary");
         const prGroup = details.locator('[data-details-group="pull-requests"]');
         const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         await trigger.waitFor();
-        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+        await expect.poll(() => details.getAttribute("role")).toBe("complementary");
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
         expect(await page.locator(".chat-footer .chat-pr").count()).toBe(0);
         await composer.fill("Keep my draft while I inspect Details.");
-        await trigger.click();
         await expect.poll(() => details.isVisible()).toBe(true);
         await expect.poll(() => progress.isVisible()).toBe(true);
         expect(await prGroup.getAttribute("open")).toBeNull();
@@ -148,7 +148,48 @@ suite.define(() => {
           );
           await writeFile(path.join(suite.artifactDir, name), frame.png);
         };
+        const geometry = async (docked: boolean) => {
+          const bounds = await details.boundingBox();
+          const frame = await page.locator(".chat-main__conversation-frame").boundingBox();
+          const conversation = await page.locator(".chat-main__conversation").boundingBox();
+          const footer = await page.locator(".chat-footer").boundingBox();
+          expect(bounds).toBeTruthy();
+          expect(frame).toBeTruthy();
+          expect(conversation).toBeTruthy();
+          expect(footer).toBeTruthy();
+          expect(bounds!.x).toBeGreaterThanOrEqual(frame!.x);
+          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(frame!.x + frame!.width + 1);
+          if (docked) {
+            expect(bounds!.width).toBe(352);
+            expect(Math.abs(bounds!.height - frame!.height)).toBeLessThanOrEqual(1);
+            expect(conversation!.x + conversation!.width).toBeLessThanOrEqual(bounds!.x + 1);
+            expect(footer!.x + footer!.width).toBeLessThanOrEqual(bounds!.x + 1);
+          } else {
+            expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(footer!.y);
+          }
+          expect(await details.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        };
+        await geometry(true);
         await capture("after.png");
+        // A dock is nonmodal: composing, including Escape, must not close it.
+        await composer.click();
+        await page.keyboard.press("Escape");
+        expect(await details.isVisible()).toBe(true);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        await trigger.focus();
+        await trigger.press("Enter");
+        await expect.poll(() => details.getAttribute("role")).toBe("dialog");
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() =>
+            details
+              .getByRole("button", { name: "Close details", exact: true })
+              .evaluate((el) => el === document.activeElement),
+          )
+          .toBe(true);
+        await geometry(false);
+        await capture("overlay.png");
         await session.locator(":scope > summary").click();
         await expect.poll(() => session.getAttribute("open")).toBeNull();
         expect(await progress.getAttribute("open")).not.toBeNull();
@@ -192,8 +233,14 @@ suite.define(() => {
           .poll(() => progress.textContent())
           .toContain("The card changed while Details stayed closed.");
         const menu = progress.locator(".chat-details-progress__menu");
+        expect(await menu.locator('[role^="menuitem"]:visible').count()).toBe(0);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').click();
+        await menu.locator('[data-value="hide"]').waitFor({ state: "visible" });
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
+        await page.keyboard.press("Escape");
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
+        await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
+        await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);
         expect(await session.isVisible()).toBe(true);
         const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
@@ -211,10 +258,10 @@ suite.define(() => {
         await trigger.click();
         await expect.poll(() => progress.isVisible()).toBe(true);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="collapse"]').click();
+        await menu.locator('[data-value="collapse"]').click();
         expect(await progress.getAttribute("open")).not.toBeNull();
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').click();
+        await menu.locator('[data-value="hide"]').click();
         await expect.poll(showSetting).toBe(false);
         await page.reload();
         await trigger.waitFor();
@@ -240,31 +287,84 @@ suite.define(() => {
         await expect.poll(() => progress.getAttribute("open")).toBeNull();
         await settingsPage.close();
         await progressToggle.click();
-        const geometry = async () => {
-          const bounds = await details.boundingBox();
-          const conversation = await page.locator(".chat-main__conversation-frame").boundingBox();
-          const footer = await page.locator(".chat-footer").boundingBox();
-          expect(bounds).toBeTruthy();
-          expect(conversation).toBeTruthy();
-          expect(footer).toBeTruthy();
-          expect(bounds!.x).toBeGreaterThanOrEqual(conversation!.x);
-          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(
-            conversation!.x + conversation!.width,
-          );
-          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(footer!.y);
-        };
-        await geometry();
+        await geometry(false);
         await details.getByRole("button", { name: "Close details", exact: true }).click();
-        await openChatSidePanelType(page, "browser");
+        await page.setViewportSize({ width: 1728, height: 1000 });
+        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await trigger.click();
-        await geometry();
+        await expect.poll(() => details.getAttribute("role")).toBe("complementary");
+        await geometry(true);
+        await openChatSidePanelType(page, "browser");
+        await expect.poll(() => details.getAttribute("role")).toBe("dialog");
+        if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+          await trigger.click();
+        }
+        await geometry(false);
         await capture("with-browser.png");
         await page.keyboard.press("Escape");
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-        await trigger.click();
+        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
-        await geometry();
+        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+        await trigger.click();
+        await expect.poll(() => details.getAttribute("role")).toBe("dialog");
+        await geometry(false);
         await capture("narrow.png");
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await page.setViewportSize({ width: 1728, height: 1000 });
+        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+        await trigger.click();
+        await expect.poll(() => details.getAttribute("role")).toBe("complementary");
+        await geometry(true);
+        await composer.fill("Keep my draft while I inspect Details.");
+        await gateway.setMethodResponse("progressCard.get", {
+          card: {
+            sessionKey,
+            revision: 3,
+            updatedAt: Date.now(),
+            markdown: "Long task details must scroll independently from the conversation.",
+            steps: Array.from({ length: 24 }, (_, index) => ({
+              step:
+                "Verification step " +
+                (index + 1) +
+                ": retain readable conversation text and an independently scrolling details rail for long-running work.",
+              status: index < 8 ? "completed" : index === 8 ? "in_progress" : "pending",
+            })),
+          },
+        });
+        await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 3 });
+        await expect.poll(() => progress.textContent()).toContain("Verification step 24");
+        await gateway.emitChatFinal({
+          runId: "details-long-transcript",
+          text: Array.from(
+            { length: 20 },
+            (_, index) =>
+              "Layout check " +
+              (index + 1) +
+              ": preserve the reading column and unsent draft while Details adapts to the available conversation width. The transcript and task checklist must remain independently scrollable.",
+          ).join("\n\n"),
+        });
+        const thread = page.locator(".chat-thread");
+        await expect.poll(() => thread.textContent()).toContain("Layout check 20");
+        await thread.hover();
+        await page.mouse.wheel(0, 10000);
+        await expect
+          .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+          .toBeLessThan(2);
+        const threadTop = await thread.evaluate((el) => el.scrollTop);
+        expect(threadTop).toBeGreaterThan(0);
+        await details.hover();
+        await page.mouse.wheel(0, 600);
+        await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+        expect(await thread.evaluate((el) => el.scrollTop)).toBe(threadTop);
+        expect(await composer.inputValue()).toBe("Keep my draft while I inspect Details.");
+        await geometry(true);
+        await capture("long-details.png");
+        const detailsTop = await details.evaluate((el) => el.scrollTop);
+        await thread.hover();
+        await page.mouse.wheel(0, -600);
+        await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBeLessThan(threadTop);
+        expect(await details.evaluate((el) => el.scrollTop)).toBe(detailsTop);
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
       },
     );

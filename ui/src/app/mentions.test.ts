@@ -65,9 +65,66 @@ function createCapability(...args: Parameters<typeof createMentionsCapability>) 
 
 afterEach(() => {
   capabilities.splice(0).forEach((capability) => capability.dispose());
+  vi.useRealTimers();
 });
 
 describe("application mention Inbox", () => {
+  it("backs off unavailable reads across gateway updates and invalidations, then recovers", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Profile catalog pending",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+      }),
+    );
+    const harness = gatewayForMentions(request);
+    const capability = createCapability(harness.gateway);
+    await flushMicrotasks();
+    for (let index = 0; index < 100; index++) {
+      harness.update({});
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: index });
+      await capability.refresh();
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(request).toHaveBeenCalledTimes(3);
+    request.mockResolvedValue(result(1));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
+  });
+
+  it.each(["connection", "dispose"] as const)(
+    "cancels an unavailable retry after %s changes",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const request = vi
+        .fn<RequestFn>()
+        .mockRejectedValueOnce(new GatewayRequestError({ code: "UNAVAILABLE", message: "Pending" }))
+        .mockResolvedValue(result(1));
+      const harness = gatewayForMentions(request);
+      const capability = createCapability(harness.gateway);
+      await flushMicrotasks();
+      if (boundary === "connection") {
+        harness.update({ client: client(request) });
+      } else {
+        capability.dispose();
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(request).toHaveBeenCalledTimes(boundary === "connection" ? 2 : 1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it.each(["none", "pending", "completed"] as const)(
     "holds automatic snapshots and queued revisions behind chat, preserving explicit refresh (%s)",
     async (explicit) => {
@@ -225,6 +282,7 @@ describe("application mention Inbox", () => {
   ] as const)(
     "clears a previously visible Inbox when %s reports %s access loss",
     async (operation, failure) => {
+      vi.useFakeTimers();
       let revoked = false;
       const request = vi.fn<RequestFn>(() =>
         revoked
@@ -257,6 +315,9 @@ describe("application mention Inbox", () => {
         error: "Mention access revoked",
       });
       revoked = false;
+      if (failure === "profile") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
       await capability.refresh();
       expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
     },

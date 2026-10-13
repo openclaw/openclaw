@@ -134,21 +134,24 @@ describe("PostgreSQL bridge request correlation", () => {
     expect(readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry")).toBe(before);
   });
 
-  it("rejects opening a workload connection on the main thread before starting its bridge", () => {
-    expect(threadId).toBe(0);
-    const anchor = new DatabaseSync(":memory:");
-    try {
-      expect(
-        () =>
-          new PostgresSyncConnection("postgres:///unused", "unused", anchor, "unused", {
-            lockTimeoutMs: 60_000,
-            statementTimeoutMs: 90_000,
-          }),
-      ).toThrow("only admission and migrations may open on the main thread");
-    } finally {
-      anchor.close();
-    }
-  });
+  it.skipIf(threadId !== 0)(
+    "rejects opening a workload connection on the main thread before starting its bridge",
+    () => {
+      expect(threadId).toBe(0);
+      const anchor = new DatabaseSync(":memory:");
+      try {
+        expect(
+          () =>
+            new PostgresSyncConnection("postgres:///unused", "unused", anchor, "unused", {
+              lockTimeoutMs: 60_000,
+              statementTimeoutMs: 90_000,
+            }),
+        ).toThrow("only synchronous admission and migrations may run on the main thread");
+      } finally {
+        anchor.close();
+      }
+    },
+  );
 
   it("publishes executed PostgreSQL statements without literal or binding values", () => {
     const { db } = transportFixture("normal");

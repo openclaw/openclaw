@@ -33,9 +33,6 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
-const unavailableMessage =
-  "Session access facts are unavailable; retry after session storage is ready.";
-
 it.each(["planning", "settlement"] as const)(
   "creates an unchanged agent session during another agent's creation and deletion %s",
   async (phase) => {
@@ -100,6 +97,16 @@ it.each(["planning", "settlement"] as const)(
           { bindCreation: prepared.bindCreation, commitGuard: () => storage.assertCurrent() },
         );
         expect(created).toMatchObject({ ok: true });
+        expect(prepared.readCurrent(cfg).target?.entry.sessionId).toBe("unchanged-reload-session");
+        runOpenClawAgentWriteTransaction(
+          (current) =>
+            writeSessionEntry(current, sessionKey, {
+              ...readExactSessionEntryRow(current, sessionKey)!.entry,
+              updatedAt: 2,
+            }),
+          { agentId: "main", path: database.path },
+        );
+        expect(prepared.readCurrent(cfg).target?.entry.updatedAt).toBe(2);
         expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
           "unchanged-reload-session",
         );
@@ -244,8 +251,7 @@ it.each([
         );
         expect(committedCreations).toBe(1);
         expect(observed).toHaveLength(1);
-        expect(observed[0]).toBeInstanceOf(Error);
-        expect(observed[0]).toHaveProperty("message", unavailableMessage);
+        expect(observed[0]).toMatchObject({ entry: { sessionId, updatedAt: 1 } });
         if (native === "completed") {
           expect(outcome).toEqual({
             kind: "failed",

@@ -121,6 +121,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
@@ -155,6 +156,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
+      await awaitRequestedHandoff?.(signal);
       // The requested transition can acknowledge a detached caller while setup continues.
       // Revalidate that retained caller before any node or provider-side preparation.
       assertCurrent();
@@ -548,6 +550,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
+    isInterruptedTurn: recovery.isInterruptedTurn,
     resumeProvisioning: startup.resumeProvisioning,
   };
 }

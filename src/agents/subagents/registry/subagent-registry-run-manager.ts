@@ -13,10 +13,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { holdQueuedSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   persistSubagentAbortedLastRun,
@@ -51,7 +48,6 @@ class SubagentRunManager extends SubagentLaunchManager {
     if (!selected || resolveSubagentChildAuthority(selected).status === "mismatch") {
       return;
     }
-    warnLegacySubagentAuthority(selected, log.warn);
     const entry = await mutateSubagentRuns(
       [runId],
       (rows) => {
@@ -248,7 +244,6 @@ class SubagentRunManager extends SubagentLaunchManager {
     const sessions = new Map<string, SubagentKillSession>();
     const holds = new Map<string, NonNullable<ReturnType<typeof holdQueuedSwarmRun>>>();
     for (const entry of selected.values()) {
-      warnLegacySubagentAuthority(entry, log.warn);
       if (
         entry.collect &&
         entry.execution.status === "queued" &&

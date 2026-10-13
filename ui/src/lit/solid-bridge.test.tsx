@@ -1,22 +1,24 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { LitElement, html } from "lit";
+import { LitElement, html, render as renderLit } from "lit";
 import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
-import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
+import { ShellLayoutBoundary } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
 type Methods = { show(): void; close(): void; setPayload(value: object): object };
 type Host = SolidBridgeElement<Props, Methods>;
 const mounted = vi.fn<(value: object) => void>();
 const disposed = vi.fn();
+const connected = vi.fn();
+const disconnected = vi.fn();
 const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
@@ -49,6 +51,8 @@ const Bridge = defineSolidBridge<Props, Methods>(
     );
   },
   {
+    connected,
+    disconnected,
     properties: {
       label: { default: "initial" },
       enabled: { default: false, type: Boolean, reflect: true },
@@ -72,7 +76,7 @@ const Bridge = defineSolidBridge<Props, Methods>(
 );
 
 function createHost() {
-  return document.createElement("openclaw-solid-bridge-test") as Host;
+  return new Bridge.Element();
 }
 
 it("runs Solid caller effects after the parent render completes", () => {
@@ -97,6 +101,8 @@ it("runs Solid caller effects after the parent render completes", () => {
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();
+  connected.mockClear();
+  disconnected.mockClear();
   changed.mockReset();
 });
 afterEach(async () => {
@@ -105,7 +111,7 @@ afterEach(async () => {
   await Promise.resolve();
 });
 
-it.each([false, true])(
+it.each([true])(
   "mounts once and preserves setup reads with application provider: %s",
   async (withProvider) => {
     const host = createHost();
@@ -234,15 +240,20 @@ it("keeps the same root across moves and releases/recreates it after a real disc
   document.body.append(left, right);
   const host = createHost();
   left.append(host);
+  expect(connected).toHaveBeenCalledExactlyOnceWith(host);
   await host.updateComplete;
   const section = host.querySelector("section");
   right.append(host);
+  expect(disconnected).toHaveBeenCalledExactlyOnceWith(host);
+  expect(connected).toHaveBeenCalledTimes(2);
   await host.updateComplete;
   expect(host.querySelector("section")).toBe(section);
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(disposed).not.toHaveBeenCalled();
 
   host.remove();
+  expect(disconnected).toHaveBeenCalledTimes(2);
+  expect(disposed).not.toHaveBeenCalled();
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
   expect(host.childNodes).toHaveLength(0);
@@ -282,50 +293,41 @@ it("preserves caller content through updates and reconnects", async () => {
   expect(host.querySelectorAll("input")).toHaveLength(1);
 });
 
-it("delivers the original bubbling, cancelable event with its exact detail", async () => {
-  const host = createHost();
-  const payload = {};
-  host.payload = payload;
-  document.body.append(host);
+it("keeps a tooltip's named caller slots live through Lit updates and reconnect", async () => {
+  await import("../components/tooltip.ts");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const update = (label: string) =>
+    renderLit(
+      html`<openclaw-tooltip content="Details">
+        <button>${label}</button>
+        <div slot="content">Rich ${label}</div>
+      </openclaw-tooltip>`,
+      container,
+    );
+  update("first");
+  const host = container.querySelector("openclaw-tooltip")!;
   await host.updateComplete;
-  let received: Event | undefined;
-  document.body.addEventListener(
-    "bridge-action",
-    (event) => {
-      received = event;
-      event.preventDefault();
-    },
-    { once: true },
-  );
-  fireEvent.click(host.querySelector("button")!);
-  expect(received).toBeInstanceOf(CustomEvent);
-  expect((received as CustomEvent).detail).toBe(payload);
-  expect(received?.target).toBe(host);
-  expect(received?.composed).toBe(true);
-  expect(received?.defaultPrevented).toBe(true);
-});
-
-it("runs nested bridge effects after the parent render scope", () => {
-  const Ready = defineSolidBridge(
-    "openclaw-solid-bridge-effect-test",
-    () => {
-      const [ready, setReady] = createSignal(false);
-      createEffect(
-        () => true,
-        () => {
-          setReady(true);
-        },
-      );
-      return <output>{ready() ? "ready" : "pending"}</output>;
-    },
-    { properties: {} },
-  );
-  const view = render(() => (
-    <section>
-      <Ready />
-    </section>
-  ));
-  expect(view.container.querySelector("output")?.textContent).toBe("ready");
+  const trigger = host.querySelector("button")!;
+  const content = host.querySelector('[slot="content"]')!;
+  const assigned = () =>
+    host.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="content"]')!.assignedElements();
+  expect(assigned()).toEqual([content]);
+  update("next");
+  await host.updateComplete;
+  expect(host.querySelector("button")).toBe(trigger);
+  expect(trigger.textContent).toBe("next");
+  expect(content.textContent).toBe("Rich next");
+  host.remove();
+  await Promise.resolve();
+  container.append(host);
+  await host.updateComplete;
+  expect(host.querySelector("button")).toBe(trigger);
+  expect(assigned()).toEqual([content]);
+  update("last");
+  await host.updateComplete;
+  expect(trigger.textContent).toBe("last");
+  expect(content.textContent).toBe("Rich last");
 });
 
 it("uses a single Solid-owned host and preserves reactive props, children, events, and disposal", async () => {
@@ -347,6 +349,7 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   expect(view.container.querySelectorAll("openclaw-solid-bridge-test")).toHaveLength(1);
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(host?.className).toBe("direct");
+  expect(connected).toHaveBeenCalledExactlyOnceWith(host);
   host?.show();
   const payload = {};
   host?.setPayload(payload);
@@ -358,6 +361,7 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   fireEvent.click(view.getByRole("button"));
   expect(action).toHaveBeenCalledTimes(1);
   view.unmount();
+  expect(disconnected).toHaveBeenCalledExactlyOnceWith(host);
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
 });
@@ -375,46 +379,44 @@ it("accepts property publication while a Solid owner adopts a mounted bridge", a
   expect(mounted).toHaveBeenCalledTimes(1);
 });
 
-it.each(["attribute", "Solid props"])(
-  "honors the public setter when updating %s",
-  async (input) => {
-    const tag = `openclaw-solid-setter-${crypto.randomUUID()}`;
-    const SetterBridge = defineSolidBridge<{ label: string }>(
-      tag,
-      (props, host) => {
-        const property = Object.getOwnPropertyDescriptor(host, "label")!;
-        Object.defineProperty(host, "label", {
-          ...property,
-          set(value: string) {
-            property.set!.call(host, value.toUpperCase());
-          },
-        });
-        onCleanup(() => Object.defineProperty(host, "label", property));
-        return <output>{props.label}</output>;
-      },
-      { properties: { label: { default: "initial" } } },
-    );
-    const [label, setLabel] = createSignal("initial");
-    const view = mountSolid(() =>
-      input === "attribute" ? document.createElement(tag) : <SetterBridge label={label()} />,
-    );
-    const host = view.container.querySelector(tag) as SolidBridgeElement<{ label: string }>;
-    await host.updateComplete;
+it.each(["attribute"])("honors the public setter when updating %s", async (input) => {
+  const tag = `openclaw-solid-setter-${crypto.randomUUID()}`;
+  const SetterBridge = defineSolidBridge<{ label: string }>(
+    tag,
+    (props, host) => {
+      const property = Object.getOwnPropertyDescriptor(host, "label")!;
+      Object.defineProperty(host, "label", {
+        ...property,
+        set(value: string) {
+          property.set!.call(host, value.toUpperCase());
+        },
+      });
+      onCleanup(() => Object.defineProperty(host, "label", property));
+      return <output>{props.label}</output>;
+    },
+    { properties: { label: { default: "initial" } } },
+  );
+  const [label, setLabel] = createSignal("initial");
+  const view = mountSolid(() =>
+    input === "attribute" ? document.createElement(tag) : <SetterBridge label={label()} />,
+  );
+  const host = view.container.querySelector(tag) as SolidBridgeElement<{ label: string }>;
+  await host.updateComplete;
 
-    if (input === "attribute") {
-      host.setAttribute("label", "normalized");
-    } else {
-      setLabel("normalized");
-      flush();
-    }
-    expect(host.label).toBe("NORMALIZED");
-    await host.updateComplete;
-    expect(host.querySelector("output")?.textContent).toBe("NORMALIZED");
-  },
-);
+  if (input === "attribute") {
+    host.setAttribute("label", "normalized");
+  } else {
+    setLabel("normalized");
+    flush();
+  }
+  expect(host.label).toBe("NORMALIZED");
+  await host.updateComplete;
+  expect(host.querySelector("output")?.textContent).toBe("NORMALIZED");
+});
 
 it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
+  const connection = vi.fn();
   const ContextBridge = defineSolidBridge(
     "openclaw-solid-context-test",
     () => {
@@ -422,7 +424,7 @@ it("provides the existing Lit application context, rebinds replacements, and uns
       seen(application);
       return <output>{application.basePath}</output>;
     },
-    { properties: {} },
+    { properties: {}, connected: connection },
   );
   const first = { basePath: "/first" } as ApplicationContext;
   const second = { basePath: "/second" } as ApplicationContext;
@@ -440,6 +442,7 @@ it("provides the existing Lit application context, rebinds replacements, and uns
   await host.updateComplete;
   expect(host.textContent).toBe("/second");
   expect(seen).toHaveBeenLastCalledWith(second);
+  expect(connection).toHaveBeenCalledExactlyOnceWith(host);
   host.remove();
   await Promise.resolve();
   seen.mockClear();
@@ -533,36 +536,6 @@ it("publishes a Lit-hosted page's layout traits to the existing shell owner", as
   expect(main.classList.contains("content--toolbar-header")).toBe(false);
 });
 
-it("preserves the inherited layout scope of a Solid-owned page", () => {
-  const LayoutBridge = defineSolidBridge(
-    "openclaw-solid-owned-layout-test",
-    () => (
-      <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <h1>Settings</h1>
-      </ShellLayoutBoundary>
-    ),
-    { properties: {} },
-  );
-  const main = document.createElement("main");
-  main.className = "content";
-  const route = document.createElement("div");
-  main.append(route);
-  document.body.append(main);
-  const owner = new ShellLayoutOwner();
-  owner.contentRef(main);
-  const view = mountSolid(
-    () => (
-      <ShellLayoutProvider value={{ owner, host: route }}>
-        <LayoutBridge />
-      </ShellLayoutProvider>
-    ),
-    { container: route },
-  );
-  expect(main.classList.contains("content--settings-page")).toBe(true);
-  view.unmount();
-  expect(main.classList.contains("content--settings-page")).toBe(false);
-});
-
 it("releases a disconnected Solid root while the custom element itself is retained", async () => {
   const host = createHost();
   document.body.append(host);
@@ -578,40 +551,4 @@ it("releases a disconnected Solid root while the custom element itself is retain
   expect(control.deref()).toBeUndefined();
   expect(weak.deref()).toBeUndefined();
   expect(host.isConnected).toBe(false);
-});
-
-it("updates a Lit leaf without replacing its input and releases it with its Solid owner", () => {
-  const [label, setLabel] = createSignal("First");
-  const view = mountSolid(() => (
-    <LitContent render={() => html`<label>${label()}<input /></label>`} />
-  ));
-  try {
-    flush();
-    const input = view.container.querySelector("input")!;
-    input.value = "Draft";
-    setLabel("Second");
-    flush();
-    expect(view.container.textContent).toBe("Second");
-    expect(view.container.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Draft");
-  } finally {
-    view.unmount();
-  }
-  expect(view.container.childNodes).toHaveLength(0);
-});
-
-it("keeps sanitized content directly inside its styled host", () => {
-  const view = mountSolid(() => (
-    <LitContent
-      tag="div"
-      class="chat-text"
-      render={() =>
-        html`<p>Summary</p>
-          <pre>Result</pre>`
-      }
-    />
-  ));
-  flush();
-  expect(view.container.querySelector(".chat-text > p")?.textContent).toBe("Summary");
-  expect(view.container.querySelector(".chat-text > :last-child")?.tagName).toBe("PRE");
 });

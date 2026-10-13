@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -29,6 +33,7 @@ afterEach(() => {
   for (const operation of operations.splice(0)) {
     operation.complete();
   }
+  clearRuntimeConfigSnapshot();
 });
 beforeAll(() => {
   // openclaw-temp-dir: allow suite database root drains before removal
@@ -55,6 +60,7 @@ async function createFixture(selected = diagnostic) {
     model: selected.model,
   };
   const cfg: OpenClawConfig = { session: { store: storePath } };
+  setRuntimeConfigSnapshot(cfg);
   await replaceSessionEntry({ storePath, sessionKey }, entry);
   const replyOperation = createReplyOperation({
     sessionId: entry.sessionId,
@@ -134,6 +140,7 @@ it("does not persist or project a fallback for the selected model's wire identit
   const { context } = fixture;
   const entry = context.activeSessionEntry!;
   context.cfg.agents = { defaults: { model: { primary: "arcee/trinity-large-preview" } } };
+  setRuntimeConfigSnapshot(context.cfg);
   entry.fallbackNotice = {
     kind: "active",
     selectedModel: "arcee/trinity-large-preview",
@@ -176,7 +183,6 @@ it("does not persist or project a fallback for the selected model's wire identit
     buildGatewaySessionRow({
       cfg: context.cfg,
       agentId: "main",
-      skipTranscriptUsageFallback: true,
       lightweightListRow: true,
       storePath,
       store: { [context.sessionKey!]: stored },
@@ -205,6 +211,7 @@ it.each([false, true])(
     context.cfg.agents = {
       defaults: { model: { primary: `${diagnostic.provider}/${diagnostic.model}` } },
     };
+    setRuntimeConfigSnapshot(context.cfg);
     context.execution.resolved = { provider: "fallback-fixture", model: "plain" };
     context.execution.fallback.attempts = [
       {
@@ -246,7 +253,6 @@ it.each([false, true])(
       buildGatewaySessionRow({
         cfg: context.cfg,
         agentId: "main",
-        skipTranscriptUsageFallback: true,
         lightweightListRow: true,
         storePath,
         store: { [context.sessionKey!]: rowEntry },

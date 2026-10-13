@@ -385,6 +385,13 @@ describe("abort detection", () => {
     const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
     const sessionId = "resolved-persistence-failure";
     const { root, cfg } = await createAbortConfig();
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey: canonicalKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
     vi.mocked(markSessionAbortTarget).mockResolvedValueOnce({
       entry: {
         sessionId,
@@ -395,7 +402,7 @@ describe("abort detection", () => {
       sessionId,
       sessionKey: canonicalKey,
     });
-    vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce({
+    vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce({
       entry: {
         sessionId,
         updatedAt: 10,
@@ -413,6 +420,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+    expect(operation.abortSignal.aborted).toBe(true);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
     expectSessionLaneCleared(canonicalKey);
@@ -423,7 +431,7 @@ describe("abort detection", () => {
     const sessionKey = "telegram:missing-persistence-target";
     const { cfg } = await createAbortConfig();
     vi.mocked(markSessionAbortTarget).mockResolvedValueOnce(null);
-    vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce(null);
+    vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce(null);
 
     const result = await runStopCommand({
       cfg,
@@ -447,6 +455,13 @@ describe("abort detection", () => {
         [sessionKey]: sessionId,
       },
     });
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
     let finishPersistence: (() => void) | undefined;
     const persistenceStarted = new Promise<void>((resolveStarted) => {
       vi.mocked(markSessionAbortTarget).mockImplementationOnce(
@@ -466,7 +481,7 @@ describe("abort detection", () => {
             };
           }),
       );
-      vi.mocked(resolveSessionAbortTarget).mockReturnValueOnce({
+      vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce({
         entry: {
           sessionId,
           updatedAt: 10,
@@ -503,6 +518,7 @@ describe("abort detection", () => {
     });
     await persistenceStarted;
 
+    expect(operation.abortSignal.aborted).toBe(true);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(childSessionId);
     expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({

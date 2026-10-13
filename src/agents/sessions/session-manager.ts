@@ -5,6 +5,7 @@
  * behavior are split into focused internal modules.
  */
 import { isDeepStrictEqual } from "node:util";
+import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
@@ -22,8 +23,10 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import type { PreparedSessionTranscriptModelContext } from "../../config/sessions/session-transcript-context-read.js";
-import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
+import {
+  resolveSessionTranscriptReadFence,
+  withSessionContextAdmission,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import {
@@ -57,6 +60,7 @@ import {
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { openSessionManagerBoundedView } from "./session-manager-reload.js";
+import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -99,7 +103,7 @@ export type {
 
 export class SessionManager extends SessionManagerBranching {
   private preparedInitialContext:
-    | (PreparedSessionTranscriptModelContext & { view: object })
+    | { branch: SessionEntry[]; writeToken: string; view: object }
     | undefined;
 
   private constructor(
@@ -140,17 +144,25 @@ export class SessionManager extends SessionManagerBranching {
     const initial = this.captureTranscriptView();
     const target = this.persistenceTarget;
     const cwd = this.cwd;
+    const reader = prepared && getOwnedSessionTranscriptReader(target);
+    if (
+      prepared &&
+      reader &&
+      !resolveSessionTranscriptReadFence(target) &&
+      prepared.writeToken === readSqliteDatabaseWriteTokenForPath(reader.database.path) &&
+      Object.keys(prepared.view).every(
+        (key) => Reflect.get(prepared.view, key) === Reflect.get(initial, key),
+      )
+    ) {
+      // The cohort already owns these bytes. Completed writes invalidate its receipt;
+      // materializing this snapshot need not join a later, still-pending write.
+      this.assertTranscriptWriteActive();
+      reader.assertCurrent();
+      return this.buildInitialContext(prepared.branch);
+    }
     const context = await readSessionManagerModelContextAsync(
       target,
-      {
-        limits: this.boundedContextLimits,
-        ...(prepared &&
-        Object.keys(prepared.view).every(
-          (key) => Reflect.get(prepared.view, key) === Reflect.get(initial, key),
-        )
-          ? { prepared }
-          : {}),
-      },
+      { limits: this.boundedContextLimits },
       (snapshot) => SessionManager.fromSelectedEntries(snapshot.events, cwd),
       this,
     );
@@ -160,7 +172,11 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    for (const entry of context.fileEntries) {
+    return this.buildInitialContext(context.getBranch());
+  }
+
+  private buildInitialContext(branch: SessionEntry[]) {
+    for (const entry of branch) {
       if (entry.type !== "message") {
         continue;
       }
@@ -181,7 +197,7 @@ export class SessionManager extends SessionManagerBranching {
         freezeJsonSnapshot(entry.message);
       }
     }
-    return context.buildSessionContext();
+    return buildCoreSessionContext(branch);
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
@@ -234,7 +250,7 @@ export class SessionManager extends SessionManagerBranching {
           writeAdmission &&
           "db" in writeAdmission.database)
       ) {
-        const detachedView = target ? undefined : structuredClone(this.captureTranscriptView());
+        const detachedView = target ? undefined : cloneTranscriptView(this.captureTranscriptView());
         const assertPrepared = () => {
           assertNavigation();
           if (
@@ -367,15 +383,11 @@ export class SessionManager extends SessionManagerBranching {
       sources: ReadonlyMap<string, SessionEntry>,
       adopt: (version: SessionTranscriptContextVersion) => void,
     ) => void,
-    publishAsync?: (
-      entries: Array<SessionEntry | SessionLeafControl>,
-      sources: ReadonlyMap<string, SessionEntry>,
-      adopt: (version: SessionTranscriptContextVersion) => void,
-    ) => Promise<void>,
+    publishAsync?: (...args: Parameters<NonNullable<typeof publish>>) => Promise<void>,
     assertBeforeCommit?: () => void,
   ) {
     const prepared = SessionManager.inMemory(this.cwd);
-    Object.assign(prepared, structuredClone(this.captureTranscriptView()));
+    Object.assign(prepared, cloneTranscriptView(this.captureTranscriptView()));
     const initialEntryCount = prepared.fileEntries.length;
     const persistedBoundaryCount = prepared.persistedBoundaryCount;
     prepared.persistedBoundaryCount = undefined;
@@ -387,7 +399,11 @@ export class SessionManager extends SessionManagerBranching {
         rewrittenEntryIds: ReadonlyMap<string, string>,
       ): Generator<SessionPersistenceStep, void, void> {
         const publication = SessionManager.inMemory(prepared.cwd);
-        Object.assign(publication, structuredClone(prepared.captureTranscriptView()));
+        Object.assign(publication, cloneTranscriptView(prepared.captureTranscriptView()));
+        // Publication changes ancestry and storage metadata, never the sealed payloads.
+        publication.fileEntries = publication.fileEntries.map((entry, index) =>
+          index < initialEntryCount ? entry : { ...entry },
+        );
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");
@@ -440,6 +456,7 @@ export class SessionManager extends SessionManagerBranching {
             persistedBoundaryCount + publication.getBoundaryCount() - loadedBoundaryCount;
         }
         const adopt = (version = publication.transcriptVersion) => {
+          entries.forEach((entry) => freezeJsonSnapshot(entry));
           publication.transcriptVersion = version;
           publication.transcriptMutationAt = version?.updatedAt;
           Object.assign(this, publication.captureTranscriptView());
@@ -565,7 +582,7 @@ export class SessionManager extends SessionManagerBranching {
         if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
           const events = cloneSessionModelContextEntries(manager.getHeader(), branch);
           manager.preparedInitialContext = {
-            context: { events, version: context.version },
+            branch: events.filter((entry) => entry.type !== "session"),
             writeToken,
             view: manager.captureTranscriptView(),
           };

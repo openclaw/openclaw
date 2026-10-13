@@ -149,13 +149,10 @@ function createOwner(
     board: WorkboardSessionsBoard,
     source: SourceSnapshot,
     placements: Map<string, Placements[number]>,
-    admittedRevision: typeof revision,
     preparedFacts?: Map<string, CachedFacts>,
   ) => {
-    if (params.store.sessionsRevision === admittedRevision) {
-      for (const key of source.missingSessionKeys ?? []) {
-        lastKnown.delete(key);
-      }
+    for (const key of source.missingSessionKeys ?? []) {
+      lastKnown.delete(key);
     }
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
@@ -193,7 +190,7 @@ function createOwner(
       }
       resolved.set(row.key, current);
       // Concurrent reads may leave an older fallback until the next successful refresh.
-      if (!failure && params.store.sessionsRevision === admittedRevision) {
+      if (!failure) {
         lastKnown.set(row.key, current);
       }
     }
@@ -305,10 +302,8 @@ function createOwner(
     return params.gateway.withSessionFacts(sessionSelection(board, view), async (source) => {
       assertReadCurrent();
       const key = JSON.stringify([id, view, source.scope ?? source.revision]);
-      const current = projections.get(key);
-      const cacheable = params.store.sessionsRevision === admittedRevision;
       const admittedAt = now();
-      const previous = cacheable ? current : undefined;
+      const previous = projections.get(key);
       let projection = previous;
       if (
         projection &&
@@ -318,7 +313,6 @@ function createOwner(
       ) {
         projection = undefined;
       }
-      const joined = Boolean(projection);
       if (!projection) {
         const prepared: PreparedProjection = {
           revision: admittedRevision,
@@ -338,7 +332,6 @@ function createOwner(
               board,
               source,
               new Map(placements.map((pin) => [pin.sessionKey, pin])),
-              admittedRevision,
               isDeepStrictEqual(previous?.board.sessions.columns, board.sessions.columns)
                 ? previous?.facts
                 : undefined,
@@ -356,26 +349,20 @@ function createOwner(
             return { snapshot, complete };
           }),
         };
-        if (cacheable) {
-          if (projections.size >= 64) {
-            projections.delete(projections.keys().next().value!);
-          }
-          projections.set(key, prepared);
+        if (projections.size >= 64) {
+          projections.delete(projections.keys().next().value!);
         }
+        projections.set(key, prepared);
         projection = prepared;
       }
       try {
         const { snapshot, complete } = await projection.read;
         assertReadCurrent();
-        const expired = projection.expires < admittedAt;
         if (
-          (!complete || expired || params.store.sessionsRevision !== admittedRevision) &&
+          (!complete || params.store.sessionsRevision !== admittedRevision) &&
           projections.get(key) === projection
         ) {
           projections.delete(key);
-        }
-        if (joined && expired) {
-          return await read(id, view, caller);
         }
         return snapshot;
       } catch (error) {

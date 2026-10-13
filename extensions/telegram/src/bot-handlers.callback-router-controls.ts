@@ -264,7 +264,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
               throw new TelegramRetryableCallbackError(canonicalError);
             }
             logVerbose(
-              `telegram: canonical approval lookup failed after stale legacy callback ` +
+              `telegram: recorded approval lookup failed after stale legacy callback ` +
                 `${approvalCallback.approvalId}: ${String(canonicalError)}`,
             );
             await terminalizeLegacyApproval({

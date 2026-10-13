@@ -47,7 +47,10 @@ import type {
   AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabasePreparationExecution,
+} from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -233,18 +236,14 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
   const prepared = expectedDatabase
     ? readOpenClawAgentDatabaseIdentity({ db: expectedDatabase })
     : undefined;
-  if (prepared && typeof prepared.identity !== "string") {
-    throw new Error("Agent Worker requires its existing file owner");
-  }
-  const expectedIdentity =
-    prepared && typeof prepared.identity === "string"
-      ? {
-          kind: "file" as const,
-          physicalIdentity: prepared.identity,
-          nativeLocation: prepared.filename,
-          birthtime: prepared.birthtime,
-        }
-      : undefined;
+  const expectedIdentity = prepared
+    ? {
+        kind: "file" as const,
+        physicalIdentity: prepared.identity,
+        nativeLocation: prepared.filename,
+        birthtime: prepared.birthtime,
+      }
+    : undefined;
   const moduleUrl = new URL(worker.moduleUrl).href;
   const input = structuredClone(worker.input);
   const state = captureOpenClawStateDatabaseReadAdmission(
@@ -370,6 +369,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       source: AgentDatabaseRequestExecutionSource,
     ) => Promise<T>,
     signal?: AbortSignal,
+    prepare = false,
   ): Promise<T> => {
     if (revoked) {
       return Promise.reject(
@@ -381,7 +381,9 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       assertCurrent();
       assertHeld();
     };
-    const execution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
+    const execution = prepare
+      ? captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity)
+      : captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent: assert,
       createAdmission(binding) {
@@ -495,6 +497,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
         () => {},
         (execution, source) => execution.prepare(source, prepareOptions?.signal),
         prepareOptions?.signal,
+        true,
       );
     },
     execute(command, assertCurrent, commandOptions) {

@@ -162,6 +162,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       ? {
           entry: contextEntry && {
             sessionId: contextEntry.sessionId,
+            updatedAt: contextEntry.updatedAt,
             lifecycleRevision: contextEntry.lifecycleRevision,
             activeWriterRunId: contextEntry.activeWriterRunId,
             cliHistoryBoundary: contextEntry.cliHistoryBoundary,

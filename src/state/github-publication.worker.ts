@@ -13,13 +13,16 @@ import * as repository from "../gateway/github-repository-publication-store.work
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
-import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import {
   assertGitHubPublicationConnectionSource,
   assertGitHubPublicationWorktreeSource,
 } from "./github-publication-source.kernel.js";
-import { assertGitHubPublicationWorkerSourceCurrent } from "./github-publication-source.worker.js";
+import {
+  assertGitHubPublicationWorkerSourceCurrent,
+  withGitHubPublicationSourceTransaction,
+} from "./github-publication-source.worker.js";
 import type {
   PersonalPublicationMutation,
   SharedPublicationMutation,
@@ -63,12 +66,14 @@ function mutate(
       return { ...value, changes };
     });
   if (source) {
-    assertGitHubPublicationWorkerSourceCurrent(database.db);
-    const receipt = capture();
-    assertMutationSource(database, receipt, source);
-    assertGitHubPublicationWorkerSourceCurrent(database.db);
-    deferSqliteWorkerCommitReceipt(database.db, receipt);
-    return receipt;
+    return withGitHubPublicationSourceTransaction(database, source, () => {
+      assertGitHubPublicationWorkerSourceCurrent(database.db);
+      const receipt = capture();
+      assertMutationSource(database, receipt, source);
+      assertGitHubPublicationWorkerSourceCurrent(database.db);
+      deferSqliteWorkerCommitReceipt(database.db, receipt);
+      return receipt;
+    });
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

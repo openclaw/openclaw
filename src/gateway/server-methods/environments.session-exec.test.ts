@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ExecAsk, ExecSecurity, ExecApprovalsFile } from "../../infra/exec-approvals.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
+  sessionKey: "agent:main:subagent:test",
   current: true,
   policy: { security: "full" as ExecSecurity, ask: "off" as ExecAsk, effectiveHost: "gateway" },
   approve: vi.fn(),
@@ -13,9 +16,11 @@ const mocks = vi.hoisted(() => ({
   ambient: true,
   assertToolAllowed: vi.fn(),
 }));
+// mock-isolation: Execution fixtures control caller revocation without provisioning a session environment.
 vi.mock("./environments.session.js", () => ({
   resolveSessionEnvironmentCaller: () => ({
-    identity: { sessionId: "conversation", sessionKey: "agent:main:test", agentId: "main" },
+    identity: { sessionId: "conversation", sessionKey: mocks.sessionKey, agentId: "main" },
+    release() {},
     assertCurrent: () => {
       if (!mocks.current) {
         throw new Error("Run authority closed");
@@ -23,8 +28,16 @@ vi.mock("./environments.session.js", () => ({
     },
   }),
 }));
-vi.mock("./sessions-shared.js", () => ({
-  loadAccessorSessionEntryForGatewayTarget: () => ({ entry: { sessionId: "conversation" } }),
+// mock-isolation: The synthetic full entry isolates execution authorization from database admission.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => ({ sessionId: "conversation" }),
+}));
+// mock-isolation: Source preparation is independent of the policy and transport checks below.
+vi.mock("../../config/sessions/session-entry-source-authority.js", () => ({
+  captureSessionEntrySourceAssertion: () =>
+    Object.assign(() => {}, {
+      prepareSessionSource: async () => ({ assertCurrent() {}, checks: [] }),
+    }),
 }));
 // mock-isolation: This dispatch fixture injects policy resolution; canonical policy writes are covered by the exec-approval store tests.
 vi.mock("../../agents/exec-defaults.js", () => ({
@@ -51,12 +64,13 @@ vi.mock("../../state/openclaw-state-worker-context.js", () => ({
 vi.mock("./environments.session-exec-approval.js", () => ({
   approveSessionEnvironmentCommand: mocks.approve,
 }));
+// mock-isolation: Execution fixtures supply ambient caller and tool authority without an active agent run.
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () =>
     mocks.ambient
       ? {
           agentId: "main",
-          sessionKey: "agent:main:test",
+          sessionKey: mocks.sessionKey,
           operationalRunInstance: { instanceId: "exec-test-instance", runId: "exec-test-run" },
           ...(mocks.capturedToolPolicy ? { assertToolAllowed: mocks.assertToolAllowed } : {}),
         }
@@ -65,7 +79,7 @@ vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
 
 const binding = {
   sessionId: "conversation",
-  sessionKey: "agent:main:test",
+  sessionKey: mocks.sessionKey,
   agentId: "main",
   environmentId: "worker:preview",
   ownerEpoch: 3,
@@ -82,6 +96,15 @@ const result = {
 };
 
 function fixture(denied: string[] = [], runtimeAllow?: string[]) {
+  const storePath = "/tmp/environment-session-policy/sessions.json";
+  const config = { session: { store: storePath }, tools: { deny: denied } };
+  const projection = createSessionRowProjectionFixture({
+    cfg: config,
+    storePath,
+    store: {
+      [mocks.sessionKey]: { sessionId: "conversation", updatedAt: 1 },
+    },
+  });
   const execute = vi.fn(async (_binding: unknown, command: WorkerWorkspaceCommand) => {
     command.assertCurrent?.();
     return result;
@@ -104,20 +127,23 @@ function fixture(denied: string[] = [], runtimeAllow?: string[]) {
           },
     respond,
     isWebchatConnect: () => true,
-    context: {
-      getRuntimeConfig: () => ({ tools: { deny: denied } }),
-      workerEnvironmentService: {
-        getSessionAttachment: () => binding,
-        assertSessionAttachment: vi.fn(),
-        execSessionAttachment: execute,
+    context: bindSessionRowProjection(
+      {
+        getRuntimeConfig: () => config,
+        workerEnvironmentService: {
+          getSessionAttachment: () => binding,
+          assertSessionAttachment: vi.fn(),
+          execSessionAttachment: execute,
+        },
       },
-    },
+      () => projection,
+    ),
   } as unknown as GatewayRequestHandlerOptions;
   const call = async (params: Record<string, unknown>) => {
     await environmentsSessionExecHandlers["environments.session.exec"]!({ ...options, params });
     return respond.mock.calls.at(-1);
   };
-  return { execute, call, respond };
+  return { execute, call, respond, projection };
 }
 
 beforeEach(() => {
@@ -220,6 +246,32 @@ describe("conversation environment execution RPC", () => {
       binding,
       expect.objectContaining({ process: { action: "start", processId: "app" } }),
     );
+  });
+
+  it("observes a published inherited deny before dispatching an approved command", async () => {
+    mocks.policy = { ...mocks.policy, security: "allowlist", ask: "on-miss" };
+    const admitted = createDeferred();
+    const decision = createDeferred();
+    mocks.approve.mockImplementation(() => {
+      admitted.resolve();
+      return decision.promise;
+    });
+    const { call, execute, projection } = fixture();
+    const pending = call({ argv: ["node", "app.js"] });
+    await admitted.promise;
+    projection.setEntry(mocks.sessionKey, {
+      sessionId: "conversation",
+      updatedAt: 2,
+      spawnedBy: "agent:main:parent",
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["exec"],
+      inheritedToolDeny: ["exec"],
+    });
+    decision.resolve();
+    expect((await pending)?.[0]).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("dispatches the exact command presented for approval even if its request object changes", async () => {

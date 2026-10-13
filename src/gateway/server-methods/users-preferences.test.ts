@@ -3,6 +3,7 @@ import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -226,8 +227,10 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       layout: "state-only",
       prefix: "users-self-read-",
     });
+    setRuntimeConfigSnapshot({});
     let releaseProfiles: (() => void) | undefined;
     try {
+      setRuntimeConfigSnapshot({});
       const owner = ensureProfileForEmail("self-reader@example.test");
       const replacement = ensureProfileForEmail("other-reader@example.test");
       releaseProfiles = (await prepareUserProfileCatalog()).release;
@@ -326,8 +329,10 @@ test("users.prefs.get retains its original scope across the preference read", as
     layout: "state-only",
     prefix: "users-prefs-read-",
   });
+  setRuntimeConfigSnapshot({});
   let releaseProfiles: (() => void) | undefined;
   try {
+    setRuntimeConfigSnapshot({});
     const owner = ensureProfileForEmail("retained-preferences@example.test");
     releaseProfiles = (await prepareUserProfileCatalog()).release;
     await invokePreferenceMethod("users.prefs.set", { entries: { "ui.theme": "dark" } }, owner.id);

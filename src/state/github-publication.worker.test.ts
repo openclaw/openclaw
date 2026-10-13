@@ -1,4 +1,3 @@
-import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -29,17 +28,28 @@ import {
   insertRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
 import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
-import type { SqliteWorkerReply, SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
 import type { RepositoryGitHubPublicationRow as RepositoryPublicationRow } from "./github-publication-read.types.js";
-import { githubPublicationReceipts } from "./github-publication-receipts.js";
+import {
+  captureGitHubPublicationLifecycle,
+  githubPublicationReceipts,
+} from "./github-publication-receipts.js";
+import { prepareGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
+import { insertGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { createGitHubPublicationWorkerScope } from "./github-publication-worker.js";
 import type {
   PublicationMutationReceipt,
   RepositoryPublicationMutation,
 } from "./github-publication-worker.types.js";
+import {
+  holdNextReceipt,
+  holdNextReply,
+  releaseHeldGitHubPublicationMessages,
+} from "./github-publication.worker.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
@@ -48,7 +58,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
@@ -62,7 +75,6 @@ import { ensureProfileForEmail } from "./user-profiles.js";
 let context: OpenClawStateWorkerContext;
 let root: string;
 const scopes = new Set<ReturnType<typeof createGitHubPublicationWorkerScope>>();
-const heldReplies = new Set<() => void>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeOpenClawAgentDatabasesAsync();
@@ -85,9 +97,7 @@ beforeEach(() => {
   setRuntimeConfigSnapshot({});
 });
 afterEach(async () => {
-  for (const release of heldReplies) {
-    release();
-  }
+  releaseHeldGitHubPublicationMessages();
   vi.restoreAllMocks();
   await Promise.all([...scopes].map((scope) => scope.close()));
   scopes.clear();
@@ -126,79 +136,6 @@ function read(row: RepositoryPublicationRow) {
     }),
     { path: context.admission.databasePath, allowNativeRead: true },
   );
-}
-function holdNextReply(commandType = "githubPublications.repository") {
-  const ready = createDeferredCore();
-  let deliver: (() => void) | undefined;
-  let target: { worker: Worker; id: number } | undefined;
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the posting Worker.
-  const postMessage = Worker.prototype.postMessage;
-  const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request: SqliteWorkerRequest,
-    ...args
-  ) {
-    if (request.type === "execute") {
-      const workerCommand: unknown = deserialize(request.input);
-      if (
-        workerCommand &&
-        typeof workerCommand === "object" &&
-        "type" in workerCommand &&
-        workerCommand.type === commandType
-      ) {
-        target = { worker: this, id: request.id };
-        posts.mockRestore();
-      }
-    }
-    return Reflect.apply(postMessage, this, [request, ...args]);
-  });
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting Worker.
-  const emit = Worker.prototype.emit;
-  const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-    this: Worker,
-    event: string | symbol,
-    reply: SqliteWorkerReply,
-  ) {
-    if (event === "message" && this === target?.worker && reply.id === target.id && reply.ok) {
-      messages.mockRestore();
-      deliver = () => {
-        Reflect.apply(emit, this, [event, reply]);
-      };
-      ready.resolve();
-      return true;
-    }
-    return Reflect.apply(emit, this, [event, reply]);
-  });
-  const release = () => {
-    const send = deliver;
-    deliver = undefined;
-    heldReplies.delete(release);
-    send?.();
-  };
-  heldReplies.add(release);
-  return { ready: ready.promise, release };
-}
-
-function holdNextReceipt() {
-  const ready = createDeferredCore();
-  let deliver: (() => void) | undefined;
-  const observe = workerAdmission.observeSqliteWorkerCommittedFacts;
-  vi.spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-    (admission, observer) => {
-      observe(admission, (receipt) => {
-        deliver = () => observer(receipt);
-        ready.resolve();
-      });
-    },
-  );
-  const release = () => {
-    const send = deliver;
-    deliver = undefined;
-    heldReplies.delete(release);
-    send?.();
-  };
-  heldReplies.add(release);
-  return { ready: ready.promise, release };
 }
 
 function observeAuthority() {
@@ -324,7 +261,9 @@ async function sourceFixture(
   return { row, source };
 }
 
-it("creates the lazy shared publication schema on its first worker insert", async () => {
+it("creates the lazy shared schema and publishes lifecycle authority before its first insert reply", async ({
+  signal,
+}) => {
   const request = {
     sessionKey: "agent:main:first-shared-publication",
     agentId: "main",
@@ -370,7 +309,34 @@ it("creates the lazy shared publication schema on its first worker insert", asyn
     signal: new AbortController().signal,
     assertCurrent: context.admission.assertCurrent,
   });
-  const inserted = await insertGitHubPublicationRequestAsync(
+  const lifecycle = await prepareGitHubPublicationSessionLifecycle({
+    publicationKind: "shared",
+    requestId: "first-shared-publication-request",
+  });
+  expect(lifecycle.readCurrent()).toBeUndefined();
+  const committed = createDeferredCore();
+  let atSettlement: ReturnType<typeof lifecycle.readCurrent>;
+  onTestFinished(
+    githubPublicationReceipts.subscribeFacts((change) => {
+      if (
+        change.kind === "committed" &&
+        change.receipt.source.identity === context.admission.identity.key
+      ) {
+        expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+        committed.resolve();
+      }
+      if (change.kind === "settled" && change.identity === context.admission.identity.key) {
+        atSettlement = captureGitHubPublicationLifecycle(captureOpenClawStateReadContext(), {
+          publicationKind: "shared",
+          requestId: "first-shared-publication-request",
+        }).readCurrent();
+      }
+    }),
+  );
+  const reply = holdNextReply("githubPublications.insert", () => {
+    expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+  });
+  const inserting = insertGitHubPublicationRequestAsync(
     {
       request,
       requestId: "first-shared-publication-request",
@@ -388,10 +354,52 @@ it("creates the lazy shared publication schema on its first worker insert", asyn
     },
     source,
   );
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([reply.ready, committed.promise]),
+        inserting,
+        "lifecycle publication did not precede its insert reply",
+      ),
+      signal,
+    );
+    expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+  } finally {
+    reply.release();
+  }
+  const inserted = await inserting;
   expect(inserted).toMatchObject({
     request_id: "first-shared-publication-request",
     status: "requested",
   });
+  expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+  if (!atSettlement) {
+    throw new Error("Publication authority did not settle");
+  }
+  const sql = observeMainThreadSql();
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    sql.calibrate();
+    const expected = {
+      lifecycle_revision: lifecycleRevision,
+      requester_authority_json:
+        '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}',
+    };
+    expect(atSettlement).toEqual(expected);
+    expect(
+      (
+        await prepareGitHubPublicationSessionLifecycle({
+          publicationKind: "shared",
+          requestId: inserted.request_id,
+        })
+      ).readCurrent(),
+    ).toEqual(expected);
+    sql.expectIdle();
+    expect(requests).not.toHaveBeenCalled();
+  } finally {
+    sql.restore();
+    requests.mockRestore();
+  }
   await expect(
     readGitHubPublicationRequestAsync({ requestId: inserted.request_id }),
   ).resolves.toEqual(inserted);
@@ -634,6 +642,17 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
 it.for(["superseded", "closed"] as const)(
   "fences a late authority receipt after its owner is %s",
   async (outcome, { signal }) => {
+    const lifecycleInput = {
+      publicationKind: "shared" as const,
+      requestId: `late-${outcome}-lifecycle`,
+    };
+    runOpenClawStateWriteTransaction(({ db }) =>
+      insertGitHubPublicationSessionLifecycle(db, {
+        ...lifecycleInput,
+        lifecycleRevision: "original-revision",
+      }),
+    );
+    const lifecycle = await prepareGitHubPublicationSessionLifecycle(lifecycleInput);
     let closed = false;
     const scope = createScope({
       ...context,
@@ -701,6 +720,20 @@ it.for(["superseded", "closed"] as const)(
       ok: true,
       rows: [{ execution_id: outcome === "superseded" ? "replacement" : "original" }],
     });
+    if (outcome === "closed") {
+      expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+      await expect(prepareGitHubPublicationSessionLifecycle(lifecycleInput)).rejects.toThrow(
+        "lifecycle authority is unavailable",
+      );
+      await expect(prepareGitHubPublicationSessionLifecycle(lifecycleInput)).rejects.toThrow(
+        "lifecycle authority is unavailable",
+      );
+    } else {
+      expect(lifecycle.readCurrent()).toEqual({
+        lifecycle_revision: "original-revision",
+        requester_authority_json: null,
+      });
+    }
   },
 );
 
@@ -737,6 +770,14 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
       }),
     );
     const reply = holdNextReply("githubPublication.deleteSessionReceipts");
+    let checkedBeforeCommit = false;
+    sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        checkedBeforeCommit = true;
+        expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
+      }
+      admit(request, grant);
+    });
     const deletion = remove();
     try {
       await withinTest(
@@ -747,6 +788,7 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
         ),
         signal,
       );
+      expect(checkedBeforeCommit).toBe(true);
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
     } finally {
       reply.release();

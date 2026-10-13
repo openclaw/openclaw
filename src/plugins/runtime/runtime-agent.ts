@@ -28,8 +28,9 @@ import {
   loadSessionEntryReadOnly,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
@@ -113,18 +114,57 @@ async function runWithSessionWorkAdmission<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const params = { ...input };
-  const source = captureIncognitoSessionSource(params);
-  if (source && !("kind" in source)) {
-    return source.actor.sessions.withSharedState(() => runAdmittedWork());
+  const memory = captureMemoryExactSessionReader(params, () => params.signal?.throwIfAborted());
+  if (memory) {
+    return admit(memory.read(params.sessionKey, "list"), () =>
+      memory.read(params.sessionKey, "list"),
+    );
   }
   return runAdmittedWork();
 
   async function runAdmittedWork(): Promise<T> {
-    const initialEntry = await readSessionEntryReadOnlyInWorker({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      readConsistency: "latest",
-    });
+    return withSessionEntryReadOnlyInWorker(
+      {
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      },
+      () => params.signal?.throwIfAborted(),
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const initialEntry = read.value;
+        const retained = owner.source?.databaseIdentity
+          ? retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${owner.source.databaseIdentity}`,
+              sessionKey: owner.scope?.sessionKey ?? params.sessionKey,
+              entry: initialEntry,
+              matches: (before, after) =>
+                before?.sessionId === after?.sessionId &&
+                before?.lifecycleRevision === after?.lifecycleRevision,
+            })
+          : undefined;
+        try {
+          return await admit(initialEntry, () => {
+            owner.assertCurrent();
+            const current = retained?.readCurrent();
+            if (retained && !current) {
+              throw session.createSessionWorkStartChangedError(params.sessionKey);
+            }
+            return current ? current.entry : initialEntry;
+          });
+        } finally {
+          retained?.release();
+        }
+      },
+    );
+  }
+
+  async function admit(
+    initialEntry: SessionEntry | undefined,
+    readCurrentEntry: () => SessionEntry | undefined,
+  ): Promise<T> {
     const lifecycleAbortController = new AbortController();
     const admission = await beginSessionWorkAdmission({
       agentId: resolveSessionAgentIds({ config: getRuntimeConfig(), sessionKey: params.sessionKey })
@@ -137,24 +177,14 @@ async function runWithSessionWorkAdmission<T>(
           new Error("Agent work interrupted by a session lifecycle change."),
         ),
       assertAllowed: () => {
-        source?.admissionSignal?.throwIfAborted();
-        if (source && "kind" in source) {
-          source.assertCurrent();
-        }
-        const currentEntry = source
-          ? "kind" in source
-            ? undefined
-            : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : getSessionEntry({
-              storePath: params.storePath,
-              sessionKey: params.sessionKey,
-              readConsistency: "latest",
-            });
-        const changed = initialEntry
-          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-          : Boolean(currentEntry);
-        if (changed) {
-          throw session.createSessionWorkStartChangedError(params.sessionKey);
+        const currentEntry = readCurrentEntry();
+        if (memory) {
+          const changed = initialEntry
+            ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+            : Boolean(currentEntry);
+          if (changed) {
+            throw session.createSessionWorkStartChangedError(params.sessionKey);
+          }
         }
         const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
         if (startError) {

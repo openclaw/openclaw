@@ -1,5 +1,8 @@
 /** Collects core config secret refs during runtime preparation. */
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
@@ -73,7 +76,15 @@ function collectModelOrSkillAssignments(params: {
         contract: entry,
       } satisfies SecretAssignmentOwner,
     };
-    collect(entry, "apiKey", `${entryPath}.apiKey`, activity);
+    const usesManagedLocalService =
+      isModel && params.context.managedSyntheticAuthProviders?.has(normalizeProviderId(id));
+    collect(entry, "apiKey", `${entryPath}.apiKey`, {
+      ...activity,
+      active: active && !usesManagedLocalService,
+      inactiveReason: usesManagedLocalService
+        ? "managed local services use provider-owned authentication."
+        : activity.inactiveReason,
+    });
     if (!isModel) {
       continue;
     }

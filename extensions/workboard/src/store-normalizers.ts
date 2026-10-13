@@ -277,7 +277,7 @@ export function normalizeWorkspace(
 export function normalizeAutomation(
   value: unknown,
   fallback: WorkboardAutomation = {},
-  options: { allowLaunchState?: boolean } = {},
+  options: { launch?: WorkboardLaunchState } = {},
 ): WorkboardAutomation | undefined {
   const record = isRecord(value) ? value : {};
   const timestamp = (key: "scheduledAt" | "dispatchCount" | "lastDispatchAt") =>
@@ -318,9 +318,7 @@ export function normalizeAutomation(
     createdCardIds: strings("createdCardIds", "created card ids", 120),
     dispatchCount: timestamp("dispatchCount") || undefined,
     lastDispatchAt: timestamp("lastDispatchAt") || undefined,
-    launch: normalizeLaunchState(
-      options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
-    ),
+    launch: options.launch ? normalizeLaunchState(options.launch) : fallback.launch,
   };
   // Legacy imports can retain empty workspace or authority objects.
   for (const [key, entry] of Object.entries(next)) {
@@ -337,7 +335,7 @@ function normalizeLaunchTimestamp(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
+export function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -831,14 +829,14 @@ export function normalizeMetadata(
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
-    allowAutomationLaunch?: boolean;
+    automationLaunch?: WorkboardLaunchState;
     preserveProofId?: string;
   } = {},
 ): WorkboardMetadata {
-  if (!isRecord(value)) {
+  if (!isRecord(value) && !options.automationLaunch) {
     return trimMetadataToBudget(fallback, options);
   }
-  const record = value;
+  const record = isRecord(value) ? value : {};
   const stale = isRecord(record.stale) ? record.stale : null;
   // Archival is a transition owned by archive(), which appends the matching
   // `archived` event. Callers that cannot produce that event (create) must not
@@ -904,7 +902,7 @@ export function normalizeMetadata(
     automation: normalizeAutomation(
       Object.hasOwn(record, "automation") ? record.automation : {},
       fallback.automation,
-      { allowLaunchState: options.allowAutomationLaunch },
+      { launch: options.automationLaunch },
     ),
     claim: Object.hasOwn(record, "claim")
       ? record.claim

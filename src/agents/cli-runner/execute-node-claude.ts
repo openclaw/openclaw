@@ -197,6 +197,7 @@ export async function executeNodeClaudeRun(params: {
       return await runWithAgentToolSourceExecutionScope(assertCurrent, () =>
         params.deps.invokeNodeClaudeCliRun({
           assertCurrent,
+          assertReadable: params.context.cliHistoryWriter?.assertReadable,
           nodeId: params.nodePlacement.nodeId,
           argv: params.executionArgs,
           stdin: params.stdinPayload,

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
@@ -59,7 +58,6 @@ export {
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 export {
-  assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
   publishSessionEntryPlaceholderInsertion,
   publishSessionEntryWorkerMetadataInvalidation,
@@ -90,11 +88,6 @@ type SessionEntryCacheUpdate = { sessionKey: string } & (
     }
   | { entry?: undefined; entryJson?: never }
 );
-
-/** Commit-driven projections borrow owner memory; ordinary reads still validate SQLite. */
-export function readCommittedSessionEntryCache(database: DatabaseSync) {
-  return sessionEntryCaches.get(database)?.entries;
-}
 
 /** Reuse only complete, current metadata; exact reads still own misses and invalid rows. */
 function readCachedExactSessionEntries(
@@ -468,7 +461,7 @@ export function publishSessionEntryCacheParticipantUpdate(
       database,
       sessionKey,
       database.agentId,
-      { kind: "participants" },
+      { kind: "participants", projectionChanged: false },
       { kind: "marker", sharingChange: "unchanged" },
     );
     return;

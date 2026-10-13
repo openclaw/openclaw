@@ -53,14 +53,12 @@ vi.mock("../logging/subsystem.js", factories.logging);
 
 vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
 // mock-isolation: The placement runtime is a hand-built fixture so capability resolution is observed without loading the worker runtime.
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
-  ...factories.placementRuntime(),
-  resolveWorkerPlacementSessionRuntimeCapabilitiesAsync: async (
-    params: Parameters<
-      typeof import("../gateway/worker-environments/placement-session-runtime.js").resolveWorkerPlacementSessionRuntimeCapabilitiesAsync
-    >[0],
-  ) => placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(params),
-}));
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+// mock-isolation: Worker preparation is covered by the placement runtime owner tests.
+vi.mock(
+  "../gateway/worker-environments/placement-session-runtime-preparation.js",
+  factories.placementRuntimePreparation,
+);
 
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 

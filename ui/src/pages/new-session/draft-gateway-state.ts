@@ -1,6 +1,10 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReactiveControllerHost } from "lit";
+import type {
+  EnvironmentsListResult,
+  EnvironmentsAdoptSuggestedProfileResult,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -79,6 +83,7 @@ export class DraftGatewayState {
   }
 
   private cloudProfilesValue: DraftCloudProfile[] = [];
+  private suggestedProfileValue: EnvironmentsListResult["suggestedProfile"];
   private gatewayAuthorityValue = "";
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
@@ -187,18 +192,25 @@ export class DraftGatewayState {
         }
         const required = policy.requiredProfile;
         if (required || !canWrite) {
-          return { profiles: readDraftCloudProfiles(required ? [required] : []), environments: [] };
+          return {
+            profiles: readDraftCloudProfiles(required ? [required] : []),
+            environments: [],
+            suggestedProfile: undefined,
+          };
         }
         const result = await requestPlaceCatalog(client, runtimeId);
         return {
           ...result,
           profiles: isAdmin ? result.profiles : [],
+          suggestedProfile: isAdmin ? result.suggestedProfile : undefined,
         };
       },
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
         this.applyCloudProfiles(placeCatalog.profiles);
+        this.suggestedProfileValue =
+          placeCatalog.profiles.length === 0 ? placeCatalog.suggestedProfile : undefined;
         this.cloudProfilesReadyValue = true;
       },
       onError: () => {
@@ -217,6 +229,43 @@ export class DraftGatewayState {
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
     return this.cloudProfilesValue;
+  }
+
+  get suggestedProfile(): EnvironmentsListResult["suggestedProfile"] {
+    return this.suggestedProfileValue;
+  }
+
+  async adoptSuggestedProfile(): Promise<string | undefined> {
+    const client = this.gatewayClientValue;
+    const epoch = this.gatewayConnectionEpochValue;
+    const scope = this.sessionCreateScope;
+    if (
+      !client ||
+      !this.gatewayConnectedValue ||
+      !this.read().isAdmin ||
+      !this.suggestedProfileValue
+    ) {
+      return undefined;
+    }
+    const { profile } = await client.request<EnvironmentsAdoptSuggestedProfileResult>(
+      "environments.adoptSuggestedProfile",
+      {},
+    );
+    if (
+      client !== this.gatewayClientValue ||
+      epoch !== this.gatewayConnectionEpochValue ||
+      scope !== this.sessionCreateScope ||
+      !this.gatewayConnectedValue ||
+      !this.read().isAdmin
+    ) {
+      return undefined;
+    }
+    // Retire an older catalog read before publishing the saved profile.
+    void this.cloudProfileTask.run();
+    this.applyCloudProfiles(readDraftCloudProfiles([profile]));
+    this.suggestedProfileValue = undefined;
+    this.callbacks.requestUpdate();
+    return profile.id;
   }
 
   /** The agent roster carries the policy, so it needs no request or wait of its own. */
@@ -426,6 +475,7 @@ export class DraftGatewayState {
     // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
     void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.cloudProfilesValue = [];
+    this.suggestedProfileValue = undefined;
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
       this.environmentsValue = null;
@@ -600,6 +650,7 @@ export class DraftGatewayState {
     this.stopPreferences = undefined;
     this.identityPreferences = undefined;
     this.cloudProfilesValue = [];
+    this.suggestedProfileValue = undefined;
     this.cloudProfilesReadyValue = false;
     this.environmentsValue = null;
     this.cloudProfileRefresh = null;

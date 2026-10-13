@@ -50,7 +50,10 @@ import {
   withWorkerCompactionAdoption,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
-import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import {
+  prepareWorkerTurnTranscriptSource,
+  resolveWorkerTurnTranscriptTarget,
+} from "./worker-turn-transcript-target.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -221,14 +224,9 @@ describe("worker turn launcher local placement", () => {
       updatedAt: Date.now() + 1,
     });
 
-    expect(() =>
-      resolveWorkerTurnTranscriptTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        sessionTarget,
-      }),
-    ).toThrow("transcript identity is no longer current");
+    await expect(prepareWorkerTurnTranscriptSource(sessionTarget)).rejects.toThrow(
+      "transcript identity is no longer current",
+    );
   });
   it("keeps the exact local claim cleanup across compaction successor acceptance", async () => {
     const uninstall = installSessionPlacementAdmissionProvider(localProvider);
