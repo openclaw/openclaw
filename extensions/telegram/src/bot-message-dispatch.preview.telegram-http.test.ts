@@ -174,8 +174,10 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   });
 
   it.each([
+    { hook: "reply_payload_sending", policy: "allow" },
     { hook: "reply_payload_sending", policy: "redact" },
     { hook: "reply_payload_sending", policy: "cancel" },
+    { hook: "message_sending", policy: "allow" },
     { hook: "message_sending", policy: "redact" },
     { hook: "message_sending", policy: "cancel" },
   ] as const)(
@@ -191,7 +193,10 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           handler: (event: PluginHookReplyPayloadSendingEvent) => {
             const text = event.payload.text ?? "";
             policyInputs.push(text);
-            return policy === "cancel" && text.includes("fixture-secret-question")
+            if (policy === "allow") {
+              return undefined;
+            }
+            return policy === "cancel" && text.includes("fixture-secret")
               ? { cancel: true }
               : {
                   payload: {
@@ -208,7 +213,10 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           hookName: hook,
           handler: (event: { content: string }) => {
             policyInputs.push(event.content);
-            return policy === "cancel" && event.content.includes("fixture-secret-question")
+            if (policy === "allow") {
+              return undefined;
+            }
+            return policy === "cancel" && event.content.includes("fixture-secret")
               ? { cancel: true }
               : { content: event.content.replaceAll("fixture-secret", "filtered") };
           },
@@ -245,14 +253,34 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
         },
       });
-      expect(policyInputs.some((text) => text.includes("fixture-secret-question"))).toBe(true);
-      expect(policyInputs.some((text) => text.includes("fixture-secret-final"))).toBe(true);
-      expect(JSON.stringify(calls)).not.toContain("fixture-secret");
-      expect([...visibleMessages.values()]).toEqual([
-        ...(policy === "redact" ? ["Choose filtered-question."] : []),
-        "Finished filtered-final.",
-        "Follow-up filtered-final.",
-      ]);
+      expect(policyInputs).toEqual(
+        expect.arrayContaining([
+          "Choose fixture-secret-question.",
+          "Finished fixture-secret-final.",
+          "Follow-up fixture-secret-final.",
+        ]),
+      );
+      const persistentMarker = /(?:fixture-secret|filtered)-(?:question|final)/u;
+      if (policy === "cancel") {
+        expect(
+          calls.filter((call) =>
+            persistentMarker.test(
+              JSON.stringify([call.fields.text, call.fields.caption, call.fields.rich_message]),
+            ),
+          ),
+        ).toEqual([]);
+        expect([...visibleMessages.values()].join("\n")).not.toMatch(persistentMarker);
+      } else {
+        const content = policy === "allow" ? "fixture-secret" : "filtered";
+        expect([...visibleMessages.values()]).toEqual([
+          `Choose ${content}-question.`,
+          `Finished ${content}-final.`,
+          `Follow-up ${content}-final.`,
+        ]);
+      }
+      if (policy !== "allow") {
+        expect(JSON.stringify(calls)).not.toContain("fixture-secret");
+      }
       expect(
         acceptedCalls.some(
           (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
