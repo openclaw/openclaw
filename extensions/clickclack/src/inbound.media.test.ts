@@ -102,12 +102,17 @@ describe("ClickClack inbound media", () => {
       [1, 2, 3],
       [1, 2, 3],
     ]);
-    expect(vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].ctxPayload.media).toEqual(
-      [
-        { path: "/managed/1.png", contentType: "image/png", messageId: "msg_1" },
-        { path: "/managed/2.png", contentType: "image/png", messageId: "msg_1" },
-      ],
-    );
+    const media = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].ctxPayload.media;
+    expect(
+      media?.map((fact) => ({
+        path: fact.path,
+        contentType: fact.contentType,
+        messageId: fact.messageId,
+      })),
+    ).toEqual([
+      { path: "/managed/1.png", contentType: "image/png", messageId: "msg_1" },
+      { path: "/managed/2.png", contentType: "image/png", messageId: "msg_1" },
+    ]);
   });
 
   it("keeps attachment messages in text-only model mode from gaining agent or tool authority", async () => {
