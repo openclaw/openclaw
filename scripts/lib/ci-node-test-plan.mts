@@ -4320,28 +4320,21 @@ export function createSelectedNodeTestShardBundles(
         ]
       : [];
   });
-  return applyNativeSoloTimings(
-    [
-      ...(tooling.size
-        ? createCompactNodeTestShardBundles(
-            shards.filter((shard) => owners.has(shard)),
-            options,
-            "pull-request",
-            tooling,
-          )
-        : []),
-      ...packSelectedNodeTestJobs(
-        projected,
-        options.runnerBackend,
-        canonicalFamilies,
-        groupSeconds,
-      ),
-    ].map((job) => ({
-      ...job,
-      runner: resolveSelectedNodeTestRunner(job, options.runnerBackend),
-    })),
-    options.runnerBackend,
-  );
+  const selectedJobs = [
+    ...(tooling.size
+      ? createCompactNodeTestShardBundles(
+          shards.filter((shard) => owners.has(shard)),
+          options,
+          "pull-request",
+          tooling,
+        )
+      : []),
+    ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
+  ];
+  for (const job of selectedJobs) {
+    job.runner = resolveSelectedNodeTestRunner(job, options.runnerBackend);
+  }
+  return applyNativeSoloTimings(selectedJobs, options.runnerBackend);
 }
 
 function compactPreparationSeconds(
