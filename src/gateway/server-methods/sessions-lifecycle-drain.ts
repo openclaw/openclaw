@@ -218,15 +218,22 @@ export async function prepareSessionLifecycleDrain(
           },
           onAuthorizedAfterQueuedAbort: () => {
             const cleared = clearSessionQueues(workIdentities);
-            let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
+            return cleared.followupCleared > 0 || cleared.laneCleared > 0;
+          },
+          onCancellationStarted: () => {
+            if (params.sessionId) {
+              params.authorize?.();
+              abortEmbeddedAgentRun(params.sessionId);
+            }
+            // Let chat controllers publish cancellation before their reply becomes non-abortable.
             for (const key of params.sessionKeys) {
-              aborted = replyRunRegistry.abort(key) || aborted;
+              params.authorize?.();
+              replyRunRegistry.abort(key);
             }
             if (params.sessionId) {
-              aborted = abortReplyRunBySessionId(params.sessionId) || aborted;
-              aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
+              params.authorize?.();
+              abortReplyRunBySessionId(params.sessionId);
             }
-            return aborted;
           },
         });
         // Observe failures immediately while the short mutation releases its queues.

@@ -3,6 +3,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
@@ -21,10 +22,17 @@ import {
   releaseSwarmRun,
   isSwarmRunActive,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import {
+  isReplyRunAbortableForSignal,
+  retainReplyOperationUntilComplete,
+} from "../../auto-reply/reply/reply-run-registry.state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -32,6 +40,10 @@ import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import {
+  prepareSessionLifecycleDrain,
+  type SessionLifecycleDrain,
+} from "./sessions-lifecycle-drain.js";
 
 const fixture = useChatAbortRegistryFixture();
 const parentKey = "agent:main:direct:embedded-parent";
@@ -496,6 +508,82 @@ it.each([
       clearActiveEmbeddedRun("running", child, childKey("running"));
       registration.cleanup();
       expect(isEmbeddedAgentRunAbortableForRunId("parent")).toBe(true);
+    }
+  },
+);
+
+it.for(["controller", "reply-only"] as const)(
+  "delete drain records cancellation before settling a retained %s reply",
+  async (owner, { signal }) => {
+    const runId = "delete-retained-reply";
+    await sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: parentKey },
+      { sessionId: parentId, updatedAt: 1 },
+    );
+    const context = createDirectChatContext({ getRuntimeConfig });
+    const registration =
+      owner === "controller"
+        ? registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId,
+            sessionId: parentId,
+            sessionKey: parentKey,
+            agentId: "main",
+            timeoutMs: 30_000,
+            isAbortable: (entry) => isReplyRunAbortableForSignal(entry.controller.signal),
+          })
+        : undefined;
+    const operation = createReplyOperation({
+      sessionKey: parentKey,
+      sessionId: parentId,
+      agentId: "main",
+      resetTriggered: false,
+      upstreamAbortSignal: registration?.controller.signal,
+    });
+    retainReplyOperationUntilComplete(operation);
+    const aborted = createDeferredCore();
+    operation.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+    let drain: SessionLifecycleDrain | undefined;
+    const pending = prepareSessionLifecycleDrain({
+      action: "delete",
+      context,
+      storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: "main",
+      }),
+      sessionKeys: [parentKey],
+      sessionKey: parentKey,
+      sessionId: parentId,
+      agentId: "main",
+      defaultAgentId: "main",
+      lifecycleIdentities: [parentKey, parentId],
+    }).then((result) => {
+      drain = result;
+      return result;
+    });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(aborted.promise, pending, "Delete skipped the reply owner"),
+        signal,
+      );
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(drain).toBeUndefined();
+      if (registration) {
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ runId, state: "aborted", stopReason: "delete" }),
+          expect.anything(),
+        );
+      }
+      operation.complete();
+      registration?.cleanup();
+      await withinTest(pending, signal);
+      expect(drain?.hasAuthoritativeWork()).toBe(false);
+    } finally {
+      operation.complete();
+      registration?.cleanup();
+      await settled;
+      drain?.release();
     }
   },
 );
