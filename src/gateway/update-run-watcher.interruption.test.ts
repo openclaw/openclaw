@@ -25,6 +25,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -41,6 +42,12 @@ const observation = vi.hoisted(() => ({
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: async (
+    ...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>
+  ) => reconcileOpenClawStateSchemaPublication(...args),
+}));
 vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
   reconcileAbandonedUpdateRunsAsync: async (

@@ -1,4 +1,5 @@
 import type { ApplicationGateway } from "./gateway.ts";
+import { hasOperatorReadAccess } from "./operator-access.ts";
 
 const REPORT_INTERVAL_MS = 30_000;
 const INPUT_EVENTS = ["keydown", "pointerdown", "pointermove", "wheel", "touchstart"] as const;
@@ -20,6 +21,7 @@ export function startGatewayPresenceActivity(
       pending ||
       !client ||
       phase !== "connected" ||
+      !hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) ||
       documentTarget.visibilityState !== "visible"
     ) {
       return;
