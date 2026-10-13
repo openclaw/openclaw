@@ -100,7 +100,7 @@ export function renderContextNewSessionAction(
   });
 }
 
-export function renderNewSessionMenu(params: {
+function renderNewSessionMenu(params: {
   basePath: string;
   access: SessionMethodAccess;
   className?: string;

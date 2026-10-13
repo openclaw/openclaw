@@ -141,6 +141,33 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
     }),
   );
 
+  it(
+    "persists the first silent heartbeat after boot for the next user run",
+    heartbeatCase(async ({ cfg, storePath, seed, replySpy, sendTelegram, run }) => {
+      cfg.agents!.defaults!.heartbeat!.target = "none";
+      const sessionKey = await seed();
+      await closeOpenClawAgentDatabasesAsync();
+      replySpy.mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: false,
+          summary: "First heartbeat after boot",
+        }),
+      );
+      expect(await run()).toMatchObject({ status: "ran" });
+      expect(sendTelegram).not.toHaveBeenCalled();
+      await closeOpenClawAgentDatabasesAsync();
+      expect(
+        await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId: "next-user",
+        }),
+      ).toMatchObject({ summary: "First heartbeat after boot", outcome: "progress" });
+    }),
+  );
+
   it.each([false, true])("awaits outcome persistence failures (notify=%s)", async (notify) =>
     heartbeatCase(async ({ cfg, storePath, seed, replySpy, sendTelegram, run }) => {
       cfg.agents!.defaults!.heartbeat!.target = "none";
