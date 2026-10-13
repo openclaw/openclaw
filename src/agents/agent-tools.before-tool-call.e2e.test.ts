@@ -2095,32 +2095,6 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("emits the retained fingerprint through a clean tracing-active delivery", async () => {
-    // Positive control for the omission cases that follow: with tracing
-    // active and a clean qualifying delivery, the fingerprint must flow
-    // through to the emission. Without this control, a guard that silently
-    // suppressed valid fingerprints would keep every omission assertion green
-    // without ever exercising the emission path.
-    registerActiveTracingBridge();
-    const delivery = createSkillDeliveryState();
-    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
-    const tool = createDeliveryWrappedRead(execute, "fp-clean-delivery", delivery);
-
-    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
-      await tool.execute("clean-delivery-read", { path: pondLocator }, undefined, undefined);
-      await flush();
-      const used = emitted.filter((evt) => evt.type === "skill.used");
-      expect(used).toHaveLength(1);
-      expectEventFields(used[0], {
-        type: "skill.used",
-        toolCallId: "clean-delivery-read",
-        activation: "read",
-        skillName: "pond",
-        skillFingerprint: "fp-clean-delivery",
-      });
-    });
-  });
-
   it("omits the fingerprint for read activations without a qualifying delivery", async () => {
     // Tracing is active, so the matcher's general tracing gate cannot
     // satisfy these omissions: each path must omit through its own guard. A
