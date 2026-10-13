@@ -82,10 +82,15 @@ fn live_executables(_: &BTreeSet<OsString>) -> RuntimeResult<Vec<PathBuf>> {
             Ok(path) => paths.push(path),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // Exited processes and zombies have no executable; unreadable live ones defer GC.
-                if fs::read_to_string(directory.join("stat")).is_ok_and(|stat| {
-                    stat.rsplit_once(") ")
-                        .is_some_and(|(_, tail)| !tail.starts_with('Z'))
-                }) {
+                let stat = match fs::read_to_string(directory.join("stat")) {
+                    Ok(stat) => stat,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if !stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, tail)| tail.starts_with('Z'))
+                {
                     return Err(error.into());
                 }
             }

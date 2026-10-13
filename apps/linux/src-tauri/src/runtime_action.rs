@@ -223,11 +223,14 @@ impl Observation {
         }
     }
 
-    fn previous_runtime_command(&self) -> String {
-        let path = self
-            .text("/service/runtimeIntent/pin/path")
+    fn selected_runtime_path(&self) -> Option<&Path> {
+        self.text("/service/runtimeIntent/pin/path")
             .map(Path::new)
-            .or_else(|| self.runtime_path());
+            .or_else(|| self.runtime_path())
+    }
+
+    fn previous_runtime_command(&self) -> String {
+        let path = self.selected_runtime_path();
         let kind = self
             .text("/service/runtimeIntent/pin/runtime")
             .unwrap_or_else(|| {
@@ -356,9 +359,10 @@ fn collect_after_healthy(
         let Some(mut launcher) = original.selection.clone() else {
             return Ok(());
         };
-        let previous = confirmed
-            .runtime_path()
-            .filter(|_| !confirmed.uses_runtime_path(&runtime.bun));
+        let previous = confirmed.selected_runtime_path().filter(|path| {
+            *path != runtime.bun
+                && fs::canonicalize(path).ok().as_deref() != Some(runtime.bun.as_path())
+        });
         let previous = previous.map(Path::to_path_buf).or_else(|| {
             launcher.retention.as_ref().and_then(|retention| {
                 (retention.current == runtime.bun)

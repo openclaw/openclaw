@@ -308,6 +308,7 @@ fn successive_activations_collect_only_after_health_and_keep_rollback_on_retry()
     let entry = fixture.prefix.join("entry.js");
     fs::write(&entry, "fixture CLI").unwrap();
     install_launcher(&fixture.prefix, &launcher_runtime, &entry, Purpose::Gateway).unwrap();
+    let prefix = fixture.prefix.clone();
     let state = |runtime: &BundledRuntime| {
         serde_json::json!({
             "service": {
@@ -318,14 +319,15 @@ fn successive_activations_collect_only_after_health_and_keep_rollback_on_retry()
                 "revision": "service", "launcherOverridden": false
             },
             "gateway": { "port": 18789 },
-            "config": { "daemon": { "path": fixture.prefix.join("openclaw.json") } },
+            "config": { "daemon": { "path": prefix.join("openclaw.json") } },
             "rpc": { "ok": true },
             "port": { "port": 18789, "status": "busy", "listeners": [{ "pid": 4100 }] }
         })
     };
     fs::write(fixture.prefix.join("state.json"), state(&first).to_string()).unwrap();
     let cli = crate::cli::OpenClawCli::browser_runtime(fixture.prefix.clone()).unwrap();
-    for runtime in [&second, &third, &third] {
+    for (runtime, tag) in [(&second, "second"), (&third, "third"), (&third, "third")] {
+        fixture.next_seed(tag);
         fs::write(
             fixture.prefix.join("healthy.json"),
             state(runtime).to_string(),
@@ -336,7 +338,7 @@ fn successive_activations_collect_only_after_health_and_keep_rollback_on_retry()
     assert!(!first.bun.exists());
     assert!(second.bun.is_file());
     assert!(third.bun.is_file());
-    // A staged but never activated seed may have been collected; reseed the failed candidate.
+    // A failed activation must preserve the remaining seeds and rollback marker.
     let fourth = fixture.next_seed("fourth");
     let launcher_path = crate::cli::managed_launcher(&fixture.prefix);
     let before = fs::read(&launcher_path).unwrap();
