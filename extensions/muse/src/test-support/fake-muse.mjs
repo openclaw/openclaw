@@ -7,7 +7,12 @@ import { EXPECTED_SCHEMA_FINGERPRINT } from "@muse-code/sdk";
 if (process.env.MUSE_REQUEST_LOG) {
   appendFileSync(
     process.env.MUSE_REQUEST_LOG,
-    `${JSON.stringify({ event: "spawn", pid: process.pid, args: process.argv.slice(2) })}\n`,
+    `${JSON.stringify({
+      event: "spawn",
+      pid: process.pid,
+      args: process.argv.slice(2),
+      noAutoUpdate: process.env.MUSE_NO_AUTO_UPDATE,
+    })}\n`,
   );
 }
 

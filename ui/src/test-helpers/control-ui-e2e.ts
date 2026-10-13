@@ -420,6 +420,7 @@ export type ControlUiMockGatewayScenario = {
   deviceToken?: string;
   authMethod?: HelloOk["auth"]["method"];
   authMode?: HelloOk["snapshot"]["authMode"] | null;
+  featureEvents?: string[];
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
@@ -947,6 +948,7 @@ function normalizeScenario(
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     authMethod: scenario.authMethod ?? "token",
     authMode: scenario.authMode ?? null,
+    featureEvents: scenario.featureEvents ?? [],
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
@@ -1845,7 +1847,7 @@ function installControlUiMockGateway(
               }),
           features: {
             capabilities: scenario.featureCapabilities,
-            events: [],
+            events: scenario.featureEvents,
             ...(scenario.omitFeatureMethods ? {} : { methods: scenario.featureMethods }),
           },
           controlUiTabs: scenario.controlUiTabs,

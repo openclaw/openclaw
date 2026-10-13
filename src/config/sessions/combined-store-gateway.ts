@@ -33,6 +33,7 @@ import {
   type GatewayStoredSessionTargets,
 } from "./combined-store-model-sources.js";
 import {
+  createGatewayConfiguredDatabaseMatcher,
   createGatewayRetainedStoreMatcher,
   discoveryReadOptions,
   isStorePathTemplate,
@@ -59,10 +60,8 @@ import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-k
 import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
-  isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
-  resolveConfiguredAgentDatabaseCandidatePaths,
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "./targets.js";
@@ -465,19 +464,13 @@ export function applyGatewaySessionStoreAdmission(
   if (opts.agentId?.trim()) {
     assertAgentDatabaseAdmitted(opts.agentId, { env });
   }
-  const configuredTargets =
+  const isConfiguredDatabase =
     opts.preserveSentinelOwners === "physical" && getAgentDatabaseStartupAdmission()
-      ? resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }).map((pathname) => ({
-          path: pathname,
-        }))
+      ? createGatewayConfiguredDatabaseMatcher(cfg, env)
       : undefined;
   const admitted = (target: SessionStoreTarget): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
-    if (
-      configuredTargets &&
-      physical &&
-      !isConfiguredAgentDatabaseTarget(configuredTargets, physical.agentId, physical.storePath)
-    ) {
+    if (isConfiguredDatabase && physical && !isConfiguredDatabase(physical.storePath)) {
       return false;
     }
     const refusal =

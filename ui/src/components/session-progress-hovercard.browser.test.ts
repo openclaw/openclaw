@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 import "./session-progress-hovercard.runtime.tsx";
 
@@ -26,6 +27,7 @@ it("settles an empty focused preview without remounting or starving the renderer
   document.body.append(host);
   try {
     await host.updateComplete;
+    flush();
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       link.focus();
       await new Promise<void>((resolve) => {

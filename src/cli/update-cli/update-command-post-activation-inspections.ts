@@ -51,7 +51,7 @@ export async function runPostActivationInspections(params: {
   const incomplete = (reason: string): UpdateRunResult => {
     step.advisory = {
       kind: "recoverable-maintenance",
-      message: `Deferred Doctor inspections did not complete after restart (${reason}). Run \`openclaw doctor --lint --severity-min info\` to inspect them.`,
+      message: `Deferred Doctor inspections did not complete after restart (${reason}). Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`,
     };
     defaultRuntime.error(step.advisory.message);
     return { ...params.result, steps: [...params.result.steps, step] };
@@ -158,7 +158,7 @@ export async function runPostActivationInspections(params: {
     if (report.doctorLintFindings.length > 0) {
       step.advisory = {
         kind: "recoverable-maintenance",
-        message: `Deferred Doctor inspections reported ${report.doctorLintFindings.length} advisory finding${report.doctorLintFindings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --severity-min info\` to inspect them.`,
+        message: `Deferred Doctor inspections reported ${report.doctorLintFindings.length} advisory finding${report.doctorLintFindings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`,
       };
     }
     return { ...params.result, steps: [...params.result.steps, step] };

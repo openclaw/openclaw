@@ -95,6 +95,17 @@ terminal receipt to bind the exact session, visible marker, and configured
 provider/model. Neither a healthy probe nor a timeout becomes successful
 acceptance. A deadline expiry retains recovery evidence.
 
+During graceful suspension drain, status reads use a five-second transport and
+subprocess bound (shortened by the original drain deadline). A typed timeout,
+connection loss, or service-restart close retries after one, two, then at most
+four seconds, with each wait capped by the remaining drain budget. These reads
+do not renew the deadline or the suspension lease. Missing or malformed failure
+evidence, authentication or protocol failures, and definitive Gateway refusals
+remain fatal. Deadline expiry still requires the existing fresh lease,
+process-generation, and write-custody proof before authorized interruption;
+failed observations never authorize stopping the Gateway. Adopt the changed
+script and library together through the complete-pair procedure below.
+
 Migration and restoration receive at least two hours, or the existing build
 budget when larger. A measured synthetic 25 → 26 crossing took 4m04s for
 3.865 GiB, roughly 39 minutes at 37 GiB by linear extrapolation before backup;

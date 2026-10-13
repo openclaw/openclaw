@@ -603,9 +603,6 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-toast-host": HTMLAttributes<HTMLElementTagNameMap["openclaw-toast-host"]> &
         Properties<HTMLElementTagNameMap["openclaw-toast-host"]>;
-      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement> & {
-        "prop:branding": ReturnType<typeof currentThemeBranding>;
-      };
     }
   }
 }

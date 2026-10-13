@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navigation", () => {
   it("traverses the actual item order and both footer controls in each direction", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const { page, userEvent } = await import("vitest/browser");
