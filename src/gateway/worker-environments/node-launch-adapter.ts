@@ -13,6 +13,7 @@ import {
   createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_INFERENCE_SETUP_ERROR,
   NODE_WORKER_STATUS_WAIT_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
@@ -534,10 +535,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                       input.descriptor.assignment.inference === "runtime-local" &&
                       node.workerHost.nativeInference !== 1
                     ) {
-                      throw createNodeRunnerInventoryIssueError(
-                        node.nodeId,
-                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-                      );
+                      throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
                     }
                     if (
                       node.workerHost.idleRetention === true &&

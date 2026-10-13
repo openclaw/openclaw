@@ -6,7 +6,6 @@ import { isMainThread } from "node:worker_threads";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { hasProfilerConflict, sanitizeDiagnosticProfileFrame } from "./diagnostic-profile.js";
 
-const ENABLED = true;
 const WINDOW_MS = 5_000;
 const SAMPLE_MS = 10;
 const MAX_SAMPLES = 1_024;
@@ -33,7 +32,6 @@ export function createStallFlightRecorder(
   let previous: { json: string; endedAt: number } | undefined;
   let startedAt = 0;
   let disabled =
-    !ENABLED ||
     !isMainThread ||
     typeof v8.startCpuProfile !== "function" ||
     Boolean(versions.bun) ||
@@ -91,8 +89,15 @@ export function createStallFlightRecorder(
             truncated = true;
             continue;
           }
-          // SAFETY: Only the native V8 CPU profiler supplies this JSON and its numeric script IDs.
-          const profile = JSON.parse(window.json) as NativeCpuProfile;
+          // V8's native serializer writes names and URLs verbatim, including quotes,
+          // backslashes and control characters. Escape them before decoding the profile.
+          const profile = JSON.parse(
+            window.json.replace(
+              /"functionName":"(.*?)"(,"lineNumber":-?\d+,"columnNumber":-?\d+,"scriptId":-?\d+,"url":)"(.*?)"}(?=,"(?:children|deoptReason|positionTicks)":|})/gs,
+              (_match, name: string, location: string, url: string) =>
+                `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
+            ),
+          ) as NativeCpuProfile; // SAFETY: V8 owns the profile shape and numeric script IDs.
           const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
           const parents = new Map<number, number>();
           for (const node of profile.nodes) {

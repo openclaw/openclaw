@@ -149,25 +149,21 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     const deleteStaleRows = () => this.deleteStaleSourceFiles("memory", existingRows, activePaths);
 
-    if (this.batch.enabled) {
-      const indexItems: MemoryIndexWorkItem[] = [];
-      for (const entry of fileEntries) {
-        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
-          this.advanceSyncProgress(params.progress);
-          continue;
-        }
-        indexItems.push({ entry, source: "memory" });
+    const indexItems: MemoryIndexWorkItem[] = [];
+    for (const entry of fileEntries) {
+      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+        this.advanceSyncProgress(params.progress);
+        continue;
       }
+      indexItems.push({ entry, source: "memory" });
+    }
+    if (this.batch.enabled) {
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
       }
       await this.indexQueuedFiles(indexItems, params.progress);
     } else {
-      const tasks = fileEntries.map((entry) => async () => {
-        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
-          this.advanceSyncProgress(params.progress);
-          return;
-        }
+      const tasks = indexItems.map(({ entry }) => async () => {
         await this.indexFile(entry, "memory");
         this.advanceSyncProgress(params.progress);
       });

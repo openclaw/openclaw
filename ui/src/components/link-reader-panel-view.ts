@@ -3,11 +3,11 @@ import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
 import { dockPanelStyles } from "./dock-panel-styles.ts";
 import { icons } from "./icons.ts";
-import { linkReaderContentStyles } from "./link-reader-content.styles.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
-import { linkReaderPanelStyles } from "./link-reader-panel.styles.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { panelTabStripStyles } from "./panel-tab-strip.ts";
+import linkReaderContentStyles from "./link-reader-content.css?inline";
+import linkReaderPanelStyles from "./link-reader-panel.css?inline";
 
 export const linkReaderPanelLayout = createDockPanelLayout({
   storageKey: "openclaw.link-reader.panel.v1",
@@ -20,8 +20,8 @@ export const linkReaderPanelLayout = createDockPanelLayout({
 });
 
 export const linkReaderViewStyles = [
-  panelTabStripStyles,
-  dockPanelStyles,
+  panelTabStripStyles.cssText,
+  dockPanelStyles.cssText,
   linkReaderPanelStyles,
   linkReaderContentStyles,
 ];

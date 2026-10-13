@@ -54,17 +54,33 @@ type SessionWorkStartBlockReason =
   | "archived"
   | "workspace_pending";
 
+export class SessionWorkStartError extends Error {
+  constructor(
+    readonly reason: SessionWorkStartBlockReason,
+    message: string,
+    readonly retryable = false,
+  ) {
+    super(message);
+  }
+}
+
 /** One work-start policy supplies both user errors and recovery disposition. */
 export function resolveSessionWorkStartBlock(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
   options?: SessionWorkStartOptions,
-): { reason: SessionWorkStartBlockReason; message: string; retryable: boolean } | undefined {
+): SessionWorkStartError | undefined {
   if (options?.expectedSessionId && !entry) {
-    return block("deleted", `Session "${sessionKey}" was deleted while starting work. Retry.`);
+    return new SessionWorkStartError(
+      "deleted",
+      `Session "${sessionKey}" was deleted while starting work. Retry.`,
+    );
   }
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
-    return block("changed", `Session "${sessionKey}" changed while starting work. Retry.`);
+    return new SessionWorkStartError(
+      "changed",
+      `Session "${sessionKey}" changed while starting work. Retry.`,
+    );
   }
   const incognitoExpiresAt = entry ? resolveIncognitoSessionExpiresAt(entry) : undefined;
   if (
@@ -72,13 +88,13 @@ export function resolveSessionWorkStartBlock(
     incognitoExpiresAt !== undefined &&
     Date.now() >= incognitoExpiresAt
   ) {
-    return block(
+    return new SessionWorkStartError(
       "expired",
       `Incognito session "${sessionKey}" expired. Start a new Incognito session.`,
     );
   }
   if (entry?.initializationPending === true) {
-    return block(
+    return new SessionWorkStartError(
       "initialization_pending",
       `Session "${sessionKey}" is still initializing. Retry after initialization completes.`,
       true,
@@ -87,7 +103,7 @@ export function resolveSessionWorkStartBlock(
   if (entry?.providerReview && options?.purpose !== "accepted-result-settlement") {
     try {
       if (!options?.providerReviewAcknowledgment) {
-        return block(
+        return new SessionWorkStartError(
           "provider_review",
           `Session "${sessionKey}" is paused as a precaution. Review the provider findings in chat before continuing.`,
         );
@@ -98,7 +114,7 @@ export function resolveSessionWorkStartBlock(
         runId: options.runId,
       });
     } catch {
-      return block(
+      return new SessionWorkStartError(
         "provider_review",
         `Session "${sessionKey}" provider review changed. Refresh the findings before continuing.`,
       );
@@ -110,7 +126,7 @@ export function resolveSessionWorkStartBlock(
     if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
       return undefined;
     }
-    return block(
+    return new SessionWorkStartError(
       "restart_tombstone",
       entry?.modelSelectionLocked === true
         ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
@@ -118,7 +134,7 @@ export function resolveSessionWorkStartBlock(
     );
   }
   if (entry?.archivedAt !== undefined) {
-    return block(
+    return new SessionWorkStartError(
       "archived",
       `Session "${sessionKey}" is archived. Restore it before starting new work.`,
     );
@@ -127,17 +143,13 @@ export function resolveSessionWorkStartBlock(
     !options?.allowPendingWorkspace &&
     (entry?.pendingProjectGitUrl !== undefined || entry?.pendingWorktree !== undefined)
   ) {
-    return block(
+    return new SessionWorkStartError(
       "workspace_pending",
       `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`,
       true,
     );
   }
   return undefined;
-}
-
-function block(reason: SessionWorkStartBlockReason, message: string, retryable = false) {
-  return { reason, message, retryable };
 }
 
 export function resolveSessionWorkStartError(

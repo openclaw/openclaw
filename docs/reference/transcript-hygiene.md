@@ -27,7 +27,7 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
-- Empty assistant error-turn removal for provider replay
+- Empty assistant error/aborted-turn removal before both live requests and provider replay
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
@@ -65,16 +65,19 @@ zero. The historical duplicate filter still removes marker-free delivery mirrors
 
 ## Failed attempts and recovery
 
-Text-only assistant errors are buffered until the logical run settles. Recovery
-discards their partial text because the recovered reply supersedes it. Terminal
-failure persists the last attempt's partial text and error.
+Failed attempts keep their original content, error, and usage in the append-only
+transcript. Recovery can hide failed streamed output without rewriting those rows.
 
-Tool calls, displayable non-text content, and attachment facts are persisted
-immediately, before dependent tool results or the recovered reply. These fact
-rows omit the error and use a replayable stop reason so provider replay retains
-the calls. For mixed text/fact messages, partial text and the error remain
-buffered separately; terminal settlement does not duplicate facts or usage.
-This uses existing assistant-row shapes and requires no database migration.
+Model projection drops empty error/aborted turns and failed tool-call frames with
+no completed result before both live requests and cold replay. When a failed frame
+has completed tool work, projection retains the completed calls and their signed
+thinking, omits unfinished calls and partial text, and uses a replayable stop reason.
+The stored failure and billing facts remain unchanged. This uses existing
+assistant-row shapes and requires no database migration.
+
+Direct Anthropic Messages append-only replay also keeps failed and recovered
+assistant frames separate, along with consecutive user turns. Strict routes
+retain their role-merging behavior.
 
 ## Global rule: runtime context is not user transcript
 
@@ -306,11 +309,10 @@ inter-session user turns that only have provenance metadata.
   repeated cache-read charges and context use for old carriers when nothing binds
   the prefix.
 - Tool result pairing repair and synthetic tool results.
-- Turn validation (merge consecutive user turns to satisfy strict
+- Turn validation (merge consecutive turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps
-  consecutive user turns separate instead, so a command turn followed by a
-  prompt replays with the same per-turn timestamp stamps the active turn was
-  signed over; Bedrock Converse still merges them.
+  consecutive user and assistant turns separate, preserving per-turn timestamps
+  and failed/recovered boundaries; Bedrock Converse still merges them.
 - Trailing assistant prefill turns are stripped from outgoing Anthropic
   Messages payloads when thinking is enabled, including Cloudflare AI
   Gateway routes.

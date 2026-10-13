@@ -84,8 +84,8 @@ export function captureAgentHarnessCompletionCustody(
   const root = retainGatewayRootWorkAdmissionContinuationScope();
   const selected = getSessionActorStorageBinding({});
   if (selected && isIncognitoSessionKey(scope.requesterSessionKey)) {
-    return context.trackExecution(async () => {
-      let handedOff = false;
+    let handedOff = false;
+    const work = context.trackExecution(async () => {
       let acquired: SessionActorStorageBinding | undefined;
       const releaseRequester = () => {
         if (acquired) {
@@ -140,8 +140,12 @@ export function captureAgentHarnessCompletionCustody(
       } finally {
         if (!handedOff) {
           releaseRequester();
-          root?.release();
         }
+      }
+    });
+    return work.finally(() => {
+      if (!handedOff) {
+        root?.release();
       }
     });
   }

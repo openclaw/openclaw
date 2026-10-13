@@ -8,8 +8,7 @@ title: "Writer admission authority"
 
 # Writer admission authority
 
-This is a proposed implementation program, not a description of shipped service
-behavior. Move bundled writer admission to one dedicated worker while preserving
+This program moves bundled writer admission to one dedicated worker while preserving
 current authority, FIFO ordering, final host COMMIT authorization, and receipt
 settlement. No schema, persistence, configuration, or update migration is proposed.
 Restart reconstructs process-local authority through the existing owners.
@@ -22,6 +21,55 @@ probe answered from shared state in 0.064 ms but incorrectly granted after polic
 revocation. Forwarding the live callback instead waited through a 200 ms host
 stall. Those diagnostic observations justify transferring authority ownership
 contracts; they do not predict production latency.
+
+The first slice transfers profile revision/status checks through shared cells and
+adds a read-only admission service test factory in
+`src/infra/sqlite-writer-admission-service.test-support.ts`. Bound and
+current-settled operations use the same canonical state as host assertions.
+The factory is exercised through real worker tests; production dispatch stays
+with the host until remaining dependencies can transfer. A measured intermediate
+host-to-service preparation detour added latency and was removed.
+Native publishers fence immediately before physical COMMIT; known rollback
+preserves the prior revision, while uncertain native outcomes stay fenced.
+Retired generations never revive through delayed descriptor delivery. First
+creation retires unresolved profile authority even when the database admission
+itself remains valid across path-to-file identity promotion. The lifecycle
+publishes that promotion through its existing shared integrity revision before
+changing identity, including worker-only creation and alias reconciliation. The existing
+worker-task owner handles service failure, termination and restart.
+
+This slice transfers no policy payload or native write grant. Descriptors retain
+their exact shared buffers directly, so no service registration map can reclaim
+or substitute a generation. Mixed physical/request/run authority, final host
+COMMIT and settlement remain on their existing path. Descriptors also retain the existing shared admission-revocation cell, so
+worker-only close refuses reads before asynchronous drainage. Service reads do
+not certify the remaining physical custody still checked by the host. Later owners must supply those
+contracts and native-to-service transport before transaction admission can bypass
+the host.
+
+The broker slice makes slot and request custody canonical shared state. Dispatch,
+queued cancellation, completion, failure and native retirement publish to the same
+retained cells before replacing current work or notifying observers. Accepted
+cancellation preserves dispatch history and receipt settlement. Native stages check
+those exact cells before requesting host admission and after consuming its grant;
+a late descriptor cannot reacquire authority through a reused numeric request ID.
+
+The service test helper also exposes a direct native-port custody check with a bounded wait.
+Expiry atomically closes the pending decision, so a delayed service reply cannot
+grant it. Service shutdown revokes its epoch before awaiting cleanup; replacement
+uses a fresh cell. This transport remains a prerequisite exercised by worker tests:
+mixed production admission still uses the host and does not add a second service
+round trip until the remaining owners can transfer. It grants only broker custody,
+never policy authority, native COMMIT or receipt settlement.
+
+The execution slice gives each logical owner, native generation and borrower its
+own shared lifetime. Logical close publishes `closing` before cleanup and can
+reopen after failed cleanup; revocation and native retirement remain permanent.
+Borrower release closes new calls and claims, while accepted operations retain
+logical/native custody through settlement. Warm operations carry those exact
+cells and their admitted physical identity to native stages and the service.
+Cold creation, readiness, deletion and policy still require their host owners;
+the service transport remains unbound to mixed production admission.
 
 ## Current owners and required transfers
 

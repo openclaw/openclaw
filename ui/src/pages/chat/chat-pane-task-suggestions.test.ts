@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AgentsListResult,
   TaskSuggestion,
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
@@ -388,13 +389,21 @@ describe("chat pane task suggestion lifecycle", () => {
     const first = createDeferred<TaskSuggestionsAcceptResult>();
     const retry = createDeferred<TaskSuggestionsAcceptResult>();
     let attempts = 0;
-    const request = createGatewayRequestMock((method) =>
-      method === "taskSuggestions.accept"
+    const request = createGatewayRequestMock((method) => {
+      if (method === "agents.list") {
+        return Promise.resolve({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }],
+        } satisfies AgentsListResult);
+      }
+      return method === "taskSuggestions.accept"
         ? ++attempts === 1
           ? first.promise
           : retry.promise
-        : Promise.resolve({ suggestions: [] }),
-    );
+        : Promise.resolve({ suggestions: [] });
+    });
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
       sessions: createSessionCapabilityFixture(),

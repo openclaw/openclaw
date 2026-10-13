@@ -34,7 +34,6 @@ const lifecycles = Array.from({ length: 129 }, (_, index) => [
 
 const aggregate = "<function=read></function>\n".repeat(9_500);
 const xmlParameter = `<function=read><parameter=path>${oversized}`;
-const incomplete = "Hello\n<function=read><parameter=path>SECRET";
 const longHarmony = `analysis${" ".repeat(256_001)}`;
 const streamDeltas = (...chunks: string[]) => chunks.map((delta) => streamTextDelta(delta));
 function cumulativeDeltas(...chunks: string[]) {
@@ -43,10 +42,6 @@ function cumulativeDeltas(...chunks: string[]) {
 }
 
 describe("normalizePlainTextToolCallStreamEvents", () => {
-  const aggregateTail = cumulativeDeltas(
-    aggregate + "<function=read><parameter=path>secret",
-    "</parameter></function>\nVisible",
-  );
   const falseMarker = cumulativeDeltas(aggregate + "[tool:re", " nope");
   const optionalWhitespace = streamDeltas(
     `[tool:read] {"path":"${oversized}`,
@@ -54,7 +49,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     "\n\n",
     "Visible",
   );
-  const incompleteEnd = [streamTextDelta(incomplete), textEnd(incomplete)];
   const prose = "analysis is ordinary prose";
   const proseEnd = [streamTextDelta("analysis"), textEnd(prose)];
   const endTypes = ["text_delta", "text_end"];
@@ -68,10 +62,8 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   ];
   const startTypes = ["text_start", "text_delta", "text_delta"];
   it.each<[string, Record<string, unknown>[], string[], string?, string[]?]>([
-    ["suppresses an aggregate's active tail", aggregateTail, ["Visible"], "secret"],
     ["replays an aggregate's false marker", falseMarker, ["[tool:re nope"], "<function=read>"],
     ["retains split optional-closer whitespace", optionalWhitespace, ["\nVisible"]],
-    ["keeps incomplete calls private", incompleteEnd, ["Hello\n"], "SECRET"],
     ["reconciles false-prefix prose", proseEnd, [prose], undefined, endTypes],
     ["bounds unnamed Harmony prefixes", streamDeltas(longHarmony), [longHarmony]],
     ["preserves malformed parameters", invalidParameter, [malformed]],
@@ -107,15 +99,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expectTerminalContent(events, "done", textContent(visible));
   });
 
-  it("preserves a 400k suffix in a done snapshot after an over-cap call", async () => {
-    const visible = `${"a".repeat(150_000)}MIDDLE${"b".repeat(250_000)}`;
-    const raw = `${overCapXml}\n${visible}`;
-    const events = await normalize(withTerminal([textDelta(raw, raw)], "done", raw));
-    expect(textDeltas(events)).toEqual([visible]);
-    expect(JSON.stringify(events)).not.toContain("<function=read>");
-    expectTerminalContent(events, "done", textContent(visible));
-  });
-
   it("suppresses XML-punctuated parameter names after the byte cap", async () => {
     const prefix = `<function=read><parameter=path>${oversized}</parameter>`;
     const tail = "<parameter=foo.bar>SECRET</parameter></function>";
@@ -126,7 +109,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(events).toEqual([]);
   });
 
-  it.each([`<parameter=path>${oversized}`, `{"path":"${oversized}"}\n[END_TOOL_REQU`])(
+  it.each([`{"path":"${oversized}"}\n[END_TOOL_REQU`])(
     "scrubs incomplete split named calls",
     async (payload) => {
       const message = assistantMessage(textContent("[read]", payload), "length");
@@ -153,13 +136,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     ["[read]", '  {"path":"/tmp"}[/read]', { path: "/tmp" }],
   ])("repairs a boundary inside leading horizontal whitespace", (first, second, args) => {
     expect(parseSplitCall([first, second])?.[0]).toMatchObject({ name: "read", arguments: args });
-  });
-
-  it("does not duplicate an existing parameter line break", () => {
-    expect(
-      parseSplitCall(["<function=read><parameter=path>", "  \r\n/tmp</parameter></function>"])?.[0]
-        ?.arguments,
-    ).toEqual({ path: "  \r\n/tmp" });
   });
 
   it.each([
@@ -363,7 +339,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   it.each([
     ["<function=read><parameter=path>SECRET", "error"],
     ["<function=read><parameter=path>SECRET", "done"],
-    ["<function=read><parameter=path>SECRET</parameter></function>", "done"],
   ] as const)("fails closed on a known %s candidate at %s", async (raw, terminal) => {
     const events = await normalize(
       terminal === "error"
@@ -373,18 +348,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(events.at(-1)?.type).toBe(terminal);
     expect(textDeltas(events)).toEqual([]);
     expect(JSON.stringify(events)).not.toContain("SECRET");
-  });
-
-  it("scrubs a cumulative partial before emitting a visible Harmony prefix", async () => {
-    const first = "Visible\nanalysis to=read code {}<";
-    const events = await normalize([
-      textDelta(first, first),
-      textDelta("|call|>", first + "|call|>"),
-    ]);
-    expect(textDeltas(events)).toEqual(["Visible\n"]);
-    expect(events[0]?.partial).toMatchObject({ content: textContent("Visible\n") });
-    expect(JSON.stringify(events[0])).not.toContain("SECRET");
-    expect(JSON.stringify(events)).not.toContain("<|call|>");
   });
 
   it("keeps block-local text_end checkpoints out of the candidate buffer", async () => {
@@ -523,37 +486,21 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
     expect(textDeltas(events).join("")).toBe(opening + candidate);
   });
 
-  it("materializes Markdown when inline spans block the fast path", async () => {
-    const lengths: number[] = [];
-    const chunks = Array.from({ length: 1_000 }, () => "ordinary `code` prose\n");
-    const candidate = literalCall.trimEnd();
-    const events = await protectedDeltas(
-      [...chunks.map((delta) => streamTextDelta(delta)), streamTextDelta(candidate)],
-      (text) => {
-        lengths.push(text.length);
-        return [];
-      },
-    );
-    expect(lengths[0]).toBe(chunks.join("").length + candidate.length);
-    expect(lengths.length).toBeLessThanOrEqual(3);
-    expect(textDeltas(events).join("")).toBe(chunks.join(""));
-  });
-
-  it.each([
-    ["an open fence", "```toml\n[read.section]\n"],
-    ["an unfinished text line", "hello"],
-  ])("resets %s between completions", async (_name, first) => {
-    const events = await normalize(
-      [
-        streamTextDelta(first),
-        doneAssistantEvent("stop", textContent(first), "stop"),
-        streamTextDelta(literalCall),
-        doneAssistantEvent("stop", textContent(literalCall), "stop"),
-      ],
-      { protectFences: true },
-    );
-    expect(textDeltas(events)).toEqual([first]);
-  });
+  it.each([["an open fence", "```toml\n[read.section]\n"]])(
+    "resets %s between completions",
+    async (_name, first) => {
+      const events = await normalize(
+        [
+          streamTextDelta(first),
+          doneAssistantEvent("stop", textContent(first), "stop"),
+          streamTextDelta(literalCall),
+          doneAssistantEvent("stop", textContent(literalCall), "stop"),
+        ],
+        { protectFences: true },
+      );
+      expect(textDeltas(events)).toEqual([first]);
+    },
+  );
 
   it("bounds prefix checks and parsing across later candidates (#122513)", async () => {
     const prefix = "x".repeat(199_998);

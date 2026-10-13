@@ -434,14 +434,7 @@ suite.define(() => {
         .toBeGreaterThan(socketsBeforeReconnect);
       await gateway.setOnline(true);
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
-        )
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
         .toBe("connected");
       if (captureUiProofEnabled) {
         await mkdir(path.join(suite.artifactDir, "initial-prompt-reconnect"), { recursive: true });

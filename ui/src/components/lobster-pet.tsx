@@ -1,6 +1,7 @@
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { LobsterPetController, type LobsterPetProps } from "./lobster-pet-controller.ts";
+import type { LobsterPetProps } from "./lobster-pet-contract.ts";
+import { LobsterPetController } from "./lobster-pet-controller.ts";
 import { LobsterPetDismissMenu } from "./lobster-pet-dismiss-menu.tsx";
 import { LobsterPetScene } from "./lobster-pet-scene-view.tsx";
 

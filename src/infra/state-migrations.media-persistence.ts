@@ -392,8 +392,8 @@ function archiveSourceMatches(
   try {
     const current = readRegularFileSync({ filePath });
     return (
-      current.stat.dev === expected.stat.dev &&
-      current.stat.ino === expected.stat.ino &&
+      current.exactIdentity.dev === expected.exactIdentity.dev &&
+      current.exactIdentity.ino === expected.exactIdentity.ino &&
       current.stat.mtimeMs === expected.stat.mtimeMs &&
       current.stat.size === expected.stat.size &&
       current.buffer.equals(expected.buffer)
