@@ -24,7 +24,7 @@ import {
   observeUpdateGatewayReadiness,
 } from "./update-cli.deferred-completion.test-support.js";
 
-describe("update-cli child-owned deferred completion", () => {
+describe("update-cli child-owned deferred completion main baseline", () => {
   const {
     runPostCoreCommand,
     postCoreConvergenceResult,
