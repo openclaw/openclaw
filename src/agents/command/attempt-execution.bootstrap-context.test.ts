@@ -27,15 +27,18 @@ const runAgentAttempt = (params: RunAgentAttemptOverrides) =>
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: The CLI runner owns process/supervisor startup; this suite only observes the parameters it receives.
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
 
+// mock-isolation: Live CLI session state is process-global and must stay isolated from the parameter assertion.
 vi.mock("../cli-runner/cli-live-session-registry.js", () => ({
   getCliLiveSessionGeneration: vi.fn(() => undefined),
   hasCliLiveSession: vi.fn(() => false),
 }));
 
+// mock-isolation: The embedded runner starts provider/model runtime; the control case only observes its parameters.
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
