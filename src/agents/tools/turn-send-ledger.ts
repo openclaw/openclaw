@@ -19,14 +19,18 @@
  * provider fallback attempts that reuse the runId — so the opt-in hard cap holds
  * for the entire turn as documented (docs/tools/loop-detection.md,
  * schema.help.runtime.ts). The logical-run owner deletes the slot at its terminal
- * boundary (clearTurnSendLedgerForRun, wired from the fallback-chain `finally` in
- * embedded-agent-runner/run-entry.ts, or from the turn owner that retries live model
- * switches under the same runId); a run that has no entry starts fresh.
+ * boundary (clearTurnSendLedgerForRun). The outermost run API owns that boundary unless
+ * an enclosing owner passes onDeferredTurnSendLedgerScope. Owners are run-entry.ts's
+ * fallback-chain `finally`, the turn owner that retries live model switches under the
+ * same runId, a direct runEmbeddedAgent or runCliAgent call, and a cron trigger-script
+ * evaluation. A run that has no entry starts fresh.
  * Concurrent foreground runs can share one sessionKey (see
  * src/auto-reply/dispatch.freshness.test.ts), so the runId is part of the key
  * rather than a field that resets a shared slot — otherwise a later run would
  * evict an earlier still-live run's counts.
  */
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-normalize.js";
@@ -107,8 +111,8 @@ function ledgerKey(sessionKey: string, runId: string): string {
 // evicting it silently zeroed that run's committed counts, pending reservations, and
 // seen-operation ids mid-turn, releasing its hard cap. Retained slots are bounded by
 // the number of concurrently live runs instead: every run clears its own slot at its
-// terminal boundary (the fallback-chain `finally` in run-entry.ts, or the turn owner it
-// hands the scope to), so completed runs never accumulate.
+// terminal boundary (the outermost run API, or the enclosing owner it hands the scope
+// to), so completed runs never accumulate.
 function storeSlot(key: string, slot: TurnSendSlot): void {
   turnSendBySession.set(key, slot);
 }
@@ -463,6 +467,30 @@ export type TurnSendLedgerScope = {
   agentId?: string;
 };
 
+/**
+ * Rebuilds the scope a native tool surface (the in-process message and conversations_send
+ * tools) writes under from the identity the owner built those tools with: both tools fold
+ * main-session aliases of their raw session key before keying the ledger. A CLI loopback
+ * grant may shift that identity, so its prepared scope is recorded at preparation instead
+ * (cli-runner/prepare.ts) and must not be rebuilt here.
+ */
+export function resolveNativeTurnSendLedgerScope(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId: string | undefined;
+  sessionKey: string | undefined;
+  runId: string;
+}): TurnSendLedgerScope {
+  const sessionKey = params.sessionKey?.trim() ?? "";
+  return {
+    agentId: params.agentId,
+    sessionKey:
+      params.agentId && sessionKey
+        ? canonicalizeMainSessionAlias({ cfg: params.cfg, agentId: params.agentId, sessionKey })
+        : sessionKey,
+    runId: params.runId,
+  };
+}
+
 export type TurnSendLedgerDiagnostic = {
   sessionKey: string;
   runId: string;
@@ -488,9 +516,10 @@ export function inspectTurnSendLedger(now = Date.now()): TurnSendLedgerDiagnosti
 /**
  * Deletes the exact (session, run) slot at a logical run's terminal boundary, freeing
  * its per-target counts, pending reservations, and seen-operation ids. The logical-run owner
- * calls this from the fallback-chain `finally` in run-entry.ts, or from the turn owner
+ * calls this from the fallback-chain `finally` in run-entry.ts, from the turn owner
  * that retries live model switches (deferred lifecycle `complete()`, the cron terminal),
- * after all owned tool work has settled, so the budget survives internal retries,
+ * or from an ownerless direct run (runEmbeddedAgent, CLI settlement, a cron trigger
+ * script), after all owned tool work has settled, so the budget survives internal retries,
  * provider fallbacks, and model switches (same runId) and resets only when the run truly ends. Rebuilds the
  * canonical ledger session key the send tools write under (buildTurnSendLedgerSessionKey).
  * Callers must pass the prepared canonical scope rather than reconstructing raw identity;
@@ -498,13 +527,40 @@ export function inspectTurnSendLedger(now = Date.now()): TurnSendLedgerDiagnosti
  * concurrent run on the same session — a distinct runId, hence a distinct key — untouched.
  * A missing agent id or session key, or an already-absent slot, is a harmless no-op. This
  * is the ledger's only delete path — nothing else ever removes a slot, so a live run's
- * counts can never be reclaimed out from under it; the terminal `finally` in run-entry.ts
- * guarantees every owned run reaches this boundary.
+ * counts can never be reclaimed out from under it; each owner's terminal `finally`
+ * guarantees its run reaches this boundary.
  */
 export function clearTurnSendLedgerForRun(args: TurnSendLedgerScope): void {
   const ledgerSessionKey = buildTurnSendLedgerSessionKey(args.agentId, args.sessionKey);
   if (ledgerSessionKey) {
     turnSendBySession.delete(ledgerKey(ledgerSessionKey, args.runId));
+  }
+}
+
+/**
+ * Runs `run` as the per-turn send ledger's logical-run owner unless an enclosing owner
+ * already passed onDeferredTurnSendLedgerScope. That owner (run-entry.ts and the turn owners
+ * behind it) keeps the budget across fallback candidates and live model switches that reuse
+ * the runId, so candidates only report their exact scopes upward. With no enclosing owner,
+ * nothing else will ever clear the scopes `run` reports, so they are cleared here once it has
+ * settled, after its internal retries and owned tool work.
+ * Accepted edge case: two concurrent ownerless runs that reuse one runId and session share a
+ * slot, and whichever finishes first resets the other's counts.
+ */
+export async function runWithTurnSendLedgerOwner<
+  TParams extends { onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void },
+  TResult,
+>(params: TParams, run: (params: TParams) => Promise<TResult>): Promise<TResult> {
+  if (params.onDeferredTurnSendLedgerScope) {
+    return await run(params);
+  }
+  const scopes: TurnSendLedgerScope[] = [];
+  try {
+    return await run({ ...params, onDeferredTurnSendLedgerScope: (scope) => scopes.push(scope) });
+  } finally {
+    for (const scope of scopes) {
+      clearTurnSendLedgerForRun(scope);
+    }
   }
 }
 

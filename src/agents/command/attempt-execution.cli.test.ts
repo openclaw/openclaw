@@ -439,6 +439,7 @@ describe("CLI attempt execution", () => {
         onExecutionStarted?: () => void;
         onAgentEvent?: RunAgentAttemptParams["onAgentEvent"];
         classifyResult?: RunAgentAttemptParams["classifyResult"];
+        onDeferredTurnSendLedgerScope?: RunAgentAttemptParams["onDeferredTurnSendLedgerScope"];
       } = {},
     ) => {
       const { abortSignal, onExecutionStarted, opts, ...attempt } = params;
@@ -456,6 +457,19 @@ describe("CLI attempt execution", () => {
     };
     return { sessionKey, sessionEntry, sessionStore, runCli };
   }
+
+  it("hands the CLI candidate's send-ledger scope to the fallback chain's owner", async () => {
+    // Without the owner callback a CLI candidate is its own logical-run owner and would clear
+    // the per-turn send budget before the next fallback candidate reuses this runId.
+    const sessionKey = "agent:main:direct:cli-ledger-owner";
+    const { runCli } = await createCliSession(sessionKey, makeSessionEntry("session-cli-ledger"));
+    const onDeferredTurnSendLedgerScope = vi.fn();
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("owned"));
+
+    await runCli({ onDeferredTurnSendLedgerScope });
+
+    expect(firstRunCliAgentArg().onDeferredTurnSendLedgerScope).toBe(onDeferredTurnSendLedgerScope);
+  });
 
   async function createBoundSession(
     sessionKey: string,

@@ -58,6 +58,11 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import {
+  clearTurnSendLedgerForRun,
+  resolveNativeTurnSendLedgerScope,
+  type TurnSendLedgerScope,
+} from "../agents/tools/turn-send-ledger.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
@@ -485,6 +490,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
     let mcp: CronScriptMcpTools | undefined;
     let releaseRuntime = () => {};
+    // This evaluation mints the runId its send tools key the per-turn ledger by, so it is the
+    // logical-run owner and clears that slot once the script has settled.
+    let turnSendLedgerScope: TurnSendLedgerScope | undefined;
     try {
       const request = {
         runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
@@ -544,6 +552,12 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         approvalSignals: [evaluationScope.signal],
       });
       assertActive();
+      turnSendLedgerScope = resolveNativeTurnSendLedgerScope({
+        cfg: runtime.context.config,
+        agentId: runtime.context.agentId,
+        sessionKey: runtime.context.sessionKey,
+        runId: admitted.operationalRunInstance.runId,
+      });
       // Reload during setup is best effort; the next invocation refreshes its cache.
       let tools = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
         runtime.createTools(
@@ -637,6 +651,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     } finally {
       try {
         admission?.close();
+        if (turnSendLedgerScope) {
+          clearTurnSendLedgerForRun(turnSendLedgerScope);
+        }
         clearToolSearchCatalog({ catalogRef });
         evaluationScope.cleanup();
         if (mcp) {

@@ -104,7 +104,8 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
-export function runEmbeddedAgent(
+/** One embedded turn; run.ts owns its per-turn send ledger scopes. */
+export function runEmbeddedAgentTurn(
   internalParamsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const config = resolveEmbeddedRunConfig(internalParamsInput);

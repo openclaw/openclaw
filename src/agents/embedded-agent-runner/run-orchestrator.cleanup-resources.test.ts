@@ -26,7 +26,7 @@ import {
   createEmbeddedAgentRunnerOpenAiConfig,
   immediateEnqueue,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { runEmbeddedAgent } from "./run-orchestrator.js";
+import { runEmbeddedAgent } from "./run.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 

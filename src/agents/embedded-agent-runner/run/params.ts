@@ -166,7 +166,10 @@ export type RunEmbeddedAgentParams = Pick<
   };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
-  /** Gives the logical-run owner the exact prepared scope to clear at its terminal. */
+  /**
+   * Enclosing logical-run owner of the per-turn send ledger; candidates report their exact
+   * scopes here instead of clearing. When omitted, runEmbeddedAgent owns and clears them.
+   */
   onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;

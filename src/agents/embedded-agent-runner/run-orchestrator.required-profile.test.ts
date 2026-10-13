@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
-import { runEmbeddedAgent } from "./run-orchestrator.js";
+import { runEmbeddedAgent } from "./run.js";
 
 it("resolves the admitted canonical agent before mandatory placement preparation", async () => {
   const state = await createOpenClawTestState({ label: "required-worker-canonical-target" });

@@ -902,6 +902,7 @@ export async function runMemoryFlushIfNeeded(
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+          onDeferredTurnSendLedgerScope: runOptions.onDeferredTurnSendLedgerScope,
           resolvedModelSelection: runOptions.resolvedModelSelection,
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           bootstrapPromptWarningSignaturesSeen,
