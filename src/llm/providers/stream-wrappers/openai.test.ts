@@ -15,6 +15,7 @@ import {
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
   resolveOpenAIFastMode,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
@@ -71,6 +72,34 @@ afterEach(() => {
   logger.debug.mockReset();
   logger.info.mockReset();
   vi.unstubAllEnvs();
+});
+
+describe("Ultrafast server compaction at request egress", () => {
+  it.each([
+    { payloadTier: undefined, fastMode: "ultrafast" as const, expected: 260_000 },
+    { payloadTier: "priority", fastMode: "ultrafast" as const, expected: 700_000 },
+    { payloadTier: "ultrafast", fastMode: false, expected: 260_000 },
+    { payloadTier: undefined, fastMode: true, expected: 700_000 },
+  ])(
+    "uses the actual request tier $payloadTier/$fastMode",
+    ({ payloadTier, fastMode, expected }) => {
+      const { baseStreamFn, payloads } = createPayloadCapture({
+        payload: () => (payloadTier === undefined ? {} : { service_tier: payloadTier }),
+      });
+      const wrapped = createOpenAIResponsesContextManagementWrapper(
+        createOpenAIFastModeWrapper(baseStreamFn, fastMode),
+        { fastMode, responsesCompactThreshold: 700_000 },
+      );
+      void wrapped(
+        { ...openaiModel, contextWindow: 1_050_000, contextTokens: 922_000 },
+        { messages: [] },
+        {},
+      );
+      expect(payloads[0]?.context_management).toEqual([
+        { type: "compaction", compact_threshold: expected },
+      ]);
+    },
+  );
 });
 
 describe("createOpenAIFastModeWrapper", () => {

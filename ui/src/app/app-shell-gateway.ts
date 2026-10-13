@@ -17,6 +17,7 @@ import {
   invalidateChatMetadataForSessionEvent,
   invalidateChatMetadataStore,
 } from "../lib/chat/chat-metadata-cache.ts";
+import { currentDisplayConfig } from "../lib/config/config-state-model.ts";
 import {
   invalidateModelAuthStatusRequests,
   modelAuthEventInvalidates,
@@ -121,10 +122,10 @@ export class ShellGatewayOwner {
   }
 
   async reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): Promise<void> {
-    const snapshot = runtimeConfig.state.configSnapshot;
+    const configObject = currentDisplayConfig(runtimeConfig.state);
     const context = this.host.context;
     if (
-      !snapshot?.config ||
+      !configObject ||
       !context ||
       context.runtimeConfig !== runtimeConfig ||
       context.gateway.snapshot.phase !== "connected"
@@ -133,7 +134,6 @@ export class ShellGatewayOwner {
     }
     const { client, hello } = context.gateway.snapshot;
     const profileId = context.gateway.snapshot.selfUser?.id;
-    const configObject = snapshot.config;
     if (!client) {
       return;
     }
@@ -143,8 +143,7 @@ export class ShellGatewayOwner {
     const remainsCurrent = () =>
       this.host.context === context &&
       context.runtimeConfig === runtimeConfig &&
-      runtimeConfig.state.configSnapshot === snapshot &&
-      runtimeConfig.state.configSnapshot.config === configObject &&
+      currentDisplayConfig(runtimeConfig.state) === configObject &&
       runtimeConfig.state.client === sourceClient &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.hello === hello &&
@@ -252,7 +251,11 @@ export class ShellGatewayOwner {
       void this.host.context?.config.refresh();
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
-      if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
+      if (
+        runtimeConfig &&
+        !runtimeConfig.state.configFormDirty &&
+        (runtimeConfig.state.configSnapshot || !runtimeConfig.state.bootstrapConfig)
+      ) {
         // Save notifications reconcile in place so active editors keep focus and stay interactive.
         void runtimeConfig.refresh({ background: true });
       }
@@ -455,7 +458,9 @@ export class ShellGatewayOwner {
     });
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
-    this.runtimeConfigReady = runtimeConfig.ensureLoaded().then(async () => {
+    this.runtimeConfigReady = (
+      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureLoaded()
+    ).then(async () => {
       if (
         this.host.context !== context ||
         this.runtimeConfigClient !== snapshot.client ||
@@ -511,7 +516,7 @@ export class ShellGatewayOwner {
       return Promise.resolve();
     }
     const client = snapshot.client;
-    const configObject = context.runtimeConfig.state.configSnapshot?.config;
+    const configObject = currentDisplayConfig(context.runtimeConfig.state);
     if (snapshot.phase !== "connected" || !client || !configObject) {
       return Promise.resolve();
     }
@@ -544,7 +549,7 @@ export class ShellGatewayOwner {
     const remainsCurrent = () =>
       this.host.context === context &&
       context.runtimeConfig === runtimeConfig &&
-      runtimeConfig.state.configSnapshot?.config === configObject &&
+      currentDisplayConfig(runtimeConfig.state) === configObject &&
       runtimeConfig.state.client === sourceClient &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.phase === "connected" &&

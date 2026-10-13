@@ -155,9 +155,13 @@ it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] 
         { env: { ...process.env, ...state.env }, encoding: "utf8", timeout: 30_000 },
       );
       expect(result.status, result.stderr).toBe(0);
+      // Pending canonical rows retain integrity proof; replacement or revocation loses only main's.
       expect(JSON.parse(result.stdout)).toEqual({
         workers: change === "unchanged" ? 0 : 1,
-        integrityReceipts: 0,
+        integrityReceipts:
+          change === "unchanged" || change === "pending edit"
+            ? agentIds.length
+            : agentIds.length - 1,
       });
     });
   },

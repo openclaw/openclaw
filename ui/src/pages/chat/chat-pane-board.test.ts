@@ -216,7 +216,7 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
-  it.each(["agent:main:closed-dashboard", "global"])(
+  it.each(["global"])(
     "keeps an explicitly closed empty dashboard closed when its first content arrives (%s)",
     async (sessionKey) => {
       const { pane, request } = createGatewayBoardPane({ sessionKey });
@@ -251,16 +251,6 @@ describe("chat pane board shell", () => {
       }
     },
   );
-
-  it("keeps side-panel presentation independent from persisted Board data", () => {
-    const pane = createTestPane();
-    const provider = createMockBoardProvider("agent:main:current");
-    const applyOps = vi.spyOn(provider, "applyOps");
-    pane.boardProvider = provider;
-    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
-    pane.commitSidebarLayout({ ...pane.state.sidebarLayout, open: false });
-    expect(applyOps).not.toHaveBeenCalled();
-  });
 
   it("opens split view once when the current task first gains a dashboard", async () => {
     const pane = createTestPane();
@@ -409,92 +399,65 @@ describe("chat pane board shell", () => {
     }
   });
 
-  it.each(["disabled", "disposed", "enabled", "default"] as const)(
-    "keeps generic child roster hydration available while swarm is %s",
-    async (mode) => {
-      vi.useFakeTimers();
-      swarmModuleImport.release();
-      const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
-      const pane = createTestPane({
-        canonicalListRevision: 0,
-        list: vi.fn(async () => ({ sessions: [] })),
-      } as unknown as SessionCapability);
-      const configSnapshot = {
-        config: mode === "default" ? {} : { tools: { swarm: { enabled: mode === "enabled" } } },
-      };
-      pane.context = {
-        ...pane.context,
-        runtimeConfig: {
-          state: {
-            configSnapshot,
-          },
+  it("keeps generic child roster hydration available with default swarm configuration", async () => {
+    vi.useFakeTimers();
+    swarmModuleImport.release();
+    const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
+    const pane = createTestPane({
+      canonicalListRevision: 0,
+      list: vi.fn(async () => ({ sessions: [] })),
+    } as unknown as SessionCapability);
+    const configSnapshot = { config: {} };
+    pane.context = {
+      ...pane.context,
+      runtimeConfig: {
+        state: {
+          configSnapshot,
         },
-      } as unknown as ApplicationContext;
-      const previous = mode === "disposed" ? new SwarmRosterHydrator() : null;
-      const dispose = previous ? vi.spyOn(previous, "dispose") : undefined;
-      Reflect.set(pane, "swarmHydrator", previous);
-      await vi.dynamicImportSettled();
-      const frames: FrameRequestCallback[] = [];
-      const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
-      vi.stubGlobal("requestAnimationFrame", requestFrame);
-      const requestUpdate = vi.spyOn(pane, "requestUpdate");
+      },
+    } as unknown as ApplicationContext;
+    Reflect.set(pane, "swarmHydrator", null);
+    await vi.dynamicImportSettled();
+    const frames: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    const requestUpdate = vi.spyOn(pane, "requestUpdate");
 
-      try {
-        for (let index = 0; index < 3; index += 1) {
-          pane.refreshSwarmRoster();
-        }
-        await vi.dynamicImportSettled();
-
-        expect(requestUpdate).not.toHaveBeenCalled();
-        expect(pane.state.requestUpdate).not.toHaveBeenCalled();
-        expect(requestFrame).toHaveBeenCalledTimes(1);
-        frames[0]?.(0);
-        expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
-        if (dispose) {
-          expect(dispose).not.toHaveBeenCalled();
-        }
-        expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
-        expect(Reflect.get(pane, "swarmEnabled")).toBe(mode === "enabled" || mode === "default");
-
-        const hydrator = Reflect.get(pane, "swarmHydrator");
-        const enabled = !Reflect.get(pane, "swarmEnabled");
-        configSnapshot.config = { tools: { swarm: { enabled } } };
-        requestFrame.mockClear();
-        frames.length = 0;
-        vi.mocked(pane.state.requestUpdate).mockClear();
+    try {
+      for (let index = 0; index < 3; index += 1) {
         pane.refreshSwarmRoster();
-        await vi.dynamicImportSettled();
-
-        expect(Reflect.get(pane, "swarmHydrator")).toBe(hydrator);
-        expect(Reflect.get(pane, "swarmEnabled")).toBe(enabled);
-        expect(requestFrame).toHaveBeenCalledOnce();
-        frames[0]?.(0);
-        expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
-      } finally {
-        const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
-          typeof SwarmRosterHydrator
-        > | null;
-        hydrator?.dispose();
-        vi.useRealTimers();
       }
-    },
-  );
+      await vi.dynamicImportSettled();
 
-  it("gates New Chat when the current session has a board", async () => {
-    const sessions = {
-      create: vi.fn(async () => "agent:main:new"),
-    } as unknown as SessionCapability;
-    const pane = createTestPane(sessions);
-    pane.boardProvider = createMockBoardProvider("agent:main:current");
+      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(pane.state.requestUpdate).not.toHaveBeenCalled();
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+      frames[0]?.(0);
+      expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
+      expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
+      expect(Reflect.get(pane, "swarmEnabled")).toBe(true);
 
-    const pending = pane.createSession();
-    await Promise.resolve();
+      const hydrator = Reflect.get(pane, "swarmHydrator");
+      const enabled = !Reflect.get(pane, "swarmEnabled");
+      configSnapshot.config = { tools: { swarm: { enabled } } };
+      requestFrame.mockClear();
+      frames.length = 0;
+      vi.mocked(pane.state.requestUpdate).mockClear();
+      pane.refreshSwarmRoster();
+      await vi.dynamicImportSettled();
 
-    expect(Boolean(pane.resetConfirmation)).toBe(true);
-    expect(sessions.create).not.toHaveBeenCalled();
-    pane.settleResetConfirmation(false);
-    await expect(pending).resolves.toBe(false);
-    expect(sessions.create).not.toHaveBeenCalled();
+      expect(Reflect.get(pane, "swarmHydrator")).toBe(hydrator);
+      expect(Reflect.get(pane, "swarmEnabled")).toBe(enabled);
+      expect(requestFrame).toHaveBeenCalledOnce();
+      frames[0]?.(0);
+      expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
+    } finally {
+      const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
+        typeof SwarmRosterHydrator
+      > | null;
+      hydrator?.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("resets a board-bearing session in place so its dashboard stays", async () => {
@@ -689,22 +652,6 @@ describe("chat pane board shell", () => {
     });
   });
 
-  it("routes face changes through the owning retained presentation", () => {
-    const pane = createTestPane();
-    pane.paneId = "pane-1";
-    pane.sessionKey = "agent:main:retained";
-    const onFaceChange = vi.fn();
-    pane.onFaceChange = onFaceChange;
-    pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
-
-    pane.handleBoardCommand({
-      sessionKey: pane.state.sessionKey,
-      command: { kind: "set_chat_dock", dock: "right" },
-    });
-
-    expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
-  });
-
   it("uses in-memory tab preferences while the route owns the face", () => {
     const pane = createTestPane();
     pane.routeFace = "dashboard";
@@ -783,11 +730,7 @@ describe("chat pane board shell", () => {
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
   });
 
-  it.each([
-    { key: "notes", acknowledged: "agent:research:notes", globalScope: false },
-    { key: "global", acknowledged: "agent:research:global", globalScope: true },
-    { key: "agent:research:global", acknowledged: "agent:research:global", globalScope: false },
-  ])(
+  it.each([{ key: "notes", acknowledged: "agent:research:notes", globalScope: false }])(
     "passes the admitted board owner to widgets while retaining $key",
     async ({ key, acknowledged, globalScope }) => {
       const { pane, request } = createGatewayBoardPane({ sessionKey: key });

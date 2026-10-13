@@ -208,7 +208,7 @@ describe("sweepCronRunSessions", () => {
       expect(result).toEqual({ swept: true, pruned: 1 });
       expect(buildPendingSet).not.toHaveBeenCalled();
       expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
-      await expect(fsPromises.access(staleArchive)).resolves.toBeUndefined();
+      await fsPromises.access(staleArchive);
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(
         { err: expect.stringContaining("archive cleanup denied") },

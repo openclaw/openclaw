@@ -31,7 +31,7 @@ Use the verified stable release with exact pins:
 npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+See the [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
 for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
 Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
 package versions and dist-tags.
@@ -162,7 +162,7 @@ transport timeouts return `false`. Both entries use the same implementation.
 
 ## Defaults and reconnect behavior
 
-The Node client starts with a 30 second request timeout, a 15 second
+The Node client starts with a 30 second request timeout, a 30 second
 connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
 seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
 1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
@@ -188,7 +188,7 @@ retained handle may miss updates after an unacknowledged unsubscribe. The caller
 still receives the timeout; ordinary acknowledged leases and release retries
 retain their ownership and ordering.
 
-The canonical defaults table and the server policy fields that can replace
+The defaults table and the server policy fields that can replace
 pre-handshake values are documented in the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol#client-constants).
 

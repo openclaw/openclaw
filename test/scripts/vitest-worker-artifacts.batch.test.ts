@@ -5,6 +5,7 @@ import { expect } from "vitest";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
@@ -46,7 +47,7 @@ process.exitCode = await runVitestBatch({
   },
 });`,
       );
-      const compiler = createControlledWorkerCompiler(directory, process.env);
+      const compiler = createControlledWorkerCompiler(directory, testRunnerFixtureEnv());
       const result = await node(
         ["--import", path.join(root, "scripts/tsx.mjs"), entry],
         root,
@@ -324,7 +325,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           )
         : "";
       const result = await node(args, root, {
-        ...process.env,
+        ...testRunnerFixtureEnv(),
         // Each nested invocation owns its selection, independently of the outer tooling shard.
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
         OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
@@ -339,7 +340,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           : {}),
       });
       expect(result.code, result.stdout + result.stderr).toBe(
-        mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
+        mode === "cancel" ? 143 : mode === "failure" ? 2 : 0,
       );
       const ready =
         mode === "ready" ||

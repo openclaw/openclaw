@@ -235,16 +235,9 @@ export function prepareProjectedSessionPresentation(
         : null),
   });
   const present = (
-    captured: records.MaterializedRow,
+    record: records.MaterializedRow,
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
-    const record = projection.describe(
-      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
-      captured,
-    );
-    if (!record) {
-      return null;
-    }
     const run = active(record.key, record.entry, record.agentId);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
@@ -473,7 +466,13 @@ export function prepareProjectedSessionPresentation(
     active,
     sharing,
     target,
-    present,
+    present(captured: records.MaterializedRow, options: PresentationOptions = {}) {
+      const record = projection.describe(
+        { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
+        captured,
+      );
+      return record ? present(record, options) : null;
+    },
     select(opts: SessionsListParams, select: () => SessionEntrySelection) {
       // These queries consume clock or transient run facts independently of row publications.
       if (
@@ -520,8 +519,8 @@ export function prepareProjectedSessionPresentation(
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);
       return record
-        ? { row: present(record, options), lifecycleRunId: record.entry.lifecycleRunId }
-        : { row: null };
+        ? { row: present(record, options), record, lifecycleRunId: record.entry.lifecycleRunId }
+        : { row: null, record };
     },
     authorizeDescription(query: records.Lookup) {
       return authorizeIncognitoSessionTarget({

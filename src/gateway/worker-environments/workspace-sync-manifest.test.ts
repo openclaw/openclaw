@@ -128,7 +128,7 @@ describe("remote workspace manifest script", () => {
     for (const unsafePath of [".", ".."]) {
       const rejected = await runTransaction("begin", "f".repeat(32), JSON.stringify([unsafePath]));
       expect(rejected.code).not.toBe(0);
-      await expect(fs.access(workspace)).resolves.toBeUndefined();
+      await fs.access(workspace);
     }
 
     const nonce = "a".repeat(32);

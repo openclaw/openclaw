@@ -21,6 +21,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-support.js";
+import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -78,7 +79,10 @@ describe("dispatchReplyFromConfig", () => {
 
   it("clears an earlier admitted verbosity override for an inherited queued run", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    await using session = await createDispatchVerboseSession(
+      "agent:main:telegram:direct:U1",
+      "off",
+    );
     const dispatcher = createDispatcher();
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -96,7 +100,7 @@ describe("dispatchReplyFromConfig", () => {
         await opts?.onToolResult?.({ text: "Explicit turn" });
         opts?.onRunVerbosityResolved?.({ resolvedVerboseLevel: "on" });
         await opts?.onToolResult?.({ text: "Inherited off" });
-        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        session.writeLevel("on");
         await opts?.onToolResult?.({ text: "Inherited live on" });
         return { text: "Done" };
       },

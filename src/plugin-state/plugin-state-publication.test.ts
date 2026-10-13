@@ -134,9 +134,34 @@ describe("plugin state committed facts", () => {
         expect(await store.entries()).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).not.toHaveBeenCalled();
 
+        const asyncSibling = createPluginStateKeyedStore("receipt-test", {
+          ...options,
+          namespace: "sibling",
+        });
+        const pendingReads: Array<ReturnType<typeof store.entries>> = [];
+        const stopPending = pluginStatePublication.subscribeFacts((change) => {
+          if (change.kind === "pending" && pendingReads.length === 0) {
+            pendingReads.push(store.entries());
+          }
+        });
+        try {
+          await asyncSibling.register("other", false);
+          expect(pendingReads).toHaveLength(1);
+          expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 1 } }]);
+          expect(dispatch).toHaveBeenCalledTimes(1);
+          dispatch.mockClear();
+          await store.register("first", { count: 2 });
+          expect(pendingReads).toHaveLength(1);
+          expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 2 } }]);
+          expect(dispatch).toHaveBeenCalledTimes(2);
+          dispatch.mockClear();
+        } finally {
+          stopPending();
+        }
+
         native.register("second", { count: 2 });
         expect(await store.entries()).toMatchObject([
-          { key: "first", value: { count: 1 } },
+          { key: "first", value: { count: 2 } },
           { key: "second", value: { count: 2 } },
         ]);
         expect(dispatch).toHaveBeenCalledOnce();
@@ -231,6 +256,48 @@ describe("plugin state committed facts", () => {
       } finally {
         captured.release();
       }
+    });
+  });
+
+  it("keeps cached reads coherent after conditional writes and capacity rollback", async () => {
+    await withOpenClawTestState({ label: "plugin-state-conditional-receipts" }, async ({ env }) => {
+      const options = {
+        namespace: "receipts",
+        maxEntries: 1,
+        overflowPolicy: "reject-new" as const,
+        env,
+      };
+      const worker = createPluginStateKeyedStore<number>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<number>("receipt-test", options);
+      const read = async (expected: number | undefined) => {
+        expect(await worker.lookup("key")).toBe(expected);
+        expect((await worker.observe("key")).value).toBe(expected);
+        expect(await worker.lookup("overflow")).toBeUndefined();
+        expect((await worker.observe("overflow")).value).toBeUndefined();
+        expect((await worker.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
+          expected === undefined ? [] : [{ key: "key", value: expected }],
+        );
+      };
+
+      await read(undefined);
+      expect(await worker.registerIfAbsent("key", 1)).toBe(true);
+      await read(1);
+      expect(native.registerIfAbsent("key", 2)).toBe(false);
+      expect(await worker.registerIfAbsent("key", 3)).toBe(false);
+      await read(1);
+      expect(() => native.registerIfAbsent("overflow", 4)).toThrow("1-row limit");
+      await read(1);
+      await expect(worker.registerIfAbsent("overflow", 5)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await read(1);
+
+      expect(native.delete("key")).toBe(true);
+      await read(undefined);
+      expect(native.registerIfAbsent("key", 6)).toBe(true);
+      await read(6);
+      clearPluginStateStoreForTests();
+      await read(undefined);
     });
   });
 

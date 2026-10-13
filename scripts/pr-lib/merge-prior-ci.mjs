@@ -839,9 +839,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         : mode === "unchanged"
           ? verifyUnchangedEvidence(...args)
           : mode === "provider-rejection"
-            ? qualifyProviderRejection(...args)
+            ? qualifyProviderRejection(readFileSync(0, "utf8"), ...args)
             : mode === "stale-head-retirement"
-              ? qualifyStaleHeadRetirement(...args)
+              ? qualifyStaleHeadRetirement(readFileSync(0, "utf8"), ...args)
               : mode === "verify"
                 ? await verifyPriorCiAdmin({
                     evidencePath: args[0],
@@ -853,7 +853,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
                   })
                 : (() => {
                     throw new Error(
-                      "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <record-json> <.local|git:outcome>, stale-head-retirement <record-json> <outcome> <replacement-head> <.local|git:successor>, or verify <evidence> <repo> <PR> <head> <actor> [main]",
+                      "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <.local|git:outcome> (record JSON on stdin), stale-head-retirement <outcome> <replacement-head> <.local|git:successor> (record JSON on stdin), or verify <evidence> <repo> <PR> <head> <actor> [main]",
                     );
                   })();
     process.stdout.write(`${JSON.stringify(result)}\n`);

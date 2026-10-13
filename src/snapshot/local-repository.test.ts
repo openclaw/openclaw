@@ -399,7 +399,7 @@ describe("local SQLite snapshot repository", () => {
     durabilityTestState.pinnedSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
 
     await expect(provider.list()).rejects.toThrow(/crash-durable directory synchronization/u);
-    await expect(fs.access(pendingPath)).resolves.toBeUndefined();
+    await fs.access(pendingPath);
 
     durabilityTestState.pinnedSyncOutcome = undefined;
     await expect(provider.list()).resolves.toEqual([snapshot]);
@@ -415,7 +415,7 @@ describe("local SQLite snapshot repository", () => {
     await fs.link(markerSourcePath, pendingPath);
 
     await expect(provider.list()).rejects.toThrow(/pending marker is unsafe/u);
-    await expect(fs.access(pendingPath)).resolves.toBeUndefined();
+    await fs.access(pendingPath);
   });
 
   it("preserves a complete pending snapshot that fails recovery verification", async () => {
@@ -425,7 +425,7 @@ describe("local SQLite snapshot repository", () => {
     await fs.appendFile(path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), "corrupt");
 
     await expect(provider.list()).rejects.toThrow(/size mismatch|hash mismatch/u);
-    await expect(fs.access(pendingPath)).resolves.toBeUndefined();
+    await fs.access(pendingPath);
   });
 
   it("rejects markerless partial snapshot directories containing only a manifest", async () => {
@@ -741,7 +741,7 @@ describe("local SQLite snapshot repository", () => {
     } finally {
       durabilityTestState.beforeSync = undefined;
     }
-    await expect(fs.access(restorePath)).resolves.toBeUndefined();
+    await fs.access(restorePath);
   });
 
   it.runIf(process.platform !== "win32")(

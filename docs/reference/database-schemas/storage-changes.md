@@ -7,6 +7,21 @@ read_when:
 title: "Storage changes and release preflight"
 ---
 
+Runtime changes use the [existing worker owner](/reference/database-schemas/worker-access),
+with Kysely for ordinary queries. Raw SQL is reserved for schema, migrations,
+bootstrap, or a justified primitive owned by the engine. Prepare asynchronous
+inputs before entering a write transaction; its callback must stay synchronous.
+Use SQLite autocommit for a complete single-statement operation through
+`runSqliteSingleStatementSync`; PostgreSQL writes retain the adapter's
+`runTransaction` custody. Related reads that require a consistent snapshot stay
+in one read transaction. Do not replace SQL-side projections that bound large
+payloads with full-value loading and TypeScript assembly.
+
+Cache changes require complete writer receipt coverage, scoped to the affected
+data. Load once and consume committed postimages or invalidations rather than
+adding freshness queries. [Authority publication](/reference/database-schemas/worker-access#final-authority-without-sql)
+is a separate owner contract: a data receipt alone never grants permission.
+
 ## Agent JSON predicate columns
 
 [Agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns)
@@ -97,7 +112,32 @@ In particular, `user_background_images` depends on `user_profiles`; its cascadin
 foreign key is retained and installed only after both tables exist. Generating a
 fragment does not activate PostgreSQL shared-state runtime support.
 
-Both engines use the same shared-state schema version (currently 21). Every
+`state.postgres.sql` and each manifest `file` contain the single runtime form of
+their state DDL. They omit transaction wrappers and fixed schema qualification;
+the owning connection supplies the namespace and transaction. The separate
+`agent.postgres.sql` readiness artifact retains its schema and transaction
+wrappers until the agent-store cutover.
+
+For a manual state-schema check, run `psql` from the generated directory and
+supply the transaction and chosen schema explicitly:
+
+```sql
+\set ON_ERROR_STOP on
+BEGIN;
+CREATE SCHEMA review_state;
+SET LOCAL search_path = review_state;
+SET LOCAL standard_conforming_strings = on;
+\i state.postgres.sql
+-- Include each desired fragment's manifest file, dependencies first.
+\i fragment-user_profiles.postgres.sql
+\i fragment-user_background_images.postgres.sql
+COMMIT;
+```
+
+Use a disposable schema for this readiness check; it does not enable shared-state
+PostgreSQL support or migrate an existing store.
+
+Both engines use the same shared-state schema version (currently 22). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -122,23 +162,29 @@ surrounding length, JSON, and newline constraints remain CHECKs, preserving NULL
 semantics. These are ten subpredicates; six CHECKs reported `instr` as their first
 unsupported construct, while four more guards were hidden behind byte casts.
 
-The two `acp_sessions` indexes `idx_acp_sessions_resume_agent` and
-`idx_acp_sessions_resume_acpx` are separately recorded as `pendingPromotion`,
-never as SQLite-only exceptions. The v22 promotion follow-up (PR4b, alongside
-receipt cursors) replaces JSON-extract indexing with promoted columns derived
-using `readJsonObjectMembers` and first-duplicate-wins semantics. No other index
-is admitted to this pending list.
+Schema 22 promotes the two ACP resume index expressions to columns. The single
+metadata writer trims string identity values using the existing whitespace rules;
+missing and non-string values become NULL. Migration preserves SQLite's first
+duplicate-key behavior. Resume lookups compare the columns directly. JSON stays canonical; receipt
+publication and cohort-cache lifetime are unchanged.
+
+Approvals, cron receipts, execution decision facts, and Skill Workshop changes
+use explicit unique `cursor_id` columns. Migration preserves the original rowid
+values, including gaps; existing cursor wire formats and insertion-order ties
+remain valid. Serialized writers assign `max(cursor_id) + 1` within their existing
+transactions. The generator's `pendingPromotion` list is empty.
 
 The CI **PostgreSQL conformance** job bootstraps the generated eager schema and
 all fragments into an isolated schema on a real server, then compares every
 table's columns, types, nullability, defaults, primary/unique keys, CHECK count,
 index count, and foreign keys (including actions and deferrability) against the
-SQLite catalog. It reports the two pending indexes explicitly. Locally run
+SQLite catalog. All shared-state indexes are translated. Locally run
 `pnpm db:postgres:gen --check-connection '<disposable PostgreSQL DSN>'`; the check
 removes its isolated schema afterward. This proves DDL equivalence, not runtime
 SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
+SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-maintenance constructs, and consumers call them.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
@@ -2183,6 +2229,12 @@ and successive page drains run outside both archive admission and the item write
 Aggregate pruning diagnostics report the whole operation separately from actual
 writer waits.
 Archive order, retention policy, schemas, and update behavior are unchanged.
+
+History-only disk-budget eviction does not trigger the bulk session-entry planner
+statistics refresh. It removes old generations without changing session-entry
+cardinality; transcript readers keep their session-scoped index paths. Actual
+archived-entry deletions retain the existing bulk refresh threshold. This avoids
+a whole-database analysis holding the writer after a large history-only pass.
 
 Worker retirement preserves the original operation failure without reporting it
 again as a cleanup failure. A successfully retired execution owner is released for

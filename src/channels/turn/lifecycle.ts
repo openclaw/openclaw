@@ -4,7 +4,10 @@ import { observeAgentRunStart } from "../../auto-reply/agent-run-start.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import {
+  settleReplyPendingFinalDelivery,
+  suppressPendingFinalDelivery,
+} from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { isReplyDispatchDeliveryPending } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
@@ -306,13 +309,10 @@ async function settleChannelDeliveryAttempt(
       messageId: resolveChannelDeliveryMessageId(finalized),
     });
   }
-  const completion = resolvePendingFinalCompletion(attempt.payload);
-  if (completion) {
-    await settlePendingFinalDelivery(
-      completion,
-      pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
-    );
-  }
+  await settleReplyPendingFinalDelivery(
+    attempt.payload,
+    pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
+  );
   await runChannelDeliveryObserver({
     onDelivered,
     payload: attempt.payload,
@@ -498,6 +498,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
     let effectivePayload = preparedPayload;
     let result: ChannelDeliveryResult | void = undefined;
     let directInfo: ChannelDeliveryInfo = info;
+    let releaseCustody: (() => void) | undefined;
     // Provider finalization may outlive the participant's async context.
     const emitMessageSentForDelivery = delivery.observeMessageSent
       ? getGroupThreadDispatchContext()
@@ -506,10 +507,11 @@ async function dispatchChannelTurnWithDeliveryOwner(
       : undefined;
     try {
       if (ownership === "routed-delivery" && operation.deliverWithProviderMessageSending) {
+        const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
+        releaseCustody = custody?.release;
         const providerInfo = {
           ...info,
-          ...(createDirectPendingFinalCustody(effectivePayload, params.storePath) ??
-            NO_PENDING_FINAL_CUSTODY),
+          ...(custody ?? NO_PENDING_FINAL_CUSTODY),
         };
         directInfo = providerInfo;
         result = await operation.deliverWithProviderMessageSending(effectiveValue, providerInfo);
@@ -536,7 +538,8 @@ async function dispatchChannelTurnWithDeliveryOwner(
           if (!operation.deliver) {
             throw new Error("channel delivery adapter is missing a direct deliverer");
           }
-          const custody = createDirectPendingFinalCustody(effectivePayload, params.storePath);
+          const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
+          releaseCustody = custody?.release;
           await custody?.onPlatformSendDispatch();
           result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
         }
@@ -556,6 +559,12 @@ async function dispatchChannelTurnWithDeliveryOwner(
         );
       }
       throw error;
+    } finally {
+      if (releaseCustody && result?.finalization) {
+        void result.finalization.then(releaseCustody, releaseCustody);
+      } else {
+        releaseCustody?.();
+      }
     }
     const attempt: PendingChannelDeliveryAttempt = {
       state: "fulfilled",

@@ -23,17 +23,10 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { describe, it } from "vitest";
-import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
-
-/** Core-owned dispatcher options returned by the Teams delivery plan. */
-type CapturedDispatcherOptions = {
-  onReplyStart?: () => Promise<void> | void;
-  deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<void> | void;
-  typingCallbacks?: { onIdle?: () => void };
-};
 
 /**
  * Deterministic stream write fault. Writes are counted across emit/update/close;
@@ -123,10 +116,7 @@ function createRecordingTurnContext(params: {
   };
 }
 
-function createTraceRuntimeStub(
-  recorder: WireRecorder,
-  captureDispatcherOptions: (options: CapturedDispatcherOptions) => void,
-): PluginRuntime {
+function createTraceRuntimeStub(recorder: WireRecorder): PluginRuntime {
   return {
     channel: {
       // Real text helpers: chunking behavior is part of the recorded lifecycle.
@@ -135,23 +125,6 @@ function createTraceRuntimeStub(
         chunkMarkdownTextWithMode,
         convertMarkdownTables,
         resolveMarkdownTableMode,
-      },
-      reply: {
-        createReplyDispatcherWithTyping: (options: CapturedDispatcherOptions) => {
-          captureDispatcherOptions(options);
-          return {
-            dispatcher: {},
-            replyOptions: {},
-            // Mirror core createReplyDispatcherWithTyping.markDispatchIdle: with
-            // no typing controller bound it stops typing via the callbacks, which
-            // ends the 8s keepalive loop and the 10min TTL timer.
-            markDispatchIdle: () => {
-              options.typingCallbacks?.onIdle?.();
-            },
-            markRunComplete: () => {},
-          };
-        },
-        resolveHumanDelayConfig: () => undefined,
       },
     },
     system: {
@@ -188,7 +161,7 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
   {
     // Same script in a channel: native streaming is DM-only and typing is
     // unsupported for channel conversations, so everything batches as block
-    // sends that flush at markDispatchIdle.
+    // sends that flush at settlement.
     golden: "block-fallback-channel",
     scenario: "streaming-happy",
     conversationType: "channel",
@@ -207,7 +180,7 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
 ];
 
 function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) {
-  setMSTeamsRuntime(createTraceRuntimeStub(recorder, () => undefined));
+  setMSTeamsRuntime(createTraceRuntimeStub(recorder));
   const stream = createRecordingStream(recorder, traceCase.streamWriteFault);
   const context = createRecordingTurnContext({
     recorder,
@@ -244,7 +217,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
   const options = {
     ...created.dispatcherOptions,
     deliver: created.delivery.deliver,
-  } as CapturedDispatcherOptions;
+  };
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {

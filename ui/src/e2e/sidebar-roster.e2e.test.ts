@@ -12,6 +12,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
+  pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
@@ -31,6 +32,11 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
       async ({ page }) => {
+        await page.addInitScript(() => {
+          // Exercise the full refresh collection window deterministically.
+          Math.random = () => 0;
+        });
+        await page.clock.install();
         const agentsList: AgentsListResult = {
           defaultId: "main",
           mainKey: "main",
@@ -190,6 +196,17 @@ suite.define(() => {
 
         const headers = sidebar.locator(".sidebar-agent-roster__row");
         await expect.poll(() => headers.count()).toBe(4);
+        expect(await sidebar.locator(".sidebar-agent-roster__menu wa-dropdown-item").count()).toBe(
+          0,
+        );
+        expect(await sidebar.locator(".sidebar-new-session-menu wa-dropdown-item").count()).toBe(0);
+        const rosterMenu = sidebar.locator('[data-agent-group="main"] .sidebar-agent-roster__menu');
+        await rosterMenu.getByRole("button", { name: "Options for Harbor", exact: true }).focus();
+        await page.keyboard.press("Enter");
+        await rosterMenu.locator('wa-dropdown-item[value="main"]').waitFor({ state: "visible" });
+        expect(await rosterMenu.locator("wa-dropdown-item").count()).toBe(3);
+        await page.keyboard.press("Escape");
+        expect(await rosterMenu.locator("wa-dropdown-item").count()).toBe(3);
         await expect
           .poll(() =>
             headers.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-id"))),
@@ -254,23 +271,38 @@ suite.define(() => {
         };
         const activityReads = () => gateway.getRequests("sessions.list", activityQuery);
         const initialReads = (await activityReads()).length;
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessions,
+          sessions: sessions.sessions.map((row) =>
+            row.key === "agent:main:project"
+              ? Object.assign({}, row, { label: "Harbor project refreshed" })
+              : row,
+          ),
+        });
+        await pauseVirtualClock(page);
         await gateway.deferNext("sessions.list", activityQuery);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           key: "agent:main:main",
         });
+        // Deliver nested mock response timers so background-read admission can drain.
+        await page.clock.runFor(5_001);
         await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 1);
         for (let index = 0; index < 3; index += 1) {
           await gateway.emitGatewayEvent("sessions.changed", {
             agentId: "main",
             key: "agent:main:main",
           });
-          // Exercise separate debounce windows while the original server read stays held.
-          await page.waitForTimeout(250);
+          // Cross full collection windows while the original server read stays held.
+          await page.clock.runFor(5_001);
           expect(await activityReads()).toHaveLength(initialReads + 1);
         }
         await gateway.resolveDeferred("sessions.list");
-        await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 2);
+        // A held read reaches the maximum cooldown before its one trailing refresh.
+        await page.clock.runFor(15_001);
+        await sidebar.getByText("Harbor project refreshed", { exact: true }).waitFor();
+        expect(await activityReads()).toHaveLength(initialReads + 2);
+        await page.clock.resume();
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         const workspaceMenu = sidebar.locator(".sidebar-agent-menu");
@@ -321,9 +353,12 @@ suite.define(() => {
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await expectFocused(workspace);
 
-        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         const newMenu = sidebar.locator(".sidebar-new-session-menu");
         await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(await newMenu.locator("wa-dropdown-item").count()).toBe(4);
+        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
         expect(
           await newMenu
             .locator("wa-dropdown-item a")

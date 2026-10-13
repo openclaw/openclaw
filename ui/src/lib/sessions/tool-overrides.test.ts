@@ -112,24 +112,27 @@ describe("session tool overrides", () => {
     ).toEqual({});
   });
 
-  it("treats constructor as an own MCP server key", () => {
-    expect(
-      nextMcpToolsDenyOverrides(
-        { mcpToolsDeny: { github: ["read"] } },
-        "constructor",
-        "inspect",
-        true,
-      ),
-    ).toEqual({
-      mcpToolsDeny: { constructor: ["inspect"], github: ["read"] },
-    });
-  });
+  it.each(["constructor", "__proto__", "hasOwnProperty"])(
+    "treats %s as an own MCP server key",
+    (name) => {
+      expect(
+        nextMcpToolsDenyOverrides({ mcpToolsDeny: { github: ["read"] } }, name, "inspect", true),
+      ).toEqual({
+        mcpToolsDeny: { [name]: ["inspect"], github: ["read"] },
+      });
+    },
+  );
 
-  it.each(["mcpServers", "skills"] as const)("treats hasOwnProperty as an own %s key", (group) => {
-    expect(nextBooleanToolOverrides({}, group, "hasOwnProperty", false, true)).toEqual({
-      [group]: { hasOwnProperty: false },
-    });
-  });
+  it.each(["mcpServers", "skills"] as const)(
+    "treats prototype property names as own %s keys",
+    (group) => {
+      for (const name of ["hasOwnProperty", "__proto__", "constructor"]) {
+        expect(nextBooleanToolOverrides({}, group, name, false, true)).toEqual({
+          [group]: { [name]: false },
+        });
+      }
+    },
+  );
 
   it("counts override categories", () => {
     const overrides = {

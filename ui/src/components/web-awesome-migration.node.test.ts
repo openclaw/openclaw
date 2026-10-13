@@ -34,13 +34,15 @@ function matchingFiles(pattern: RegExp, owners: readonly string[] = []): string[
 
 describe("shared control ownership", () => {
   it("keeps dialogs, menus, and tabs on shared primitives", () => {
-    expect(matchingFiles(/<dialog\b/u, ["components/modal-dialog.ts"])).toEqual([]);
+    expect(matchingFiles(/<dialog\b/u, ["components/solid/modal-dialog.ts"])).toEqual([]);
     expect(
       matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u, [
         "components/menu-surface.ts",
         "components/web-awesome.ts",
-        "components/panel-tab-strip.ts",
+        "components/panel-tab-strip-solid.ts",
         "components/hub-tabs.ts",
+        "components/solid/menu.ts",
+        "components/solid/tabs.ts",
       ]),
     ).toEqual([]);
     expect(
@@ -72,7 +74,6 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
       "components/assistant-panel-view.ts",
-      "components/dock-layout-controller.ts",
       "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-sidebar-region.runtime.ts",

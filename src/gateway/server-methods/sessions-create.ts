@@ -281,7 +281,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
         return;
       }
-      const eligible = context.mentionInbox?.validateRecipients(
+      const eligible = await context.mentionInbox?.validateRecipientsAsync(
         client,
         {
           agentId: explicitlyRequestedAgent.agentId,
@@ -380,6 +380,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
+      // Mention validation and later creation must use the same real child target.
       sessionKey ??= buildDashboardSessionKey(sessionAgentId);
     }
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
@@ -574,6 +575,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
       },
       commitGuard,
+      bindSharingCreation: (operation) =>
+        sessionMutationAuthorization?.bindCreation?.(p, operation),
+      followSharingRegistration: sessionMutationAuthorization?.followRegistration,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
@@ -587,6 +591,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionKey: committed.key,
           storePath: committed.storePath,
           sessionId: committed.entry.sessionId,
+          entry: committed.entry,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
         if ((hasInitialTurn || requiredProfile) && requestAuthority.family === "worker") {
@@ -604,6 +609,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           prepare: context.workerPlacementDispatchService?.withRequiredSession,
           session,
           assertCurrent: assertSessionCreateCurrent,
+          retainDispatch: sessionMutationAuthorization?.retain,
           signal,
         });
         await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);

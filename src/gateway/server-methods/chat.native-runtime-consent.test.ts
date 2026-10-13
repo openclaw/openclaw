@@ -372,7 +372,9 @@ it.runIf(process.platform !== "win32")(
           ).toEqual([]);
         }
         expect(rejection).toEqual(expect.any(Error));
-        expect(String(rejection)).toContain("Captured session database changed before read");
+        expect(String(rejection)).toContain(
+          "Reply initialization database changed after its snapshot",
+        );
         expect(respond).not.toHaveBeenCalled();
         expect(context.chatAbortControllers.size).toBe(0);
       } finally {

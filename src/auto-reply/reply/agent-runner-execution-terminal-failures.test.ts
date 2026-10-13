@@ -224,6 +224,14 @@ describe("executeAgentTurn: terminal failures", () => {
   it.each([
     { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
     {
+      reason: "restart",
+      code: "aborted_for_restart",
+      phase: "end",
+      stopReason: "restart",
+      backendOwned: true,
+      restartError: true,
+    },
+    {
       reason: "superseded",
       code: "aborted_for_supersession",
       phase: "error",
@@ -261,7 +269,7 @@ describe("executeAgentTurn: terminal failures", () => {
       state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
         if (reason === "superseded") {
           replyOperation.supersede();
-        } else {
+        } else if (!("backendOwned" in testCase)) {
           const abortReason =
             reason === "restart"
               ? createAgentRunRestartAbortError()

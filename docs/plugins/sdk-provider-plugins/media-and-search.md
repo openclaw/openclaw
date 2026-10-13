@@ -61,6 +61,12 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
+    `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
+    provider network policy. Pass the embedding provider ID, API, effective base URL,
+    and configured `request.allowPrivateNetwork` value; reuse the returned policy for
+    embedding requests and batch upload, status, and download requests.
+
     If an endpoint documents an input-array limit, set the optional
     `maxInputsPerRequest` field on the created provider instance. Use a positive
     safe integer for the selected endpoint and model; omit it when unknown.
@@ -87,7 +93,7 @@ the adapter retains responsibility for cancellation and terminal settlement.
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:
-    do not authenticate or access the network. Make normalization idempotent and
+    do not authenticate or access the network. Make repeated normalization leave an already-normalized value unchanged, and
     reuse it in `create`, which may receive an already-normalized model or be
     called outside memory. Return an empty string only when the
     model remains unknown until discovery; do not turn an invalid explicit

@@ -295,6 +295,8 @@ const ModelDefinitionSchema = z.strictObject({
   compat: ModelCompatSchema,
   /** Media input limits used by routing and preflight compression. */
   mediaInput: ModelMediaInputSchema.optional(),
+  /** Custom authored rows may accept endpoint-selected response ids; official policy still wins. */
+  responseModelEquivalent: z.boolean().optional(),
   /** Metadata source marker for models added by CLI/catalog tooling. */
   metadataSource: z.literal("models-add").optional(),
 });

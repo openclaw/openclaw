@@ -36,15 +36,12 @@ import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import {
+  prepareConversationCapabilityProfile,
   prepareDelegatedToolDenyFloor,
   resolveConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
-import {
-  bindActiveCronCreatorAuthorityResolver,
-  bindCronManagementGrant,
-} from "./cron-creator-authority-context.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
@@ -69,6 +66,7 @@ import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invoc
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
+import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import {
   withPreparedToolConstruction,
@@ -336,17 +334,20 @@ function* assembleOpenClawCodingTools(
           recordToolPrepStage: options?.recordToolPrepStage,
         })
       : [];
-  const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
-  const cronManagementGrant = bindCronManagementGrant(options?.runId);
-  const { sessionPortalTarget, ownerOnlyCoreToolDenylist, ownerOnlyCoreToolPolicy } =
-    prepareSessionPortalToolAccess({
-      sessionKey: executionSessionKey,
-      agentId: executionAgentId,
-      sessionId: options?.sessionId,
-      senderIsOwner: options?.senderIsOwner,
-      sandboxed: Boolean(sandbox),
-      hasAutomationGrant: Boolean(cronCreatorAuthorityResolver || cronManagementGrant),
-    });
+  const {
+    sessionPortalTarget,
+    ownerOnlyCoreToolDenylist,
+    ownerOnlyCoreToolPolicy,
+    cronCreatorAuthorityResolver,
+  } = prepareSessionPortalToolAccess({
+    sessionKey: executionSessionKey,
+    agentId: executionAgentId,
+    sessionId: options?.sessionId,
+    senderIsOwner: options?.senderIsOwner,
+    sandboxed: Boolean(sandbox),
+    runId: options?.runId,
+    cronSelfRemoveOnlyJobId,
+  });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
@@ -552,6 +553,7 @@ function* assembleOpenClawCodingTools(
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
     ...options,
     agentId,
+    preparedRequesterPolicy: capabilityProfile.policy,
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
@@ -658,16 +660,18 @@ function* assembleOpenClawCodingTools(
 export function createOpenClawCodingToolsInternal(
   ...args: Parameters<typeof assembleOpenClawCodingTools>
 ): AnyAgentTool[] {
-  const assembly = assembleOpenClawCodingTools(...args);
-  let step = assembly.next();
-  while (!step.done) {
-    step = assembly.next(
-      "pluginTools" in step.value
-        ? resolveOpenClawPluginToolsForOptions(step.value.pluginTools)
-        : createOpenClawTools(step.value),
-    );
-  }
-  return step.value;
+  return withLegacySessionCapabilityRead(() => {
+    const assembly = assembleOpenClawCodingTools(...args);
+    let step = assembly.next();
+    while (!step.done) {
+      step = assembly.next(
+        "pluginTools" in step.value
+          ? resolveOpenClawPluginToolsForOptions(step.value.pluginTools)
+          : createOpenClawTools(step.value),
+      );
+    }
+    return step.value;
+  });
 }
 
 /** Internal preparation data stays outside the public harness factory options. */
@@ -688,8 +692,17 @@ export async function createOpenClawCodingToolsInternalAsync(
           : (options?.abortSignal ?? preparation.signal),
     },
     async (shared) => {
+      const conversationCapabilityProfile =
+        options?.conversationCapabilityProfile ??
+        (await prepareConversationCapabilityProfile({
+          ...options,
+          config: shared.config,
+          agentId: options?.policyAgentId ?? options?.agentId,
+          sandboxToolPolicy: options?.sandbox?.enabled ? options.sandbox.tools : undefined,
+          pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
+        }));
       const assembly = assembleOpenClawCodingTools(
-        { ...options, config: shared.config },
+        { ...options, config: shared.config, conversationCapabilityProfile },
         skillReadResources,
         onPolicyFilter,
         preparedSurface,

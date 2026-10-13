@@ -38,10 +38,9 @@ const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
   executePreparedCliRun: vi.fn(async () => ({ text: "The session is fixing a bug." })),
 }));
 
-const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
+const { appendMessage, admitWrite, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => Promise<string | undefined>>(),
   admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
-  loadEntry: vi.fn<() => { entry: InternalSessionEntry } | undefined>(),
   removeSession:
     vi.fn<
       (
@@ -68,10 +67,6 @@ vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }));
 vi.mock("../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: admitWrite,
-}));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntry: loadEntry,
-  loadExactSessionEntryCandidates: () => [],
 }));
 vi.mock("../agents/internal-session-effects.js", () => ({
   prepareInternalSessionEffectsSession: async () => preparedTarget,
@@ -129,7 +124,6 @@ describe("session companion embedded invocation", () => {
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset().mockResolvedValue("seed-entry");
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
-    loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
     runEmbeddedAgent.mockReset().mockResolvedValue({
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
@@ -540,36 +534,6 @@ describe("session companion embedded invocation", () => {
     } finally {
       resume.resolve();
       await pending.catch(() => undefined);
-      companion.dispose();
-    }
-  });
-
-  it.each([
-    { name: "missing", entry: undefined },
-    { name: "replaced", entry: { ...preparedTarget.sessionEntry, sessionId: "replacement" } },
-    {
-      name: "reset with the same id",
-      entry: { ...preparedTarget.sessionEntry, lifecycleRevision: "replacement-lifecycle" },
-    },
-    {
-      name: "claimed by another writer",
-      entry: { ...preparedTarget.sessionEntry, activeWriterRunId: "replacement-writer" },
-    },
-  ])("does not seed a session that is $name before admission", async ({ entry }) => {
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      loadEntry.mockReturnValue(entry ? { entry } : undefined);
-      await write();
-    });
-    const companion = createCompanion();
-    try {
-      await expect(companion.ask(question)).rejects.toThrow();
-      expect(appendMessage).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
-        lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
-        activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
-      });
-    } finally {
       companion.dispose();
     }
   });

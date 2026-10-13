@@ -25,7 +25,10 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
@@ -49,7 +52,6 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -542,7 +544,7 @@ describe("agent deletion database cleanup authority", () => {
     async (retire) => {
       const f = fixture();
       closeOpenClawAgentDatabasesForTest(f.root);
-      clearOpenClawAgentIntegrityVerification(f.target.path, f.options.env);
+      revokeSqliteDatabaseAdmissionsForPath(f.target.path);
       const writer = openNodeSqliteDatabase(f.target.path);
       try {
         writer.exec("DROP INDEX idx_agent_cache_expiry");
@@ -611,7 +613,7 @@ describe("agent deletion database cleanup authority", () => {
   it("does not expose cleanup admission to a coalesced operation outside its scope", async () => {
     const f = fixture();
     closeOpenClawAgentDatabasesForTest(f.root);
-    clearOpenClawAgentIntegrityVerification(f.target.path, f.options.env);
+    revokeSqliteDatabaseAdmissionsForPath(f.target.path);
     await f.withDeletion(async (deletion) => {
       const checked = createDeferred();
       const resume = createDeferred();

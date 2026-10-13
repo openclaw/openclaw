@@ -210,12 +210,7 @@ export async function resolveOnboardCommandOptions(
     tokenProfileId: opts.tokenProfileId as string | undefined,
     tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
     secretInputMode: opts.secretInputMode as OnboardOptions["secretInputMode"],
-    ...Object.fromEntries(
-      ONBOARD_AUTH_FLAGS.map((flag) => [
-        flag.optionKey,
-        opts[flag.optionKey] as string | undefined,
-      ]),
-    ),
+    ...Object.fromEntries(ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey]])),
     cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
     cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
     customBaseUrl: opts.customBaseUrl as string | undefined,

@@ -14,6 +14,7 @@ import {
   collectNestedErrorCandidates,
   toErrorObject,
 } from "../../packages/normalization-core/src/error-coercion.ts";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { MAX_TIMER_TIMEOUT_MS } from "../../packages/normalization-core/src/number-coercion.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import {
@@ -144,6 +145,7 @@ async function fixture({
   const values = {
     theme: new Proxy({}, { get: () => (value) => value }),
     normalizeOptionalString,
+    expectDefined,
     resolveServiceRefreshEnv: (env) => env,
     resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
     isPackageManagerUpdateMode: (mode) => ["npm", "pnpm", "bun"].includes(mode),
@@ -266,6 +268,7 @@ async function fixture({
     "update-command-execution-guards",
     "update-command-result",
     "../../infra/update-failure-result",
+    "../../infra/package-update-refusal",
     "../../infra/update-failure-public-codes",
     "../../infra/update-run-step-key",
     "../../infra/update-preflight-details",
@@ -275,6 +278,13 @@ async function fixture({
     "../../plugins/clawhub-error-codes",
     "../../plugins/install-types",
     "../../logging/diagnostic-support-redaction",
+    "../../logging/redact",
+    "../../logging/redact-linear-matchers",
+    "../../logging/redact-pem",
+    "../../security/config-regex",
+    "../../security/safe-regex",
+    "../../infra/map-size",
+    "../../../packages/acp-core/src/structured-auth-redaction",
     "../../logging/redact-patterns",
     "../../logging/redact-pattern-runtime",
     "../../infra/update-run-step",

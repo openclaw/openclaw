@@ -10,7 +10,6 @@ import {
   withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../shared/current-read-authority.js";
-import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
@@ -20,7 +19,6 @@ import type {
 } from "../state/user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "../state/user-profile-events.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
 import { materializePreparedPersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
@@ -28,15 +26,15 @@ import { resolveAuthStoreReadOnlyValidUntil } from "./auth-profiles/read-only-av
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
-import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessId } from "./harness/support.js";
+import { buildAgentHarnessSupportContext } from "./harness/support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
+import { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
@@ -54,6 +52,8 @@ import {
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+
+export { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 
 export type ModelCatalogDecisionParams = {
   cfg: OpenClawConfig;
@@ -642,79 +642,5 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     pluginRegistry: params.pluginRegistry,
     isCurrent,
     observationConfig: params.observationConfig,
-  };
-}
-
-/** Public runtime and thinking consume this same route/account decision. */
-export function resolveCatalogDecisionRuntime(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: ModelCatalogEntry;
-  evaluation: ModelAuthAvailabilityEvaluation;
-  pluginRegistry?: PluginRegistry;
-}): GatewayAgentRuntime | undefined {
-  const route = params.evaluation.selectedRoute;
-  const context = {
-    config: params.cfg,
-    agentId: params.agentId,
-    provider: params.entry.provider,
-    modelId: params.entry.id,
-    modelProvider: {
-      api: route?.api ?? params.entry.api,
-      baseUrl: route?.baseUrl ?? params.entry.baseUrl,
-      requestTransportOverrides: route?.requestTransportOverrides,
-      runtimePolicy: route?.runtimePolicy,
-      preparedAuth: params.evaluation.selectedCredential,
-    },
-    preparedModelProvider: true,
-  };
-  const select = () => {
-    const { policy } = resolveAgentHarnessAvailabilityDecision({
-      ...context,
-      mode: "projection",
-      agentHarnessRuntimeOverride: params.evaluation.requestedRuntimeId,
-    });
-    return {
-      policy,
-      runtime:
-        policy.runtime === "auto"
-          ? (resolveAutoAgentHarnessId(context) ?? "openclaw")
-          : policy.runtime,
-    };
-  };
-  const selected = params.pluginRegistry
-    ? withPluginRuntimeRegistryScope(params.pluginRegistry, select)
-    : (() => {
-        const policy = resolveAgentHarnessPolicy({
-          ...context,
-          modelApi: context.modelProvider.api,
-          modelBaseUrl: context.modelProvider.baseUrl,
-          requestTransportOverrides: context.modelProvider.requestTransportOverrides,
-        });
-        return {
-          policy,
-          runtime:
-            params.evaluation.requestedRuntimeId ??
-            (policy.runtime === "auto" ? "openclaw" : policy.runtime),
-        };
-      })();
-  // Route projection must retain the native owner that supplied availability. Recomputing
-  // implicit policy from its API-key route alone would relabel that owner as OpenClaw.
-  const runtime =
-    selected.policy.runtimeSource === "implicit" &&
-    !selected.policy.forcedByEnvironment &&
-    isDefaultAgentRuntimeId(params.evaluation.requestedRuntimeId)
-      ? (params.evaluation.runtimeAuth?.id ?? selected.runtime)
-      : selected.runtime;
-  if (
-    selected.policy.runtime === "auto" &&
-    runtime === "openclaw" &&
-    !params.evaluation.requestedRuntimeId
-  ) {
-    return undefined;
-  }
-  return {
-    id: runtime,
-    source: selected.policy.runtimeSource ?? "implicit",
   };
 }

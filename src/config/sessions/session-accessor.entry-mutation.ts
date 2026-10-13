@@ -16,7 +16,7 @@ import {
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
+import { patchSessionEntryCore } from "./session-accessor.entry.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
@@ -40,6 +40,7 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
+import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
@@ -326,6 +327,7 @@ export function prepareSessionEntryMutationDatabases(
     assertCurrent: () => void;
     relatedScopes?: readonly SessionAccessScope[];
     expectedSource?: SessionEntryDatabasePreparationSource;
+    followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   }[],
   ready: Promise<void>,
 ) {
@@ -418,7 +420,16 @@ export function prepareSessionEntryMutationDatabases(
           for (const member of members) {
             member.capture.begin(member.target.options.path, execution);
           }
-          await prepareSessionEntryReplacementDatabase(target.options, assertCurrent, execution);
+          await prepareSessionEntryReplacementDatabase(
+            target.options,
+            assertCurrent,
+            execution,
+            (change) => {
+              for (const { index } of members) {
+                targets[index]!.followRegistration?.(change);
+              }
+            },
+          );
           for (const member of members) {
             member.capture.finish(member.target.options.path, member.target.identity);
           }
@@ -490,17 +501,11 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
   const incognito = captureIncognitoSessionBinding(target);
-  // A sibling's cold registration must not invalidate discovery of this same store.
-  // Release admission before creation callbacks acquire their own commit custody.
+  // Preserve earlier queued writes for existing-key adoption and protect shared-store
+  // discovery from sibling cold registration. Commit custody is acquired separately.
   const admission =
     isMainThread && !incognito ? resolveSqliteWriteAdmissionScope(target) : undefined;
-  const prepare = async () => {
-    const resolved = await prepareSqliteScope(target);
-    if (admission && resolved.path !== admission.path) {
-      throw new Error("Session creation preparation changed its reserved database path");
-    }
-    return resolved;
-  };
+  const prepare = () => prepareSqliteScope(target);
   const resolved = captureLifecycleDatabaseScope(
     isMainThread && !incognito
       ? admission
@@ -589,10 +594,10 @@ export async function updateSessionEntry(
 }
 
 /** Resolves one abort target identity without exposing the mutable store. */
-export function resolveSessionAbortTarget(
+export async function resolveSessionAbortTarget(
   scope: SessionAccessScope,
-): SessionAbortTargetIdentity | null {
-  const entry = loadSessionEntry(scope);
+): Promise<SessionAbortTargetIdentity | null> {
+  const entry = await readSessionEntryReadOnlyInWorker(scope);
   if (!entry) {
     return null;
   }

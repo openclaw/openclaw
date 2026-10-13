@@ -6,7 +6,6 @@ import { i18n, t } from "../i18n/index.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
-import { renderNewSessionLink } from "./new-session-link.ts";
 import { renderPicker } from "./select-picker.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 
@@ -128,24 +127,11 @@ function renderSidebarSessionFilter(
   </button>`;
 }
 
-export function renderSessionListToolbar(host: SessionListHost, teamNewSession?: unknown) {
-  const newSessionAccess = host.readNewSessionAccess();
+export function renderSessionListToolbar(host: SessionListHost) {
   return html`
     <div class="sidebar-session-toolbar">
       ${renderSidebarOwnerPicker(host)}
       ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
-      ${
-        teamNewSession ??
-        renderNewSessionLink({
-          basePath: host.basePath,
-          agentId: host.expandedAgentId(),
-          className: "sidebar-session-toolbar__button sidebar-new-session",
-          label: t("agentChip.newConversation"),
-          showShortcut: true,
-          disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-        })
-      }
     </div>
   `;
 }

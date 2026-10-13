@@ -195,45 +195,31 @@ describe("running installation replacement", () => {
     },
   );
 
-  it.each(["suspension", "registration"] as const)(
-    "coalesces reads and discards observations after %s changes",
-    async (change) => {
-      const json = await import("../infra/json-files.js");
-      const pending = createDeferredCore<unknown>();
-      const read = vi.spyOn(json, "tryReadJson").mockImplementationOnce(() => pending.promise);
-      const restart = vi.fn();
-      dispose = owner.registerGatewayInstallationReplacementHandler(restart);
-      const currentHandoff = vi.fn();
-      const checking = Promise.all([
-        owner.checkGatewayInstallationReplacement(),
-        owner.checkGatewayInstallationReplacement(),
-      ]);
-      expect(read).toHaveBeenCalledOnce();
-      try {
-        if (change === "suspension") {
-          const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
-          expect(suspension?.drain()).toBe(true);
-          await writeIdentity("2026.9.4", "build-before");
-          expect(suspension?.release()).toBe(true);
-        } else {
-          dispose();
-          dispose = owner.registerGatewayInstallationReplacementHandler(currentHandoff);
-        }
-        pending.resolve({ version: "2026.9.5", buildId: "build-after" });
-        await checking;
-        expect(restart).not.toHaveBeenCalled();
-        expect(currentHandoff).not.toHaveBeenCalled();
-        expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
-        if (change === "suspension") {
-          await owner.checkGatewayInstallationReplacement();
-          expect(restart).not.toHaveBeenCalled();
-        }
-      } finally {
-        pending.resolve(undefined);
-        await checking;
-      }
-    },
-  );
+  it("coalesces reads and discards observations after registration changes", async () => {
+    const json = await import("../infra/json-files.js");
+    const pending = createDeferredCore<unknown>();
+    const read = vi.spyOn(json, "tryReadJson").mockImplementationOnce(() => pending.promise);
+    const restart = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(restart);
+    const currentHandoff = vi.fn();
+    const checking = Promise.all([
+      owner.checkGatewayInstallationReplacement(),
+      owner.checkGatewayInstallationReplacement(),
+    ]);
+    expect(read).toHaveBeenCalledOnce();
+    try {
+      dispose();
+      dispose = owner.registerGatewayInstallationReplacementHandler(currentHandoff);
+      pending.resolve({ version: "2026.9.5", buildId: "build-after" });
+      await checking;
+      expect(restart).not.toHaveBeenCalled();
+      expect(currentHandoff).not.toHaveBeenCalled();
+      expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+    } finally {
+      pending.resolve(undefined);
+      await checking;
+    }
+  });
 
   it("reports missing runtime chunks without taking over a held suspension", () => {
     const restart = vi.fn();

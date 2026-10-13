@@ -10,7 +10,10 @@ import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import * as gitOwner from "./git.js";
@@ -66,6 +69,7 @@ describe("managed removal custody", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });

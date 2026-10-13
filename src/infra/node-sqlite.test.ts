@@ -15,6 +15,7 @@ import {
   resolveImmutableSqliteFileUri,
   resolveNodeSqliteLocation,
 } from "./node-sqlite.js";
+import { resolveSqliteDatabaseFilePath } from "./sqlite-database-admission.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -206,6 +207,9 @@ describe("node SQLite locations", () => {
 
     expect(resolveImmutableSqliteFileUri(pathname, "win32")).toBe(
       `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`,
+    );
+    expect(resolveSqliteDatabaseFilePath(resolveImmutableSqliteFileUri(pathname, "win32"))).toBe(
+      namespacedPath,
     );
   });
 });

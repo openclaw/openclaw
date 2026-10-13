@@ -451,12 +451,12 @@ describe("worker tunnel manager", () => {
         expect(
           fake.runs.filter(({ argv }) => argv[0] === "git" && argv[3] === "config"),
         ).toHaveLength(0);
-        await expect(git(result.remoteWorkspaceDir, "config", "--get", "user.name")).resolves.toBe(
-          "Configured Author",
-        );
-        await expect(git(result.remoteWorkspaceDir, "config", "--get", "user.email")).resolves.toBe(
-          "configured@example.invalid",
-        );
+        await expect(
+          git(result.remoteWorkspaceDir, "config", "--local", "--get", "user.name"),
+        ).resolves.toBe("Configured Author");
+        await expect(
+          git(result.remoteWorkspaceDir, "config", "--local", "--get", "user.email"),
+        ).resolves.toBe("configured@example.invalid");
         await expect(
           fs.readFile(path.join(result.remoteWorkspaceDir, "current.txt"), "utf8"),
         ).resolves.toBe("current\n");

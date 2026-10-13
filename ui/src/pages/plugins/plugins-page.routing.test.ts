@@ -203,7 +203,7 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   expect(refresh).toHaveBeenCalledTimes(write ? 0 : 1);
 });
 
-it("commits the focused numeric field before Escape dismisses settings", async () => {
+it("closes setting menus before Escape dismisses settings and commits a focused field", async () => {
   const result = createResult();
   const { harness } = pageGateway({
     "plugins.inspect": () => createInspectResult(),
@@ -225,6 +225,29 @@ it("commits the focused numeric field before Escape dismisses settings", async (
   const selector = 'input[aria-label="Refresh interval (minutes)"]';
   await waitForSolid(() => expect(page.querySelector(selector)).not.toBeNull());
   const input = page.querySelector<HTMLInputElement>(selector)!;
+  const row = input.closest(".plugin-editor__row")!;
+  const trigger = row.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+  const menuItem = row.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')!;
+  // JSDOM omits layout scrolling; the real menu still owns focus and Escape.
+  for (const item of row.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+    item.scrollIntoView = vi.fn();
+  }
+  vi.mocked(context.replace).mockClear();
+  for (const focus of [menuItem, trigger]) {
+    trigger.click();
+    await settlePlugins();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(menuItem);
+    focus.focus();
+    focus.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await settlePlugins();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(page.querySelector(".plugin-editor")).not.toBeNull();
+    expect(context.replace).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+  }
   input.focus();
   input.value = "30";
   input.dispatchEvent(new Event("input", { bubbles: true }));

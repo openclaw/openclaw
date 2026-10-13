@@ -69,6 +69,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+  setRuntimeConfigSnapshot(config);
 });
 
 function prepare(
@@ -101,6 +102,7 @@ it.each([false, true])(
   "persists first-turn skills only while the caller is current without caller-thread session SQL (revoked: %s)",
   async (revokeAtCommit) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:skill-persistence",
@@ -212,6 +214,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
 
 it("refreshes skills without overwriting other session fields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:skill-cohort",
@@ -444,6 +447,7 @@ async function withAccountingFixture(
   await withOpenClawTestState(
     { label: "compaction-accounting", scenario: "minimal" },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),

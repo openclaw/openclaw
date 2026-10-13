@@ -151,6 +151,10 @@ export type ChatThreadProps = ChatSendStatusActions &
     runActive?: boolean;
     runWorking?: boolean;
     startupLabel?: string;
+    retryAt?: number;
+    onRetryRun?: (runId: string) => void;
+    onChangeFailureModel?: (runId: string) => void;
+    failureActionsRunId?: string;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     asyncQuestions?: AsyncQuestionPresentation;
@@ -201,6 +205,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     onHistoryIntent?: (event: Event) => void;
     onDraftChange: (next: string) => void;
     onSend: () => void;
+    onPermissionRetry?: (message: string) => void;
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

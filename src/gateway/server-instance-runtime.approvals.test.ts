@@ -233,13 +233,15 @@ it.each([
   try {
     // Both accounts authorize this actor before submission; only support owns the request.
     expect(
-      msteamsPlugin.approvalCapability?.authorizeActorAction?.({
-        cfg,
-        accountId,
-        senderId,
-        action: "approve",
-        approvalKind: "exec",
-      })?.authorized,
+      (
+        await msteamsPlugin.approvalCapability?.authorizeActorActionAsync?.({
+          cfg,
+          accountId,
+          senderId,
+          action: "approve",
+          approvalKind: "exec",
+        })
+      )?.authorized,
     ).toBe(true);
     const resolution = resolveApprovalOverGateway({
       cfg: submittedConfig,

@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -41,7 +40,7 @@ const ensureWorkshopChangesSchema = createSqliteSchemaEnsurer(
     }),
   {
     tables: ["skill_workshop_changes"],
-    indexes: ["idx_skill_workshop_changes_agent_time"],
+    indexes: ["skill_workshop_changes_cursor_id_idx", "idx_skill_workshop_changes_agent_time"],
   },
 );
 
@@ -62,7 +61,14 @@ export function recordWorkshopChangeInDatabase(
   const kysely = getNodeSqliteKysely<ChangesDatabase>(db);
   executeSqliteQuerySync(
     db,
-    kysely.insertInto("skill_workshop_changes").values({
+    kysely.insertInto("skill_workshop_changes").values((eb) => ({
+      cursor_id: eb
+        .selectFrom("skill_workshop_changes")
+        .select((inner) =>
+          inner(inner.fn.coalesce(inner.fn.max<number>("cursor_id"), inner.val(0)), "+", 1).as(
+            "cursor_id",
+          ),
+        ),
       change_id: change.id,
       agent_id: change.agentId,
       skill_name: change.skillName,
@@ -73,7 +79,7 @@ export function recordWorkshopChangeInDatabase(
       session_key: change.sessionKey ?? null,
       run_id: change.runId ?? null,
       created_at_ms: change.createdAtMs,
-    }),
+    })),
   );
   executeSqliteQuerySync(
     db,
@@ -88,7 +94,7 @@ export function recordWorkshopChangeInDatabase(
           .select("change_id")
           .where("agent_id", "=", change.agentId)
           .orderBy("created_at_ms", "desc")
-          .orderBy(sql`rowid`, "desc")
+          .orderBy("cursor_id", "desc")
           .limit(MAX_CHANGES_PER_AGENT),
       ),
   );
@@ -115,10 +121,7 @@ export function listWorkshopChangesInDatabase(
   }
   const rows = executeSqliteQuerySync(
     db,
-    select
-      .orderBy("created_at_ms", "desc")
-      .orderBy(sql`rowid`, "desc")
-      .limit(query.limit),
+    select.orderBy("created_at_ms", "desc").orderBy("cursor_id", "desc").limit(query.limit),
   ).rows;
   return rows.flatMap((row) => {
     // The table CHECK constraints admit only these values; skip anything a future writer adds.

@@ -94,7 +94,7 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
-  test("reconciles concurrent pairing decisions against current device authority", async () => {
+  test("keeps approved connects off recovery reads and checks current authority", async () => {
     const origin = "https://pairing.example.test";
     const auth = { mode: "token", token: "concurrent-pairing-secret" } as const;
     testState.gatewayAuth = auth;
@@ -111,6 +111,7 @@ describe("gateway connect pairing exemptions", () => {
     });
     const started = await startServerWithClient(undefined, { auth });
     const readPairing = devicePairing.listDevicePairing;
+    const readPaired = devicePairing.getPairedDevice;
     const scopes = ["operator.read", "operator.write"];
     try {
       expect(
@@ -123,8 +124,7 @@ describe("gateway connect pairing exemptions", () => {
         ).ok,
       ).toBe(true);
       for (const decision of [
-        "approved before reread",
-        "approved after reread",
+        "approved",
         "rejected",
         "revoked",
         "different key",
@@ -159,14 +159,16 @@ describe("gateway connect pairing exemptions", () => {
           });
         }
         const ws = await openTrackedWs(started.port, { origin });
-        const reread = vi
-          .spyOn(devicePairing, "listDevicePairing")
-          .mockImplementationOnce(async () => {
+        const recoveryRead = vi.spyOn(devicePairing, "listDevicePairing");
+        const authorityRead = vi
+          .spyOn(devicePairing, "getPairedDevice")
+          .mockImplementationOnce(readPaired)
+          .mockImplementationOnce(async (deviceId, baseDir) => {
             const pendingSnapshot = await readPairing();
             if (decision === "inline approval revoked") {
-              expect(await getPairedDevice(loaded.identity.deviceId)).not.toBeNull();
+              expect(await readPaired(loaded.identity.deviceId)).not.toBeNull();
               await devicePairing.removePairedDevice(loaded.identity.deviceId);
-              return pendingSnapshot;
+              return readPaired(deviceId, baseDir);
             }
             const pending = pendingSnapshot.pending.find(
               (entry) => entry.deviceId === loaded.identity.deviceId,
@@ -179,7 +181,7 @@ describe("gateway connect pairing exemptions", () => {
               expect(response.ok, JSON.stringify(response)).toBe(true);
             };
             if (decision === "unapproved metadata") {
-              return pendingSnapshot;
+              return readPaired(deviceId, baseDir);
             }
             if (decision === "rejected") {
               await decide("device.pair.reject", { requestId: pending.requestId });
@@ -220,9 +222,7 @@ describe("gateway connect pairing exemptions", () => {
                 await decide("device.pair.remove", { deviceId: loaded.identity.deviceId });
               }
             }
-            // Approval can commit either before the recovery read or after its
-            // snapshot, but before the awaiting handshake resumes.
-            return decision === "approved after reread" ? pendingSnapshot : await readPairing();
+            return readPaired(deviceId, baseDir);
           });
         try {
           const response = await connectReq(ws, {
@@ -232,8 +232,8 @@ describe("gateway connect pairing exemptions", () => {
             deviceIdentityPath: loaded.identityPath,
             prePairDevice: false,
           });
-          expect(reread).toHaveBeenCalled();
-          if (decision.startsWith("approved")) {
+          if (decision === "approved") {
+            expect(recoveryRead).not.toHaveBeenCalled();
             expect.soft(response, decision).toMatchObject({
               ok: true,
               payload: { type: "hello-ok", auth: { role: "operator", scopes } },
@@ -250,7 +250,8 @@ describe("gateway connect pairing exemptions", () => {
             });
           }
         } finally {
-          reread.mockRestore();
+          authorityRead.mockRestore();
+          recoveryRead.mockRestore();
           ws.close();
         }
       }

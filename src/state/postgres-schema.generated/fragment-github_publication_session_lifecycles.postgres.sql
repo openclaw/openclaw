@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."github_publication_session_lifecycles" (
+CREATE TABLE "github_publication_session_lifecycles" (
   "publication_kind" text COLLATE "C" NOT NULL,
   "request_id" text COLLATE "C" NOT NULL,
   "lifecycle_revision" text COLLATE "C",
@@ -12,5 +8,3 @@ CREATE TABLE "openclaw_state"."github_publication_session_lifecycles" (
   PRIMARY KEY ("publication_kind", "request_id"),
   CHECK (("publication_kind" IN ('shared', 'personal')))
 );
-
-COMMIT;

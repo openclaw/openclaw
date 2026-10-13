@@ -152,6 +152,22 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
   }
 });
 
+it("explains an unresolved initial turn while offline without blocking the outbox", () => {
+  const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  state.hasPendingInitialTurn = () => true;
+  state.connected = false;
+  try {
+    const { input, send } = draw();
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
+      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+    );
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
+  } finally {
+    render(nothing, container);
+  }
+});
+
 it("updates held Send when an edited draft changes between control and ordinary input", () => {
   const { state, container, draw } = createRecoveringComposer("/stop");
   let renderRequested = false;

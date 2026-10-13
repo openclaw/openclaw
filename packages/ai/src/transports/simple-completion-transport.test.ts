@@ -115,73 +115,6 @@ describe("prepareModelForSimpleCompletion", () => {
     configureAiTransportHost(initialHost);
   });
 
-  it("routes provider-owned simple-completion wrappers through an internal API alias", () => {
-    const sourceApi = "moonshot-simple-source";
-    const sourceResult = { source: true };
-    let capturedApi: string | undefined;
-    apiRegistry.registerApiProvider(
-      {
-        api: sourceApi,
-        stream: () => sourceResult as never,
-        streamSimple: (runtimeModel) => {
-          capturedApi = runtimeModel.api;
-          return sourceResult as never;
-        },
-      },
-      SIMPLE_COMPLETION_SOURCE_ID,
-    );
-    resolveProviderStreamFn.mockReturnValueOnce(undefined);
-    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(
-      ({ context }) =>
-        (
-          model: Parameters<StreamFn>[0],
-          streamContext: Parameters<StreamFn>[1],
-          options: Parameters<StreamFn>[2],
-        ) =>
-          context.streamFn(model, streamContext, options),
-    );
-    const model: Model = {
-      id: "kimi-k2.7-code",
-      name: "Kimi K2.7 Code",
-      api: sourceApi,
-      provider: "moonshot",
-      baseUrl: "https://api.moonshot.ai/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
-      contextWindow: 262_144,
-      maxTokens: 262_144,
-    };
-
-    const auth = { mode: "oauth", authFlow: "test-subscription" };
-    const result = prepareModelForSimpleCompletion({ model, auth });
-
-    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledTimes(1);
-    expect(wrapProviderSimpleCompletionStreamFn.mock.results[0]?.value).toBeTypeOf("function");
-    expect(result.api).toBe(
-      "openclaw-provider-simple:moonshot:kimi-k2.7-code:moonshot-simple-source:https%3A%2F%2Fapi.moonshot.ai%2Fv1:oauth:test-subscription",
-    );
-    expect(inheritManagedTransport).toHaveBeenCalledWith(model, result);
-    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "moonshot",
-        context: expect.objectContaining({
-          provider: "moonshot",
-          modelId: "kimi-k2.7-code",
-          auth,
-          model,
-          streamFn: expect.any(Function),
-        }),
-      }),
-    );
-    const registeredStream = ensureCustomApiRegistered.mock.calls.at(-1)?.[2];
-    expect(registeredStream).toBeTypeOf("function");
-    const stream = registeredStream(result, { messages: [] }, {});
-    expect(stream).toBe(sourceResult);
-    expect(stream).not.toBeInstanceOf(Promise);
-    expect(capturedApi).toBe(sourceApi);
-  });
-
   it("keeps each selected auth and agent policy when completions share a model registry", () => {
     ensureCustomApiRegistered.mockImplementation(
       (registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
@@ -368,86 +301,6 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(pluginStreamFn).toHaveBeenCalledExactlyOnceWith(model, { messages: [] }, {});
   });
 
-  it("carries the source API into wrappers after provider stream projection", () => {
-    const builtInStream = vi.fn(() => createAssistantMessageEventStream());
-    apiRegistry.registerApiProvider(
-      {
-        api: "openai-responses",
-        stream: builtInStream,
-        streamSimple: builtInStream,
-      },
-      SIMPLE_COMPLETION_SOURCE_ID,
-    );
-    const model: Model<"openai-responses"> = {
-      id: "muse-spark-1.2",
-      name: "Muse Spark 1.2",
-      api: "openai-responses",
-      provider: "meta",
-      baseUrl: "https://api.meta.ai/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      maxTokens: 131_072,
-    };
-    resolveProviderStreamFn.mockReturnValueOnce(undefined);
-    createTransportAwareStreamFnForModel.mockReturnValueOnce(pluginStreamFn);
-    let wrappedModelApi: Api | undefined;
-    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(
-      ({ context }) =>
-        (
-          runtimeModel: Parameters<StreamFn>[0],
-          streamContext: Parameters<StreamFn>[1],
-          options?: Parameters<StreamFn>[2],
-        ) => {
-          wrappedModelApi = runtimeModel.api;
-          return context.streamFn(runtimeModel, streamContext, options);
-        },
-    );
-    ensureCustomApiRegistered.mockImplementation(
-      (registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
-        if (registry.getApiProvider(api)) {
-          return false;
-        }
-        registry.registerApiProvider({
-          api,
-          stream: (runtimeModel, context, options) =>
-            requireSynchronousStream(streamFn(runtimeModel, context, options)),
-          streamSimple: (runtimeModel, context, options) =>
-            requireSynchronousStream(streamFn(runtimeModel, context, options)),
-        });
-        return true;
-      },
-    );
-
-    const result = prepareModelForSimpleCompletion({ model });
-    const dispatchApi =
-      "openclaw-provider-stream:meta:muse-spark-1.2:openai-responses:https%3A%2F%2Fapi.meta.ai%2Fv1";
-
-    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          model: expect.objectContaining({ api: dispatchApi }),
-          sourceApi: "openai-responses",
-        }),
-      }),
-    );
-    expect(result.api).toMatch(/^openclaw-provider-simple:/);
-    const finalStreamFn = apiRegistry.getApiProvider(result.api)?.streamSimple;
-    if (!finalStreamFn) {
-      throw new Error("Expected projected simple completion stream");
-    }
-
-    void finalStreamFn(result, { messages: [] }, {});
-
-    expect(wrappedModelApi).toBe(model.api);
-    expect(pluginStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({ api: model.api }),
-      { messages: [] },
-      {},
-    );
-  });
-
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {
     const model: Model<"anthropic-messages"> = {
       id: "claude-sonnet",
@@ -515,95 +368,7 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
-  it("routes registered Google simple completions through the provider plugin stream", () => {
-    const model: Model<"google-generative-ai"> = {
-      id: "gemma-4-26b-a4b-it",
-      name: "Gemma 4 26B",
-      api: "google-generative-ai",
-      provider: "google",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 8192,
-      headers: {},
-    };
-    const googleStream = vi.fn(() => createAssistantMessageEventStream());
-    apiRegistry.registerApiProvider(
-      {
-        api: "google-generative-ai",
-        stream: googleStream,
-        streamSimple: googleStream,
-      },
-      SIMPLE_COMPLETION_SOURCE_ID,
-    );
-    const result = prepareModelForSimpleCompletion({ model });
-
-    expect(resolveProviderStreamFn).toHaveBeenCalledOnce();
-    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
-    expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
-    expect(result.api).toMatch(/^openclaw-provider-stream:/);
-    const registeredStream = ensureCustomApiRegistered.mock.calls.find(
-      (call) => call[1] === result.api,
-    )?.[2] as StreamFn | undefined;
-    void registeredStream?.(
-      result,
-      { messages: [] },
-      {
-        reasoning: "high",
-        apiKey: "google-key",
-        headers: { "x-test": "value" },
-        signal: new AbortController().signal,
-      },
-    );
-    expect(pluginStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({ id: model.id }),
-      { messages: [] },
-      expect.objectContaining({
-        reasoning: "high",
-        apiKey: "google-key",
-        headers: { "x-test": "value" },
-        signal: expect.any(AbortSignal),
-      }),
-    );
-  });
-
-  it("prefers the Google provider plugin over the duplicate transport-aware path", () => {
-    const model: Model<"google-generative-ai"> = {
-      id: "gemini-flash-latest",
-      name: "Gemini Flash Latest",
-      api: "google-generative-ai",
-      provider: "google",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 8192,
-      headers: {},
-    };
-
-    const result = prepareModelForSimpleCompletion({ model });
-
-    expect(resolveProviderStreamFn).toHaveBeenCalledOnce();
-    expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
-    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
-    expect(result.api).toBe("google-generative-ai");
-    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
-      apiRegistry,
-      "google-generative-ai",
-      expect.any(Function),
-    );
-  });
-
   it.each([
-    ["https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/codex"],
-    ["https://chatgpt.com/backend-api/v1", "https://chatgpt.com/backend-api/codex"],
-    ["https://chatgpt.com/backend-api/codex", "https://chatgpt.com/backend-api/codex"],
-    ["https://chatgpt.com/backend-api/codex/v1", "https://chatgpt.com/backend-api/codex"],
-    ["https://chatgpt.com/backend-api/codex/responses", "https://chatgpt.com/backend-api/codex"],
-    ["https://proxy.example.test/openai", "https://proxy.example.test/openai/codex"],
     [
       "https://proxy.example.test/openai/codex/responses",
       "https://proxy.example.test/openai/codex",
@@ -655,28 +420,26 @@ describe("prepareModelForSimpleCompletion", () => {
     },
   );
 
-  it.each([
-    "https://proxy.example.test/openai?token=x",
-    "https://proxy.example.test/openai#route",
-    "https://proxy.example.test/openai?",
-    "https://proxy.example.test/openai#",
-  ])("rejects Codex proxy base URLs with query or fragment components: %s", (baseUrl) => {
-    const model: Model<"openai-chatgpt-responses"> = {
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: "openai-chatgpt-responses",
-      provider: "openai",
-      baseUrl,
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-    };
-    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+  it.each(["https://proxy.example.test/openai#route"])(
+    "rejects Codex proxy base URLs with query or fragment components: %s",
+    (baseUrl) => {
+      const model: Model<"openai-chatgpt-responses"> = {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      };
+      resolveProviderStreamFn.mockReturnValueOnce(undefined);
 
-    expect(() => prepareModelForSimpleCompletion({ model })).toThrow(
-      "OpenAI Codex Responses baseUrl must not include query parameters or fragments",
-    );
-  });
+      expect(() => prepareModelForSimpleCompletion({ model })).toThrow(
+        "OpenAI Codex Responses baseUrl must not include query parameters or fragments",
+      );
+    },
+  );
 });

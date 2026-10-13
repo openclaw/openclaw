@@ -137,7 +137,7 @@ import {
 } from "./session-parent-fork-prepare.js";
 import {
   clearCommittedSessionResetRuntimeState,
-  createSessionResetCleanupGuard,
+  prepareSessionResetCleanupGuard,
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
@@ -281,17 +281,23 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
           }
           // Child finalizers may need the same store writer. Drain them here,
           // outside that lane, before an explicit reset can commit or run its tail.
-          await stopSessionResetSubagents({
-            cfg: params.cfg,
-            sessionKey: candidate.sessionKey,
+          const cleanup = await prepareSessionResetCleanupGuard({
             agentId: attemptContext.agentId,
-            assertCurrent: createSessionResetCleanupGuard({
-              sessionKey: candidate.sessionKey,
-              storePath: attemptContext.storePath,
-              expectedSession: current,
-              assertCurrent: () => params.signal?.throwIfAborted(),
-            }),
+            sessionKey: candidate.sessionKey,
+            storePath: attemptContext.storePath,
+            expectedSession: current,
+            assertCurrent: () => params.signal?.throwIfAborted(),
           });
+          try {
+            await stopSessionResetSubagents({
+              cfg: params.cfg,
+              sessionKey: candidate.sessionKey,
+              agentId: attemptContext.agentId,
+              assertCurrent: cleanup.assertCurrent,
+            });
+          } finally {
+            cleanup.release();
+          }
         }
       },
       // Check the current identity once at the commit instead of rebuilding the
@@ -750,6 +756,7 @@ async function initSessionStateAttemptLocked(
   const committed = await measureDiagnosticsTimelineSpan("reply.session.commit", () =>
     commitReplySessionInitialization({
       bindCreation: params.bindSessionCreation,
+      onCreated: params.onSessionCreated,
       ...sessionTarget,
       commitGuard: !entry
         ? () => {

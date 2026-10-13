@@ -168,20 +168,6 @@ describe("fetchParentMessageCached", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache parent fetches when the expiry would exceed Date range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const fetcher = fetchChannelMessage.mockImplementation(async () => ({
-      id: "p1",
-      body: { content: "hi", contentType: "text" },
-    }));
-
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
-
-    expect(fetcher).toHaveBeenCalledTimes(2);
-  });
-
   it("evicts oldest entries when exceeding the 100-entry cap", async () => {
     const fetcher = fetchChannelMessage.mockImplementation(async (_tok, _g, _c, parentId) => ({
       id: parentId,

@@ -9,6 +9,8 @@ import type {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
@@ -95,7 +97,12 @@ export function createSqliteSessionActorExecutor(
   let fenced = false;
   const authorize = (
     authority: SessionActorAuthority,
-    observe?: (native: NativeAdmission, publication: unknown) => void,
+    observe?: (
+      native: NativeAdmission,
+      publication: unknown,
+      stage: "transaction" | "commit",
+      snapshot: SessionActorAuthorityFacts,
+    ) => void,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -123,7 +130,7 @@ export function createSqliteSessionActorExecutor(
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
         const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
         const publication = facts.publication;
-        observe?.(native, publication);
+        observe?.(native, publication, request.stage, snapshot);
         authority.authorize(
           request.stage,
           snapshot,
@@ -182,6 +189,7 @@ export function createSqliteSessionActorExecutor(
     const captured = input;
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     let native: NativeAdmission | undefined;
+    let previousEntry: SessionActorAuthorityFacts["entry"];
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;
@@ -257,6 +265,18 @@ export function createSqliteSessionActorExecutor(
                 }
                 result = committed;
                 try {
+                  // Retained effect predicates must observe this commit before its callbacks.
+                  if (target.database.kind === "file") {
+                    const entry = committed.receipt.postimage.entry;
+                    publishRetainedSessionEntryChange(
+                      target.database.physicalIdentity,
+                      target.sessionKey,
+                      entry ? projectSessionSharingEntry(entry) : undefined,
+                      previousEntry,
+                      true,
+                      entry,
+                    );
+                  }
                   // Partial transcript publication precedes installation of the full actor replica.
                   publishCommittedSessionTranscriptReceipts(
                     committed.receipt.transcript.authorityReceipts,
@@ -323,8 +343,11 @@ export function createSqliteSessionActorExecutor(
           })();
           return running;
         },
-        authorize(authority, (admission, publication) => {
+        authorize(authority, (admission, publication, stage, snapshot) => {
           native = admission;
+          if (stage === "transaction") {
+            previousEntry = snapshot.entry;
+          }
           if (isRecord(publication) && publication.kind === "session-actor-outcome") {
             transfer.accept(publication.transfer);
           }

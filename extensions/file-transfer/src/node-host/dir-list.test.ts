@@ -91,7 +91,7 @@ describe("directory binding", () => {
     ).resolves.toEqual({
       ok: false,
       code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
+      message: "resolved path differs from the authorized target",
       canonicalPath: file,
     });
   });
@@ -252,7 +252,7 @@ describe("handleDirList — happy path", () => {
     expect(changed).toEqual({
       ok: false,
       code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
+      message: "resolved path differs from the authorized target",
       canonicalPath: tmpRoot,
     });
   });

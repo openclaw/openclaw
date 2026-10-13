@@ -606,6 +606,9 @@ export async function createServiceChildRelayAdapter(
         }
         throw startupError ?? secretDeliveryError;
       }
+      if (params.input !== undefined && params.prepareInput) {
+        await params.prepareInput();
+      }
       if (params.abortSignal?.aborted || waitError) {
         throw waitError ?? new Error("service child construction aborted");
       }

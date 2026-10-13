@@ -610,7 +610,7 @@ export async function prepareQuestionCommitAuthority(
     | ReturnType<
         NonNullable<
           ReturnType<typeof readGatewayRequestMutationAuthority>["questionCallerRead"]
-        >["retainNative"]
+        >["retainCurrent"]
       >
     | undefined;
   const assertCurrent = () => {
@@ -649,7 +649,7 @@ export async function prepareQuestionCommitAuthority(
     }
   };
   try {
-    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainNative();
+    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainCurrent();
     assertCurrent();
     return {
       assertCurrent,

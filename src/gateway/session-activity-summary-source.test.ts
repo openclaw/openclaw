@@ -76,7 +76,7 @@ it("reuses complete actor context with the worker's byte bounds, anchors and rol
     const events = content.map((message, index) => ({
       type: "message",
       id: `message-${index}`,
-      parentId: index === 0 ? null : `message-${index - 1}`,
+      parentId: index === 0 ? "runtime-context" : `message-${index - 1}`,
       timestamp: "2026-01-01T00:00:00Z",
       message,
     }));
@@ -92,6 +92,21 @@ it("reuses complete actor context with the worker's byte bounds, anchors and rol
           version: 3,
           timestamp: "2026-01-01T00:00:00Z",
           cwd: "/synthetic",
+        },
+        {
+          type: "custom",
+          id: "model-snapshot",
+          parentId: null,
+          customType: "model-snapshot",
+          data: { provider: "synthetic", modelId: "test-model" },
+        },
+        {
+          type: "custom_message",
+          id: "runtime-context",
+          parentId: "model-snapshot",
+          customType: "openclaw.runtime-context",
+          content: "Current synthetic runtime facts",
+          display: false,
         },
         ...events,
       ]);

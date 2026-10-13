@@ -567,7 +567,7 @@ export async function prepareVitestRuntime(
     bin: process.execPath,
     args: ["scripts/ui.js", "build"],
     cwd,
-    env,
+    env: { ...env, OPENCLAW_CONTROL_UI_BUILD_ID: buildId },
     signal: options.signal,
   });
   if (code !== 0) {

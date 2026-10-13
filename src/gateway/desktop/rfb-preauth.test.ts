@@ -110,6 +110,7 @@ async function runPreauth(params: {
   preauth: RfbPreauthDescriptor;
   serverScript: (server: ScriptedPeer) => Promise<void>;
   browserScript?: (browser: ScriptedPeer) => Promise<void>;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const [gatewayServer, fakeServerStream] = duplexPair();
   const [gatewayBrowserStream, fakeBrowserStream] = duplexPair();
@@ -122,6 +123,7 @@ async function runPreauth(params: {
         server: gatewayServer,
         browser: gatewayBrowser,
         preauth: params.preauth,
+        assertCurrent: params.assertCurrent,
       }),
       params.serverScript(fakeServer),
       (params.browserScript ?? completeSyntheticBrowserHandshake)(fakeBrowser),
@@ -156,6 +158,32 @@ async function writeArdOffer(server: ScriptedPeer, keyLength: number): Promise<v
 }
 
 describe("RFB server-side pre-authentication", () => {
+  it("refuses credential response when ingress authority changes during the challenge read", async () => {
+    let current = true;
+    const responses: Buffer[] = [];
+    await expect(
+      runPreauth({
+        preauth: { auth: "vnc-password", credentials: { password: "test-password" } },
+        assertCurrent() {
+          if (!current) {
+            throw new Error("ingress authority revoked");
+          }
+        },
+        serverScript: async (server) => {
+          await server.write(VERSION_3_8);
+          expect(await server.readExactly(12)).toEqual(VERSION_3_8);
+          await server.write(Buffer.from([1, 2]));
+          expect(await server.readExactly(1)).toEqual(Buffer.from([2]));
+          server.stream.on("data", (bytes: Buffer) => responses.push(bytes));
+          current = false;
+          await server.write(Buffer.from("0123456789abcdef"));
+          await server.write(Buffer.alloc(4));
+        },
+      }),
+    ).rejects.toThrow("ingress authority revoked");
+    expect(responses).toEqual([]);
+  });
+
   it("negotiates with the browser while upstream authentication is pending, withholding success", async () => {
     const browserReady = createDeferred();
     const events: string[] = [];

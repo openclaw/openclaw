@@ -18,6 +18,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const root = process.cwd();
 const artifacts = path.join(root, ".artifacts");
@@ -67,7 +68,11 @@ function createWorkerArtifactFixtures(
       return joined;
     }
 
-    function node(args: Parameters<typeof runNodeScript>[0], cwd = root, env = process.env) {
+    function node(
+      args: Parameters<typeof runNodeScript>[0],
+      cwd = root,
+      env = testRunnerFixtureEnv(),
+    ) {
       const completion = fixtureLifetime.track(
         runNodeScript(args, compilerEnv(env, "node"), undefined, {
           cwd,
@@ -80,7 +85,7 @@ function createWorkerArtifactFixtures(
       return completion;
     }
 
-    function runtime(args: string[], cwd = root, env = process.env) {
+    function runtime(args: string[], cwd = root, env = testRunnerFixtureEnv()) {
       const completion = fixtureLifetime.track(
         runNodeScript(args, compilerEnv(env, currentRuntime), undefined, {
           cwd,
@@ -101,11 +106,12 @@ function createWorkerArtifactFixtures(
         stderr = path.join(logs, "stderr.log");
       const out = fs.openSync(stdout, "w"),
         err = fs.openSync(stderr, "w");
+      const env = testRunnerFixtureEnv();
       const handle = spawnWatchedVitestProcess({
         workerRun: owner,
         pnpmArgs: ["exec", "node", ...nodeArgs, "node_modules/vitest/vitest.mjs", ...args],
-        spawnParams: { ...resolveVitestSpawnParams(process.env), stdio: ["ignore", out, err] },
-        env: process.env,
+        spawnParams: { ...resolveVitestSpawnParams(env), stdio: ["ignore", out, err] },
+        env,
       });
       fs.closeSync(out);
       fs.closeSync(err);
@@ -129,6 +135,7 @@ function createWorkerArtifactFixtures(
     async function prepareWorkers(owner: VitestWorkerRun): Promise<VitestWorkerManifest> {
       commandSignal.throwIfAborted();
       const child = spawn(process.execPath, ["--input-type=module", "--eval", preparationClient], {
+        env: testRunnerFixtureEnv(),
         detached: process.platform !== "win32",
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       });
@@ -163,7 +170,8 @@ function createWorkerArtifactFixtures(
     fixtureLifetime,
     fixtureDirectory,
     createFixtureCommands,
-    createWorkerRun: () => createVitestWorkerRun(compilerEnv(process.env, currentRuntime)),
+    createWorkerRun: () =>
+      createVitestWorkerRun(compilerEnv(testRunnerFixtureEnv(), currentRuntime)),
   };
 }
 

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import assert from "node:assert/strict";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +10,12 @@ import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
+
+function readBuiltIdentity(html: string): { buildId: string } {
+  const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(html)?.[1];
+  assert.ok(encoded, "built document must carry its artifact identity");
+  return JSON.parse(encoded);
+}
 
 describe("Control UI Vite build", () => {
   let root: string;
@@ -447,10 +454,10 @@ describe("Control UI Vite build", () => {
     }
     const serviceWorker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
     const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(serviceWorker)?.[1];
-    const buildInfo = JSON.parse(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    const buildInfo = readBuiltIdentity(html);
     expect(embeddedBuildId).toBe(buildInfo.buildId);
 
-    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
     const scriptTags = html.match(/<script\b[^>]*>/gu) ?? [];
     expect(scriptTags.length).toBeGreaterThan(0);
     for (const tag of scriptTags) {
@@ -498,17 +505,18 @@ describe("Control UI Vite build", () => {
       path.join(root, "index.html"),
       '<html><script type="module" src="./main.js"></script></html>',
     );
-    const buildInfo = JSON.parse(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]);
+    let initialBuildId: string | undefined;
     const cacheIds: string[] = [];
     for (const title of ["First", "Second"]) {
       await fs.writeFile(path.join(publicDir, "favicon.svg"), `<svg><title>${title}</title></svg>`);
       await build(config);
       const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+      initialBuildId ??= readBuiltIdentity(html).buildId;
       const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
       expect(cacheId).toBeDefined();
       cacheIds.push(cacheId!);
       const worker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
-      expect(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1]).toBe(buildInfo.buildId);
+      expect(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1]).toBe(initialBuildId);
     }
     expect(cacheIds[0]).not.toBe(cacheIds[1]);
   });

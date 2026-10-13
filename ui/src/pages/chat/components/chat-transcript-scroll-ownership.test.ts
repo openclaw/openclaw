@@ -5,7 +5,12 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import { handleChatScroll, handleChatScrollTakeover, lockChatScroll } from "../scroll.ts";
+import {
+  handleChatScroll,
+  handleChatScrollTakeover,
+  lockChatScroll,
+  scheduleCommittedChatScroll,
+} from "../scroll.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
@@ -25,6 +30,24 @@ import {
   transcriptSize,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
+
+function createPolicyTranscript(paneId: string) {
+  const policy = makeChatHost({ chatHasAutoScrolled: true });
+  const transcript = new ChatTranscriptController(
+    {
+      addController: vi.fn(),
+      removeController: vi.fn(),
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    },
+    () => paneId,
+    {
+      canFollowEnd: () => !policy.chatFollowLocked,
+      onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+    },
+  );
+  return { policy, transcript };
+}
 
 describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
@@ -185,20 +208,7 @@ describe("chat transcript scroll ownership", () => {
     "preserves $intent ownership through composer $nativeResize and row growth",
     async ({ intent, nativeResize }) => {
       const flushFrames = stubAnimationFrames();
-      const policy = makeChatHost({ chatHasAutoScrolled: true });
-      const transcript = new ChatTranscriptController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
-        },
-        () => `footer-${intent}`,
-        {
-          canFollowEnd: () => !policy.chatFollowLocked,
-          onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-        },
-      );
+      const { policy, transcript } = createPolicyTranscript(`footer-${intent}`);
       const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
         kind: "content",
         key: `row:${index}`,
@@ -289,6 +299,73 @@ describe("chat transcript scroll ownership", () => {
       }
     },
   );
+  it("preserves following through an upward end retarget and no-op until real reader input takes over", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { policy, transcript } = createPolicyTranscript("upward-end-retarget");
+    const { container } = await mountTestTranscript(
+      "upward-end-retarget",
+      Array.from({ length: 20 }, (_, index): TestContentRow => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      })),
+      transcript,
+    );
+    let scrollHeight = 2000;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = Math.min(options.top ?? container.scrollTop, scrollHeight - 600);
+      }
+    };
+    policy.chatScrollElement = () => container;
+    policy.chatScrollToEnd = (options) => transcript.scrollToEnd(options);
+    policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
+    policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
+    const onScroll = (event: Event) => handleChatScroll(policy, event);
+    container.addEventListener("scroll", onScroll);
+    try {
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+      }
+      transcript.scrollToEnd({ source: "auto" });
+      container.dispatchEvent(new Event("scroll"));
+      flushFrames();
+      expect(container.scrollTop).toBe(1400);
+
+      // Provisional rows retire before the next reply's measured range grows.
+      // Deliver the native offset only after both changes, as browsers can do.
+      scrollHeight = 1800;
+      transcript.scrollToEnd({ source: "auto" });
+      expect(container.scrollTop).toBe(1200);
+      transcript.scrollToEnd({ source: "auto" });
+      // Retiring the completed command does not represent reader input.
+      transcript.cancelScroll();
+      scrollHeight = 1920;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatFollowLocked).toBe(false);
+      scheduleCommittedChatScroll(policy);
+      flushFrames();
+      expect(container.scrollTop).toBe(1320);
+      container.dispatchEvent(new Event("scroll"));
+
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+      container.scrollTop -= 80;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatFollowLocked).toBe(true);
+      scrollHeight = 2040;
+      scheduleCommittedChatScroll(policy);
+      flushFrames();
+      expect(container.scrollTop).toBe(1240);
+    } finally {
+      container.removeEventListener("scroll", onScroll);
+      transcript.hostDisconnected();
+    }
+  });
+
   it("cancels the active native target when the reader locks following", async () => {
     const flushFrames = stubAnimationFrames();
     const policy = makeChatHost({ chatHasAutoScrolled: true });

@@ -74,7 +74,7 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
   `whatsapp-group-outbound-media`, `whatsapp-group-outbound-poll`,
   `whatsapp-message-actions`, `whatsapp-reply-context-isolation`,
   `whatsapp-reply-delivery-shape`. These bypass model prompting on purpose
-  and prove deterministic Gateway/channel `send`, `poll`, and
+  and prove repeatable Gateway/channel `send`, `poll`, and
   `message.action` contracts.
 - Access-control coverage: `whatsapp-access-control-dm-open`,
   `whatsapp-access-control-dm-disabled`, `whatsapp-access-control-group-open`,
@@ -87,7 +87,7 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
   `whatsapp-status-reaction-lifecycle`.
 
 WhatsApp defaults are derived from the selected taxonomy profile and lane
-constraints. `mock-openai` runs eligible scenarios deterministically through
+constraints. `mock-openai` runs eligible scenarios with fixed model responses through
 the real WhatsApp transport while mocking only model output; `live-frontier`
 excludes scenarios whose provider or model contract requires the mock lane.
 

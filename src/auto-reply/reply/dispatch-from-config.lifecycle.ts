@@ -418,13 +418,10 @@ export function createDispatchReplyOperationCoordinator(params: {
       });
     const lifecycleOnlyAbortController =
       allowActiveResolution || allowSlackRoutedThreadBypass ? new AbortController() : undefined;
-    const onLifecycleInterrupt = () => {
-      preDispatchLifecycleInterrupted = true;
-      lifecycleOnlyAbortController?.abort();
-    };
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          onDatabaseRegistration: params.replyOptions?.onDatabaseRegistration,
           assertRequestCurrent: () => {
             params.replyOptions?.operatorAuthority?.assertCurrent();
             params.replyOptions?.internalEventExecution?.assertCurrent?.();
@@ -454,7 +451,10 @@ export function createDispatchReplyOperationCoordinator(params: {
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActiveResolution && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActiveResolution || allowSlackRoutedThreadBypass,
-          onLifecycleInterrupt,
+          onLifecycleInterrupt: () => {
+            preDispatchLifecycleInterrupted = true;
+            lifecycleOnlyAbortController?.abort();
+          },
         });
       } catch (error) {
         if (
@@ -516,7 +516,8 @@ export function createDispatchReplyOperationCoordinator(params: {
             routeThreadId: params.routeThreadId,
           }))
       ) {
-        if (allowActiveResolution) {
+        // A low-level successor retains its own cancellation while it waits for queue admission.
+        if (allowActiveResolution && !params.allowActiveQueueResolution) {
           preDispatchAbortOperation = admission.activeOperation;
         }
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;

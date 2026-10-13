@@ -2,7 +2,12 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  createChangedNodeTestShards,
+  hasControlUiPerformanceAffectingChange,
+  hasPromptSnapshotAffectingChange,
+  hasSqliteSessionLifecycleAffectingChange,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { rebalanceMeasuredSerialJobs } from "../../scripts/lib/ci-measured-compact-packing.mts";
 import * as nodeTestInventory from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
@@ -87,6 +92,10 @@ import {
 import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
 import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
+import {
+  createChangedNodeTestShards as createChangedOwnerNodeTestShards,
+  selectedFiles,
+} from "./ci-changed-node-test-plan.test-support.js";
 import {
   expectRuntimeReleaseInventory,
   isNumberedToolingGroup,
@@ -948,7 +957,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("keeps precise RunsOn targets and their canonical child policies", () => {
     const cronTarget = "src/cron/validate-timestamp.test.ts";
     const siblingTarget = "src/cli/update-dry-run-state.process.test.ts";
-    const targets = [cronTarget, siblingTarget];
+    const cliTarget = "src/cli/nodes-cli.coverage.test.ts";
+    const targets = [cronTarget, siblingTarget, cliTarget];
     const hybrid = expectDefined(
       createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
       "precise hybrid plan",
@@ -979,6 +989,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         job.groups.some((group) => group.includePatterns?.includes(siblingTarget)),
       )?.runner,
     );
+    expect(
+      runson.find((job) => job.groups.some((group) => group.includePatterns?.includes(cliTarget)))
+        ?.runner,
+    ).toBe("blacksmith-16vcpu-ubuntu-2404");
   });
 
   it("discovers only tooling files for a cold precise tooling plan", () => {
@@ -3060,8 +3074,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runnerBackend === "github" ? { OPENCLAW_VITEST_MAX_WORKERS: "2" } : undefined,
       );
       expect(plan.map((job) => job.planConcurrency)).toEqual([1]);
-      if (owner === "agentic-cli" && runnerBackend !== "github") {
-        expect(plan.map((job) => job.runner)).toEqual([EXTRA_LARGE_NODE_TEST_RUNNER]);
+      if (runnerBackend !== "github") {
+        expect(plan.map((job) => job.runner)).toEqual(["blacksmith-16vcpu-ubuntu-2404"]);
       }
       if (owner === "agentic-gateway-core-2") {
         const changed = expectDefined(
@@ -4198,5 +4212,159 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     expect(actual).toEqual(listTestFiles("src/auto-reply/reply"));
     expect(new Set(actual).size).toBe(actual.length);
+  });
+});
+
+describe("CI changed Node test plan", () => {
+  it.each([
+    ["ui/src/main.ts", true],
+    ["ui/src/pages/chat/chat-gateway.test.ts", false],
+    // Erased TSX header imports do not bring Gateway server code into the UI runtime.
+    ["packages/gateway-client/src/index.ts", false],
+    ["packages/gateway-client/src/browser.ts", true],
+  ] as const)("selects UI performance for %s: %s", (file, expected) => {
+    expect(hasControlUiPerformanceAffectingChange([file])).toBe(expected);
+  });
+
+  it("classifies prompt-snapshot impact by surface and generator import graph", () => {
+    // Inside the generator's import graph -> regenerated output can change.
+    expect(hasPromptSnapshotAffectingChange(["src/auto-reply/reply/prompt-prelude.ts"])).toBe(true);
+    // The codex extension loads through a dynamic bundled-plugin module id the
+    // graph walk cannot see; it stays on the always-run surface.
+    expect(hasPromptSnapshotAffectingChange(["extensions/codex/src/index.ts"])).toBe(true);
+    expect(
+      hasPromptSnapshotAffectingChange([
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/README.md",
+      ]),
+    ).toBe(true);
+    expect(hasPromptSnapshotAffectingChange(["scripts/generate-prompt-snapshots.ts"])).toBe(true);
+    // Workspace packages feed the generator through package-specifier imports
+    // the relative graph walk cannot see.
+    expect(hasPromptSnapshotAffectingChange(["packages/llm-core/src/index.ts"])).toBe(true);
+    // The gate's own orchestration must not be able to skip the gated lane.
+    expect(hasPromptSnapshotAffectingChange([".github/workflows/ci.yml"])).toBe(true);
+    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(
+      true,
+    );
+    // Outside the surface and the generator graph -> the lane may skip.
+    expect(hasPromptSnapshotAffectingChange(["ui/src/app.ts"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["docs/index.md"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(
+      false,
+    );
+    // Deleted source files cannot be graphed; fail safe to running the check.
+    expect(hasPromptSnapshotAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
+  });
+
+  it("classifies SQLite session lifecycle impact by owner and import graph", () => {
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/agents/embedded-agent-runner/run/attempt-session-runtime-prepare.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/gateway/server-methods/sessions.ts"]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/sessions/session-lifecycle-admission.ts"]),
+    ).toBe(true);
+    expect(hasSqliteSessionLifecycleAffectingChange(["src/config/sessions.ts"])).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "packages/media-understanding-common/src/provider-id.ts",
+      ]),
+    ).toBe(false);
+    expect(hasSqliteSessionLifecycleAffectingChange(["src/agents/model-auth.ts"])).toBe(false);
+    expect(hasSqliteSessionLifecycleAffectingChange(["extensions/discord/src/index.ts"])).toBe(
+      false,
+    );
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/config/sessions/session-registry-maintenance.test.ts",
+      ]),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/infra/definitely-deleted-module.ts"]),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/agents/embedded-agent-runner/run/deleted-session-runtime.ts",
+      ]),
+    ).toBe(true);
+  });
+
+  describe("release fast lane", () => {
+    it("keeps compact packing policy and runtime inputs bounded", () => {
+      const onFallback = vi.fn();
+      createChangedOwnerNodeTestShards(
+        ["scripts/lib/ci-node-test-plan.mts", "test/scripts/ci-node-test-plan.test.ts"],
+        { runnerBackend: "blacksmith", onFallback },
+      );
+      expect(onFallback).not.toHaveBeenCalledWith(
+        "compact packing policy requires full-plan proof",
+      );
+      const globalPlan = createChangedOwnerNodeTestShards(["scripts/run-vitest.mts"], {
+        onFallback,
+      });
+      expect(globalPlan).not.toBeNull();
+      expect(selectedFiles(globalPlan)).toContain("test/scripts/test-projects.test.ts");
+      expect(selectedFiles(globalPlan)).not.toContain("src/cron/service.stream-trigger.test.ts");
+      expect(onFallback).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps measured packing ownership bounded on RunsOn", () => {
+    const shards = createChangedOwnerNodeTestShards(
+      ["scripts/lib/ci-measured-compact-packing.mts"],
+      {
+        runnerBackend: "runson",
+      },
+    );
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain("test/scripts/ci-node-test-plan.test.ts");
+    expect(selectedFiles(shards)).not.toContain("src/cron/service.stream-trigger.test.ts");
+  });
+
+  it("fails safe for raw Git paths that resemble normalized script paths", () => {
+    for (const changedPath of [
+      " scripts/changed-lanes.mts",
+      String.raw`scripts\changed-lanes.mts`,
+    ]) {
+      expect(createChangedOwnerNodeTestShards([changedPath]), changedPath).toBeNull();
+    }
+  });
+
+  describe("documentation targeting", () => {
+    it("keeps the complete budgeted corpus plan beside a documentation page", () => {
+      const targets = startupCorpusTestFiles;
+      const before = createChangedOwnerNodeTestShards(targets);
+      expect(before).toHaveLength(3);
+      expect(before?.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
+      expect(before?.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(
+        targets.toSorted(),
+      );
+      expect(before?.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
+      expect(createChangedOwnerNodeTestShards([...targets, "docs/ci/pipeline.md"])).toEqual(before);
+    });
+
+    it("retains the mapped prompt Markdown owner beside documentation", () => {
+      const fixture =
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md";
+      const before = createChangedOwnerNodeTestShards([fixture]);
+      expect(before).not.toBeNull();
+      const ownedTargets = before?.flatMap((shard) => [
+        ...(shard.targets ?? []),
+        ...(shard.includePatterns ?? []),
+        ...(shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []),
+      ]);
+      expect(ownedTargets).toContain("test/scripts/prompt-snapshots.test.ts");
+      expect(createChangedOwnerNodeTestShards([fixture, "docs/ci/pipeline.md"])).toEqual(before);
+    });
   });
 });

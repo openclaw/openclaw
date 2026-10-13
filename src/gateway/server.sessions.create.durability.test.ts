@@ -114,7 +114,7 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
     message: `Persist concurrent Gateway initial input ${index}.`,
   }));
   const competingWrites: Promise<unknown>[] = [];
-  const staleInputs = new Set<string>();
+  const intervenedInputs = new Set<string>();
   const acquire = sessionInputActors.acquireSessionInputActor;
   vi.spyOn(sessionInputActors, "acquireSessionInputActor").mockImplementation(async (...args) => {
     const input = await acquire(...args);
@@ -137,16 +137,11 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
             },
           );
         await recordParticipant(1);
+        intervenedInputs.add(input.actor.target.sessionKey);
         const pending = accept(...command);
-        // This independent writer must wait behind the complete admission, including its rebase.
+        // This independent writer must wait behind the complete input admission.
         competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
-        const outcome = await pending;
-        expect(outcome).toMatchObject({
-          kind: "stale-version",
-          postimage: { target: input.actor.target },
-        });
-        staleInputs.add(input.actor.target.sessionKey);
-        return outcome;
+        return pending;
       });
     }
     return input;
@@ -175,7 +170,7 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
         ),
       ).toHaveLength(1);
     }
-    expect(staleInputs).toEqual(new Set(inputs.map((input) => input.key)));
+    expect(intervenedInputs).toEqual(new Set(inputs.map((input) => input.key)));
     expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
   } finally {
     await Promise.all(competingWrites);
@@ -516,12 +511,12 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
   },
 );
 
-test("retains idle chat input custody when its separate transcript commit is refused", async () => {
+test("leaves idle chat input unaccepted when its durable commit is refused", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  const key = "agent:main:dashboard:idle-staging-preserved";
-  const message = "Idle input keeps its separately accepted bytes.";
-  const runId = "idle-staging-preserved";
+  const key = "agent:main:dashboard:idle-commit-refused";
+  const message = "Idle input is accepted only after its durable commit.";
+  const runId = "idle-commit-refused";
   const target = { agentId: "main", sessionKey: key, storePath };
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
@@ -547,9 +542,7 @@ test("retains idle chat input custody when its separate transcript commit is ref
     const entry = expectDefined(loadSessionEntry(target), "idle session");
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
     const scope = { ...target, sessionId: entry.sessionId };
-    const pending = await listSessionPendingInputs(scope);
-    expect(pending).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
-    expect(JSON.stringify(pending.items)).toContain(message);
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
     expect(
       (await loadTranscriptEvents(scope)).filter((event) =>
         JSON.stringify(event).includes(message),
