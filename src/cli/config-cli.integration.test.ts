@@ -37,7 +37,7 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli integration", () => {
-  it("protects pending plugin inputs while admitting explicit plugin entry removal", async () => {
+  it("edits canonical config without consuming pending plugin migrations", async () => {
     const pluginPath = "plugins.entries.sample.config";
     const raw = JSON.stringify({
       gateway: { mode: "local", port: 18789 },
@@ -61,27 +61,21 @@ describe("config cli integration", () => {
               },
             ],
           });
-          for (const args of [
-            ["set", `${pluginPath}.legacyRoot`, "/srv/replacement"],
-            ["set", `${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run"],
-            ["unset", `${pluginPath}.legacyRoot`],
-            ["set", pluginPath, '{"legacyRoot":"/srv/replacement"}', "--replace"],
-            ["unset", "plugins.entries"],
-          ]) {
-            await reject(run(...args));
-            expect(errors.at(-1)).toContain('Plugin "sample" data/settings upgrade is unfinished');
-            expect(errors.at(-1)).toContain("openclaw plugins install @example/sample");
-            expect(read(configPath)).toBe(raw);
-            expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
-            expect(logs.join("\n")).not.toMatch(/Updated|Removed|Applied/);
-          }
+          const pending = readDeferredPluginMigrations();
+          await set(`${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run");
+          expect(read(configPath)).toBe(raw);
+          expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+          await set(`${pluginPath}.legacyRoot`, "/srv/replacement");
+          expect(load(configPath).plugins.entries.sample.config).toEqual({
+            legacyRoot: "/srv/replacement",
+          });
+          expect(read(`${configPath}.bak`)).toBe(raw);
           await set("gateway.port", "18790");
           expect(load(configPath)).toMatchObject({
             gateway: { port: 18790 },
-            plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
+            plugins: { entries: { sample: { config: { legacyRoot: "/srv/replacement" } } } },
           });
           const beforeRemoval = read(configPath);
-          const pending = readDeferredPluginMigrations();
           await run("unset", "plugins.entries.sample");
           expect(load(configPath)).not.toHaveProperty("plugins.entries.sample");
           expect(load(configPath)).toMatchObject({
@@ -91,6 +85,7 @@ describe("config cli integration", () => {
           expect(read(`${configPath}.bak`)).toBe(beforeRemoval);
           expect(readDeferredPluginMigrations()).toEqual(pending);
           expect(logs.join("\n")).toContain("Removed plugins.entries.sample");
+          expect(errors.join("\n")).not.toContain("upgrade is unfinished");
         } finally {
           closeOpenClawStateDatabaseForTest();
         }

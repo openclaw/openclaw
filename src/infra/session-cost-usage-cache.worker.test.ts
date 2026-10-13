@@ -29,8 +29,15 @@ import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { onSessionCostUsageUpdated } from "./session-cost-usage-events.js";
+import {
+  partitionUsageCostRollup,
+  decodeUsageCostPartition,
+  USAGE_COST_PARTITION_SCOPE,
+} from "./session-cost-usage-partitions.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
+import { decodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
+import { appendSessionUsageRollupContribution } from "./session-cost-usage-rollup.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   loadCostUsageSummaryFromCache,
@@ -99,6 +106,134 @@ function usageLine(id: string): string {
     },
   })}\n`;
 }
+
+it("refreshes one checkpoint with its partitions after an in-process replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-partition-replacement";
+    const sessionFile = state.path("partition-replacement.jsonl");
+    const september = usageLine("september");
+    const october = usageLine("october").replace("2026-09-18", "2026-10-18");
+    await fs.writeFile(sessionFile, september + october);
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    const row = readSessionCostUsageRollupRows(agentId)[0]!;
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const body = db
+      .prepare("SELECT blob FROM cache_entries WHERE scope = ? AND key = ?")
+      .get("session-cost-usage-rollup-v3", sessionFile);
+    if (!(body?.blob instanceof Uint8Array)) {
+      throw new Error("Expected stored usage body");
+    }
+    const envelope: unknown = JSON.parse(row.valueJson);
+    if (!isRecord(envelope) || typeof envelope.pricingFingerprint !== "string") {
+      throw new Error("Expected stored usage pricing fingerprint");
+    }
+    const previous = decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob);
+    if (!previous) {
+      throw new Error("Expected stored usage checkpoint");
+    }
+    for (const stored of db
+      .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ?")
+      .all(USAGE_COST_PARTITION_SCOPE)) {
+      if (typeof stored.value_json !== "string" || !(stored.blob instanceof Uint8Array)) {
+        throw new Error("Expected stored usage partition");
+      }
+      const partition = decodeUsageCostPartition(stored.value_json, stored.blob)!;
+      Object.assign(previous.rollup.buckets, partition.buckets);
+    }
+    appendSessionUsageRollupContribution(previous.rollup, {
+      timestamp: Date.UTC(2026, 8, 19),
+      role: "assistant",
+      model: "test",
+      provider: "test",
+      toolNames: [],
+      toolResultCounts: { total: 0, errors: 0 },
+      usageTotals: {
+        ...previous.rollup.untimestamped.totals,
+        input: 1_000,
+        totalTokens: 1_000,
+      },
+    });
+    const replacement = partitionUsageCostRollup({
+      ...previous,
+      scannedAt: row.updatedAt + 1,
+    });
+    // The checkpoint body is unchanged; only the exact metadata match rejects these partitions.
+    expect(
+      decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, replacement.blob),
+    ).toBeDefined();
+    await fs.appendFile(sessionFile, october.replace("october", "october-next"));
+
+    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+    let activeLock: ReturnType<typeof prepareLock> | undefined;
+    const locks = vi
+      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+      .mockImplementation((...args) => {
+        const lock = prepareLock(...args);
+        if (args[0] === agentId) {
+          activeLock = lock;
+        }
+        return lock;
+      });
+    let replaced = false;
+    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
+    const run = WorkerTaskPool.prototype.run;
+    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
+      this: WorkerTaskPool<unknown, unknown>,
+      input: WorkerTaskInput<unknown>,
+      options: WorkerTaskOptions<unknown>,
+    ) {
+      const onRequest = options.onRequest;
+      if (!onRequest) {
+        return run.call(this, input, options);
+      }
+      return run.call(this, input, {
+        ...options,
+        onRequest: async (value, context) => {
+          if (!replaced && isRecord(value) && value.kind === "refresh-session") {
+            replaced = true;
+            expect(
+              await activeLock!.writeRollup({
+                rollupId: sessionFile,
+                valueJson: new TextEncoder().encode(replacement.valueJson),
+                blob: replacement.blob,
+                partitions: replacement.partitions,
+                updatedAt: row.updatedAt + 1,
+              }),
+            ).toBe(true);
+          }
+          return onRequest(value, context);
+        },
+      });
+    });
+    try {
+      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    } finally {
+      observer.mockRestore();
+      locks.mockRestore();
+    }
+    expect(replaced).toBe(true);
+    await fs.appendFile(sessionFile, usageLine("november").replace("2026-09-18", "2026-11-18"));
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    for (const [month, totalTokens] of [
+      [8, 10],
+      [9, 20],
+      [10, 10],
+    ] as const) {
+      const result = await loadSessionCostSummariesFromCache({
+        config,
+        agentId,
+        sessions: [{ sessionFile }],
+        requestRefresh: false,
+        startMs: Date.UTC(2026, month, 1),
+        endMs: Date.UTC(2026, month + 1, 1) - 1,
+      });
+      expect(result).toMatchObject({
+        cacheStatus: { status: "fresh" },
+        summaries: [{ totalTokens }],
+      });
+    }
+  });
+});
 
 it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

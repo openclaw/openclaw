@@ -13,7 +13,6 @@ import {
   hasCanonicalCronDeliveryMode,
 } from "./delivery-codec.js";
 import { cronStoreKey } from "./key.js";
-import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import {
   receiptFromRow,
   receiptHandle,
@@ -73,11 +72,6 @@ function activeRow(db: DatabaseSync, key: string, jobId?: string) {
   }
 }
 
-function currentJob(database: DatabaseSync, storeKey: string, jobId: string): CronJob | undefined {
-  const rows = loadCronRows(database, storeKey, new Set([jobId]));
-  return loadedCronStoreFromRows(rows).store.jobs[0];
-}
-
 function validateCurrentReceiptJob<Job>(
   job: Job | undefined,
   params: {
@@ -104,11 +98,9 @@ function pruneTerminalReceipts(
   database: DatabaseSync,
   storeKey: string,
   jobId: string,
-  job: CronJob | undefined,
+  pendingReceiptId: string | undefined,
   receiptSchema: CronRunReceiptWriteSchema,
 ): void {
-  const pendingReceiptId =
-    job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId;
   let terminalQuery = query(database)
     .selectFrom("cron_run_receipts")
     .select("receipt_id")
@@ -166,7 +158,13 @@ export function claimCronRunReceiptInDatabase(params: {
   const { handle } = params;
   const job = validateCurrentReceiptJob(params.job, params);
   assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
-  pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job, params.receiptSchema);
+  pruneTerminalReceipts(
+    params.database,
+    handle.storeKey,
+    handle.jobId,
+    job.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
+    params.receiptSchema,
+  );
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -238,6 +236,7 @@ export function finishCronRunReceiptInDatabase(params: {
   database: DatabaseSync;
   receiptSchema: CronRunReceiptWriteSchema;
   handle: CronRunReceiptHandle;
+  pendingReceiptId: string | undefined;
   status: Exclude<CronRunReceiptStatus, "running">;
   finishedAtMs: number;
   error?: string;
@@ -258,7 +257,7 @@ export function finishCronRunReceiptInDatabase(params: {
     params.database,
     params.handle.storeKey,
     params.handle.jobId,
-    currentJob(params.database, params.handle.storeKey, params.handle.jobId),
+    params.pendingReceiptId,
     params.receiptSchema,
   );
 }

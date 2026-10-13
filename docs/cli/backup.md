@@ -305,7 +305,9 @@ openclaw backup sqlite verify <snapshot-directory>
 openclaw backup sqlite restore <snapshot-directory> --target <new-database-path>
 ```
 
-Verification checks the strict manifest shape, artifact size and SHA-256, SQLite integrity, foreign keys, schema version, database role and owner, and OpenClaw-owned index definitions.
+Verification checks the strict manifest shape, artifact size and SHA-256, SQLite integrity, foreign keys, schema version, and database role and owner.
+
+Snapshots from supported older schema versions can be verified and restored without migration. Newer-than-supported schemas and mismatched version metadata are refused. Restore preserves the snapshot bytes, and the running version performs any required migration when it opens the restored database. Snapshot creation still requires the current schema and validates OpenClaw-owned table and index definitions before compaction.
 
 Verification validates a private content-pinned copy so pathname races cannot swap the bytes SQLite inspects. By default, that temporary copy is created beside the snapshot repository and removed before the command returns. The staging root and its ancestor chain must prevent other users from replacing it. POSIX roots must be current-user-owned and not group/world writable; sticky ancestors such as `/tmp` are accepted for user-owned children. macOS ACL grants that expose or make staging replaceable are rejected. Windows roots and ancestors must be owned by the current user or a trusted OS principal, with ACLs that deny untrusted staging access. For a read-only mount or network share, pass `--scratch <existing-private-directory>` on storage with equivalent encryption and destination controls.
 

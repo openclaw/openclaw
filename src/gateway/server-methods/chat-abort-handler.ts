@@ -649,6 +649,7 @@ export async function handleChatAbortRequestWithLifecycle(
               }).aborted;
               return aborted;
             }
+            // Completion can retire the captured run while metadata is being prepared.
             if (!context.chatAbortControllers.has(runId) && !context.chatQueuedTurns.has(runId)) {
               return false;
             }

@@ -136,6 +136,17 @@ function runTimer(cronJob: CronJob) {
 }
 
 describe("cron timer maintenance admission", () => {
+  it("uses the claimed job postimage for maintenance and the next wake", () => {
+    const scheduler = createScheduler([job("due", { state: { nextRunAtMs: NOW } })]);
+    sqliteTransactionLabels.length = 0;
+    const result = scheduler.tick();
+    expect(result.accepted).toHaveLength(1);
+    expect(scheduler.read().jobs[0]?.state.queuedAtMs).toBe(NOW);
+    expect(sqliteTransactionLabels).not.toContain("cron.schedule-unowned");
+    expect(result.nextWakeAtMs).toBeGreaterThan(NOW);
+    expect(scheduler.tick().accepted).toEqual([]);
+  });
+
   it("skips a write sweep for an active due schedule", () => {
     const result = runTimer(
       job("active", { state: { nextRunAtMs: NOW - 60_000, runningAtMs: NOW } }),

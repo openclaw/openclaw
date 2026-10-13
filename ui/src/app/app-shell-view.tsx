@@ -46,7 +46,7 @@ export function renderApplicationShell(host: ShellViewHost): SolidJSX.Element {
   return <ApplicationShell host={host} />;
 }
 
-export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
+function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);

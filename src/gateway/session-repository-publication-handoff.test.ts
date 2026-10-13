@@ -10,7 +10,7 @@ import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/ses
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -414,8 +414,10 @@ it.each([
       const initial = claimGitHubPublicationExecution(requestId, "local-instance");
       const execution = createGitHubPublicationExecutionStore("local-instance");
       const requester = await restoreGitHubPublicationRequester(
-        readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
-          ?.requester_authority_json,
+        readGitHubPublicationSessionLifecycle(
+          { publicationKind: "shared", requestId },
+          openOpenClawStateDatabase().db,
+        )?.requester_authority_json,
         scope,
         () => cfg,
       );

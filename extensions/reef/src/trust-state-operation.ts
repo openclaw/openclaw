@@ -4,13 +4,11 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   matchesReefPeerIdentity,
-  ReefAutonomySchema,
-  ReefPeerTrustSchema,
   sameReefPeerIdentity,
-  type ReefAutonomy,
   type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
+import { transitionReefPeer, type ReefPeerMutations } from "./trust-peer-transition.js";
 import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
   currentReefDeliveries,
@@ -20,16 +18,14 @@ import {
   parseReefPeerState,
   ReefOutboundDeliverySchema,
   ReefOutboundRejectionSchema,
-  ReefPeerStateSchema,
   ReefPeerTrustChangedError,
   ReefRejectionNoticeStateSchema,
   reefOutboundRequestStatus,
-  withoutReefOutboundRequest,
   type ReefOutboundDelivery,
   type ReefOutboundDeliveryBinding,
   type ReefPeerStateSnapshot,
 } from "./trust-store-format.js";
-import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } from "./types.js";
+import type { ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type PeerKey = { key: string };
 export type ReefDeliveryOperationInput = {
@@ -46,28 +42,13 @@ type Reservation =
   | { kind: "peer-changed" }
   | { kind: "unavailable" };
 
-export type ReefTrustStateOperations = {
+export type ReefTrustStateOperations = ReefPeerMutations & {
   snapshot: { input: PeerKey; output: ReefPeerStateSnapshot };
   list: { input: { prefix: string }; output: Array<{ peer: string; trust: ReefPeerTrust }> };
-  set: { input: PeerKey & { trust: ReefPeerTrust }; output: void };
-  remove: { input: PeerKey; output: boolean };
-  setAutonomy: { input: PeerKey & { autonomy: ReefAutonomy }; output: boolean };
-  markSafetyNumberChanged: { input: PeerKey & { expectedRevision: number }; output: boolean };
-  commitPeerTrust: {
-    input: PeerKey & {
-      friend: RelayFriend;
-      expectedRevision: number;
-      expectedOutboundRequestId?: string;
-      approvedAt: number;
-    };
-    output: boolean;
-  };
-  beginRequest: { input: PeerKey & { requestId: string; requestedAt: number }; output: void };
   requestStatus: {
     input: PeerKey & { requestId: string };
     output: "current" | "superseded" | "revoked";
   };
-  removeRequest: { input: PeerKey & { requestId?: string }; output: boolean };
   prepareDelivery: { input: ReefDeliveryOperationInput; output: ReefPeerTrust | undefined };
   recordDelivery: {
     input: ReefDeliveryOperationInput & { delivery: ReefOutboundDelivery };
@@ -174,99 +155,24 @@ export function runReefTrustStateOperation(
       return readReefPeerState(tx, command.input.key);
     case "list":
       return listReefPeerTrust(tx.entries(0), command.input.prefix);
-    case "set": {
-      const { key, trust } = command.input;
-      const current = readReefPeerState(tx, key);
-      tx.set(0, key, {
-        ...current,
-        revision: current.revision + 1,
-        trust: ReefPeerTrustSchema.parse(trust),
-      });
-      return;
-    }
-    case "remove": {
-      const { key } = command.input;
-      const current = readReefPeerState(tx, key);
-      tx.set(0, key, { revision: current.revision + 1 });
-      return true;
-    }
-    case "setAutonomy": {
-      const { key, autonomy } = command.input;
-      const current = readReefPeerState(tx, key);
-      if (!current.trust) {
-        return false;
+    case "set":
+    case "remove":
+    case "setAutonomy":
+    case "markSafetyNumberChanged":
+    case "commitPeerTrust":
+    case "beginRequest":
+    case "removeRequest": {
+      const next = transitionReefPeer(command, readReefPeerState(tx, command.input.key));
+      if (next) {
+        tx.set(0, command.input.key, next);
       }
-      tx.set(0, key, {
-        ...current,
-        trust: { ...current.trust, autonomy: ReefAutonomySchema.parse(autonomy) },
-      });
-      return true;
-    }
-    case "markSafetyNumberChanged": {
-      const { key, expectedRevision } = command.input;
-      const current = readReefPeerState(tx, key);
-      if (current.revision !== expectedRevision || !current.trust) {
-        return false;
-      }
-      tx.set(0, key, {
-        ...current,
-        revision: current.revision + 1,
-        trust: { ...current.trust, safetyNumberChanged: true },
-      });
-      return true;
-    }
-    case "commitPeerTrust": {
-      const { key, friend, expectedRevision, expectedOutboundRequestId, approvedAt } =
-        command.input;
-      const current = readReefPeerState(tx, key);
-      if (
-        current.revision !== expectedRevision ||
-        (expectedOutboundRequestId !== undefined &&
-          current.outboundRequests?.[expectedOutboundRequestId] === undefined)
-      ) {
-        return false;
-      }
-      tx.set(0, key, {
-        revision: current.revision + 1,
-        trust: ReefPeerTrustSchema.parse({
-          autonomy: current.trust?.autonomy ?? "bounded",
-          ed25519PublicKey: friend.ed25519_pub,
-          x25519PublicKey: friend.x25519_pub,
-          keyEpoch: friend.key_epoch,
-          safetyNumberChanged: false,
-          approvedAt,
-        }),
-        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
-      });
-      return true;
-    }
-    case "beginRequest": {
-      const { key, requestId, requestedAt } = command.input;
-      const current = readReefPeerState(tx, key);
-      tx.set(
-        0,
-        key,
-        ReefPeerStateSchema.parse({
-          ...current,
-          outboundRequests: { ...current.outboundRequests, [requestId]: requestedAt },
-        }),
-      );
-      return;
+      return command.type === "set" || command.type === "beginRequest" ? undefined : Boolean(next);
     }
     case "requestStatus":
       return reefOutboundRequestStatus(
         readReefPeerState(tx, command.input.key),
         command.input.requestId,
       );
-    case "removeRequest": {
-      const { key, requestId } = command.input;
-      const next = withoutReefOutboundRequest(readReefPeerState(tx, key), requestId);
-      if (next === undefined) {
-        return false;
-      }
-      tx.set(0, key, next);
-      return true;
-    }
     case "prepareDelivery":
       return readReefPeerState(tx, command.input.peerKey).trust;
     case "recordDelivery":
