@@ -73,7 +73,8 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("../infra/push-web.js", () => ({
+vi.mock("../infra/push-web.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/push-web.js")>()),
   withBoundWebPushSubscriptions: async <T>(
     stateDir: string | undefined,
     prepare: (
@@ -400,7 +401,7 @@ describe("consented event Web Push content", () => {
         expectDefined(preparedWebPushSendMock.mock.calls[0], "expected a notification send")[0]
           .payload,
       ).toMatchObject({
-        body: "Continue?",
+        body: "Continue?\n• Yes\n• No",
         url: "ask/request%3A42",
         preview: {
           version: 1,

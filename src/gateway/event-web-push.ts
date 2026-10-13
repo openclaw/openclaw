@@ -280,7 +280,13 @@ export function createEventWebPushDelivery(params: {
             if (preview) {
               const candidate = {
                 ...pushPayload,
-                body: preview.kind === "answer" ? preview.text : preview.question.text,
+                body:
+                  preview.kind === "answer"
+                    ? preview.text
+                    : [
+                        preview.question.text,
+                        ...preview.question.choices.map((choice) => `• ${choice}`),
+                      ].join("\n"),
                 preview,
               };
               // Fallback as a whole: never truncate question choices, identifiers, or routes.

@@ -3,7 +3,7 @@ import type { QuestionRecord } from "../../packages/gateway-protocol/src/schema/
 import type { LiveTextProjectionText } from "./live-text-continuity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import type { SessionAncestorReferences } from "./session-ancestor-references.js";
-import type { SessionSharingTarget } from "./session-sharing-policy.js";
+import type { SessionSharingTarget } from "./session-sharing-target.types.js";
 
 export type SessionEventProjection = {
   payload: unknown;

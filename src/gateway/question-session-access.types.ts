@@ -7,7 +7,7 @@ export type QuestionClientAuthorization = (
   target?: { agentId: string; canonicalKey: string; entry: SessionEntry } | null,
 ) => boolean;
 
-type QuestionSessionCurrentRead = {
+export type QuestionSessionCurrentRead = {
   readonly target: {
     agentId: string;
     canonicalKey: string;

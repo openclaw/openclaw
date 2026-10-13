@@ -321,7 +321,7 @@ describe("Control UI service worker notification scope", () => {
     const worker = createNotificationServiceWorker(nestedScope, []);
     const payload = {
       title: "OpenClaw needs an answer",
-      body: "Continue?",
+      body: "Continue?\n• Yes\n• No",
       url: "ask/request%3A42",
       preview: {
         version: 1,
@@ -331,7 +331,7 @@ describe("Control UI service worker notification scope", () => {
       },
     };
     const notification = await worker.dispatchPush(payload);
-    expect(notification.options.body).toBe("Continue?");
+    expect(notification.options.body).toBe("Continue?\n• Yes\n• No");
     expect(notification.options).not.toHaveProperty("actions");
     expect(notification.options.data).toEqual({ url: "ask/request%3A42", explicitUrl: true });
     await worker.dispatchNotificationClick(notification.options.data);

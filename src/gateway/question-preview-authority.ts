@@ -2,12 +2,12 @@ import type { QuestionRecord } from "../../packages/gateway-protocol/src/schema/
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { usesOwnRunQuestionAccess } from "./question-access.js";
 import type { QuestionObservation } from "./question-manager.js";
-import type { PreparedQuestionSession } from "./question-session-access.js";
+import type { QuestionSessionCurrentRead } from "./question-session-access.types.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 
 export function questionPreviewAuthority(
   observation: QuestionObservation | null,
-  prepared: PreparedQuestionSession | undefined,
+  prepared: Pick<QuestionSessionCurrentRead, "target" | "read"> | undefined,
   record: QuestionRecord | undefined,
 ): GatewayBroadcastOpts["questionPreview"] {
   const target = prepared?.target;
