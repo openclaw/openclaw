@@ -5,9 +5,7 @@ import {
   type SuggestedWorkerProfileSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readConfigFileSnapshotForWrite, resolveConfigSnapshotHash } from "../../config/io.js";
-import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { resolveSuggestedWorkerProfile } from "../../plugins/worker-profile-suggestions.js";
-import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -32,18 +30,15 @@ export async function listSuggestedWorkerProfile(
   };
 }
 
-async function savedProfileSummary(
-  context: GatewayRequestContext,
-  profile: CloudWorkerProfileConfig,
-) {
+async function requireActiveCloudProfile(context: GatewayRequestContext) {
   const summaries = await listWorkerProfilesWithMachines(context);
-  return (
-    summaries.find((summary) => summary.id === "cloud") ?? {
-      id: "cloud",
-      providerId: profile.provider,
-      ...workerInferenceMetadata({ providerId: profile.provider, profileSnapshot: profile }),
-    }
-  );
+  const profile = summaries.find((summary) => summary.id === "cloud");
+  if (!profile) {
+    throw new Error(
+      "The cloud worker profile is saved but is not active on this Gateway. Wait for the Gateway to restart, then retry; if it does not restart, restart it manually.",
+    );
+  }
+  return profile;
 }
 
 export const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
@@ -57,7 +52,7 @@ export const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
       authority.assertCurrent();
       const existing = snapshot.sourceConfig.cloudWorkers?.profiles?.cloud;
       if (existing) {
-        const profile = await savedProfileSummary(context, existing);
+        const profile = await requireActiveCloudProfile(context);
         authority.assertCurrent();
         respond(true, { profile }, undefined);
         return;
@@ -79,7 +74,7 @@ export const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
       const { configHandlers } = await import("./config.js");
       authority.assertCurrent();
       let saved = false;
-      // The normal config owner validates, commits with its snapshot CAS, and awaits reload.
+      // The config owner commits with its snapshot CAS; restart-required writes may stay inactive.
       await configHandlers["config.patch"]!({
         ...options,
         req: { ...options.req, method: "config.patch" },
@@ -100,7 +95,7 @@ export const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
       if (!saved) {
         return;
       }
-      const profile = await savedProfileSummary(context, suggestion.profile);
+      const profile = await requireActiveCloudProfile(context);
       authority.assertCurrent();
       respond(true, { profile }, undefined);
     });

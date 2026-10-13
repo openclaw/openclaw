@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
+import { scheduleGatewayRestart } from "../../infra/restart.js";
 import { resolveSuggestedWorkerProfile } from "../../plugins/worker-profile-suggestions.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
@@ -9,6 +11,7 @@ import { clearConfigSchemaResponseCacheForTests } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import { environmentsHandlers } from "./environments.js";
 import { adoptSuggestedWorkerProfile } from "./environments.suggested-profile.js";
+import { workerService } from "./environments.test-support.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
@@ -47,11 +50,24 @@ vi.mock("../../secrets/runtime.js", async (importOriginal) => ({
 vi.mock("./config-write-flow.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./config-write-flow.js")>()),
   commitGatewayConfigWrite: configWriteMocks.commitGatewayConfigWrite,
-  resolveGatewayConfigRestartWriteResult: async () => ({
-    payload: { kind: "config-patch", mode: "config.patch", configPath: "/tmp/openclaw.json" },
-    sentinelPersisted: false,
-    restart: undefined,
-  }),
+}));
+vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-sentinel.js")>()),
+  writeRestartSentinel: vi.fn(async () => undefined),
+}));
+vi.mock("../../infra/restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart.js")>()),
+  scheduleGatewayRestart: vi.fn<typeof scheduleGatewayRestart>(() => ({
+    ok: true,
+    pid: 1,
+    signal: "SIGUSR2",
+    reason: "config.patch",
+    mode: "signal",
+    delayMs: 2_000,
+    coalesced: false,
+    cooldownMsApplied: 0,
+    emitHooksQueued: false,
+  })),
 }));
 
 let storedConfig: OpenClawConfig;
@@ -113,10 +129,24 @@ describe("suggested cloud profile adoption", () => {
     },
   };
 
-  function adoptionHarness() {
+  function adoptionHarness(getRuntimeConfig = () => storedConfig) {
     return createConfigHandlerHarness({
       method: "environments.adoptSuggestedProfile",
-      contextOverrides: { getRuntimeConfig: () => storedConfig },
+      contextOverrides: {
+        getRuntimeConfig,
+        workerEnvironmentService: {
+          ...workerService(),
+          startTunnel: async () => {
+            throw new Error("Unexpected tunnel creation during profile adoption");
+          },
+          stopTunnel: async () => {},
+        },
+        workerPlacementDispatchService: {
+          dispatch: async () => {
+            throw new Error("Unexpected allocation during profile adoption");
+          },
+        },
+      },
     });
   }
 
@@ -215,6 +245,49 @@ describe("suggested cloud profile adoption", () => {
       { profile: { id: "cloud", providerId: "static-ssh" } },
       undefined,
     );
+  });
+
+  it("keeps a saved profile unavailable until the restart applies it", async () => {
+    storedConfig = { gateway: { reload: { mode: "off" } } };
+    let runtimeConfig = structuredClone(storedConfig);
+    vi.mocked(resolveSuggestedWorkerProfile).mockResolvedValue(suggested);
+    const { options, respond } = adoptionHarness(() => runtimeConfig);
+
+    expect(resolveWorkerPlacementDestination({ cfg: runtimeConfig, profileId: "cloud" }).ok).toBe(
+      false,
+    );
+    await adoptSuggestedWorkerProfile(options);
+    expect(storedConfig.cloudWorkers?.profiles?.cloud).toEqual(suggested.profile);
+    expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
+    expect(writeRestartSentinel).toHaveBeenCalledWith(
+      expect.objectContaining({ stats: expect.objectContaining({ requiresRestart: true }) }),
+    );
+    expect(resolveWorkerPlacementDestination({ cfg: runtimeConfig, profileId: "cloud" }).ok).toBe(
+      false,
+    );
+    const unavailable = [
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("restart") }),
+    ];
+    expect(respond.mock.calls).toEqual([unavailable]);
+
+    respond.mockClear();
+    await adoptSuggestedWorkerProfile(options);
+    expect(respond.mock.calls).toEqual([unavailable]);
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+
+    runtimeConfig = structuredClone(storedConfig);
+    respond.mockClear();
+    await adoptSuggestedWorkerProfile(options);
+    expect(respond.mock.calls).toEqual([
+      [true, { profile: { id: "cloud", providerId: "crabbox" } }, undefined],
+    ]);
+    expect(resolveWorkerPlacementDestination({ cfg: runtimeConfig, profileId: "cloud" }).ok).toBe(
+      true,
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+    expect(scheduleGatewayRestart).toHaveBeenCalledOnce();
   });
 
   it("does not write when discovery no longer offers a cloud profile", async () => {
