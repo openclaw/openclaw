@@ -15,7 +15,7 @@ const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function openSessionFilters(page: Page) {
   await page.getByRole("button", { name: "Filters" }).click();
-  await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+  await page.locator(".sessions-filter-popover:popover-open").waitFor();
 }
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
