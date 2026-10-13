@@ -200,6 +200,21 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  // Regression for #166202 at the real exec boundary: an empty quoted option
+  // value and an unquoted line continuation must not hide the interpreter script
+  // from preflight, or the shell-bleed guard is silently bypassed.
+  it("validates Python scripts behind an empty quoted env option value", async () => {
+    await expect(
+      execScripts('env --argv0 "" python bad.py', { "bad.py": "payload = $DM_JSON" }),
+    ).rejects.toThrow(injection);
+  });
+
+  it("validates Python scripts joined by an unquoted line continuation", async () => {
+    await expect(
+      execScripts("python \\\nbad.py", { "bad.py": "payload = $DM_JSON" }),
+    ).rejects.toThrow(injection);
+  });
+
   it("validates scripts under literal tilde directories", async () => {
     await expect(
       execScripts('python3 "~/bad.py"', { "~/bad.py": "payload = $DM_JSON" }),
