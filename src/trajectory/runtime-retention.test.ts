@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
-import { registerOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
-import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  OpenClawAgentDatabaseExecution,
+} from "../state/openclaw-agent-execution-contract.js";
 import type { OpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import { scheduleSqliteTrajectoryRuntimeRetention } from "./runtime-retention.js";
@@ -23,7 +23,6 @@ const fixture = vi.hoisted(() => {
     executionFailure,
     unregisterAgent: vi.fn(),
     unregisterRoot: vi.fn(),
-    releaseDatabase: vi.fn(),
     write: vi.fn<() => Promise<unknown>>(),
     read: vi.fn(),
     releaseReader: vi.fn<() => void>(() => {
@@ -48,10 +47,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
     fixture.roots.push(resource);
     return fixture.unregisterRoot;
   },
-}));
-// mock-isolation: Observe the scheduler's retained database borrow without opening canonical state.
-vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
-  retainAgentDatabase: () => fixture.releaseDatabase,
 }));
 // mock-isolation: No root database or schema admission is needed for this cleanup-only contract.
 vi.mock("../state/openclaw-state-worker-context.js", () => ({
@@ -128,29 +123,13 @@ afterEach(() => vi.useRealTimers());
 
 function createRequest(directory: string) {
   const pathname = path.join(directory, "agent.sqlite");
-  const db = openNodeSqliteDatabase(pathname);
-  registerOpenClawAgentDatabaseIdentity(db);
-  const database: OpenClawAgentDatabase = {
-    agentId: "main",
-    db,
-    path: pathname,
-    walMaintenance: {
-      checkpoint() {
-        throw new Error("Unexpected checkpoint");
-      },
-      reclaimFreePages() {
-        throw new Error("Unexpected reclamation");
-      },
-      async stop() {
-        throw new Error("Unexpected WAL stop");
-      },
-      close() {
-        throw new Error("Unexpected WAL close");
-      },
-    },
+  const identity: AgentDatabaseExecutionFileIdentity = {
+    kind: "file",
+    physicalIdentity: "retention-test",
+    nativeLocation: pathname,
   };
   return {
-    database,
+    identity,
     options: { agentId: "main", path: pathname, env: { OPENCLAW_STATE_DIR: directory } },
     input: { sessionId: "current" },
     assertCurrent() {},
@@ -159,32 +138,27 @@ function createRequest(directory: string) {
 
 it("retains failed cleanup custody and exposes the original failure to lifecycle joiners", async () => {
   const request = createRequest(tempDirs.make("trajectory-retention-cleanup-"));
-  try {
-    const pending = scheduleSqliteTrajectoryRuntimeRetention(request);
-    assert(pending);
-    const agent = fixture.agents[0];
-    const root = fixture.roots[0];
-    assert(agent && root);
-    // Revocation cancels the owned immediate before it can admit native work.
-    const closing = agent.close();
-    const outcomes = await Promise.allSettled([pending, closing]);
-    const original = outcomes[0];
-    const joined = outcomes[1];
-    assert(original?.status === "rejected" && joined?.status === "rejected");
-    expect(original.reason).toMatchObject({
-      errors: [fixture.readerFailure, fixture.executionFailure],
-    });
-    expect(joined.reason).toBe(original.reason);
-    await expect(root.close()).rejects.toBe(original.reason);
-    expect(scheduleSqliteTrajectoryRuntimeRetention(request)).toBe(pending);
-    expect(fixture.releaseReader).toHaveBeenCalledOnce();
-    expect(fixture.releaseExecution).toHaveBeenCalledOnce();
-    expect(fixture.unregisterAgent).not.toHaveBeenCalled();
-    expect(fixture.unregisterRoot).not.toHaveBeenCalled();
-    expect(fixture.releaseDatabase).not.toHaveBeenCalled();
-  } finally {
-    request.database.db.close();
-  }
+  const pending = scheduleSqliteTrajectoryRuntimeRetention(request);
+  assert(pending);
+  const agent = fixture.agents[0];
+  const root = fixture.roots[0];
+  assert(agent && root);
+  // Revocation cancels the owned immediate before it can admit native work.
+  const closing = agent.close();
+  const outcomes = await Promise.allSettled([pending, closing]);
+  const original = outcomes[0];
+  const joined = outcomes[1];
+  assert(original?.status === "rejected" && joined?.status === "rejected");
+  expect(original.reason).toMatchObject({
+    errors: [fixture.readerFailure, fixture.executionFailure],
+  });
+  expect(joined.reason).toBe(original.reason);
+  await expect(root.close()).rejects.toBe(original.reason);
+  expect(scheduleSqliteTrajectoryRuntimeRetention(request)).toBe(pending);
+  expect(fixture.releaseReader).toHaveBeenCalledOnce();
+  expect(fixture.releaseExecution).toHaveBeenCalledOnce();
+  expect(fixture.unregisterAgent).not.toHaveBeenCalled();
+  expect(fixture.unregisterRoot).not.toHaveBeenCalled();
 });
 
 it.each(["refresh", "error"] as const)(
@@ -221,10 +195,9 @@ it.each(["refresh", "error"] as const)(
       await next;
       expect(fixture.read).toHaveBeenCalledTimes(2);
       expect(fixture.write).toHaveBeenCalledTimes(4);
-      expect(fixture.releaseDatabase).toHaveBeenCalledTimes(2);
+      expect(fixture.releaseExecution).toHaveBeenCalledTimes(2);
     } finally {
       clock.mockRestore();
-      request.database.db.close();
     }
   },
 );
