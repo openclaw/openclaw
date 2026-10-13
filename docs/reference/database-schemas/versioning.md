@@ -23,6 +23,11 @@ cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
 
+Shared-state [schema 22](/reference/database-schemas/state-schema-history#state-schema-22)
+adds portable ACP resume columns and explicit cursor identities. Builds supporting
+only schema 21 or earlier refuse it. Existing cursor values are preserved; binary
+rollback requires the verified pre-upgrade backup and its matching build.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports

@@ -72,6 +72,12 @@ timeout: progress does not extend it. The client connect watchdog and server
 preauth timeout share this default. Operators can override the server budget with
 `OPENCLAW_HANDSHAKE_TIMEOUT_MS`; configure connecting clients with the same budget.
 
+When the Gateway already holds a named canonical owner and its local-owner
+binding, initial connections and reconnects reuse those profile facts. Committed
+profile writes update the retained catalog; creating an owner, adopting a missing
+name, or repairing a binding still uses the profile writer. Every connection
+retains its authentication, device authorization, role, and visibility checks.
+
 ```json
 {
   "type": "res",
