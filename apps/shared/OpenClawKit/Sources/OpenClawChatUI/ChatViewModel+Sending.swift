@@ -9,6 +9,7 @@ struct SlashFilterCache {
 }
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
+private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
@@ -16,9 +17,30 @@ extension OpenClawChatViewModel {
             !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
-            !self.hasBlockingRunActivity &&
+            !self.isSwitchingSessionBranch &&
+            (!self.hasBlockingRunActivity || self.canSendDuringRun) &&
             self.composerModelAvailabilityMessage == nil &&
             self.hasDraftToSend
+    }
+
+    private var canSendDuringRun: Bool {
+        self.outbox != nil && self.attachments.isEmpty &&
+            !localSessionCommands.contains(self.input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    var canChooseSendMode: Bool {
+        self.hasBlockingRunActivity && self.canSend && self.canSendDuringRun &&
+            !Self.isSlashCommandDraft(self.input.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    var sendModeChoices: [OpenClawChatQueueMode] {
+        guard self.canChooseSendMode else { return [] }
+        switch self.currentSessionEntry()?.effectiveQueueMode {
+        case "steer": return [.followup]
+        case "followup": return [.steer]
+        // Other Gateway modes and older Gateways do not have a single opposite.
+        default: return [.steer, .followup]
+        }
     }
 
     public var hasDraftToSend: Bool {
@@ -41,7 +63,7 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    public func send() -> Task<Void, Never>? {
+    public func send(queueMode: OpenClawChatQueueMode? = nil) -> Task<Void, Never>? {
         guard !self.usesWebConversation else { return nil }
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "
@@ -50,7 +72,7 @@ extension OpenClawChatViewModel {
                 + "health=\(healthOK)")
         // Reserve the accepted draft before scheduling work so initial route
         // hydration cannot retire its owner before asynchronous validation starts.
-        guard let draft = captureSendDraft() else { return nil }
+        guard let draft = captureSendDraft(queueMode: queueMode) else { return nil }
         isSubmittingDraft = true
         return Task { await self.performSend(draft) }
     }
@@ -257,6 +279,7 @@ extension OpenClawChatViewModel {
         let trimmed: String
         let session: SessionSnapshot
         let replyTarget: OpenClawChatReplyTarget?
+        let queueMode: OpenClawChatQueueMode?
         let composerSessionKey: String
         let composerRevision: UInt64
 
@@ -312,7 +335,7 @@ extension OpenClawChatViewModel {
         await self.deliverLiveSend(attempt)
     }
 
-    private func captureSendDraft() -> SendDraft? {
+    private func captureSendDraft(queueMode: OpenClawChatQueueMode?) -> SendDraft? {
         guard !isSubmittingDraft, !isSending else {
             logDiagnostic("chat.ui send ignored reason=sending sessionKey=\(sessionKey)")
             return nil
@@ -323,7 +346,9 @@ extension OpenClawChatViewModel {
             logDiagnostic("chat.ui send ignored reason=attachment-staging sessionKey=\(sessionKey)")
             return nil
         }
-        guard !self.hasBlockingRunActivity else {
+        guard !self.isSwitchingSessionBranch,
+              !self.hasBlockingRunActivity || self.canSendDuringRun
+        else {
             logDiagnostic(
                 "chat.ui send ignored reason=pending sessionKey=\(sessionKey) "
                     + "pending=\(pendingRunCount) "
@@ -337,19 +362,25 @@ extension OpenClawChatViewModel {
             logDiagnostic("chat.ui send ignored reason=empty sessionKey=\(sessionKey)")
             return nil
         }
+        // A menu choice belongs to this message. Slash commands own their
+        // intent, and a transport without an outbox cannot preserve the choice.
+        if queueMode != nil {
+            guard self.canSendDuringRun, !Self.isSlashCommandDraft(trimmed) else { return nil }
+        }
         return SendDraft(
             input: input,
             attachments: attachments,
             trimmed: trimmed,
             session: currentSessionSnapshot(),
             replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
+            queueMode: queueMode,
             composerSessionKey: self.composerSessionKey(for: sessionKey),
             composerRevision: composerRevision(for: sessionKey))
     }
 
     private func validateSendDraft(_ draft: SendDraft) async -> Bool {
         let command = draft.trimmed.lowercased()
-        if ["/new", "/reset", "/clear", "/compact"].contains(command) {
+        if localSessionCommands.contains(command) {
             // Preserved presentations can retain healthy state after a silent disconnect.
             await pollHealthIfNeeded(force: true, sessionSnapshot: draft.session)
             guard isCurrentSession(draft.session) else { return false }
@@ -415,8 +446,12 @@ extension OpenClawChatViewModel {
         // session-scoped: other sessions are separate conversations with no
         // ordering contract.
         if outbox != nil,
+           draft.queueMode != nil || self.hasBlockingRunActivity ||
            shouldPersistAttachmentDraft || mustPreserveOutboxOrder
         {
+            // Busy sends reuse durable delivery without replacing the active
+            // run's stream or tools. A menu choice also takes this path if the
+            // original run completed while the menu was open.
             logDiagnostic(
                 "chat.ui send routed behind outbox sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
             await self.enqueueOutboxDraft(draft)
@@ -431,6 +466,7 @@ extension OpenClawChatViewModel {
             draftInput: draft.input,
             draftRevision: draft.composerRevision,
             draftAttachments: draft.attachments,
+            queueMode: draft.queueMode,
             session: draft.session)
         if accepted {
             self.finishAcceptedComposerSend(draft)

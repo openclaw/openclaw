@@ -959,6 +959,7 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-outbox-settings-claim-v8",
             "client-state-watch-message-journal-v9",
             "client-state-watch-message-legacy-receipts-v1",
+            "client-state-outbox-queue-mode-v10",
         ])
     }
 }
@@ -1223,6 +1224,84 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
 }
 
 final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sendable {
+    @Test(arguments: [nil, .steer, .followup] as [OpenClawChatQueueMode?])
+    func `queue mode survives reopen claim and retry`(mode: OpenClawChatQueueMode?) async throws {
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "mode-choice", sessionKey: "main", text: "Preserve the choice.",
+            thinking: "off", queueMode: mode, createdAt: Date().timeIntervalSince1970,
+            status: .queued, retryCount: 0, lastError: nil)))
+        try databases.close()
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let reopenedStore = reopened.store(gatewayID: "gw-a")
+        let loaded = try #require(await reopenedStore.loadCommands().first)
+        #expect(loaded.queueMode == mode && loaded.text == "Preserve the choice.")
+        let claimed = try #require(await reopenedStore.claimNextCommand())
+        #expect(claimed.queueMode == mode)
+        #expect(await reopenedStore.markCommandQueued(
+            id: claimed.id, attemptVersion: claimed.attemptVersion, retryCount: 1, lastError: nil) == .updated)
+        let secondClaim = try #require(await reopenedStore.claimNextCommand())
+        #expect(secondClaim.queueMode == mode)
+        #expect(await reopenedStore.markCommandFailedIfPresent(
+            id: secondClaim.id, attemptVersion: secondClaim.attemptVersion,
+            retryCount: 1, lastError: "rejected") == .updated)
+        let failed = try #require(await reopenedStore.loadCommands().first)
+        #expect(await reopenedStore.markCommandRetriedIfPresent(
+            id: failed.id, expectation: retryExpectation(failed), agentID: "main",
+            deliverySessionKey: "agent:main:main", routingContract: "per-sender|main|main",
+            expectedSessionSettings: .init(permissionMode: nil, toolOverrides: nil),
+            replacementID: nil) == .updated)
+        let retriedClaim = try #require(await reopenedStore.claimNextCommand())
+        #expect(retriedClaim.queueMode == mode)
+    }
+
+    @Test func `queue mode migration keeps legacy commands on the session default`() async throws {
+        #expect(await store.enqueueCommand(outboxCommand(id: "before-mode-migration", text: "Keep this draft.")))
+        try databases.close()
+        try withRawDatabase(at: directory.appendingPathComponent("client-state.sqlite")) { raw in
+            execute(raw, """
+            DROP TRIGGER outbox_queue_mode_claim_guard;
+            DROP TRIGGER outbox_queue_mode_retry_guard;
+            ALTER TABLE outbox_commands DROP COLUMN queue_mode_authorization;
+            ALTER TABLE outbox_commands DROP COLUMN queue_mode;
+            DELETE FROM grdb_migrations WHERE identifier = 'client-state-outbox-queue-mode-v10';
+            """)
+        }
+        let upgraded = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? upgraded.close() }
+        let command = try #require(await upgraded.store(gatewayID: "gw-a").claimNextCommand())
+        #expect(command.id == "before-mode-migration" && command.text == "Keep this draft.")
+        #expect(command.queueMode == nil)
+    }
+
+    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    func `older clients cannot claim or retry an explicit queue mode`(mode: OpenClawChatQueueMode) async throws {
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "explicit-mode", sessionKey: "main", text: "Keep this choice.",
+            thinking: "off", queueMode: mode, createdAt: Date().timeIntervalSince1970,
+            status: .queued, retryCount: 0, lastError: nil)))
+        try databases.close()
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, """
+            UPDATE outbox_commands
+            SET status = 'sending', settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+            WHERE client_uuid = 'explicit-mode';
+            """)
+            let result = sqlite3_exec(raw, """
+            UPDATE outbox_commands
+            SET status = 'queued', settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+            WHERE client_uuid = 'explicit-mode';
+            """, nil, nil, nil)
+            #expect(result == SQLITE_CONSTRAINT)
+        }
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let command = try #require(await reopened.store(gatewayID: "gw-a").loadCommands().first)
+        #expect(command.status == .failed && command.queueMode == mode)
+        #expect(command.lastError == OpenClawChatSQLiteTranscriptCache.outboxQueueModeUpgradeRequiredError)
+    }
+
     @Test func `session settings expectation survives a cold outbox reopen`() async throws {
         let expectation = OpenClawChatSessionSettingsExpectation(
             permissionMode: .guarded,

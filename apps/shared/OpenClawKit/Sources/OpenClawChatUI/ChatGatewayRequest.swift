@@ -663,6 +663,7 @@ public enum OpenClawChatGatewayRequests {
         expectedSessionRoutingContract: String?,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         supportsSessionSettingsCAS: Bool = false,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
@@ -681,6 +682,7 @@ public enum OpenClawChatGatewayRequests {
             to: &params,
             key: "expectedSessionRoutingContract")
         self.add(thinking, to: &params, key: "thinking")
+        self.add(queueMode?.rawValue, to: &params, key: "queueMode")
         if supportsSessionSettingsCAS, let expectedSessionSettings {
             params["expectedPermissionMode"] = expectedSessionSettings.permissionMode
                 .map { AnyCodable($0.rawValue) } ?? AnyCodable(NSNull())

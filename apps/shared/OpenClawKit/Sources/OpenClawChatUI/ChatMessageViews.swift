@@ -934,16 +934,24 @@ struct ChatSpeechStatusChip: View {
     }
 }
 
-/// Status footer for a user bubble backed by the durable offline outbox.
+/// Status footer for a user bubble awaiting durable delivery or confirmation.
 @MainActor
 struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
+    var queueMode: OpenClawChatQueueMode?
 
     var body: some View {
         let presentation = self.presentation
         HStack(spacing: 4) {
             Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
+            if let modeTitle {
+                Text(modeTitle)
+                    .font(OpenClawChatTypography.caption)
+                Text("·")
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityHidden(true)
+            }
             Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
@@ -952,6 +960,15 @@ struct ChatOutboxStatusLabel: View {
         .accessibilityLabel(
             Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
+        .accessibilityValue(Text(self.modeTitle ?? LocalizedStringResource("")))
+    }
+
+    private var modeTitle: LocalizedStringResource? {
+        switch self.queueMode {
+        case .steer: "Steer"
+        case .followup: "Queue next"
+        case nil: nil
+        }
     }
 
     private var presentation: (
@@ -961,7 +978,7 @@ struct ChatOutboxStatusLabel: View {
     {
         switch self.state {
         case .queued:
-            ("Queued", "clock", "Queued, sends when reconnected")
+            ("Queued", "clock", "Queued, waiting to send")
         case .sending:
             ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:

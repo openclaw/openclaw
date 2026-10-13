@@ -480,6 +480,26 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        try await self.sendMessage(
+            sessionKey: sessionKey,
+            target: OpenClawChatSendTarget(
+                agentID: agentID,
+                expectedSessionRoutingContract: expectedSessionRoutingContract,
+                expectedSessionSettings: nil),
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
+    }
+
+    func sendMessage(
+        sessionKey: String,
+        target sendTarget: OpenClawChatSendTarget,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
         let target = self.sessionTarget(for: sessionKey)
         try await self.requireCurrentOutboxGateway()
         guard let route = await connection.captureRoute(),
@@ -491,15 +511,17 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         // live send keeps its captured route on older gateways and omits the
         // unsupported atomic routing field.
         let guardedContract = OpenClawChatSessionRoutingContract.expectedValue(
-            expectedSessionRoutingContract,
+            sendTarget.expectedSessionRoutingContract,
             serverSupportsGuard: supportsRoutingContract)
         return try await self.withNativeSendOwnership(.init(
-            sessionKey: target.sessionKey, agentID: agentID ?? target.agentID))
+            sessionKey: target.sessionKey, agentID: sendTarget.agentID ?? target.agentID))
         {
             try await self.connection.chatSend(
                 sessionKey: target.sessionKey,
-                agentID: agentID ?? target.agentID,
+                agentID: sendTarget.agentID ?? target.agentID,
                 expectedSessionRoutingContract: guardedContract,
+                expectedSessionSettings: sendTarget.expectedSessionSettings,
+                queueMode: sendTarget.queueMode,
                 message: message,
                 thinking: thinking,
                 idempotencyKey: idempotencyKey,
@@ -544,14 +566,15 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         else { return .unavailable(reason: nil) }
         let routingContract = routingIdentity.contract
         return .available(OpenClawChatTransportRouteLease(
-            sendTargetedMessageWithSettings: { sessionKey, agentID, settings, message, thinking, id, attachments in
+            sendTargetedMessage: { sessionKey, target, message, thinking, id, attachments in
                 try await self.requireCurrentOutboxGateway()
-                return try await self.withNativeSendOwnership(.init(sessionKey: sessionKey, agentID: agentID)) {
+                return try await self.withNativeSendOwnership(.init(sessionKey: sessionKey, agentID: target.agentID)) {
                     try await self.connection.chatSend(
                         sessionKey: sessionKey,
-                        agentID: agentID,
+                        agentID: target.agentID,
                         expectedSessionRoutingContract: routingContract,
-                        expectedSessionSettings: settings,
+                        expectedSessionSettings: target.expectedSessionSettings,
+                        queueMode: target.queueMode,
                         message: message,
                         thinking: thinking,
                         idempotencyKey: id,

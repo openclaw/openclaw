@@ -240,17 +240,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
 /// transports bind both sends and confirmation reads to the same connection;
 /// a gateway switch then cancels the old work instead of retargeting it.
 public struct OpenClawChatTransportRouteLease: Sendable {
-    public typealias SendMessage = @Sendable (
+    public typealias SendTargetedMessage = @Sendable (
         _ sessionKey: String,
-        _ message: String,
-        _ thinking: String,
-        _ idempotencyKey: String,
-        _ attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
-    public typealias RequestHistory = @Sendable (String) async throws -> OpenClawChatHistoryPayload
-    public typealias SendTargetedMessageWithSettings = @Sendable (
-        _ sessionKey: String,
-        _ agentID: String?,
-        _ expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
+        _ target: OpenClawChatSendTarget,
         _ message: String,
         _ thinking: String,
         _ idempotencyKey: String,
@@ -259,36 +251,20 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         _ sessionKey: String,
         _ agentID: String?) async throws -> OpenClawChatHistoryPayload
 
-    private let sendTargetedMessageImpl: SendTargetedMessageWithSettings
+    private let sendTargetedMessageImpl: SendTargetedMessage
     private let requestTargetedHistoryImpl: RequestTargetedHistory
     public let sessionRoutingContract: String?
     public let supportsSessionSettingsCAS: Bool
 
     public init(
-        sendMessage: @escaping SendMessage,
-        requestHistory: @escaping RequestHistory,
-        sessionRoutingContract: String? = nil,
-        supportsSessionSettingsCAS: Bool = false)
-    {
-        self.sessionRoutingContract = sessionRoutingContract
-        self.supportsSessionSettingsCAS = supportsSessionSettingsCAS
-        self.sendTargetedMessageImpl = { sessionKey, _, _, message, thinking, idempotencyKey, attachments in
-            try await sendMessage(sessionKey, message, thinking, idempotencyKey, attachments)
-        }
-        self.requestTargetedHistoryImpl = { sessionKey, _ in
-            try await requestHistory(sessionKey)
-        }
-    }
-
-    public init(
-        sendTargetedMessageWithSettings: @escaping SendTargetedMessageWithSettings,
+        sendTargetedMessage: @escaping SendTargetedMessage,
         requestTargetedHistory: @escaping RequestTargetedHistory,
         sessionRoutingContract: String? = nil,
         supportsSessionSettingsCAS: Bool = false)
     {
         self.sessionRoutingContract = sessionRoutingContract
         self.supportsSessionSettingsCAS = supportsSessionSettingsCAS
-        self.sendTargetedMessageImpl = sendTargetedMessageWithSettings
+        self.sendTargetedMessageImpl = sendTargetedMessage
         self.requestTargetedHistoryImpl = requestTargetedHistory
     }
 
@@ -296,19 +272,34 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         sessionKey: String,
         agentID: String? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await self.sendTargetedMessageImpl(
-            sessionKey,
-            agentID,
-            expectedSessionSettings,
-            message,
-            thinking,
-            idempotencyKey,
-            attachments)
+        try await self.sendMessage(
+            sessionKey: sessionKey,
+            target: OpenClawChatSendTarget(
+                agentID: agentID,
+                expectedSessionRoutingContract: self.sessionRoutingContract,
+                expectedSessionSettings: expectedSessionSettings,
+                queueMode: queueMode),
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
+    }
+
+    public func sendMessage(
+        sessionKey: String,
+        target: OpenClawChatSendTarget,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        try await self.sendTargetedMessageImpl(sessionKey, target, message, thinking, idempotencyKey, attachments)
     }
 
     public func requestHistory(
@@ -541,6 +532,12 @@ public struct OpenClawChatNewSessionRouteLease: Sendable {
 /// is the only failure class safe for automatic outbox retry.
 public enum OpenClawChatTransportSendError: Error, Sendable {
     case notDispatched
+}
+
+struct OpenClawChatQueueModeUnsupportedError: LocalizedError, Sendable {
+    var errorDescription: String? {
+        String(localized: "This connection cannot send with Steer or Queue. Send normally or reconnect to the gateway.")
+    }
 }
 
 public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
@@ -1032,8 +1029,18 @@ extension OpenClawChatTransport {
 
     public func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
         .available(OpenClawChatTransportRouteLease(
-            sendMessage: self.sendMessage,
-            requestHistory: self.requestHistory))
+            sendTargetedMessage: { sessionKey, target, message, thinking, idempotencyKey, attachments in
+                try await self.sendMessage(
+                    sessionKey: sessionKey,
+                    target: target,
+                    message: message,
+                    thinking: thinking,
+                    idempotencyKey: idempotencyKey,
+                    attachments: attachments)
+            },
+            requestTargetedHistory: { sessionKey, _ in
+                try await self.requestHistory(sessionKey: sessionKey)
+            }))
     }
 
     public func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
@@ -1095,7 +1102,8 @@ extension OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await self.sendMessage(
+        guard target.queueMode == nil else { throw OpenClawChatQueueModeUnsupportedError() }
+        return try await self.sendMessage(
             sessionKey: sessionKey,
             agentID: target.agentID,
             expectedSessionRoutingContract: target.expectedSessionRoutingContract,
