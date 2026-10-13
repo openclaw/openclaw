@@ -21,10 +21,7 @@ type PlacementSessionRetirementDeps = {
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
   ) => Promise<PlacementSessionEvidenceResolver>;
-  reportChanges: (
-    operation: () => Promise<void>,
-    before: readonly WorkerSessionPlacementRecord[],
-  ) => Promise<void>;
+  reportChanges: (operation: () => Promise<void>) => Promise<void>;
   warn: (message: string) => void;
 };
 
@@ -115,7 +112,6 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     if (placements.length === 0) {
       return;
     }
-    // The retirement scan already supplies the complete before-snapshot for reporting.
     await deps.reportChanges(async () => {
       const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
       for (const placement of placements) {
@@ -127,7 +123,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
           );
         }
       }
-    }, placements);
+    });
   };
 
   return { reconcile };

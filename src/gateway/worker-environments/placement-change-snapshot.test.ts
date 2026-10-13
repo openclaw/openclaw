@@ -166,17 +166,6 @@ it.each(["cached", "fresh"] as const)(
         });
       }
       const failed = await store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
-      const warn = vi.fn();
-      const publishChanges = createGatewayWorkerPlacementChangePublisher({
-        placements: store,
-        getSessionChangeContext: () => ({
-          broadcastToConnIds: vi.fn(),
-          chatAbortControllers: new Map(),
-          getRuntimeConfig: () => ({}),
-          getSessionEventSubscriberConnIds: () => new Set(),
-        }),
-        warn,
-      });
       const expected: WorkerSessionPlacementChangeSnapshot[] = [
         {
           sessionId: "a",
@@ -204,8 +193,6 @@ it.each(["cached", "fresh"] as const)(
       try {
         before = await store.readChangeSnapshot();
         expect(before).toEqual(expected);
-        await expect(publishChanges(async () => "reconciled")).resolves.toBe("reconciled");
-        expect(warn).not.toHaveBeenCalled();
         calls.expectIdle();
         expect(database.db.isOpen).toBe(mode === "cached");
       } finally {
@@ -241,13 +228,14 @@ it.each(["cached", "fresh"] as const)(
   },
 );
 
-it("reports committed placement changes inside an inspection snapshot", async () => {
+it("reports committed changes and cold retirement without reporting reads, including failed operations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawStateDatabase();
     const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
     await store.startDispatch({ sessionId: "a", agentId: "main", sessionKey: "agent:main:a" });
     const failed = await store.fail({ sessionId: "a", recoveryError: "synthetic failure" });
     const broadcastToConnIds = vi.fn();
+    const reportingRead = vi.spyOn(store, "readChangeSnapshot");
     const warn = vi.fn();
     const context = {
       broadcastToConnIds,
@@ -261,10 +249,41 @@ it("reports committed placement changes inside an inspection snapshot", async ()
       warn,
     });
     try {
+      await expect(publishChanges(async () => "idle")).resolves.toBe("idle");
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      const otherStore = createWorkerSessionPlacementStore({ database, now: () => 2000 });
+      const operationError = new Error("failed after commit");
+      await expect(
+        publishChanges(async () => {
+          await otherStore.startDispatch({
+            sessionId: "b",
+            agentId: "main",
+            sessionKey: "agent:main:b",
+          });
+          await otherStore.fail({ sessionId: "b", recoveryError: "synthetic failure" });
+          throw operationError;
+        }),
+      ).rejects.toBe(operationError);
+      await flushPendingSessionsChangedEvents(context);
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({ reason: "placement", sessionKey: "agent:main:b" }),
+        new Set(["synthetic-client"]),
+        expect.any(Object),
+      );
+      broadcastToConnIds.mockClear();
+      // Reopening drops the receipt replica: retirement must carry its own identity.
+      await closeOpenClawStateDatabaseAsync();
+      const reopenedStore = createWorkerSessionPlacementStore({ database });
+      const publishRetirement = createGatewayWorkerPlacementChangePublisher({
+        placements: reopenedStore,
+        getSessionChangeContext: () => context,
+        warn,
+      });
       await withOpenClawStateDatabaseReadSnapshot(async () => {
         await expect(
-          publishChanges(async () => {
-            await store.retireSessionPlacementAsync({
+          publishRetirement(async () => {
+            await reopenedStore.retireSessionPlacementAsync({
               sessionId: "a",
               expectedState: "failed",
               expectedGeneration: failed.generation,
@@ -280,10 +299,12 @@ it("reports committed placement changes inside an inspection snapshot", async ()
           expect.any(Object),
         );
       });
-      expect(await store.listAsync()).toEqual([]);
+      expect((await reopenedStore.listAsync()).map((row) => row.sessionId)).toEqual(["b"]);
+      expect(reportingRead).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await flushPendingSessionsChangedEvents(context);
+      vi.restoreAllMocks();
     }
   });
 });

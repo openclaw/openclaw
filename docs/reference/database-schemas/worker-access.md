@@ -15,6 +15,15 @@ batch related work so ordinary requests do not repeat database calls.
 
 ## Choose the execution owner
 
+Actor-backed session managers serialize append preparation and committed view
+adoption on their manager queue. Only each actor storage command reserves the
+agent database writer, so unrelated sessions can write between commands. Native
+maintenance and unbound SDK managers retain their existing storage admission.
+Slow direct-reservation warnings label session-manager, actor-command, and selected
+history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
+publishes holder timing without paths, session identities, or message content.
+Schemas, stored data, live commit authority, and update behavior are unchanged.
+
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
@@ -2570,10 +2579,10 @@ notification records are both empty. Outbound recovery reuses an empty queue fac
 only at the connection's current admitted read revision. Owning-writer receipts,
 local mutations, and connection retirement invalidate these facts through their
 existing owners.
-Worker auto-suspension takes placement reporting snapshots only when its policy is
-enabled. Placement retirement reuses its own scan for the reporting before-snapshot
-and skips reporting when that scan is empty. These reporting facts do not grant
-mutation authority. Retention, retry timing, schemas, durability, and update behavior are unchanged.
+Worker auto-suspension and placement retirement collect committed placement
+identities from the existing receipt owner; idle reporting does not query the
+placement inventory. Retirement returns the deleted identity in its conditional
+delete. These reporting facts do not grant mutation authority. Retention, retry timing, schemas, durability, and update behavior are unchanged.
 
 Sandbox reservation and removal-intent transactions run in the existing shared-state
 executor. Reservation selection and prune eligibility read authoritative rows inside
@@ -6550,14 +6559,15 @@ snapshot; generic SecretRef callers retain their current activation guards.
 Hidden GitHub operations and the CLI allowed-host setter remain with their existing
 owners. Schemas, retention, stored bytes, and update behavior are unchanged.
 
-Placement change reporting reads its before/after snapshots in the shared-state
-read worker using the placement store's row codec. It transfers only session
-identity, state, generation, and update time to the Gateway. The reconciliation
-coordinator reserves and admits its sweep before awaiting reporting, preserving
-dispatch ordering and request coalescing. Reporting failures preserve the original
-operation outcomes. Placement
-writes, current-authority checks, and workspace retention retain their existing
-owners; these reporting snapshots grant no execution or deletion authority.
+Placement change reporting subscribes to the existing placement receipt owner
+for the duration of reconciliation, coalescing committed changes by session.
+The owner compares published row facts in memory; retirement carries the deleted
+identity from the same conditional delete. Reporting takes no before/after
+inventory snapshots and still publishes committed changes when later work fails.
+Concurrent committed changes may share a notification batch; notifications grant
+no execution or deletion authority. Metadata changes still use the targeted
+shared-state read worker. Dispatch ordering, current-authority checks, workspace
+retention, and update behavior are unchanged.
 
 Per-agent target discovery consumes the physical database's admitted schema
 without selecting a session row merely to prove availability. Fixed shared stores
