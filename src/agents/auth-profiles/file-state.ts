@@ -230,19 +230,23 @@ function directoryState(directory: string): DirectoryState {
     sourceVersions: new Map(),
     dirty: false,
     publishChange: captureFileChangePublisher(),
-    observation: observeOwnedDirectory(directory, (filename) => {
-      if (
-        filename === undefined ||
-        legacyNames.has(filename) ||
-        [...identities.keys()].some(
-          (databasePath) =>
-            filename === path.basename(databasePath) ||
-            filename === `${path.basename(databasePath)}-wal`,
-        )
-      ) {
-        void refreshDirectory(directory, state);
-      }
-    }),
+    observation: observeOwnedDirectory(
+      directory,
+      (filename) => {
+        if (
+          filename === undefined ||
+          legacyNames.has(filename) ||
+          [...identities.keys()].some(
+            (databasePath) =>
+              filename === path.basename(databasePath) ||
+              filename === `${path.basename(databasePath)}-wal`,
+          )
+        ) {
+          void refreshDirectory(directory, state);
+        }
+      },
+      { recoveryIntervalMs: 30_000 },
+    ),
   };
   directories.set(directory, state);
   return state;

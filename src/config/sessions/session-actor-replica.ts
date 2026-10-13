@@ -3,7 +3,10 @@ import {
   readSqliteDatabaseWriteTokenForPath,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -316,14 +319,8 @@ export function retainSessionActorTranscriptReplica(
 
 function forgetUnused(cell: ReplicaCell): void {
   const key = targetKey(cell.target);
-  if (
-    !cell.handles &&
-    !cell.pending &&
-    !cell.snapshot &&
-    !cell.entry &&
-    !cell.transcript &&
-    pool.cells.get(key) === cell
-  ) {
+  const empty = !cell.snapshot && !cell.entry && !cell.transcript;
+  if (!cell.handles && !cell.pending && empty && pool.cells.get(key) === cell) {
     pool.cells.delete(key);
   }
 }
@@ -380,33 +377,28 @@ export function readSessionActorProjectionReceipt(
   return undefined;
 }
 
-function readCurrentEntryCell(target: FileTarget) {
+function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentity) {
   ensureReplicaSubscription();
   const cell = pool.cells.get(targetKey(target));
   const state = cell?.snapshot ?? cell?.entry;
   if (!cell || !state || cell.generation === undefined) {
     return undefined;
   }
-  const current = readDatabasePathIdentitySync(target.database.nativeLocation);
+  const current = admitted ?? readDatabasePathIdentitySync(target.database.nativeLocation);
+  const token = scopedWriteToken(target, state.dependencySessionIds);
   if (
     current.key !== `file:${target.database.physicalIdentity}` ||
-    current.birthtime !== target.database.birthtime
+    current.birthtime !== target.database.birthtime ||
+    (token && token !== state.writeToken)
   ) {
     discard(cell);
     forgetUnused(cell);
     return undefined;
   }
-  const token = scopedWriteToken(target, state.dependencySessionIds);
-  if (!token) {
-    return undefined;
+  if (token) {
+    touch(cell);
   }
-  if (token !== state.writeToken) {
-    discard(cell);
-    forgetUnused(cell);
-    return undefined;
-  }
-  touch(cell);
-  return { cell, state, incarnation: cell.generation };
+  return token ? { cell, state, incarnation: cell.generation } : undefined;
 }
 
 /** Entry projections share actor residency; they never certify live authority. */
@@ -429,6 +421,9 @@ export function readSessionActorEntryFacts(
         : state.entry,
     members: state.members,
     participants: state.participants,
+    coldArchiveAbsent:
+      cell.snapshot?.transcript.modelContext.kind === "resident" ||
+      cell.snapshot?.transcript.modelContext.reason === "projection",
     snapshots:
       snapshotFields === "full"
         ? snapshots
@@ -446,7 +441,10 @@ export function readSessionActorEntryFacts(
   });
 }
 
-function readCurrentEntryCellForPath(params: { path: string; sessionKey: string }) {
+function readCurrentEntryCellForPath(
+  params: { path: string; sessionKey: string },
+  admitted?: DatabasePathIdentity,
+) {
   ensureReplicaSubscription();
   for (const { target } of pool.cells.values()) {
     const { database, sessionKey } = target;
@@ -455,10 +453,26 @@ function readCurrentEntryCellForPath(params: { path: string; sessionKey: string 
       database.nativeLocation === params.path &&
       sessionKey === params.sessionKey
     ) {
-      return readCurrentEntryCell({ database, sessionKey });
+      return readCurrentEntryCell({ database, sessionKey }, admitted);
     }
   }
   return undefined;
+}
+
+/** Only the complete actor postimage covers pending-input absence for its current window. */
+export function hasSessionActorEmptyPendingInputHistory(
+  admitted: DatabasePathIdentity,
+  sessionKey: string,
+  sessionId: string,
+): boolean {
+  const snapshot = readCurrentEntryCellForPath(
+    { path: admitted.canonicalPath, sessionKey },
+    admitted,
+  )?.cell.snapshot;
+  return (
+    snapshot?.entry?.sessionId === sessionId &&
+    snapshot.pendingInputs.every((row) => row.consumed_event_id !== null)
+  );
 }
 
 /** Complete transcript bodies share the actor's receipt token and bounded residency. */

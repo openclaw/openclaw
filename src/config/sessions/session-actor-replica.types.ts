@@ -11,6 +11,8 @@ export type SessionActorEntryFacts = Pick<
 > &
   Partial<Pick<SessionActorHotState, "participants" | "members">> & {
     snapshots: "full" | readonly SessionEntrySnapshotField[];
+    /** Only a complete actor transcript snapshot proves archive absence. */
+    coldArchiveAbsent?: boolean;
     projection?: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
     predicateColumns?: ReturnType<typeof deriveSessionPredicateColumns>;
   };
