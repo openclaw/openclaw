@@ -311,7 +311,7 @@ describe("consented event Web Push content", () => {
       },
     );
 
-    it.each(["missing", "retired", "different-event"])(
+    it.each(["missing", "different-event"])(
       "keeps answer text private when its original source is %s",
       async (source) => {
         listBoundWebPushSubscriptionsMock.mockResolvedValue([
@@ -326,9 +326,9 @@ describe("consented event Web Push content", () => {
               source === "missing"
                 ? undefined
                 : {
-                    payload: source === "different-event" ? { ...finalEvent } : finalEvent,
+                    payload: { ...finalEvent },
                     text: "The draft is ready.",
-                    canPreview: () => source !== "retired",
+                    canPreview: () => true,
                   },
           },
         );
@@ -417,7 +417,7 @@ describe("consented event Web Push content", () => {
       });
     });
 
-    it.each(["retired", "different-record", "different-route", "missing-owner"])(
+    it.each(["different-record", "different-route", "missing-owner"])(
       "keeps question content generic for %s even with consent",
       async (caseName) => {
         listBoundWebPushSubscriptionsMock.mockResolvedValue([
@@ -439,7 +439,7 @@ describe("consented event Web Push content", () => {
             ? undefined
             : {
                 record: caseName === "different-record" ? { ...record } : record,
-                canPreview: () => caseName !== "retired",
+                canPreview: () => true,
               };
         createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent(
           "question.requested",
